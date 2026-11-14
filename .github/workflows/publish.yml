@@ -1,0 +1,167 @@
+name: Publish @wadeck-app/machine-cli
+
+# Manual only: a push never publishes (the siblings publish on every push to main; refused for this repo).
+# TODO(user): decide whether a tag push should also publish. The version comes from compute-version, not from a tag.
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: 'Stable version (e.g. 1.2.0). Empty = CalVer edge build'
+                required: false
+                default: ''
+            breaking:
+                description: 'Breaking change? (true/false)'
+                required: false
+                default: 'false'
+
+# Same as the siblings.
+# TODO(user): GitHub Packages access for the four new package names (@wadeck-app/machine-cli and its three platform packages)
+# is unproven for this repo: the first run decides (packaging.md section 5, 9.10).
+permissions:
+    contents: read
+    packages: write
+
+# One publish at a time, never cancelled: a half-finished publish would leave the registry inconsistent.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    test:
+        # Only main publishes (a dispatch on a branch or a tag must not).
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+                  registry-url: 'https://npm.pkg.github.com'
+                  scope: '@wadeck-app'
+                  cache: npm
+
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: '1.26.8'
+
+            - name: Install dependencies
+              run: npm ci --prefer-offline
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Test
+              run: npm test
+
+    publish:
+        needs: test
+        runs-on: ubuntu-latest
+        env:
+            PKG_OUT: ${{ github.workspace }}/dist-packages
+        steps:
+            - uses: actions/checkout@v5
+              with:
+                  fetch-depth: 0
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+                  registry-url: 'https://npm.pkg.github.com'
+                  scope: '@wadeck-app'
+                  cache: npm
+
+            # Patch-pinned: a new Go patch changes every launcher hash, which republishes the three platform packages
+            # (hash-reuse) and moves the exact pin a rollback needs. Bump it on purpose. Same value as ci.yml.
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: '1.26.8'
+
+            - name: Install dependencies
+              run: npm ci --prefer-offline
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Compute version
+              id: version
+              uses: wadeck-app/ci-templates/.github/actions/compute-version@main
+              with:
+                  version-input: ${{ github.event.inputs.version || '' }}
+                  breaking-input: ${{ github.event.inputs.breaking || 'false' }}
+
+            # The launcher kit's build.sh embeds the Windows PE metadata with goversioninfo; with LAUNCHER_REQUIRE_PE_METADATA=1 a
+            # missing tool fails the build instead of warning. No sibling workflow installs it (none of their workflows mentions it).
+            # TODO(user): pin goversioninfo to a version (@latest can change the exe hash, which republishes the win32 package).
+            - name: Install goversioninfo
+              run: |
+                  go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+                  echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+            - name: Build Go launchers
+              run: bash packages/machine-cli/ci/scripts/build-launcher.sh
+              env:
+                  LAUNCHER_REQUIRE_PE_METADATA: '1'
+
+            # go build sets the exec bit on Linux; make it explicit and check it, so a step that dropped it fails here and not on a Mac.
+            - name: Set and check the exec bit of the Unix launchers
+              run: |
+                  fail=0
+                  for f in packages/machine-cli/dist-launcher/darwin-arm64/machine packages/machine-cli/dist-launcher/linux-x64/machine; do
+                    test -f "$f" || { echo "[fail] $f not built" >&2; fail=1; continue; }
+                    chmod +x "$f"
+                    test -x "$f" || { echo "[fail] $f has no exec bit" >&2; fail=1; }
+                  done
+                  test -f packages/machine-cli/dist-launcher/win32-x64/machine.exe || { echo "[fail] machine.exe not built" >&2; fail=1; }
+                  test "$fail" = 0
+
+            # BUNDLE_VERSION is inlined in the bundles (the updater refuses a non-CalVer build) and stamped in the app-module manifest.
+            - name: Bundle (machine.cjs, machine-updater.cjs, app-module)
+              run: npm run bundle:all
+              env:
+                  BUNDLE_VERSION: ${{ steps.version.outputs.version }}
+
+            # Strict by default: a missing launcher, machine-updater.cjs or app-module/ is an error.
+            - name: Generate the packages
+              run: node packages/machine-cli/ci/scripts/generate-platform-packages.mjs --out "$PKG_OUT" --version "${{ steps.version.outputs.version }}"
+
+            # Nothing is published here: file list of the four packages, then the exec bit INSIDE the tarballs
+            # (same check as the queue workflow; a launcher or shim packed as 0644 gives EACCES on macOS and Linux).
+            - name: Packed smoke (file lists and exec bits)
+              run: |
+                  out="$(mktemp -d)"
+                  for d in "$PKG_OUT"/*/; do
+                    echo "--- $(basename "$d")"
+                    (cd "$d" && npm pack --dry-run)
+                  done
+                  for d in machine-cli-dist machine-cli-darwin-arm64 machine-cli-linux-x64; do
+                    (cd "$PKG_OUT/$d" && npm pack --silent --pack-destination "$out" >/dev/null)
+                  done
+                  fail=0
+                  count=0
+                  for t in "$out"/*.tgz; do
+                    for line in $(tar -tvzf "$t" | grep -E 'package/(machine|bin/machine\.js)$' | awk '{print $1 "@" $NF}'); do
+                      count=$((count + 1))
+                      mode="${line%%@*}"
+                      case "$mode" in *x*x*x*) echo "ok   $mode ${line#*@} ($(basename "$t"))" ;; *) echo "FAIL $mode ${line#*@} ($(basename "$t")): no exec bit" >&2; fail=1 ;; esac
+                    done
+                  done
+                  # 3 executables expected: machine (darwin), machine (linux), bin/machine.js (wrapper)
+                  test "$count" = 3 || { echo "[fail] expected 3 executables in the tarballs, found $count" >&2; fail=1; }
+                  test "$fail" = 0
+
+            # Reads the registry, publishes the three platform packages only when the launcher bytes changed (else checks all three
+            # are already published), then pins the exact versions into the wrapper. It does not publish the wrapper.
+            # TODO(user): the script runs a plain `npm publish` for the platform packages: they get the dist-tag latest even when this
+            # run is a breaking-edge build. Decide whether that is acceptable.
+            - name: Publish platform packages (hash-reuse) and pin the wrapper
+              run: node packages/machine-cli/ci/scripts/publish-platform-packages.mjs --dir "$PKG_OUT" --build-version "${{ steps.version.outputs.version }}" --publish
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Publish the wrapper
+              working-directory: dist-packages/machine-cli-dist
+              run: npm publish --tag ${{ steps.version.outputs.dist_tag }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -26,7 +26,8 @@
 - Not in the frozen contract, accepted tolerantly: the JSON shape of `ensure`/`remove` (any string field equal to the outcome word) and of `show` (`command` at top level or under `job`). Not verified against the real orch.
 - `machine join --auto-startup`: runs enable after a successful join; a failure is reported and join exits 1 (the join is kept).
 - Port file: `<configDir>/daemon.port.json` = `{pid, port, peerPort}`, mode 0600, written last (listeners up), removed on stop, signals and process exit only if it still names this pid.
-- Bundle: `npm run bundle` writes `dist/machine.cjs` (git-ignored).
+- Bundle: `npm run bundle` writes `dist/machine.cjs` (git-ignored); `npm run bundle:all` also writes `machine-updater.cjs` and `app-module/` (packaging.md 9.5-9.7).
+- Update records in `<configDir>` (written by the updater, packaging.md 9.5): `update-blocked.json` (failed target, retried after 24 h in the background), `post-update-pending.json` (installed but post-update failed, retried by the next updater run), `update-notice-seen.json` (terminal notice already shown), `update-starts.json` (loop guard, daemon). A corrupt record is reported with "delete it"; none holds a secret.
 
 ## Verified against the real orch (2026-11-14, orch 2026.11.14-592)
 
