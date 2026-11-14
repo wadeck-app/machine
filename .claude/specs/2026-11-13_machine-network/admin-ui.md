@@ -1,0 +1,46 @@
+# Admin UI (WP8): app-module-machine and dsl-lib-machine
+
+**Version:** v0.1 draft (2026-11-14). Facts from app-core-owner and dsl-owner (read from their repos, partly unverified as marked). Implements decisions 18, 19, 36, 40, 50.
+
+## Facts that shape the design
+
+| Topic | Fact | Source |
+|---|---|---|
+| Module layout | `packages/app-module-machine`: `manifest.json`, `src/backend/index.ts` (routes under `/api/modules/machine/...`, `ctx.dataDir`), `src/dsl-views/*.yaml`, `src/dsl-components/` (dsl-lib, loaded into the shell, same origin), `src/commons` (shared with the browser, no `node:` imports, enforced by `app-core-cli check`) | app-core `module-authoring.md` |
+| Commands | `app-core-cli init ./app-module-machine --id machine --title "Machine"`, `check .`, `dev . --watch`, `BUNDLE_VERSION=<v> app-core-cli package .`, `npm publish` (ships `dist-module` only) | app-core-owner |
+| Siblings to copy | `queue/packages/app-module-queue`, `orchestrator/packages/app-module-orchestrator` (+ `dsl-lib-orch`), reference `app-core/packages/test-app-modules/app-module-example` | app-core-owner |
+| Browser to relay | impossible: CSP `connect-src 'self'`; the relay admin token stays server side, in the module backend (reads `_secrets_/relay-admin.json`), the page calls only `/api/modules/machine/...` | app-core-owner |
+| Browser to daemon | impossible for the same reason; the backend calls the machine daemon on 127.0.0.1 (port from `daemon.port.json`, read at each request); auth of that call is ours | app-core-owner |
+| app-core API auth | none: only Host and Origin checks; any local process can call a module route as the user, so a route that spends the token or signs is a risk (keep routes read-only or add our own check) | app-core-owner |
+| WebCrypto | Ed25519, X25519, P-256 work in Chrome 156 on localhost (secure context); PBKDF2, HKDF, AES-GCM everywhere; other browsers not verified; no WASM (CSP has no `wasm-unsafe-eval`) | app-core-owner |
+| Components | no timeline in dsl-view (Stepper is a horizontal wizard); `Tooltip` wraps one element with string content; domain components stay in `dsl-lib-machine`; a generic vertical timeline is built first in `dsl-lib-machine` tagged `@dsl-view-candidate status: incubating` | dsl-owner |
+| Secrets in components | only in component `useState`/`useRef`; never `$setVar`, `$publishOutput`, `@registryBind formData`, a URL parameter or an Error message | dsl-owner |
+
+## Decisions (reversible, logged D25 and D26)
+
+- **D25 Signing happens in the browser**, key held as a non-extractable `CryptoKey` after unlock, bounded by the unlock timer, wiped on lock or tab close. Reason: a server-side key would sit in the process shared with every other module backend and any local process could request signatures through our route. Residual risk for the threat model: other modules' components share the origin and could patch `crypto.subtle` or read the DOM (decision 19 accepts it).
+- **D26 One interface, two implementations**: the browser needs a WebCrypto implementation of the machine-core operations it uses (admin key file unlock, canonical JSON, Ed25519 signing of registrations, documents, policies, revocations, HKDF, X25519 sealing with the Ed25519-to-X25519 public key conversion). It lives in its own package `machine-webcrypto` (no `node:` imports), tested against the Node implementation with fixed vectors and with cross-verification both ways.
+
+## Open design point: pair secret derivation and non-extractable keys
+
+`derivePairSecret` keys HKDF with the admin seed, which needs the raw seed in page memory. A non-extractable key cannot do that. Option: derive the pair secret from a deterministic Ed25519 signature over a domain-separated string with both uuids and serials (Ed25519 is deterministic and unforgeable without the key, so it is a keyed PRF), then HKDF of that. Same property (any admin machine recomputes the same secret, retries are idempotent), no raw seed in the page. Changing it is free until the first real enrollment. To decide with the browser implementation.
+
+## Pages (decision 40) and what each needs
+
+| Page | Source of data | Actions |
+|---|---|---|
+| Machines | backend route to the daemon (`list`, presence, addresses, aliases) | alias set and remove |
+| Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | approve (unlock, sign in the page, post decision through the backend, then distribution documents), reject |
+| Policy | local policy files through the daemon | edit allowlists and limits, sign in the page, install and distribute |
+| Audit | daemon audit log | view and verify the hash chain |
+| Unlock | none (page memory only) | passphrase, unlock duration, lock now |
+
+The Candidacies page shows a vertical timeline on the left (candidacy received, details checked, passphrase and signature, final code compared, documents distributed) with an "i" tooltip per step naming the threat it answers. The tab shows a badge with the number of pending candidacies (module indicator).
+
+## Work breakdown
+
+1. `machine-webcrypto` package with vectors against machine-core (this document, D26).
+2. Backend routes: read-only status, list candidacies, post decision (the signature arrives from the page), distribution; every route that spends the token validates the shape and refuses without a page-produced signature.
+3. dsl-lib components: timeline (generic, incubating), passphrase and signing, final code display.
+4. DSL views for the five pages; scaffold with `app-core-cli init`, copy the sibling test layout (including a real-server backend integration test).
+5. Publish with the same process as `app-module-queue`.
