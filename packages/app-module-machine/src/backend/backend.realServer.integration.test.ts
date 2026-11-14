@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { candidacyCode, generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
@@ -50,6 +50,7 @@ let configDir: string;
 let baseUrl: string;
 let fakes: Server[] = [];
 let candidate: { identityPublicKey: string; random: string };
+let builtModuleDir: string;
 
 /** Every app-core-cli run schedules a DETACHED background updater next to its bundle: a folder without an updater next to it means none is started. */
 function noUpdaterEnv(): NodeJS.ProcessEnv {
@@ -148,6 +149,7 @@ describe('the packaged module through a real app-core server', () => {
     writeFileSync(join(configDir, '_secrets_', 'relay-admin.json'), JSON.stringify({ relayUrl: `http://127.0.0.1:${relayPort}`, token: ADMIN_TOKEN, label: 'console', claimedAt: '2026-11-14T00:00:00.000Z' }));
 
     const builtModule = join(workDir, 'module');
+    builtModuleDir = builtModule;
     packageModule(builtModule);
     baseUrl = await startServer(builtModule);
   });
@@ -162,6 +164,15 @@ describe('the packaged module through a real app-core server', () => {
     await Promise.all(fakes.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
     fakes = [];
     if (workDir !== undefined) removeTempDir(workDir);
+  });
+
+  it('the package carries the dsl-lib with the machine components and the Candidacies page uses the timeline', () => {
+    const entries = join(builtModuleDir, 'dsl-lib', 'entries.mjs');
+    expect(existsSync(entries), `${entries} is missing: the module was packaged without its dsl-lib (check src/dsl-components/index.ts)`).toBe(true);
+    const lib = readFileSync(entries, 'utf8');
+    for (const name of ['VerticalTimeline', 'PassphraseSigner', 'FinalCodeDisplay']) expect(lib).toContain(name);
+    expect(existsSync(join(builtModuleDir, 'dsl-lib', 'style.css'))).toBe(true);
+    expect(readFileSync(join(builtModuleDir, 'dsl-frontend', 'candidacies.json'), 'utf8')).toContain('machine:VerticalTimeline');
   });
 
   it('GET /status answers the status of the (fake) daemon through the packaged bundle', async () => {

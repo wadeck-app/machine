@@ -62,9 +62,9 @@ The Candidacies page shows a vertical timeline on the left (candidacy received, 
 | Item | Status |
 |---|---|
 | 1 `machine-webcrypto` | Done (separate work) |
-| 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, global app-core-cli). Post decision, distribution and the signature check are not started |
-| 3 dsl-lib components | NOT started: `VerticalTimeline` needs react, jsdom, testing-library (not in the lockfile, see the package list in the todos) |
-| 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (no timeline, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
+| 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, local app-core-cli devDependency). Post decision, distribution and the signature check are not started |
+| 3 dsl-lib components | `packages/dsl-lib-machine` (jsdom tests, generated entries, CSS): `VerticalTimeline` (generic, incubating), `PassphraseSigner` (unlock and sign a registration in the page, key in a ref), `FinalCodeDisplay`. Not done: the key file route, wiring the signed result to a backend post, the two components are on no page yet |
+| 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (timeline of the five steps with static statuses, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
 | 5 Publish | Not started |
 
 Facts found in slice 1:

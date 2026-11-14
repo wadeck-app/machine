@@ -3,26 +3,52 @@ $sources:
     url: GET /api/modules/machine/candidacies
     poll: 30s
 
-# Read-only slice: there are no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature
-# happen in the page, never in the backend). The vertical timeline of the five steps (candidacy received, details checked,
-# passphrase and signature, final code compared, documents distributed) is written and tested as the component
-# `machine:VerticalTimeline` in a following step, once its test tooling is installed; it is NOT on this page yet.
-# The code in the table is recomputed by the module from the key and random it received, never the one the relay sends.
+# Read-only slice: no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature happen in
+# the page, never in the backend). The timeline on the left lists the approval procedure; its statuses are static ("todo") until
+# the signing slice drives them from the selected candidacy. The code in the table is recomputed by the module from the key and
+# random it received, never the one the relay sends.
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Candidacies
     subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Read-only.
-  - $type: DataTable
-    rows: $sources.candidacies.candidacies
-    emptyMessage: No pending candidacy
-    expansion:
-      $type: Markdown
-      text: $ctx.row.bindingText
-    columns:
-      - { key: "name", label: "Name", nowrap: true }
-      - { key: "code", label: "Verification code", nowrap: true }
-      - { key: "hostname", label: "Hostname", nowrap: true }
-      - { key: "observedIp", label: "Seen from", nowrap: true }
-      - { key: "ageText", label: "Age", nowrap: true }
-      - { key: "statusText", label: "Status" }
+  - $type: HorizontalStack
+    gap: gap-6
+    align: items-start
+    itemSizes: [fixed, flex]
+    items:
+      - $type: machine:VerticalTimeline
+        steps:
+          - id: received
+            title: Candidacy received
+            status: todo
+            info: "Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here."
+          - id: checked
+            title: Details checked
+            status: todo
+            info: "Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect."
+          - id: signed
+            title: Passphrase and signature
+            status: todo
+            info: "Threat: a local process signing for you. The passphrase is typed in this page only and the signature is made in your browser, never by the daemon or the module backend."
+          - id: final-code
+            title: Final code compared
+            status: todo
+            info: "Threat: the relay swaps a public key (candidate or admin). Compare the final code on the candidate machine, never the one displayed by the relay."
+          - id: distributed
+            title: Documents distributed
+            status: todo
+            info: "Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one."
+      - $type: DataTable
+        rows: $sources.candidacies.candidacies
+        emptyMessage: No pending candidacy
+        expansion:
+          $type: Markdown
+          text: $ctx.row.bindingText
+        columns:
+          - { key: "name", label: "Name", nowrap: true }
+          - { key: "code", label: "Verification code", nowrap: true }
+          - { key: "hostname", label: "Hostname", nowrap: true }
+          - { key: "observedIp", label: "Seen from", nowrap: true }
+          - { key: "ageText", label: "Age", nowrap: true }
+          - { key: "statusText", label: "Status" }

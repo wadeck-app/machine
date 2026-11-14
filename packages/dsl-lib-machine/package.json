@@ -1,0 +1,47 @@
+{
+  "name": "@wadeck-app/dsl-lib-machine",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "description": "dsl components of the machine admin pages (generic vertical timeline, passphrase and signing, final code display). Loaded in the app-core shell, same origin.",
+  "scripts": {
+    "css": "tsx scripts/build-css.ts",
+    "entries": "tsx scripts/generate-entries.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --bail=1"
+  },
+  "dependencies": {
+    "@wadeck-app/dsl-renderer": "latest",
+    "@wadeck-app/dsl-ui": "latest",
+    "@wadeck-app/machine-webcrypto": "*",
+    "lucide-react": "^0.400.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "*",
+    "@testing-library/react": "*",
+    "@testing-library/user-event": "*",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "@wadeck-app/machine-core": "*",
+    "autoprefixer": "^10.6.2",
+    "jsdom": "*",
+    "postcss": "^8.5.33",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.5",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

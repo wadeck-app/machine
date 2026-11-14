@@ -1,0 +1,4 @@
+/* The library's stylesheet. app-core's shell already has Tailwind's base layer and dsl-ui's palette, so there is no
+   `@tailwind base` here and no palette: only the utilities the components and the module's views use. */
+@tailwind components;
+@tailwind utilities;

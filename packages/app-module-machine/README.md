@@ -28,13 +28,13 @@ Signing never happens in this backend (decision D25).
 
 ```
 npm test                    # backend unit tests ONLY (prints a notice line saying so)
-npm run test:integration    # real-server integration test (needs an app-core-cli)
+npm run test:integration    # real-server integration test (starts a local app-core server on a free port)
 ```
 
-The default `npm test` (and so the root `npm test`) does NOT run the integration test: it needs an app-core-cli, and `@wadeck-app/app-core-cli` is not installed in this repository. The test is excluded by `vitest.config.ts` and runs from `vitest.integration.config.ts`, so a missing tool never turns the default suite red nor is skipped silently.
+The default `npm test` (and so the root `npm test`) does NOT run the integration test: it packages the module and starts a server, so it runs on request from `vitest.integration.config.ts`.
 
-The integration test packages the module and starts `app-core-cli dev` on a free port. `npm run test:integration` needs the `@wadeck-app/app-core-cli` devDependency, or `MACHINE_TEST_APP_CORE_CLI_ENTRY=<path of dist/cli.bundle.js>` (for example the global install: `npm root -g`, then `@wadeck-app/app-core-cli/dist/cli.bundle.js`). Without either it FAILS with that instruction. Run it before publishing the module.
+The integration test packages the module and starts `app-core-cli dev` on a free port. It uses the `@wadeck-app/app-core-cli` devDependency; `MACHINE_TEST_APP_CORE_CLI_ENTRY=<path of dist/cli.bundle.js>` overrides it. Packaging needs `src/dsl-components/style.css`, which is generated: run `npm run css --workspace=@wadeck-app/dsl-lib-machine` first on a fresh clone (`npm run bundle` does it).
 
 ## Not in this slice
 
-Timeline component, passphrase and signing component, approve and reject, Policy, Audit and Unlock pages, publication (see the work breakdown in admin-ui.md).
+Approve and reject buttons (the components `machine:PassphraseSigner` and `machine:FinalCodeDisplay` exist in `packages/dsl-lib-machine` but are not on a page; the Candidacies timeline statuses are static), the admin key file route, the post-decision and distribution routes, Policy, Audit and Unlock pages, publication (see the work breakdown in admin-ui.md).
