@@ -39,6 +39,10 @@ export interface StartupContext {
   /** Decides how the real orch is started (Windows runs `orch.cmd` through cmd.exe). */
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
+  /** Library only (no CLI flag): another job id than `machine`, for a check against the real orch that must not touch the real job. */
+  id?: string;
+  /** Library only (no CLI flag): false leaves `--restart-on-exit` out. Default true. */
+  restartOnExit?: boolean;
 }
 
 export function currentDaemonSource(): DaemonSource {
@@ -215,10 +219,12 @@ export interface EnableResult {
 export async function enableStartup(ctx: StartupContext): Promise<EnableResult> {
   const command = expectedCommand(ctx);
   const portFile = daemonPortFile(resolve(ctx.configDir));
-  const args = ['ensure', 'startup', STARTUP_JOB_ID, '--command', command, '--restart-on-exit', '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', portFile, '--json'];
+  const id = ctx.id ?? STARTUP_JOB_ID;
+  const restart = ctx.restartOnExit === false ? [] : ['--restart-on-exit'];
+  const args = ['ensure', 'startup', id, '--command', command, ...restart, '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', portFile, '--json'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup enable');
-  return { action: parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged'), id: STARTUP_JOB_ID, command, portFile };
+  return { action: parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged'), id, command, portFile };
 }
 
 export interface DisableResult {
@@ -227,10 +233,11 @@ export interface DisableResult {
 }
 
 export async function disableStartup(ctx: StartupContext): Promise<DisableResult> {
-  const args = ['remove', STARTUP_JOB_ID, '--if-exists'];
+  const id = ctx.id ?? STARTUP_JOB_ID;
+  const args = ['remove', id, '--if-exists'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup disable');
-  return { outcome: parseOutcome(result.stdout, ['removed', 'absent'] as const, 'removed or absent'), id: STARTUP_JOB_ID };
+  return { outcome: parseOutcome(result.stdout, ['removed', 'absent'] as const, 'removed or absent'), id };
 }
 
 export interface StatusResult {
@@ -245,14 +252,15 @@ export interface StatusResult {
 
 export async function startupStatus(ctx: StartupContext): Promise<StatusResult> {
   const expected = expectedCommand(ctx);
-  const args = ['show', STARTUP_JOB_ID, '--json'];
+  const id = ctx.id ?? STARTUP_JOB_ID;
+  const args = ['show', id, '--json'];
   const result = await runOrch(ctx, args);
   // Exit 3 of orch show: no such job.
-  if (result.code === 3) return { exists: false, id: STARTUP_JOB_ID, expected };
+  if (result.code === 3) return { exists: false, id, expected };
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup status');
   const command = findCommand(result.stdout);
   if (command === undefined) throw new StartupError(`orch show answered with no command field, so the job cannot be compared. Its output was: ${result.stdout.trim() || '(empty)'}`);
-  return { exists: true, id: STARTUP_JOB_ID, expected, command, upToDate: command === expected };
+  return { exists: true, id, expected, command, upToDate: command === expected };
 }
 
 /** The `command` string at the top of the answer or inside a `job` object. */

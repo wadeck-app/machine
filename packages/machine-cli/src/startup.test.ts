@@ -90,6 +90,18 @@ describe('enableStartup', () => {
     expect(r).toMatchObject({ action: 'added', id: 'machine', portFile: expectedPortFile() });
   });
 
+  it('library-only options: another job id, and no restart-on-exit (used by a safety check against the real orch, no CLI flag)', async () => {
+    stub.script({ ensure: { stdout: 'added zz-other\n' }, remove: { stdout: 'removed zz-other\n' }, show: { code: 3 } });
+    const r = await enableStartup({ ...ctx(), id: 'zz-other', restartOnExit: false });
+    expect(r.id).toBe('zz-other');
+    const expected = ensureArgs(currentCommand());
+    expected[2] = 'zz-other';
+    expected.splice(expected.indexOf('--restart-on-exit'), 1);
+    await disableStartup({ ...ctx(), id: 'zz-other' });
+    expect((await startupStatus({ ...ctx(), id: 'zz-other' })).id).toBe('zz-other');
+    expect(stub.calls()).toEqual([expected, ['remove', 'zz-other', '--if-exists'], ['show', 'zz-other', '--json']]);
+  });
+
   it.each([
     ['plain text', 'updated machine\n', 'updated'],
     ['JSON with an action field', '{"action":"unchanged","id":"machine"}', 'unchanged'],

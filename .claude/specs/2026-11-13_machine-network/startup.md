@@ -24,3 +24,7 @@
 - `machine join --auto-startup`: runs enable after a successful join; a failure is reported and join exits 1 (the join is kept).
 - Port file: `<configDir>/daemon.port.json` = `{pid, port, peerPort}`, mode 0600, written last (listeners up), removed on stop, signals and process exit only if it still names this pid.
 - Bundle: `npm run bundle` writes `dist/machine.cjs` (git-ignored).
+
+## Verified against the real orch (2026-11-14, orch 2026.11.14-592)
+
+A throwaway job (library-only options `id` and `restartOnExit`, default `machine` and true) was ensured with a command holding three quoted segments with spaces and, in a second run, parentheses: stored byte for byte, then `unchanged`, `updated`, `removed`; the job list was identical afterwards. The real `machine` job has not been registered on this machine yet.
