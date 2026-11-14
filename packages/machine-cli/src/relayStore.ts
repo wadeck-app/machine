@@ -60,3 +60,69 @@ export function writeRelayConfig(configDir: string, config: RelayConfig, replace
     unlinkSync(temp);
   }
 }
+
+// The pending candidacy of this machine, kept so that a later `machine join --resume` can continue after a Ctrl-C, a
+// timeout or a lost SSH session. Not a secret itself, but once approved it holds the approval (pair secrets of the
+// peers), so it lives next to the token with the same 0600 mode.
+
+export interface CandidacyState {
+  v: 1;
+  id: string;
+  random: string;
+  name: string;
+  identityPublicKey: string;
+  createdAt: number;
+  expiresAt: number;
+  /** The approval as received from the relay, kept so that a refused or interrupted enrollment can be run again. */
+  approval?: unknown;
+}
+
+export const candidacyFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay-candidacy.json');
+
+export function readCandidacy(configDir: string): CandidacyState | undefined {
+  const path = candidacyFile(configDir);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error(`cannot read ${path}: ${(e as Error).message}`);
+  }
+  const corrupt = (why: string) => new Error(`${path} is corrupt or invalid (${why}): delete it, then run \`machine join --resume\` to post a new candidacy`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw corrupt('not valid JSON');
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw corrupt('not a JSON object');
+  const o = raw as Record<string, unknown>;
+  for (const key of ['id', 'random', 'name', 'identityPublicKey'] as const) {
+    if (typeof o[key] !== 'string' || (o[key] as string).length === 0) throw corrupt(`${key} is missing`);
+  }
+  for (const key of ['createdAt', 'expiresAt'] as const) {
+    if (typeof o[key] !== 'number') throw corrupt(`${key} is missing`);
+  }
+  return {
+    v: 1,
+    id: o.id as string,
+    random: o.random as string,
+    name: o.name as string,
+    identityPublicKey: o.identityPublicKey as string,
+    createdAt: o.createdAt as number,
+    expiresAt: o.expiresAt as number,
+    ...(o.approval !== undefined ? { approval: o.approval } : {}),
+  };
+}
+
+export function writeCandidacy(configDir: string, state: CandidacyState): void {
+  writeFileAtomic(candidacyFile(configDir), `${JSON.stringify(state, null, 2)}\n`, 0o600);
+}
+
+export function deleteCandidacy(configDir: string): void {
+  try {
+    unlinkSync(candidacyFile(configDir));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`cannot delete ${candidacyFile(configDir)}: ${(e as Error).message}`);
+  }
+}

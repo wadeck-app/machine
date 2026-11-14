@@ -31,7 +31,7 @@ describe('machine join', () => {
   it('claims, stores the token, posts the candidacy and prints the code alone on a line, never the token', async () => {
     relay = await startFakeRelay();
     await ok(dir, ['init', '--name', 'laptop']);
-    const r = await ok(dir, ['join', '12345678', '--relay', relay.url]);
+    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
 
     expect(readRelayConfig(dir)).toMatchObject({ relayUrl: relay.url, token: relay.token, label: 'machine-pairing' });
 
@@ -51,7 +51,7 @@ describe('machine join', () => {
   it('--json carries the code and id but not the token', async () => {
     relay = await startFakeRelay();
     await ok(dir, ['init', '--name', 'laptop']);
-    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--json']);
+    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--json', '--no-wait']);
     const parsed = JSON.parse(r.out) as Record<string, unknown>;
     expect(parsed.verificationCode).toMatch(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
     expect(r.out).not.toContain(relay.token);
@@ -68,7 +68,7 @@ describe('machine join', () => {
   it('twice: refused without --force, nothing sent', async () => {
     relay = await startFakeRelay();
     await ok(dir, ['init', '--name', 'laptop']);
-    await ok(dir, ['join', '12345678', '--relay', relay.url]);
+    await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
     const before = relay.requests.length;
     const again = await cli(dir, ['join', '12345678', '--relay', relay.url]);
     expect(again.code).toBe(1);
@@ -112,7 +112,7 @@ describe('machine join', () => {
     const r = await cli(dir, ['join', '12345678', '--relay', relay.url]);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/saved/);
-    expect(r.err).toMatch(/--force/);
+    expect(r.err).toMatch(/--resume/);
     expect(r.err).not.toContain(relay.token);
   });
 
@@ -130,7 +130,7 @@ describe('machine join', () => {
   it('asks for the code at the prompt when omitted', async () => {
     relay = await startFakeRelay();
     await ok(dir, ['init', '--name', 'laptop']);
-    const r = await ok(dir, ['join', '--relay', relay.url], async () => '1234 5678');
+    const r = await ok(dir, ['join', '--relay', relay.url, '--no-wait'], async () => '1234 5678');
     expect(r.out).toMatch(/Verification code/);
   });
 

@@ -24,9 +24,13 @@ Commands:
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
   stop                               stop the running daemon
-  join [<code>] [--relay <url>] [--force]
+  join [<code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>]
                                      join the relay with a pairing code from the admin (asked at the prompt when
-                                     omitted); posts this machine's candidacy and prints the code to compare
+                                     omitted), post this machine's candidacy, print the code to compare, wait for
+                                     the admin's approval, then show the final code and enroll
+  join --resume [--timeout <seconds>] [--yes-final-code <code>]
+                                     continue after Ctrl-C or a timeout with the saved token (posts a new
+                                     candidacy when the previous one expired)
 
 Administration (manual enrollment, until the relay does it):
   admin init                         create the admin key on this machine (passphrase shown once)
@@ -54,7 +58,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -69,6 +73,10 @@ function parse(argv: string[]): Parsed {
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--replace') out.replace = true;
     else if (a === '--force') out.force = true;
+    else if (a === '--resume') out.resume = true;
+    else if (a === '--no-wait') out.noWait = true;
+    else if (a === '--timeout') out.timeout = valueOf('--timeout');
+    else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--address') out.address = valueOf('--address');

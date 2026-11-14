@@ -28,13 +28,38 @@ Errors: `{ "success": false, "error": "<code>", "message": "<what happened and t
 
 Field rules: `name` matches `^[a-z0-9][a-z0-9-]{0,31}$`; `hostname` printable ASCII, 1-64 characters (self-declared, informative); `identityPublicKey` unpadded base64url of 32 bytes; `random` unpadded base64url of 16 bytes; `id` is 128 random bits (base64url), chosen by the relay; `observedIp` is the peer address seen by the relay (server side, never client supplied).
 
-`approval` is an opaque JSON object, at most 16 KiB. The relay does not read it (it holds the signed registration and sealed pair secrets).
+`approval` is an opaque JSON object for the relay, at most 16 KiB; its format is in the Approval section. It holds pair secrets in clear, so the relay can read them: to review against T-05 (a peer also needs the pinned key to use them).
 
 Limits: a candidate re-posting the same `identityPublicKey` while pending replaces its entry (same `id`, expiry restarted). At most 4 pending per token and 32 in total; beyond that `429`.
 
 Lifetime: a candidacy lives 15 minutes from creation (`expiresAt`), in memory only (a relay restart drops them; the candidate posts again). An approved or rejected entry is kept 5 minutes so the candidate can read it, then dropped.
 
 The verification code (decision 35a) is computed by the CLI and by the admin page from `identityPublicKey` and `random`; the relay never computes it. The relay UI may show the fields above, informative only.
+
+## Approval (decisions 35, 35a, 48)
+
+`approval` is the JSON object the admin console puts in `PUT .../decision` and the candidate reads back. The relay stores it as is. Documents reuse the formats of the manual flow (decision 48), so one code path verifies both.
+
+```json
+{ "v": 1,
+  "self":  { "registration": { "body": { }, "signature": "..." }, "pairSecret": "<base64url 32 bytes>" },
+  "admin": { "v": 1, "adminPublicKey": "<base64url>", "adminKeyId": "<32 hex>" },
+  "peers": [ { "registration": { }, "pairSecret": "..." } ] }
+```
+
+| Field | Content | Candidate check |
+|---|---|---|
+| `self` | `PeerBundle` (network.ts) registering THIS machine | signed by `admin`, in its validity window; uuid, name and identity key equal to this machine. Not stored (nothing consumes it yet) |
+| `admin` | the admin's `admin.json` | pinned with the `machine admin pin` logic (`pinAdminDocument`), only after the final code is confirmed; a different key already pinned is refused |
+| `peers` | `PeerBundle`s the admin chose to include (may be empty) | each verified against `admin`, then `importPeer` |
+
+Unknown fields are refused. Everything is verified before anything is pinned or stored; one failure refuses the whole approval.
+
+Verification proves consistency, NOT that `admin` is the real admin: a relay can replace the whole approval with one signed by its own key (T-05). Only the final code (decision 35a) catches this: `finalCode(candidate key, admin.adminPublicKey, random)`, shown by the candidate and by the admin console, compared by a human before the pin. The candidate prints it alone on a line, then asks y/N (terminal) or compares it with `--yes-final-code` (headless). It never pins silently.
+
+Candidate behaviour (`machine join [<code>]`, `machine join --resume`): polls `GET /api/machines/candidacies/{id}` every 3 s, honours `Retry-After` on 429, retries network errors and 5xx with a warning, ends on approved, rejected, 404 (expired), `--timeout` (default 900 s) or Ctrl-C. Token and pending candidacy (`_secrets_/relay-candidacy.json`, mode 0600, holds the approval once received) are kept on timeout and Ctrl-C; `--resume` continues, and posts a fresh candidacy (new random, same name and key) when the old one is gone. `--no-wait` posts and returns.
+
+**Open (blocks the admin side, needs poc-owner):** the candidacy carries no `uuid`, but the admin must sign a registration for the candidate's uuid, and the candidate refuses any other. Proposal: add `uuid` (lower-case v4) to the candidacy body. It is NOT sent yet because the deployed relay refuses unknown fields (400).
 
 ## Machines resource: address and presence (decision 34)
 

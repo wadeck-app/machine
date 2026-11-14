@@ -20,8 +20,15 @@ export interface FakeRelay {
   /** Every request received: method, path and the Authorization header. */
   requests: { method: string; path: string; authorization: string | undefined; body: unknown }[];
   candidacies: Map<string, Record<string, unknown> & { status: string }>;
-  /** Next answer forced on a path prefix (one shot). */
-  force: (pathPrefix: string, status: number, body: unknown, headers?: Record<string, string>) => void;
+  /** Next answer forced on a path prefix (one shot), optionally only for one HTTP method. */
+  force: (pathPrefix: string, status: number, body: unknown, headers?: Record<string, string>, method?: string) => void;
+  /** Admin side, tests only: the decision the admin console would send with a full-access token. */
+  approve: (id: string, approval: unknown) => void;
+  reject: (id: string) => void;
+  /** The relay forgot the candidacy (15 minutes passed, or a restart): the candidate gets a 404. */
+  expire: (id: string) => void;
+  /** Ids of the candidacies still pending, oldest first. */
+  pendingIds: () => string[];
   close: () => Promise<void>;
 }
 
@@ -30,7 +37,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const token = options.token ?? `tok_${randomBytes(12).toString('hex')}`;
   const scopes = options.scopes === undefined ? ['machine'] : options.scopes;
   let codeUsed = false;
-  const forced: { prefix: string; status: number; body: unknown; headers: Record<string, string> }[] = [];
+  const forced: { prefix: string; status: number; body: unknown; headers: Record<string, string>; method: string | undefined }[] = [];
   const records = new Map<string, { record: unknown; etag: number }>();
   const candidacies: FakeRelay['candidacies'] = new Map();
   const requests: FakeRelay['requests'] = [];
@@ -51,7 +58,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     const authorization = req.headers.authorization;
     requests.push({ method, path, authorization, body });
 
-    const forcedAt = forced.findIndex((f) => path.startsWith(f.prefix));
+    const forcedAt = forced.findIndex((f) => path.startsWith(f.prefix) && (f.method === undefined || f.method === method));
     if (forcedAt !== -1) {
       const [f] = forced.splice(forcedAt, 1) as [(typeof forced)[number]];
       return send(res, f.status, f.body, f.headers);
@@ -126,7 +133,20 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     token,
     requests,
     candidacies,
-    force: (prefix, status, body, headers = {}) => void forced.push({ prefix, status, body, headers }),
+    force: (prefix, status, body, headers = {}, method) => void forced.push({ prefix, status, body, headers, method }),
+    approve: (id, approval) => {
+      const entry = candidacies.get(id);
+      if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
+      entry.status = 'approved';
+      entry.approval = approval;
+    },
+    reject: (id) => {
+      const entry = candidacies.get(id);
+      if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
+      entry.status = 'rejected';
+    },
+    expire: (id) => void candidacies.delete(id),
+    pendingIds: () => [...candidacies.entries()].filter(([, c]) => c.status === 'pending').map(([id]) => id),
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

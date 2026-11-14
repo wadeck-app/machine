@@ -6,10 +6,10 @@ import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
-import { joinRelay } from './join.js';
+import { DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { DEFAULT_RELAY_URL, RelayError } from './relayClient.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
-import { promptHidden } from './prompt.js';
+import { promptHidden, promptLine } from './prompt.js';
 import { readAliases } from './state.js';
 import { runOnPeer } from './peerService.js';
 
@@ -170,29 +170,70 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
     // Fail before a one-shot code is asked for or spent.
     readMachine(configDir);
     let code = rest[0];
-    if (code === undefined) {
-      try {
-        code = await prompt('Pairing code from the admin: ');
-      } catch {
-        return fail('no pairing code given and no terminal to ask for it: pass it as `machine join <code>` (the admin opens it in the relay console: Tokens, Add token, "Limited to scopes", machine)', EXIT.usage);
+    if (args.resume) {
+      if (code !== undefined) return fail('--resume continues with the saved token and takes no pairing code', EXIT.usage);
+      if (args.force) return fail('--resume and --force cannot be combined: --force replaces the token with a new pairing code', EXIT.usage);
+    } else {
+      if (args.yesFinalCode !== undefined && args.noWait) return fail('--yes-final-code needs the wait: it cannot be combined with --no-wait', EXIT.usage);
+      if (code === undefined) {
+        try {
+          code = await prompt('Pairing code from the admin: ');
+        } catch {
+          return fail('no pairing code given and no terminal to ask for it: pass it as `machine join <code>` (the admin opens it in the relay console: Tokens, Add token, "Limited to scopes", machine), or `machine join --resume` if this machine already has a token', EXIT.usage);
+        }
       }
+      code = code.trim();
+      if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
     }
-    code = code.trim();
-    if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
+    const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
+    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
+
+    // Ctrl-C stops the wait cleanly (token and candidacy kept) instead of killing the process mid-write.
+    const controller = new AbortController();
+    const onSigint = () => controller.abort();
+    if (io.timing === undefined) process.once('SIGINT', onSigint);
+    const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
+    // With --json stdout carries the final JSON only: the human progress goes to stderr.
+    const say = args.json ? io.stderr : io.stdout;
     let result;
     try {
-      result = await joinRelay(configDir, { code, relayUrl: args.relay ?? DEFAULT_RELAY_URL, force: args.force });
+      result = await runJoin(configDir, {
+        ...(code !== undefined ? { code } : {}),
+        resume: args.resume,
+        ...(args.relay !== undefined ? { relayUrl: args.relay } : {}),
+        defaultRelayUrl: DEFAULT_RELAY_URL,
+        force: args.force,
+        wait: !args.noWait,
+        timeoutMs: timeoutSeconds * 1000,
+        ...(args.yesFinalCode !== undefined ? { yesFinalCode: args.yesFinalCode } : {}),
+        ask: io.ask ?? promptLine,
+        timing,
+        say,
+        // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
+        onPosted: (p) => {
+          if (args.json && args.noWait) return;
+          say(
+            `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
+              `Candidacy ${p.candidacyId} posted, valid until ${new Date(p.expiresAt * 1000).toISOString()}.\n` +
+              `Verification code, the admin must see exactly this one before approving:\n\n  ${p.verificationCode}\n\n`,
+          );
+        },
+      });
     } catch (e) {
       if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
       throw e;
+    } finally {
+      process.removeListener('SIGINT', onSigint);
     }
-    // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
+    if (result.status === 'posted') {
+      emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n');
+      return EXIT.ok;
+    }
+    const e = result.enrolled;
+    const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : 'peers trusted: none (the admin included none)\n';
     emit(
-      result,
-      `[ok] joined the relay ${result.relayUrl} as "${result.name}" (token "${result.label}" saved)\n` +
-        `Candidacy ${result.candidacyId} posted, valid until ${new Date(result.expiresAt * 1000).toISOString()}.\n` +
-        `Verification code, the admin must see exactly this one before approving:\n\n  ${result.verificationCode}\n\n` +
-        'next: ask the admin to approve this machine in the admin console and to compare the code above\n',
+      { ...e, relayUrl: result.posted.relayUrl },
+      '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n',
     );
     return EXIT.ok;
   }

@@ -1,10 +1,23 @@
 import type { Prompt } from './admin.js';
 
+/** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
+export interface Timing {
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  nowMs: () => number;
+  pollIntervalMs: number;
+  /** Stops the wait like Ctrl-C does. */
+  signal?: AbortSignal;
+}
+
 export interface CliIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
   /** Hidden passphrase prompt; defaults to the terminal. Tests inject one. */
   prompt?: Prompt;
+  /** Visible one-line question (y/N); rejects when there is no terminal. Defaults to the terminal; tests inject one. */
+  ask?: (label: string) => Promise<string>;
+  /** Defaults to the real clock and Ctrl-C; tests inject a fake one. */
+  timing?: Timing;
 }
 
 /**
@@ -33,6 +46,10 @@ export interface Parsed {
   apiPort?: string;
   peerHost?: string;
   relay?: string;
+  resume: boolean;
+  noWait: boolean;
+  timeout?: string;
+  yesFinalCode?: string;
 }
 
 export class UsageError extends Error {}
