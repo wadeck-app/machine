@@ -93,6 +93,21 @@ describe('annotate-failure.mjs', () => {
     expect(out).toContain('(truncated)');
   });
 
+  it('annotates the FIRST failing lines (colored vitest output included) before the tail, when the failure is not at the end', () => {
+    const body = [
+      ' \u001b[41m\u001b[1m FAIL \u001b[22m\u001b[49m src/run.test.ts > real PowerShell > first',
+      '\u001b[31m\u001b[1mAssertionError\u001b[22m: timed out after 30094 ms, exitCode null',
+      ...Array.from({ length: 80 }, (_, i) => `later package passing ${i}`),
+    ].join('\n');
+    const out = run('tests', log(body)).stdout.trim();
+    expect(out).toContain('first failing lines');
+    expect(out).toContain('FAIL  src/run.test.ts > real PowerShell > first');
+    expect(out).toContain('AssertionError: timed out after 30094 ms, exitCode null');
+    expect(out).not.toContain('\u001b');
+    expect(out).toContain('later package passing 79');
+    expect(out).not.toContain('later package passing 5%0A');
+  });
+
   it('says clearly when there is no log, or an empty one, and with no argument prints the usage (exit 2)', () => {
     expect(run('t', join(work, 'missing.log')).stdout).toContain('no log file');
     expect(run('t', log('')).stdout).toContain('the log is empty');

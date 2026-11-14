@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runCommand, type RunOptions } from './run.js';
 
 // These run the REAL shells of the machine that executes the tests (T-15 conformance). Each platform block states what
@@ -65,6 +65,17 @@ describe.runIf(onWindows)('real cmd', () => {
 });
 
 describe.runIf(onWindows)('real PowerShell', () => {
+  // The first PowerShell launch on the windows-latest runner stayed silent for the whole 30 s three times (no byte on stdout or stderr,
+  // exit code null; cause unproven: start-up or hang). This separate, generous first launch tells the two apart: if it finishes, the
+  // start-up was only slow and its duration is in the log; if it times out too, PowerShell really hangs and this fails with the timing.
+  // It does not touch the assertions of the tests below.
+  beforeAll(async () => {
+    const r = await runCommand({ shell: 'ps', command: 'Write-Output ready', timeoutMs: 180_000, maxOutputBytes: 100_000 });
+    process.stderr.write(`[run.test] first PowerShell launch: ${r.durationMs} ms, exit ${String(r.exitCode)}, timedOut ${String(r.timedOut)}\n`);
+    expect(r.timedOut, `the first PowerShell launch did not answer within ${r.durationMs} ms (stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}): PowerShell hangs on this machine`).toBe(false);
+    expect(lines(r.stdout)).toEqual(['ready']);
+  }, 200_000);
+
   it('keeps single and double quotes exactly as approved', async () => {
     const r = await runCommand({ shell: 'ps', command: `Write-Output 'a b'; Write-Output "c d"`, ...quick });
     // The message carries stderr so that a failure says why the output is empty (CI: empty after 30 s). stderr is not compared:
