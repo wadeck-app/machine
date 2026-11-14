@@ -56,3 +56,20 @@ The Candidacies page shows a vertical timeline on the left (candidacy received, 
 ## D27 Pair secret derivation: signature-based (decided 2026-11-14)
 
 `derivePairSecretV2` (machine-core) and its WebCrypto twin (machine-webcrypto): the admin key signs `machine/pair-secret/v2 NUL uuidA:serialA NUL uuidB:serialB` (ordered by uuid), then HKDF-SHA256 over the 64 signature bytes. Deterministic (Ed25519), unforgeable without the admin key, no raw seed needed, so the browser keeps a non-extractable key. Identical outputs in Node and WebCrypto on fixed vectors and 100 random cases. The only production call site is `machine-cli/src/distribute.ts` (switched in a follow-up commit once the bootstrap work in machine-cli is done). The V1 seed-based function stays exported, deprecated. Consequence unchanged (T-36): whoever can sign with the unlocked admin key can recompute every pair secret.
+
+## Status of the work breakdown (2026-11-14)
+
+| Item | Status |
+|---|---|
+| 1 `machine-webcrypto` | Done (separate work) |
+| 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, global app-core-cli). Post decision, distribution and the signature check are not started |
+| 3 dsl-lib components | NOT started: `VerticalTimeline` needs react, jsdom, testing-library (not in the lockfile, see the package list in the todos) |
+| 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (no timeline, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
+| 5 Publish | Not started |
+
+Facts found in slice 1:
+
+- The daemon local API is `POST /<command>` on 127.0.0.1 with `Bearer <configDir>/health_token`, answer `{ result }`. The port comes from `daemon.port.json` as planned.
+- The daemon `list` carries only uuid, name and aliases. Presence and addresses are added by machine-cli (`addRelayView`, not exported): the Machines page does not show them yet and says so (`presenceNote`).
+- The `x-machine-module` header cannot be required on read routes: DSL `$sources` and the manifest tab count send no custom header. `guard.ts` exists and is tested for the signing and spending routes (later slices). Any local process can call every route of the module; read routes only return what that process could read from the user's files, apart from the relay query made with the admin token.
+- `machine-cli` exports neither the relay client, `reviewCandidacy`, nor the config dir resolution: their minimal pure logic is copied in the module (`candidacies.ts`, `configDir.ts`), to keep in step.

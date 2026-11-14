@@ -25,7 +25,10 @@ async function machine(...args: string[]): Promise<{ stdout: string; stderr: str
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'machine-bundle-script-'));
   bundle = join(root, 'out', 'machine.cjs');
-  output = (await run(process.execPath, [script, '--out', bundle], { windowsHide: true, timeout: 60_000 })).stdout;
+  // BUNDLE_VERSION must not leak in from the caller: it would change what the default build inlines.
+  const env = { ...process.env };
+  delete env.BUNDLE_VERSION;
+  output = (await run(process.execPath, [script, '--out', bundle], { windowsHide: true, timeout: 60_000, env })).stdout;
 }, 90_000);
 
 afterAll(() => {
@@ -44,6 +47,23 @@ describe('the bundle script', () => {
     const dir = join(root, 'cfg');
     await machine('init', '--name', 'bundled', '--config-dir', dir);
     expect((await machine('status', '--config-dir', dir)).stdout).toContain(`version: ${packageJson.version}`);
+  });
+
+  it('BUNDLE_VERSION wins over package.json and is the version the bundle reports (CI sets it, as queue does)', async () => {
+    const out = join(root, 'ci', 'machine.cjs');
+    const calver = '2026.11.14-592-abcdef12';
+    const r = await run(process.execPath, [script, '--out', out], { windowsHide: true, timeout: 60_000, env: { ...process.env, BUNDLE_VERSION: calver } });
+    expect(r.stdout).toContain(calver);
+    const dir = join(root, 'cfg-ci');
+    await run(process.execPath, [out, 'init', '--name', 'ci', '--config-dir', dir], { windowsHide: true, timeout: 60_000 });
+    const status = await run(process.execPath, [out, 'status', '--config-dir', dir], { windowsHide: true, timeout: 60_000 });
+    expect(status.stdout).toContain(`version: ${calver}`);
+  });
+
+  it('an empty BUNDLE_VERSION fails loudly instead of falling back to package.json', async () => {
+    const e = (await run(process.execPath, [script, '--out', join(root, 'empty', 'machine.cjs')], { windowsHide: true, timeout: 60_000, env: { ...process.env, BUNDLE_VERSION: '' } }).catch((x: unknown) => x)) as { code?: number; stderr?: string };
+    expect(e.code).toBe(1);
+    expect(e.stderr).toMatch(/BUNDLE_VERSION is set but empty/);
   });
 
   it('runs --help', async () => {

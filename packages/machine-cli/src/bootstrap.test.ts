@@ -137,7 +137,7 @@ describe('relay with ownership bound at approval', () => {
     it('status shows enrolled with no peer; list shows only itself; startup status behaves the same before and after', async () => {
       const id = await firstMachinePosts();
       stub.script({ show: { code: 3 } });
-      const startupStatus = () => cli(a, ['startup', 'status'], undefined, { startup: { orch: stub.orch, daemon: { platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/opt/machine.cjs', native: false }, platform: 'linux' } });
+      const startupStatus = () => cli(a, ['startup', 'status'], undefined, { startup: { orch: stub.orch, daemon: { platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/opt/machine.cjs' }, platform: 'linux' } });
       const before = await startupStatus();
       expect((await approve(a, id)).code).toBe(0);
       expect((await cli(a, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: forbidden('the final code') })).code).toBe(0);

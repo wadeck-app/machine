@@ -20,8 +20,8 @@ afterEach(() => {
   rmSync(stub.dir, { recursive: true, force: true });
 });
 
-const WIN_BUNDLE: DaemonSource = { platform: 'win32', execPath: 'C:\\Program Files\\nodejs\\node.exe', scriptPath: 'C:\\tools\\my app\\machine.cjs', native: false };
-const UNIX_BUNDLE: DaemonSource = { platform: 'linux', execPath: '/usr/bin/node', scriptPath: "/opt/it's here/machine.cjs", native: false };
+const WIN_BUNDLE: DaemonSource = { platform: 'win32', execPath: 'C:\\Program Files\\nodejs\\node.exe', scriptPath: 'C:\\tools\\my app\\machine.cjs' };
+const UNIX_BUNDLE: DaemonSource = { platform: 'linux', execPath: '/usr/bin/node', scriptPath: "/opt/it's here/machine.cjs" };
 const UNIX_COMMAND = "'/usr/bin/node' '/opt/it'\\''s here/machine.cjs' daemon";
 const expectedPortFile = () => join(configDir, 'daemon.port.json');
 const currentCommand = () => `${UNIX_COMMAND} --config-dir '${configDir}'`;
@@ -47,9 +47,44 @@ describe('daemonCommand', () => {
     expect(daemonCommand(UNIX_BUNDLE)).toBe(UNIX_COMMAND);
   });
 
-  it('a native binary: "<exe>" daemon', () => {
-    expect(daemonCommand({ platform: 'win32', execPath: 'C:\\my tools\\machine.exe', native: true })).toBe('"C:\\my tools\\machine.exe" daemon');
-    expect(daemonCommand({ platform: 'linux', execPath: '/opt/m m/machine', native: true })).toBe("'/opt/m m/machine' daemon");
+  const WIN_LAUNCHER: DaemonSource = { platform: 'win32', execPath: 'C:\\node.exe', scriptPath: 'C:\\nm\\machine.cjs', launcher: { exe: 'C:\\my cfg\\bin\\1.0.0\\machine.exe' } };
+  const UNIX_LAUNCHER: DaemonSource = { platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/opt/lib/machine.cjs', launcher: { exe: '/home/u/.config/machine/bin/1.0.0/machine', bundleOverride: '/opt/lib/machine.cjs' } };
+
+  it('staged launcher on Windows: "<staged exe>" daemon, no override when the launcher finds the bundle by itself', () => {
+    expect(daemonCommand(WIN_LAUNCHER)).toBe('"C:\\my cfg\\bin\\1.0.0\\machine.exe" daemon');
+    expect(daemonCommand(WIN_LAUNCHER, 'D:\\cfg dir')).toBe('"C:\\my cfg\\bin\\1.0.0\\machine.exe" daemon --config-dir "D:\\cfg dir"');
+  });
+
+  it('staged launcher on Unix: LAUNCHER_BUNDLE_OVERRIDE=<bundle> in front of the quoted exe', () => {
+    expect(daemonCommand(UNIX_LAUNCHER)).toBe("LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' '/home/u/.config/machine/bin/1.0.0/machine' daemon");
+    expect(daemonCommand(UNIX_LAUNCHER, '/data/my cfg')).toBe("LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' '/home/u/.config/machine/bin/1.0.0/machine' daemon --config-dir '/data/my cfg'");
+  });
+
+  it('staged launcher on Unix without override: just the quoted exe', () => {
+    const source: DaemonSource = { ...UNIX_LAUNCHER, launcher: { exe: '/a b/machine' } };
+    expect(daemonCommand(source)).toBe("'/a b/machine' daemon");
+  });
+
+  it('a single quote in a path of the launcher form is refused on Unix, naming the path and the fix', () => {
+    const inBundle: DaemonSource = { ...UNIX_LAUNCHER, launcher: { exe: '/x/machine', bundleOverride: "/o'k/machine.cjs" } };
+    expect(() => daemonCommand(inBundle)).toThrow(/o'k.*single quote.*move/s);
+    const inExe: DaemonSource = { ...UNIX_LAUNCHER, launcher: { exe: "/it's/machine" } };
+    expect(() => daemonCommand(inExe)).toThrow(/single quote/);
+    expect(() => daemonCommand(UNIX_LAUNCHER, "/it's/cfg")).toThrow(/single quote/);
+  });
+
+  it('a double quote or percent in a path of the launcher form is refused on Windows', () => {
+    expect(() => daemonCommand({ ...WIN_LAUNCHER, launcher: { exe: 'C:\\a"b\\machine.exe' } })).toThrow(/"/);
+    expect(() => daemonCommand({ ...WIN_LAUNCHER, launcher: { exe: 'C:\\%X%\\machine.exe' } })).toThrow(/%/);
+  });
+
+  it('Windows needs the override (node is not where the global modules are) but orch cannot carry it: refused with the fix', () => {
+    const source: DaemonSource = { ...WIN_LAUNCHER, launcher: { exe: 'C:\\cfg\\bin\\1\\machine.exe', bundleOverride: 'C:\\nm\\machine.cjs' } };
+    expect(() => daemonCommand(source)).toThrow(/cannot find the bundle.*LAUNCHER_BUNDLE_OVERRIDE.*npm/s);
+  });
+
+  it('the launcher form with a script that is not a bundle is refused like the node form', () => {
+    expect(() => daemonCommand({ ...UNIX_LAUNCHER, scriptPath: '/repo/src/bin.ts' })).toThrow(/npm run bundle/);
   });
 
   it('adds --config-dir when a configuration directory other than the default is in use', () => {
@@ -57,8 +92,8 @@ describe('daemonCommand', () => {
   });
 
   it('refuses a script that is not a bundle (sources run by a TypeScript runner) and says how to get one', () => {
-    expect(() => daemonCommand({ platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/repo/src/bin.ts', native: false })).toThrow(/npm run bundle/);
-    expect(() => daemonCommand({ platform: 'linux', execPath: '/usr/bin/node', native: false })).toThrow(/npm run bundle/);
+    expect(() => daemonCommand({ platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/repo/src/bin.ts' })).toThrow(/npm run bundle/);
+    expect(() => daemonCommand({ platform: 'linux', execPath: '/usr/bin/node' })).toThrow(/npm run bundle/);
   });
 });
 

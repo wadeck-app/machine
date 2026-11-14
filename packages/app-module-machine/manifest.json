@@ -1,0 +1,27 @@
+{
+  "id": "machine",
+  "title": "Machine",
+  "extensionPoints": [
+    {
+      "kind": "page",
+      "slot": "nav",
+      "label": "Machines",
+      "path": "/",
+      "view": {
+        "type": "path",
+        "value": "./src/dsl-views/machines.yaml"
+      }
+    },
+    {
+      "kind": "page",
+      "slot": "nav",
+      "label": "Candidacies",
+      "path": "/candidacies",
+      "count": { "route": "/candidacies", "field": "count" },
+      "view": {
+        "type": "path",
+        "value": "./src/dsl-views/candidacies.yaml"
+      }
+    }
+  ]
+}

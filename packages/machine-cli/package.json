@@ -1,5 +1,5 @@
 {
-  "name": "@wadeck-app/machine-cli",
+  "name": "machine-cli",
   "version": "0.1.0",
   "private": true,
   "description": "Local daemon and command line of machine: identity, aliases, status, list. Thin front-end over machine-core, machine-transport and machine-exec.",

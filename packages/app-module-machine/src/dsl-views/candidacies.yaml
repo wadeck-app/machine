@@ -1,0 +1,28 @@
+$sources:
+  candidacies:
+    url: GET /api/modules/machine/candidacies
+    poll: 30s
+
+# Read-only slice: there are no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature
+# happen in the page, never in the backend). The vertical timeline of the five steps (candidacy received, details checked,
+# passphrase and signature, final code compared, documents distributed) is written and tested as the component
+# `machine:VerticalTimeline` in a following step, once its test tooling is installed; it is NOT on this page yet.
+# The code in the table is recomputed by the module from the key and random it received, never the one the relay sends.
+$type: PageContent
+sections:
+  - $type: PageHeader
+    title: Candidacies
+    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Read-only.
+  - $type: DataTable
+    rows: $sources.candidacies.candidacies
+    emptyMessage: No pending candidacy
+    expansion:
+      $type: Markdown
+      text: $ctx.row.bindingText
+    columns:
+      - { key: "name", label: "Name", nowrap: true }
+      - { key: "code", label: "Verification code", nowrap: true }
+      - { key: "hostname", label: "Hostname", nowrap: true }
+      - { key: "observedIp", label: "Seen from", nowrap: true }
+      - { key: "ageText", label: "Age", nowrap: true }
+      - { key: "statusText", label: "Status" }

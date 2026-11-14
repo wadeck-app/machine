@@ -64,7 +64,7 @@ Commands:
   startup enable | disable | status  start the daemon at login through an orch startup job named "machine"
                                      (needs orch: npm i -g @wadeck-app/orchestrator-cli). enable creates or refreshes
                                      the job (run it again after moving machine); disable removes it; status shows
-                                     whether it exists, its command and whether it is up to date (exit 0 either way).
+                                     whether it exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
   join --resume [--timeout <seconds>] [--yes-final-code <code>]
                                      continue after Ctrl-C or a timeout with the saved token (posts a new

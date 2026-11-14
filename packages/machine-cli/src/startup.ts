@@ -1,17 +1,20 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
-import { isSea } from 'node:sea';
-import { delimiter, join, resolve } from 'node:path';
+import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { delimiter, dirname, join, resolve, win32 } from 'node:path';
 import { ConfigDir } from '@wadeck-app/shared-cli/ConfigDir';
 import { daemonPortFile } from './daemonPortFile.js';
+import { pruneStaged, stagedLauncher, stageWrapper, WRAPPER_NAME, wrapperScript, wrapperState, type BinaryDeps, type PruneResult } from './platformBinary.js';
 
-// Registration of the daemon as an orch startup job (spec: startup.md). Library only: no I/O besides running orch.
+// Registration of the daemon as an orch startup job (spec: startup.md, packaging.md). Library only: no I/O besides
+// running orch and staging the launcher.
 
 /** Id of the orch job. */
 export const STARTUP_JOB_ID = 'machine';
 /** orch can start its daemon on a first call: give it time, but never hang forever. */
 const ORCH_TIMEOUT_MS = 60_000;
 const NOT_INSTALLED = 'orch is not installed: npm i -g @wadeck-app/orchestrator-cli';
+/** The bundle the Go launcher is built to find (ci/launcher.config.json, packaging.md section 3.3). */
+export const LAUNCHER_BUNDLE_SPEC = '@wadeck-app/machine-cli/machine.cjs';
 
 export class StartupError extends Error {}
 
@@ -22,19 +25,37 @@ export interface OrchCommand {
   args?: string[];
 }
 
+/**
+ * Which command the job runs:
+ * - `launcher`: the STAGED launcher (`<configDir>/bin/<stamp>/machine[.exe]`, a copy of the platform package binary).
+ * - `launcher-wrapper`: Windows only, when the launcher cannot find the bundle by itself: `wscript.exe //B //Nologo <staged>\machine-daemon.vbs`,
+ *   a generated script that sets LAUNCHER_BUNDLE_OVERRIDE and runs the staged launcher (orch.cmd cannot carry an environment variable).
+ * - `development`: `node <bundle> daemon`, for a checkout or the development bundle (no launcher package installed).
+ */
+export type DaemonForm = 'launcher' | 'launcher-wrapper' | 'development';
+
 /** What is running, to build the command orch must run later. */
 export interface DaemonSource {
   platform: NodeJS.Platform;
-  /** Absolute path of the running executable (node for the bundle, the binary itself for a native build). */
+  /** Absolute path of node (used by the development form). */
   execPath: string;
-  /** Absolute path of the bundle run by node. Unused for a native binary. */
+  /** Absolute path of the bundle run by node: the launcher form needs it too, to name it in the override. */
   scriptPath?: string;
-  native: boolean;
+  /** Present for the launcher form. `bundleOverride` is the bundle to hand over as LAUNCHER_BUNDLE_OVERRIDE, when the launcher cannot find it by itself. */
+  launcher?: { exe: string; bundleOverride?: string; wrapper?: WrapperPlan };
+}
+
+/** The Windows wrapper: wscript.exe (absolute), the staged script and its exact content (configuration folder included). */
+export interface WrapperPlan {
+  wscript: string;
+  vbs: string;
+  content: string;
 }
 
 export interface StartupContext {
   configDir: string;
   orch?: OrchCommand;
+  /** Tests: a ready-made source, which bypasses staging and pruning. */
   daemon?: DaemonSource;
   /** Decides how the real orch is started (Windows runs `orch.cmd` through cmd.exe). */
   platform?: NodeJS.Platform;
@@ -43,11 +64,10 @@ export interface StartupContext {
   id?: string;
   /** Library only (no CLI flag): false leaves `--restart-on-exit` out. Default true. */
   restartOnExit?: boolean;
-}
-
-export function currentDaemonSource(): DaemonSource {
-  const script = process.argv[1];
-  return { platform: process.platform, execPath: process.execPath, ...(script ? { scriptPath: resolve(script) } : {}), native: isSea() };
+  /** Absolute path of the running bundle. Default: the script node runs. */
+  bundlePath?: string;
+  /** Platform, resolver and fs of the launcher lookup (tests). */
+  binary?: BinaryDeps;
 }
 
 /** Windows: double quotes (cmd.exe). Elsewhere: single quotes, a quote inside becomes '\'' . */
@@ -61,28 +81,143 @@ export function quoteArg(value: string, platform: NodeJS.Platform): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** The shell string orch will run: `"<node>" "<bundle>" daemon`, or `"<exe>" daemon` for a native binary. */
+/** The shell string orch will run: the staged launcher form or the `"<node>" "<bundle>" daemon` development form. */
 export function daemonCommand(source: DaemonSource, configDir?: string): string {
   const q = (v: string) => quoteArg(v, source.platform);
+  if (source.scriptPath === undefined || !/\.(cjs|mjs|js)$/.test(source.scriptPath)) {
+    throw new StartupError(
+      `machine startup needs the single-file bundle, but it runs from ${source.scriptPath ?? 'no script'}: build the bundle with \`npm run bundle\` and run \`node dist/machine.cjs startup enable\``,
+    );
+  }
   let command: string;
-  if (source.native) {
-    command = `${q(source.execPath)} daemon`;
-  } else {
-    if (source.scriptPath === undefined || !/\.(cjs|mjs|js)$/.test(source.scriptPath)) {
+  if (source.launcher) {
+    const { exe, bundleOverride, wrapper } = source.launcher;
+    if (source.platform !== 'win32') {
+      // orch passes the string to sh and does not support a quote inside a path of this form (orch-owner, packaging.md section 8).
+      for (const path of [exe, bundleOverride, configDir]) {
+        if (path !== undefined && path.includes("'")) {
+          throw new StartupError(`the path ${path} contains a single quote, which orch cannot carry in the launcher command: move machine (or its configuration folder) to a path without it`);
+        }
+      }
+    }
+    if (bundleOverride !== undefined && source.platform === 'win32') {
+      // The wrapper script carries the override and the configuration folder; the job command only names the script.
+      if (wrapper !== undefined) return `${q(wrapper.wscript)} //B //Nologo ${q(wrapper.vbs)}`;
       throw new StartupError(
-        `machine startup needs the single-file bundle or a native binary, but it runs from ${source.scriptPath ?? 'no script'}: build the bundle with \`npm run bundle\` and run \`node dist/machine.cjs startup enable\``,
+        `the launcher cannot find the bundle ${bundleOverride} from its staged folder: it only looks under <folder of node>\\node_modules\\${LAUNCHER_BUNDLE_SPEC}, and the Windows job cannot carry LAUNCHER_BUNDLE_OVERRIDE through orch.cmd. Make the global modules of machine live next to node.exe (npm prefix = the folder of node.exe), run \`npm i -g @wadeck-app/machine-cli\` again, then \`machine startup enable\``,
       );
     }
+    command = `${bundleOverride === undefined ? '' : `LAUNCHER_BUNDLE_OVERRIDE=${q(bundleOverride)} `}${q(exe)} daemon`;
+  } else {
     command = `${q(source.execPath)} ${q(source.scriptPath)} daemon`;
   }
   return configDir === undefined ? command : `${command} --config-dir ${q(configDir)}`;
 }
 
-/** The command `enable` writes now. `--config-dir` is added only when this is not the default folder: orch's own environment is not the user's. */
-function expectedCommand(ctx: StartupContext): string {
-  const source = ctx.daemon ?? currentDaemonSource();
+/**
+ * LAUNCHER_BUNDLE_OVERRIDE to hand the launcher, or undefined for none (port of orch launcher-bundle.ts). The launcher,
+ * staged outside node_modules, finds the bundle by itself only at `<folder of node>/node_modules/<spec>`; any other bundle
+ * (a checkout, a Windows global prefix in %APPDATA%, a Unix prefix with lib/) must be named.
+ */
+export function launcherBundleOverride(opts: { bundle: string; spec: string; nodeDir: string | null; realpath?: (p: string) => string }): string | undefined {
+  if (opts.nodeDir === null) return opts.bundle;
+  const real = opts.realpath ?? realpathSync;
+  const found = join(opts.nodeDir, 'node_modules', ...opts.spec.split('/'));
+  try {
+    return real(found) === real(opts.bundle) ? undefined : opts.bundle;
+  } catch {
+    // The launcher's own lookup (a stat) fails the same way: it would not find the bundle, so it must be told.
+    return opts.bundle;
+  }
+}
+
+/** Which form a stored command is, from its first program: the staged launcher, node, or something else (not guessed). */
+export function registeredForm(command: string): DaemonForm | 'unknown' {
+  const rest = command.replace(/^LAUNCHER_BUNDLE_OVERRIDE='(?:[^']|'\\'')*'\s+/, '');
+  if (/^"[^"]*[\\/]wscript\.exe"\s+\/\/B\s+\/\/Nologo\s+"[^"]*[\\/]machine-daemon\.vbs"$/i.test(rest)) return 'launcher-wrapper';
+  const program = /^"([^"]*)"/.exec(rest)?.[1] ?? /^'((?:[^']|'\\'')*)'/.exec(rest)?.[1];
+  if (program === undefined) return 'unknown';
+  const name = (program.split(/[\\/]/).pop() ?? '').toLowerCase();
+  if (/^machine(\.exe)?$/.test(name)) return 'launcher';
+  if (/^node(\.exe)?$/.test(name)) return 'development';
+  return 'unknown';
+}
+
+/** What `enable` would run now, how it was built, and what to do after orch accepted it. */
+interface DaemonPlan {
+  source: DaemonSource;
+  form: DaemonForm;
+  /** Why the development form is used (absent for the launcher form). */
+  formNote?: string;
+  /** The wrapper of the launcher-wrapper form (status compares its file). */
+  wrapper?: WrapperPlan;
+  /** Launcher form built from the real package: the stamp to keep when pruning. */
+  keepStamp?: string;
+}
+
+function planDaemon(ctx: StartupContext, stage: boolean): DaemonPlan {
+  if (ctx.daemon) return { source: ctx.daemon, form: ctx.daemon.launcher ? 'launcher' : 'development' };
+  const platform = ctx.platform ?? process.platform;
+  const env = ctx.env ?? process.env;
+  const bundle = ctx.bundlePath ?? (process.argv[1] ? resolve(process.argv[1]) : undefined);
+  const base: DaemonSource = { platform, execPath: process.execPath, ...(bundle === undefined ? {} : { scriptPath: bundle }) };
+  const staged = stagedLauncher(resolve(ctx.configDir), { platform, ...ctx.binary }, stage);
+  if (staged.kind === 'absent') {
+    return {
+      source: base,
+      form: 'development',
+      formNote: `development form (node + bundle): ${staged.reason}, so this is a checkout or the development bundle. The installed release (npm i -g @wadeck-app/machine-cli) registers the staged launcher instead`,
+    };
+  }
+  if (bundle === undefined) {
+    throw new StartupError('machine startup cannot tell which bundle is running (no script): run it as `machine startup enable` from the installed package');
+  }
+  const nodeFound = findOnPath('node', env, platform);
+  const bundleOverride = launcherBundleOverride({ bundle, spec: LAUNCHER_BUNDLE_SPEC, nodeDir: nodeFound === undefined ? null : dirname(nodeFound) });
+  const wrapper = platform === 'win32' && bundleOverride !== undefined ? windowsWrapper(ctx, staged.exe, bundleOverride, env, stage) : undefined;
+  return {
+    source: { ...base, launcher: { exe: staged.exe, ...(bundleOverride === undefined ? {} : { bundleOverride }), ...(wrapper === undefined ? {} : { wrapper }) } },
+    form: wrapper === undefined ? 'launcher' : 'launcher-wrapper',
+    ...(wrapper === undefined ? {} : { wrapper }),
+    keepStamp: staged.stamp,
+  };
+}
+
+/** The --config-dir value of the job, or undefined for the default folder: orch's own environment is not the user's. */
+function nonDefaultConfigDir(ctx: StartupContext): string | undefined {
   const dir = resolve(ctx.configDir);
-  return daemonCommand(source, dir === resolve(ConfigDir.get('machine')) ? undefined : dir);
+  return dir === resolve(ConfigDir.get('machine')) ? undefined : dir;
+}
+
+/** %SystemRoot%\System32\wscript.exe from the environment, absolute or refused. */
+function wscriptPath(env: Record<string, string | undefined>): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? env.WINDIR;
+  if (root === undefined || !/^[A-Za-z]:\\/.test(root)) {
+    const got = root === undefined ? 'not set' : `not an absolute Windows path (${root})`;
+    throw new StartupError(
+      `cannot find wscript.exe: SystemRoot is ${got}. The Windows startup wrapper runs %SystemRoot%\\System32\\wscript.exe: run machine from a normal Windows session (SystemRoot set), then \`machine startup enable\``,
+    );
+  }
+  return win32.join(root, 'System32', 'wscript.exe');
+}
+
+/** Generates machine-daemon.vbs next to the staged launcher (written only when `stage`), every path validated. */
+function windowsWrapper(ctx: StartupContext, exe: string, bundle: string, env: Record<string, string | undefined>, stage: boolean): WrapperPlan {
+  const wscript = wscriptPath(env);
+  const vbs = win32.join(win32.dirname(exe), WRAPPER_NAME);
+  const configDir = nonDefaultConfigDir(ctx);
+  try {
+    const content = wrapperScript({ exe, bundle, ...(configDir === undefined ? {} : { configDir }) });
+    if (stage) stageWrapper(vbs, content, ctx.binary?.fs);
+    return { wscript, vbs, content };
+  } catch (e) {
+    throw new StartupError((e as Error).message);
+  }
+}
+
+/** The command `enable` writes now. `--config-dir` is added only when this is not the default folder: orch's own environment is not the user's. */
+function expectedCommand(ctx: StartupContext, plan: DaemonPlan): string {
+  return daemonCommand(plan.source, nonDefaultConfigDir(ctx));
 }
 
 /** First match of `name` on PATH (Windows: with a PATHEXT extension; a bare file is a shim that cmd.exe cannot run). */
@@ -214,17 +349,26 @@ export interface EnableResult {
   id: string;
   command: string;
   portFile: string;
+  form: DaemonForm;
+  /** Why the development form was used (absent for the launcher form). */
+  formNote?: string;
+  /** Older staged launcher folders removed after orch accepted the job (launcher form built from the real package only). */
+  pruned?: PruneResult;
 }
 
 export async function enableStartup(ctx: StartupContext): Promise<EnableResult> {
-  const command = expectedCommand(ctx);
+  // The new launcher is staged BEFORE orch is called and the old ones are pruned only AFTER orch returned 0: the stored job may still name an old folder until then (orch-owner rule).
+  const plan = planDaemon(ctx, true);
+  const command = expectedCommand(ctx, plan);
   const portFile = daemonPortFile(resolve(ctx.configDir));
   const id = ctx.id ?? STARTUP_JOB_ID;
   const restart = ctx.restartOnExit === false ? [] : ['--restart-on-exit'];
   const args = ['ensure', 'startup', id, '--command', command, ...restart, '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', portFile, '--json'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup enable');
-  return { action: parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged'), id, command, portFile };
+  const action = parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged');
+  const pruned = plan.keepStamp === undefined ? undefined : pruneStaged(resolve(ctx.configDir), plan.keepStamp, ctx.binary?.fs);
+  return { action, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }) };
 }
 
 export interface DisableResult {
@@ -248,19 +392,37 @@ export interface StatusResult {
   /** Command stored in the orch job (when it exists). */
   command?: string;
   upToDate?: boolean;
+  /** Form `enable` would register now, and why it is the development form when it is. */
+  expectedForm: DaemonForm;
+  formNote?: string;
+  /** Form of the stored command (when the job exists). */
+  registeredForm?: DaemonForm | 'unknown';
+  /** Wrapper form only: whether the staged script is the one `enable` would write now. */
+  wrapper?: 'current' | 'missing' | 'different';
 }
 
 export async function startupStatus(ctx: StartupContext): Promise<StatusResult> {
-  const expected = expectedCommand(ctx);
   const id = ctx.id ?? STARTUP_JOB_ID;
+  const plan = planDaemon(ctx, false);
+  const expected = expectedCommand(ctx, plan);
+  const base = { id, expected, expectedForm: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }) };
   const args = ['show', id, '--json'];
   const result = await runOrch(ctx, args);
   // Exit 3 of orch show: no such job.
-  if (result.code === 3) return { exists: false, id, expected };
+  if (result.code === 3) return { exists: false, ...base };
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup status');
   const command = findCommand(result.stdout);
   if (command === undefined) throw new StartupError(`orch show answered with no command field, so the job cannot be compared. Its output was: ${result.stdout.trim() || '(empty)'}`);
-  return { exists: true, id, expected, command, upToDate: command === expected };
+  let wrapper: 'current' | 'missing' | 'different' | undefined;
+  if (plan.wrapper !== undefined) {
+    try {
+      wrapper = wrapperState(plan.wrapper.vbs, plan.wrapper.content, ctx.binary?.fs);
+    } catch (e) {
+      throw new StartupError((e as Error).message);
+    }
+  }
+  const upToDate = command === expected && (wrapper === undefined || wrapper === 'current');
+  return { exists: true, ...base, command, upToDate, registeredForm: registeredForm(command), ...(wrapper === undefined ? {} : { wrapper }) };
 }
 
 /** The `command` string at the top of the answer or inside a `job` object. */

@@ -1,0 +1,24 @@
+{
+  "name": "@wadeck-app/app-module-machine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "app-core module of machine: admin pages (machines, candidacies). Backend routes read the local daemon and the relay; signing never happens here (decision D25).",
+  "type": "module",
+  "files": [
+    "dist-module"
+  ],
+  "scripts": {
+    "check": "app-core-cli check .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bundle": "app-core-cli package .",
+    "test": "echo [app-module-machine] unit tests only: the real-server integration test is NOT run here (needs app-core-cli): run npm run test:integration --workspace=packages/app-module-machine && vitest run --bail=1",
+    "test:integration": "vitest run --bail=1 -c vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@wadeck-app/machine-core": "*",
+    "@wadeck-app/shared-cli": "latest"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -20,11 +20,14 @@ export interface OrchStub {
   script: (replies: Record<string, OrchReply>) => void;
   /** Every call so far, as argument lists. */
   calls: () => string[][];
+  /** One entry per call: whether the file named by the ORCH_STUB_WATCH variable existed while orch ran (to prove an order of events). */
+  watched: () => ('exists' | 'missing')[];
 }
 
 const STUB_SOURCE = `const fs = require('node:fs');
 const path = require('node:path');
 fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.ORCH_STUB_WATCH) fs.appendFileSync(path.join(__dirname, 'watch.log'), (fs.existsSync(process.env.ORCH_STUB_WATCH) ? 'exists' : 'missing') + '\\n');
 const script = JSON.parse(fs.readFileSync(path.join(__dirname, 'script.json'), 'utf8'));
 const reply = script[process.argv[2]] || { code: 99, stderr: 'stub: no scripted reply for ' + process.argv[2] };
 if (reply.stdout) process.stdout.write(reply.stdout);
@@ -38,6 +41,7 @@ export function makeOrchStub(): OrchStub {
   writeFileSync(script, STUB_SOURCE);
   writeFileSync(join(dir, 'script.json'), '{}');
   appendFileSync(join(dir, 'calls.jsonl'), '');
+  appendFileSync(join(dir, 'watch.log'), '');
   return {
     orch: { file: process.execPath, args: [script] },
     dir,
@@ -47,5 +51,9 @@ export function makeOrchStub(): OrchStub {
         .split('\n')
         .filter((l) => l.length > 0)
         .map((l) => JSON.parse(l) as string[]),
+    watched: () =>
+      readFileSync(join(dir, 'watch.log'), 'utf8')
+        .split('\n')
+        .filter((l) => l.length > 0) as ('exists' | 'missing')[],
   };
 }

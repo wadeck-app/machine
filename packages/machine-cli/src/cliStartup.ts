@@ -1,5 +1,5 @@
 import { EXIT, type CommandContext } from './cliTypes.js';
-import { disableStartup, enableStartup, startupStatus, StartupError, type EnableResult, type StartupContext } from './startup.js';
+import { disableStartup, enableStartup, startupStatus, StartupError, type DaemonForm, type EnableResult, type StartupContext } from './startup.js';
 
 // `machine startup enable | disable | status`: thin front-end over startup.ts.
 
@@ -11,8 +11,19 @@ function startupContext(ctx: CommandContext): StartupContext {
   return { configDir: ctx.configDir, env: ctx.env, ...ctx.io.startup };
 }
 
+const FORM_TEXT: Record<DaemonForm | 'unknown', string> = {
+  launcher: 'staged launcher',
+  'launcher-wrapper': 'staged launcher through a wscript wrapper',
+  development: 'development (node + bundle)',
+  unknown: 'unknown (not a command this version of machine writes)',
+};
+
 function enableText(r: EnableResult): string {
-  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nport file: ${r.portFile}\n`;
+  const form = r.form !== 'development' ? `${FORM_TEXT[r.form]} (the job needs Node >= 22 on its PATH: the launcher starts node)` : FORM_TEXT.development;
+  const removed = r.pruned && r.pruned.removed.length > 0 ? `removed older staged launchers: ${r.pruned.removed.join(', ')}\n` : '';
+  const skipped = r.pruned && r.pruned.skipped.length > 0 ? `older staged launchers still in use, kept until the next run: ${r.pruned.skipped.join(', ')}\n` : '';
+  const note = r.formNote === undefined ? '' : `${r.formNote}\n`;
+  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}port file: ${r.portFile}\n`;
 }
 
 /**
@@ -51,9 +62,13 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
     }
     const s = await startupStatus(sctx);
     if (!s.exists) {
-      emit(s, `startup job "${s.id}": absent (run machine startup enable)\n`);
+      const note = s.formNote === undefined ? '' : `${s.formNote}\n`;
+      emit(s, `startup job "${s.id}": absent (run machine startup enable)\nenable would register the form: ${FORM_TEXT[s.expectedForm]}\n${note}`);
     } else {
-      emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n`);
+      const note = s.formNote === undefined ? '' : `${s.formNote}\n`;
+      const wrapper = s.wrapper === undefined ? '' : `wrapper script: ${s.wrapper}\n`;
+      const forms = `registered form: ${FORM_TEXT[s.registeredForm ?? 'unknown']}\nexpected form: ${FORM_TEXT[s.expectedForm]}\n${wrapper}${note}`;
+      emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${forms}${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n`);
     }
     return EXIT.ok;
   } catch (e) {

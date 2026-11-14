@@ -1,6 +1,6 @@
 import type { Prompt } from './admin.js';
 import type { PromptTimer } from './prompt.js';
-import type { DaemonSource, OrchCommand } from './startup.js';
+import type { StartupContext } from './startup.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
 export interface Timing {
@@ -23,7 +23,7 @@ export interface CliIo {
   /** Limit timer of the prompts; tests inject a fake one. */
   promptTimer?: PromptTimer;
   /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
-  startup?: { orch?: OrchCommand; daemon?: DaemonSource; platform?: NodeJS.Platform };
+  startup?: Partial<StartupContext>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
   allowLoopbackPeers?: boolean;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */

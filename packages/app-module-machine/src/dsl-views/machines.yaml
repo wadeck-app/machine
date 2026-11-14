@@ -1,0 +1,30 @@
+$sources:
+  machines:
+    url: GET /api/modules/machine/machines
+
+$type: PageContent
+sections:
+  - $type: PageHeader
+    title: Machines
+    subtitle: This machine and the peers it trusts, as the local machine daemon knows them. Read-only.
+  # The route answers `note` when this machine is not enrolled yet, and `presenceNote` for what the list cannot show.
+  - $type: Card
+    $if: $sources.machines.note
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.note
+  - $type: Card
+    $if: $sources.machines.presenceNote
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.presenceNote
+  - $type: DataTable
+    rows: $sources.machines.machines
+    emptyMessage: No machine
+    columns:
+      - { key: "name", label: "Name", nowrap: true }
+      - { key: "role", label: "Role", nowrap: true }
+      - { key: "aliasesText", label: "Aliases" }
+      - { key: "uuid", label: "UUID", nowrap: true }

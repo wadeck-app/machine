@@ -17,3 +17,6 @@ _secrets_/
 .claude/scratch/
 .claude/logs/
 .claude/w-guardrails/
+
+# Go launcher binaries built by packages/machine-cli/ci/scripts/build-launcher.sh
+dist-launcher/
