@@ -48,6 +48,12 @@ jobs:
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+            # The launcher tests run Go with GOPROXY=off (offline by design): fetch the modules of the SDK launcher once, here.
+            # The Windows job failed with "module lookup disabled by GOPROXY=off" for golang.org/x/sys on a fresh runner.
+            - name: Download Go modules of the launcher
+              run: go mod download
+              working-directory: node_modules/@wadeck-app/singleton-daemon-kit/go-launcher
+
             - name: Typecheck
               run: npm run typecheck
 

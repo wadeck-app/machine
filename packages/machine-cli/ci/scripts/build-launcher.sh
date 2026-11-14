@@ -113,9 +113,10 @@ for p in "${WANTED[@]}"; do
 done
 
 # Patched copy: the first build_target call is replaced by the wanted ones, the others are dropped; SCRIPT_DIR points at the SDK.
-awk -v targets="$targets" -v kit="$KIT_GO_NATIVE" '
+# The targets go through the environment: BSD awk (macOS) rejects a newline in a -v value ("newline in string").
+TARGETS="$targets" awk -v kit="$KIT_GO_NATIVE" '
   /^SCRIPT_DIR=/ { print "SCRIPT_DIR=\"" kit "\""; next }
-  /^build_target "/ { if (!done) { printf "%s", targets; done = 1 } next }
+  /^build_target "/ { if (!done) { printf "%s", ENVIRON["TARGETS"]; done = 1 } next }
   { print }
 ' "$BUILD_SH" > "$WORK/build-patched.sh"
 

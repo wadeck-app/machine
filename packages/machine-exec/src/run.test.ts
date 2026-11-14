@@ -67,6 +67,9 @@ describe.runIf(onWindows)('real cmd', () => {
 describe.runIf(onWindows)('real PowerShell', () => {
   it('keeps single and double quotes exactly as approved', async () => {
     const r = await runCommand({ shell: 'ps', command: `Write-Output 'a b'; Write-Output "c d"`, ...quick });
+    // The message carries stderr so that a failure says why the output is empty (CI: empty after 30 s). stderr is not compared:
+    // PowerShell writes its "preparing modules for first use" progress there.
+    expect(r.timedOut, `timed out, stderr: ${r.stderr}`).toBe(false);
     expect(lines(r.stdout)).toEqual(['a b', 'c d']);
   });
 

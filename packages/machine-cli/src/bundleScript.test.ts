@@ -129,6 +129,6 @@ describe('the bundle script', () => {
 
   it('writes dist/machine.cjs at the repo root by default, and dist/ is git-ignored', () => {
     expect(readFileSync(fileURLToPath(new URL('../scripts/bundle.mjs', import.meta.url)), 'utf8')).toMatch(/dist.*machine\.cjs/s);
-    expect(readFileSync(fileURLToPath(new URL('../../../.gitignore', import.meta.url)), 'utf8').split('\n')).toContain('dist/');
+    expect(readFileSync(fileURLToPath(new URL('../../../.gitignore', import.meta.url)), 'utf8').split(/\r?\n/)).toContain('dist/');
   });
 });
