@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -111,6 +111,9 @@ describe('machine cli update', () => {
 });
 
 describe('machine cli rollback', () => {
+  // update-state.json is still there (nothing consumed it): shared-cli reads previousVersion from it.
+  beforeEach(() => writeFileSync(join(dir, 'update-state.json'), JSON.stringify({ status: 'success', previousVersion: '2026.11.14-590-aaaaaaaa', targetVersion: RELEASE, timestamp: 5 })));
+
   it('refuses a development build, never touching the install', async () => {
     let ran = false;
     const r = await run(['cli', 'rollback'], { version: '0.1.0', rollback: async () => void (ran = true) });
@@ -138,6 +141,59 @@ describe('machine cli rollback', () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain('[fail] orch gone');
     expect(r.err).toMatch(/machine cli post-update/);
+  });
+});
+
+describe('machine cli rollback after update-state.json was consumed', () => {
+  const PREVIOUS = '2026.11.14-590-aaaaaaaa';
+  const record = () => writeFileSync(join(dir, 'last-update.json'), JSON.stringify({ previousVersion: PREVIOUS, targetVersion: RELEASE, timestamp: 5 }));
+
+  it('restores update-state.json from the record for the rollback, says so, then removes the record', async () => {
+    record();
+    let stateSeen: { previousVersion?: string } | undefined;
+    const r = await run(['cli', 'rollback'], {
+      version: RELEASE,
+      rollback: async (_pkg, d) => {
+        stateSeen = JSON.parse(readFileSync(join(d, 'update-state.json'), 'utf8')) as { previousVersion?: string };
+        rmSync(join(d, 'update-state.json'));
+      },
+      spawnPostUpdate: async () => ({ code: 0, output: '' }),
+    });
+    expect(r.code).toBe(0);
+    expect(stateSeen?.previousVersion).toBe(PREVIOUS);
+    expect(r.err).toMatch(/last-update\.json/);
+    expect(existsSync(join(dir, 'last-update.json'))).toBe(false);
+  });
+
+  it('without state and record, fails before npm with the fix, and does not call the rollback', async () => {
+    let ran = false;
+    const r = await run(['cli', 'rollback'], { version: RELEASE, rollback: async () => void (ran = true) });
+    expect(r.code).toBe(1);
+    expect(ran).toBe(false);
+    expect(r.err).toMatch(/machine cli update.*npm install -g @wadeck-app\/machine-cli@<version>/s);
+  });
+
+  it('a record of another target is refused and kept untouched', async () => {
+    writeFileSync(join(dir, 'last-update.json'), JSON.stringify({ previousVersion: PREVIOUS, targetVersion: '2026.11.14-500-cccccccc', timestamp: 5 }));
+    let ran = false;
+    const r = await run(['cli', 'rollback'], { version: RELEASE, rollback: async () => void (ran = true) });
+    expect(r.code).toBe(1);
+    expect(ran).toBe(false);
+    expect(existsSync(join(dir, 'last-update.json'))).toBe(true);
+  });
+
+  it('when the reinstall fails, the restored state is removed again and the record is kept for a retry', async () => {
+    record();
+    const r = await run(['cli', 'rollback'], {
+      version: RELEASE,
+      rollback: async () => {
+        throw new Error('npm exploded');
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('npm exploded');
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(false);
+    expect(existsSync(join(dir, 'last-update.json'))).toBe(true);
   });
 });
 

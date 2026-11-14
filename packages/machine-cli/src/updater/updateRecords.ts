@@ -9,6 +9,18 @@ export const POST_UPDATE_PENDING_FILE = 'post-update-pending.json';
 /** The last update to this version failed or was rolled back: it is not retried automatically (`machine cli update` forces it). */
 export const UPDATE_BLOCKED_FILE = 'update-blocked.json';
 
+/**
+ * The last SUCCESSFUL update (previous and target version). update-state.json cannot serve `machine cli rollback` on its own: the daemon
+ * consumes (deletes) it at its start. Kept until a rollback succeeds.
+ */
+export const LAST_UPDATE_FILE = 'last-update.json';
+
+export interface LastUpdate {
+  previousVersion: string;
+  targetVersion: string;
+  timestamp: number;
+}
+
 export interface PendingPostUpdate {
   targetVersion: string;
   error: string;
@@ -30,6 +42,9 @@ export interface UpdateRecords {
   readBlocked(): BlockedUpdate | null;
   writeBlocked(blocked: BlockedUpdate): void;
   clearBlocked(): void;
+  readLastUpdate(): LastUpdate | null;
+  writeLastUpdate(last: LastUpdate): void;
+  clearLastUpdate(): void;
 }
 
 function readJson<T>(file: string, valid: (value: unknown) => value is T): T | null {
@@ -60,10 +75,13 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isPending = (v: unknown): v is PendingPostUpdate => isObject(v) && typeof v.targetVersion === 'string' && typeof v.error === 'string' && typeof v.timestamp === 'number';
 const isBlocked = (v: unknown): v is BlockedUpdate => isObject(v) && typeof v.version === 'string' && typeof v.error === 'string' && typeof v.timestamp === 'number';
 
+const isLastUpdate = (v: unknown): v is LastUpdate => isObject(v) && typeof v.previousVersion === 'string' && typeof v.targetVersion === 'string' && typeof v.timestamp === 'number';
+
 /** Reads throw on a file that is there but unusable (the caller logs it and goes on); a missing file is null. */
 export function createUpdateRecords(configDir: string): UpdateRecords {
   const pendingFile = join(configDir, POST_UPDATE_PENDING_FILE);
   const blockedFile = join(configDir, UPDATE_BLOCKED_FILE);
+  const lastFile = join(configDir, LAST_UPDATE_FILE);
   return {
     readPending: () => readJson(pendingFile, isPending),
     writePending: (pending) => write(pendingFile, pending),
@@ -71,5 +89,8 @@ export function createUpdateRecords(configDir: string): UpdateRecords {
     readBlocked: () => readJson(blockedFile, isBlocked),
     writeBlocked: (blocked) => write(blockedFile, blocked),
     clearBlocked: () => rmSync(blockedFile, { force: true }),
+    readLastUpdate: () => readJson(lastFile, isLastUpdate),
+    writeLastUpdate: (last) => write(lastFile, last),
+    clearLastUpdate: () => rmSync(lastFile, { force: true }),
   };
 }

@@ -15,6 +15,7 @@ import { enableStartup, OrchNotInstalledError, startupStatus, StartupError, type
 import { spawnPostUpdate } from './updater/spawnPostUpdate.js';
 import { UPDATER_BUNDLE_NAME } from './updateScheduling.js';
 import { writeFileAtomic } from './fsutil.js';
+import { forgetLastUpdate, prepareRollback } from './rollbackRecord.js';
 import { noticeKey, NOTICE_SEEN_FILE, postUpdatePendingNotice, readUpdateStateReadOnly, updateNotice } from './updateNotice.js';
 import { POST_UPDATE_PENDING_FILE } from './updater/updateRecords.js';
 import { appVersion } from './version.js';
@@ -210,7 +211,17 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
         const refused = devRefusal();
         if (refused !== undefined) return refused;
         io.stderr('[warn] a rollback restarts the daemon when it runs under the startup job: a remote command still running is cut\n');
-        await deps.rollback(PACKAGE_NAME, configDir);
+        // The daemon consumes update-state.json at its start: it comes back from the durable record of the last update, or this fails with the fix.
+        const prepared = prepareRollback(configDir, deps.version);
+        if (prepared.note !== undefined) io.stderr(`[machine] ${prepared.note}\n`);
+        try {
+          await deps.rollback(PACKAGE_NAME, configDir);
+        } catch (e) {
+          // A failed reinstall must not leave a state the daemon would take for a fresh update; the record stays for the retry.
+          if (prepared.restored) rmSync(join(configDir, 'update-state.json'), { force: true });
+          throw e;
+        }
+        forgetLastUpdate(configDir);
         const post = await deps.spawnPostUpdate();
         if (post.output.length > 0) io.stderr(post.output.endsWith('\n') ? post.output : `${post.output}\n`);
         if (post.code !== 0) return fail('the previous version is installed, but post-update failed: the startup job or the running daemon may still use the newer one. Fix the cause above, then run: machine cli post-update');

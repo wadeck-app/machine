@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { updaterMain, type UpdaterMainDeps } from './updaterMain.js';
-import type { BlockedUpdate, PendingPostUpdate, UpdateRecords } from './updateRecords.js';
+import type { BlockedUpdate, LastUpdate, PendingPostUpdate, UpdateRecords } from './updateRecords.js';
 
 // The updater entry, with every side effect injected: nothing here runs npm, touches the real install or spawns a process.
 
@@ -16,7 +16,7 @@ function make(over: Partial<UpdaterMainDeps> = {}, runs: { cfg?: Cfg; envAtRun?:
   const err: string[] = [];
   const calls = { npmRoot: 0, postUpdate: [] as string[] };
   const env: Record<string, string | undefined> = {};
-  const store: { pending: PendingPostUpdate | null; blocked: BlockedUpdate | null } = { pending: null, blocked: null };
+  const store: { pending: PendingPostUpdate | null; blocked: BlockedUpdate | null; last: LastUpdate | null } = { pending: null, blocked: null, last: null };
   const records: UpdateRecords = {
     readPending: () => store.pending,
     writePending: (p) => void (store.pending = p),
@@ -24,6 +24,9 @@ function make(over: Partial<UpdaterMainDeps> = {}, runs: { cfg?: Cfg; envAtRun?:
     readBlocked: () => store.blocked,
     writeBlocked: (b) => void (store.blocked = b),
     clearBlocked: () => void (store.blocked = null),
+    readLastUpdate: () => store.last,
+    writeLastUpdate: (l) => void (store.last = l),
+    clearLastUpdate: () => void (store.last = null),
   };
   const deps: UpdaterMainDeps = {
     pkgName: '@wadeck-app/machine-cli',
@@ -197,6 +200,47 @@ describe('after the updater ran', () => {
     t.env.UPDATER_SELF_CHECK_CMD = 'custom check';
     expect(await updaterMain(t.deps)).toBe(1);
     expect(t.err.join('')).toMatch(/\[fail\].*npm root -g.*gone.*machine cli post-update/s);
+  });
+});
+
+describe('the durable record of the last successful update (what `cli rollback` needs once update-state.json was consumed)', () => {
+  const success = { status: 'success', currentVersion: CURRENT, targetVersion: TARGET, previousVersion: CURRENT, timestamp: 2_000 };
+
+  it('is written by a successful update of this run, before post-update, with previous and target versions', async () => {
+    const t = make({
+      readState: () => success,
+      spawnPostUpdate: async () => {
+        expect(t.store.last).not.toBeNull();
+        return { code: 0, output: '' };
+      },
+    });
+    await updaterMain(t.deps);
+    expect(t.store.last).toEqual({ previousVersion: CURRENT, targetVersion: TARGET, timestamp: 1_000 });
+  });
+
+  it('falls back to the running version when the state has no previousVersion (the updater runs from the previous install)', async () => {
+    const t = make({ readState: () => ({ status: 'success', currentVersion: CURRENT, targetVersion: TARGET, timestamp: 2_000 }) });
+    await updaterMain(t.deps);
+    expect(t.store.last?.previousVersion).toBe(CURRENT);
+  });
+
+  it('is not written for a failure, a rollback, or a state that is not of this run', async () => {
+    for (const state of [{ ...success, status: 'failed' }, { ...success, status: 'rolled-back' }, { ...success, timestamp: 999 }, { ...success, targetVersion: CURRENT }]) {
+      const t = make({ readState: () => state });
+      await updaterMain(t.deps);
+      expect(t.store.last, JSON.stringify(state)).toBeNull();
+    }
+  });
+
+  it('a record that cannot be written is an error in the log and on stderr, and the update goes on to post-update', async () => {
+    const t = make({ readState: () => success });
+    t.deps.records.writeLastUpdate = () => {
+      throw new Error('disk full');
+    };
+    expect(await updaterMain(t.deps)).toBe(0);
+    expect(t.logs.join('\n')).toMatch(/error: .*disk full/);
+    expect(t.err.join('')).toMatch(/machine cli rollback.*disk full|disk full.*machine cli rollback/s);
+    expect(t.calls.postUpdate).toEqual([NPM_ROOT]);
   });
 });
 

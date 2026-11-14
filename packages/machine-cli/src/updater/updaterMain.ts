@@ -19,7 +19,7 @@ export interface UpdaterMainDeps {
   /** `npm root -g`; throws when npm fails. */
   npmRootGlobal: () => string;
   resolveTarget: (npmRoot: string) => SelfCheckTarget;
-  readState: () => { status: string; currentVersion?: string; targetVersion?: string; error?: string; timestamp?: number } | null;
+  readState: () => { status: string; currentVersion?: string; previousVersion?: string; targetVersion?: string; error?: string; timestamp?: number } | null;
   runUpdater: (cfg: UpdaterConfig) => Promise<void>;
   /** Runs `cli post-update` of the NEW install (so that a fix of that logic applies to the update that installs it). */
   spawnPostUpdate: (npmRoot: string) => Promise<{ code: number; output: string }>;
@@ -144,6 +144,13 @@ export async function updaterMain(deps: UpdaterMainDeps): Promise<number> {
     deps.records.clearBlocked();
   } catch (e) {
     deps.log('warn', `${pkgName} cannot clear the record of the blocked update: ${message(e)}`);
+  }
+  // Before post-update (which may restart the daemon): the daemon consumes update-state.json at its start, and a rollback needs the versions.
+  try {
+    deps.records.writeLastUpdate({ previousVersion: state.previousVersion ?? currentVersion, targetVersion: state.targetVersion, timestamp: deps.now() });
+  } catch (e) {
+    deps.log('error', `${pkgName} cannot record the update for a rollback: ${message(e)}`);
+    deps.stderr(`[warn] cannot record the update for \`machine cli rollback\` (${message(e)}): once the daemon has started, a rollback needs: npm install -g ${pkgName}@${currentVersion}\n`);
   }
   deps.stderr(`[ok] updated machine to v${state.targetVersion} (was v${currentVersion})\n`);
   let root: string;

@@ -141,7 +141,7 @@ Rule from CLAUDE.md applies: new `@wadeck-app/*` dependencies (`shared-updater`,
 <npm root -g>/@wadeck-app/machine-cli-<plat>/     machine[.exe]   (never executed from here)
 <configDir>/bin/<platform-pkg-version>/machine[.exe]   staged launcher, run by orch
 <configDir>/app-module/<stamp>/                         staged app-module, registered with app-core
-<configDir>/update-state.json, update-cache.json, .update.lock, logs/
+<configDir>/update-state.json, last-update.json, update-cache.json, .update.lock, logs/
 ```
 
 - Staging code (new `platformBinary.ts` in machine-cli, port of orch `platform-binary.ts:119-322`): table, `findLauncher()` via `require.resolve('<pkg>/machine[.exe]')`, `stageBinary` (partial + rename, throw on failure), `pruneStaged`, `unsupportedPlatformMessage`. No fallback to the `node_modules` path.
@@ -159,6 +159,7 @@ Rule from CLAUDE.md applies: new `@wadeck-app/*` dependencies (`shared-updater`,
    b. Restart the daemon (38b): if a daemon runs and reports a version different from the new one, `POST /quit` with the `health_token` (the daemon runs its `onShutdown` and exits 0); the orch job `--restart-on-exit` relaunches the command string. Not through shared-updater's `restartDaemon`, which also writes `config.restart` (that makes the launcher relaunch node itself and orch never sees an exit); see question to shared-updater owner. If step (a) already restarted it (`--restart-if-changed`), step (b) sees the new version and does nothing.
    c. No app-core call from the updater: the restarted daemon registers the module at start (3.7).
 5. `machine cli rollback`: `CliMetaCommands.ts:100-118` then the same `cli post-update` (it only reinstalls; startup and restart must follow).
+   `CliMetaCommands.ts` needs `update-state.json`, which the daemon deletes at its start (`readAndClearState`). The updater therefore writes `<configDir>/last-update.json` (previous and target version) on success, before post-update; `cli rollback` restores `update-state.json` from it when missing (says so on stderr), refuses a record whose target is not the installed version, removes the restored state if the reinstall fails, and deletes the record after success. Without state and record it fails with the fix (`machine cli update`, or `npm install -g @wadeck-app/machine-cli@<version>`).
 6. Output: `[ok]`/`[fail]` lines naming version, state file and the manual command (`npm install -g @wadeck-app/machine-cli@<prev>`); the next CLI invocation shows the result of a background update (`readAndClearState`, `QueueIndex.ts:933-940` pattern).
 7. Background: the daemon (long-running, like orch) requests the updater at start and every 30 min through a `createUpdateScheduler` port, with the loop guard (`update-guard.ts`) and the `autoUpdate: false` gate in `<configDir>/config.yml`. Default ON as in the siblings; the work laptop sets it off (AR-9, user parameter).
 
