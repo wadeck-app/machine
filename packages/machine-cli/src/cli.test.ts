@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -155,5 +155,78 @@ describe('machine strictness', () => {
     const r = await run('alias', 'set', 'desktop', 'desktop');
     // Pointing a name at itself is harmless.
     expect(r.code).toBe(0);
+  });
+});
+
+describe('machine admin', () => {
+  async function runWith(prompt: (label: string) => Promise<string>, ...args: string[]): Promise<{ code: number; out: string; err: string }> {
+    let out = '';
+    let err = '';
+    const code = await runCli([...args, '--config-dir', dir], { stdout: (t) => (out += t), stderr: (t) => (err += t), prompt }, { MACHINE_PASSPHRASE: 'ignored-value' });
+    return { code, out, err };
+  }
+  const never = async () => {
+    throw new Error('the prompt must not be asked');
+  };
+
+  it('admin init prints the passphrase once, tells to store it, and warns about an ignored environment variable', async () => {
+    const r = await runWith(never, 'admin', 'init');
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/passphrase/i);
+    expect(r.out).toMatch(/shown only once/i);
+    expect(r.err).toMatch(/MACHINE_PASSPHRASE is set but ignored/);
+    expect(r.err + r.out).not.toContain('ignored-value');
+  });
+
+  it('admin init twice fails', async () => {
+    await runWith(never, 'admin', 'init');
+    const r = await runWith(never, 'admin', 'init');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/already exists/);
+  });
+
+  it('refuses a passphrase given as an option and says why', async () => {
+    const r = await runWith(never, 'admin', 'sign-policy', 'x.json', '--passphrase', 'hunter2');
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/passphrase.*never.*argument/is);
+    expect(r.err).not.toContain('hunter2');
+  });
+
+  it('sign-policy shows the summary on stderr, asks the prompt, writes the signed document', async () => {
+    const init = await runWith(never, 'admin', 'init');
+    const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.out)?.[1]?.trim() ?? '';
+    expect(passphrase.length).toBeGreaterThan(20);
+    const draft = join(dir, 'draft.json');
+    const out = join(dir, 'signed.json');
+    writeFileSync(
+      draft,
+      JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [{ shell: 'cmd', command: 'ipconfig' }], peers: {} }),
+    );
+    const r = await runWith(async () => passphrase, 'admin', 'sign-policy', draft, '--out', out);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('"ipconfig"');
+    const signed = JSON.parse(readFileSync(out, 'utf8')) as { body: { version: number }; signature: string };
+    expect(signed.body.version).toBe(1);
+    expect(signed.signature.length).toBeGreaterThan(20);
+    expect(r.out + r.err).not.toContain(passphrase);
+  });
+
+  it('sign-policy without an interactive terminal fails with the reason', async () => {
+    await runWith(never, 'admin', 'init');
+    const draft = join(dir, 'draft.json');
+    writeFileSync(draft, JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} }));
+    let err = '';
+    const code = await runCli(['admin', 'sign-policy', draft, '--config-dir', dir], { stdout: () => undefined, stderr: (t) => (err += t) }, {});
+    expect(code).toBe(1);
+    expect(err).toMatch(/interactive terminal/);
+  });
+
+  it('a wrong passphrase exits 1 with a clear message', async () => {
+    await runWith(never, 'admin', 'init');
+    const draft = join(dir, 'draft.json');
+    writeFileSync(draft, JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} }));
+    const r = await runWith(async () => 'definitely not the passphrase', 'admin', 'sign-policy', draft);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/wrong passphrase/);
   });
 });

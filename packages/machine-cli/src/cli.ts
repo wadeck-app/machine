@@ -1,13 +1,18 @@
+import { writeFileSync } from 'node:fs';
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
+import { adminInit, signPolicyFile, type Prompt } from './admin.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
 import { initMachine } from './identity.js';
 import { resolveConfigDir } from './paths.js';
+import { promptHidden } from './prompt.js';
 import { appVersion } from './version.js';
 
 export interface CliIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  /** Hidden passphrase prompt; defaults to the terminal. Tests inject one. */
+  prompt?: Prompt;
 }
 
 export const EXIT = { ok: 0, failure: 1, usage: 2, reference: 3 } as const;
@@ -25,9 +30,12 @@ Commands:
   alias set <alias> <reference>  create an alias (--replace to repoint it)
   alias rm <alias>               remove an alias
   daemon                         run the daemon in the foreground (started by orch)
+  admin init                     create the admin key on this machine (passphrase shown once)
+  admin sign-policy <draft.json> sign a policy draft after showing it (--out <file>, else stdout)
 
 Options:
   --json                 machine-readable output
+  --out <file>           write the signed document to a file
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
 
@@ -42,6 +50,7 @@ interface Parsed {
   help: boolean;
   replace: boolean;
   name?: string;
+  out?: string;
   configDir?: string;
 }
 
@@ -58,6 +67,10 @@ function parse(argv: string[]): Parsed {
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--replace') out.replace = true;
     else if (a === '--name') out.name = valueOf('--name');
+    else if (a === '--out') out.out = valueOf('--out');
+    else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
+      throw new UsageError('a passphrase is never accepted as an argument (it would stay in your shell history and in the process list): it is typed at the prompt');
+    }
     else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a.startsWith('--')) throw new UsageError(`unknown option "${a}": see \`machine --help\``);
     else out.positional.push(a);
@@ -115,6 +128,46 @@ ${HELP}`);
       io.stdout(`[ok] machine daemon listening on 127.0.0.1:${daemon.port} (config ${configDir})\n`);
       await daemon.stopped;
       return EXIT.ok;
+    }
+
+    if (command === 'admin') {
+      const [sub, draft] = rest;
+      if (env.MACHINE_PASSPHRASE !== undefined || env.MACHINE_ADMIN_PASSPHRASE !== undefined) {
+        io.stderr('[warn] MACHINE_PASSPHRASE is set but ignored: passphrases are only read from the terminal prompt, never from the environment. Unset it\n');
+      }
+      if (sub === 'init') {
+        const r = adminInit(configDir);
+        emit(
+          { adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey, passphrase: r.passphrase },
+          `[ok] admin key created (id ${r.adminKeyId})
+Admin passphrase (shown only once, write it down now; it cannot be recovered):
+  ${r.passphrase}
+`,
+        );
+        return EXIT.ok;
+      }
+      if (sub === 'sign-policy') {
+        if (draft === undefined || rest.length > 2) return fail('usage: machine admin sign-policy <draft.json> [--out <file>]', EXIT.usage);
+        const prompt = io.prompt ?? promptHidden;
+        const { signed } = await signPolicyFile(configDir, draft, {
+          now: Math.floor(Date.now() / 1000),
+          prompt,
+          onSummary: (summary) => io.stderr(`${summary}
+Signing this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.
+`),
+        });
+        const text = `${JSON.stringify(signed, null, 2)}
+`;
+        if (args.out) {
+          writeFileSync(args.out, text);
+          io.stderr(`[ok] signed policy written to ${args.out}
+`);
+        } else {
+          io.stdout(text);
+        }
+        return EXIT.ok;
+      }
+      return fail('usage: machine admin init | sign-policy <draft.json>', EXIT.usage);
     }
 
     // Everything else goes through the daemon when it runs and through the same code in-process when it does not.
