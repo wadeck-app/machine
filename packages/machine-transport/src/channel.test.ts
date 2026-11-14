@@ -241,6 +241,24 @@ describe('peer channel', () => {
     expect(await (h.sessions[0] as PeerSession).next()).toEqual({ last: true });
   });
 
+  // The revocation hello travels as the first application frame, possibly in the same flight as the proof: it must neither be lost nor count against the 1 KiB pre-authentication buffer.
+  it('delivers a first frame that arrives in the same write as the proof, and frames above the pre-auth 1 KiB once authenticated', async () => {
+    const h = await start();
+    const socket = await rawClient(h);
+    const exported = socket.exportKeyingMaterial(32, 'EXPORTER-machine-pair-proof', Buffer.from('client'));
+    const proof = Buffer.concat([Buffer.from([1]), createHmac('sha256', h.secret).update(exported).digest()]);
+    socket.write(Buffer.concat([proof, frame(Buffer.from('{"type":"hello"}'))]));
+    await until(() => h.sessions.length === 1, 'server session');
+    expect(await (h.sessions[0] as PeerSession).next()).toEqual({ type: 'hello' });
+
+    const h2 = await start();
+    const socket2 = await rawClient(h2);
+    sendProof(socket2, h2.secret);
+    await until(() => h2.sessions.length === 1, 'server session');
+    socket2.write(frame(Buffer.from(`{"pad":"${'x'.repeat(4000)}"}`)));
+    expect(await (h2.sessions[0] as PeerSession).next()).toMatchObject({ pad: expect.any(String) });
+  });
+
   it('closing the listener also ends live sessions', async () => {
     const h = await start();
     const client = await connect(h);

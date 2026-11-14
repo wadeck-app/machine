@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateSigningKeyPair, keyId } from './keys.js';
-import { applyRevocation, isRevoked, mergeRevocations, revocationDigest, signRevocation, verifyRevocation, type RevocationBody } from './revocation.js';
+import { MAX_REVOCATION_ENTRIES, applyRevocation, canonicalSignedRevocation, isRevoked, mergeRevocations, revocationDigest, signRevocation, verifyRevocation, type RevocationBody } from './revocation.js';
 
 const A = '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
 const B = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
@@ -86,5 +86,21 @@ describe('revocation', () => {
     expect(revocationDigest(one)).toBe(revocationDigest(two));
     expect(revocationDigest(one)).not.toBe(revocationDigest(mergeRevocations(one, [{ uuid: A, serial: 3 }])));
     expect(revocationDigest(one)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('refuses to sign or read a list with more than the entry cap, so a stored or forwarded list stays bounded', () => {
+    const { admin, body } = setup();
+    const entries = Array.from({ length: MAX_REVOCATION_ENTRIES + 1 }, (_, i) => ({ uuid: `6f1c2d3e-4a5b-4c6d-8e7f-${i.toString(16).padStart(12, '0')}`, serial: 1 }));
+    expect(() => signRevocation({ ...body, entries }, admin.privateKeyPkcs8)).toThrow(/at most 4096|too many/);
+  });
+
+  it('rebuilds the canonical { body, signature } and drops every other top-level field before a list is stored or forwarded', () => {
+    const { admin, body } = setup();
+    const signed = signRevocation(body, admin.privateKeyPkcs8);
+    const dirty = { ...signed, extra: 'x'.repeat(1000), __proto_note: 1 };
+    expect(canonicalSignedRevocation(dirty)).toEqual(signed);
+    expect(Object.keys(canonicalSignedRevocation(dirty))).toEqual(['body', 'signature']);
+    expect(() => canonicalSignedRevocation({ body: signed.body })).toThrow(/signature/);
+    expect(() => canonicalSignedRevocation('nope')).toThrow(/object/);
   });
 });

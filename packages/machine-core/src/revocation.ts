@@ -5,6 +5,9 @@ import { signDocument, verifyDocument } from './signed.js';
 
 export const REVOCATION_DOMAIN = 'machine/revocation/v1';
 
+/** Entries per signed list: a list is stored and forwarded between peers, so its size is bounded (about 300 KiB at the cap). */
+export const MAX_REVOCATION_ENTRIES = 4096;
+
 /** Revokes every registration of `uuid` whose serial is at most `serial` (a re-registration with a higher serial is a new machine identity). */
 export interface RevocationEntry {
   uuid: string;
@@ -40,6 +43,7 @@ export function assertRevocationBody(value: unknown): asserts value is Revocatio
   if (typeof record.adminKeyId !== 'string' || !KEY_ID.test(record.adminKeyId)) throw new Error('revocation: adminKeyId must be 32 lowercase hex characters');
   if (typeof record.issuedAt !== 'number' || !Number.isSafeInteger(record.issuedAt) || record.issuedAt < 0) throw new Error('revocation: issuedAt must be epoch seconds');
   if (!Array.isArray(record.entries)) throw new Error('revocation: entries must be a list');
+  if (record.entries.length > MAX_REVOCATION_ENTRIES) throw new Error(`revocation: too many entries (${record.entries.length}); a list holds at most ${MAX_REVOCATION_ENTRIES}`);
   let previous: string | undefined;
   for (const entry of record.entries as unknown[]) {
     const e = entry as Record<string, unknown>;
@@ -53,6 +57,15 @@ export function assertRevocationBody(value: unknown): asserts value is Revocatio
     if (previous !== undefined && e.uuid < previous) throw new Error('revocation: entries must be sorted by uuid');
     previous = e.uuid;
   }
+}
+
+/** Only { body, signature }: anything else a peer or a file put next to them is dropped before a list is stored or forwarded. */
+export function canonicalSignedRevocation(value: unknown): SignedRevocation {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('revocation: a signed list must be an object');
+  const { body, signature } = value as { body?: unknown; signature?: unknown };
+  if (typeof signature !== 'string') throw new Error('revocation: missing signature');
+  if (typeof body !== 'object' || body === null) throw new Error('revocation: missing body');
+  return { body: body as RevocationBody, signature };
 }
 
 export function signRevocation(body: RevocationBody, adminPrivateKeyPkcs8: Uint8Array): SignedRevocation {

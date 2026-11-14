@@ -13,8 +13,10 @@ export {
   type VerifyRegistrationContext,
 } from './registration.js';
 export {
+  MAX_REVOCATION_ENTRIES,
   REVOCATION_DOMAIN,
   applyRevocation,
+  canonicalSignedRevocation,
   assertRevocationBody,
   isRevoked,
   mergeRevocations,
@@ -26,6 +28,7 @@ export {
   type RevocationResult,
   type SignedRevocation,
 } from './revocation.js';
+export { parseRevocationHello, shouldSendRevocations, type HelloResult, type RevocationHello } from './revocationCatchup.js';
 export {
   POLICY_DOMAIN,
   SHELLS,

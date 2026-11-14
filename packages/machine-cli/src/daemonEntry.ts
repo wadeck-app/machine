@@ -1,16 +1,15 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDaemon, type DaemonHandle } from '@wadeck-app/singleton-daemon-kit';
-import type { PeerListener } from '@wadeck-app/machine-transport';
 import { adminPinFile } from './admin.js';
 import { resolveAdvertised, type AdvertiseSpec, type InterfaceProvider } from './addressDiscovery.js';
 import { createAddressPublisher } from './addressPublisher.js';
 import { makeCommands } from './commands.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
-import { loadNetwork, type Network } from './network.js';
+import { installRevocation, loadNetwork, recordRevocationSeen, revocationState, type Network } from './network.js';
 import { startInboxLoop, type InboxLoop, type InboxTimer } from './inboxLoop.js';
-import { startPeerListener } from './peerService.js';
+import { startPeerListener, type ServicedPeerListener } from './peerService.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 import { removeDaemonPortFile, writeDaemonPortFile } from './daemonPortFile.js';
@@ -71,7 +70,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   const log = options.log ?? ((line: string) => process.stderr.write(`[machine] ${line}\n`));
   const now = () => Math.floor(Date.now() / 1000);
 
-  let listener: PeerListener | undefined;
+  let listener: ServicedPeerListener | undefined;
   let inbox: InboxLoop | undefined;
   let markStopped: () => void = () => undefined;
   const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
@@ -119,6 +118,16 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         usage,
         audit,
         now,
+        revocation: {
+          state: () => revocationState(configDir),
+          // A list that was installed must take effect now, not after the cache delay: D must not connect right after C learned of it.
+          install: (signed) => {
+            const result = installRevocation(configDir, signed, { now: now() });
+            cached = undefined;
+            return result;
+          },
+          seen: (peerUuid, announced) => recordRevocationSeen(configDir, peerUuid, announced, now(), (warning) => log(`revocation: ${warning}`)),
+        },
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },
@@ -158,6 +167,11 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         audit,
         now,
         publisher,
+        // A revocation installed from the inbox takes effect now: no cache delay, and the open sessions of the revoked peer are closed.
+        onRevocationInstalled: () => {
+          cached = undefined;
+          listener?.revalidate();
+        },
         log: (line) => log(line),
         ...(options.inbox?.timer ? { timer: options.inbox.timer } : {}),
         ...(options.inbox?.heartbeatMs !== undefined ? { heartbeatMs: options.inbox.heartbeatMs } : {}),

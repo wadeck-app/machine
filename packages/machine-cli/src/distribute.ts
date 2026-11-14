@@ -5,7 +5,9 @@ import {
   decodeBase64urlStrict,
   derivePairSecretV2,
   documentId,
+  mergeRevocations,
   pairSecretDocumentContext,
+  revocationDigest,
   sealTo,
   signRevocation,
   type DocumentKind,
@@ -17,7 +19,7 @@ import {
 import { adminKeyFile, readAdminPin } from './admin.js';
 import { adminRelayError } from './adminRelay.js';
 import { NotInitializedError } from './errors.js';
-import { exportMachineInfo, loadNetwork, trustedRegistrations } from './network.js';
+import { exportMachineInfo, loadNetwork, revocationState, signAndInstallRevocation, trustedRegistrations } from './network.js';
 import { createRelayClient, RelayError, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile } from './relayStore.js';
 
@@ -178,7 +180,15 @@ export async function distributeRevocation(configDir: string, revokedUuid: strin
   if (!network.revocations.some((r) => r.uuid === revokedUuid)) {
     throw new Error(`machine ${revokedUuid} is not revoked on this machine: nothing to distribute (\`machine admin revoke <machine>\` revokes it)`);
   }
-  const signed = signRevocation({ v: 1, adminKeyId: pin.adminKeyId, issuedAt: sender.now(), entries: network.revocations }, sender.adminPrivateKeyPkcs8);
+  // A list this machine already signed for exactly these revocations is sent again as it is (a retry is idempotent, peers and admin agree on its
+  // version). Only when none covers them exactly is a new union signed, with a version above the held ones, and installed here in the same locked step.
+  const wanted = revocationDigest(network.revocations);
+  let signed = revocationState(configDir).lists.find((l) => revocationDigest(l.body.entries) === wanted);
+  if (signed === undefined) {
+    signed = signAndInstallRevocation(configDir, ({ entries, version }) =>
+      signRevocation({ v: 1, adminKeyId: pin.adminKeyId, issuedAt: Math.max(sender.now(), version + 1), entries: mergeRevocations(entries, network.revocations) }, sender.adminPrivateKeyPkcs8),
+    ).signed;
+  }
   const recipients = trustedRegistrations(configDir, sender.now()).filter((r) => r.body.uuid !== revokedUuid);
   report.machines = recipients.length;
   for (const r of recipients) {

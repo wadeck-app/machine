@@ -54,6 +54,8 @@ export interface InboxLoopOptions {
   timer?: InboxTimer;
   /** Asked in every round, right AFTER the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
   publisher?: { tick(): Promise<void> };
+  /** Called after a revocation list was installed (the daemon drops its network cache and closes the open sessions of revoked peers). */
+  onRevocationInstalled?: () => void;
   /** Tests: size of the set of installed ids. */
   handledCap?: number;
 }
@@ -265,7 +267,9 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
     if (verified.revocation.body.entries.some((entry) => entry.uuid === selfUuid)) {
       o.log('inbox: THIS machine is on the revocation list of the admin: its peers no longer trust it');
     }
-    return installRevocation(o.configDir, verified.revocation).changed ? {} : { reason: 'already-installed' };
+    const installed = installRevocation(o.configDir, verified.revocation, { now });
+    if (installed.changed) o.onRevocationInstalled?.();
+    return installed.changed ? {} : { reason: 'already-installed' };
   };
 
   const handleEntry = async (entry: InboxEntry): Promise<Outcome> => {

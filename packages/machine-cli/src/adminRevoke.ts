@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { keyId, resolveMachineRef, signRevocation } from '@wadeck-app/machine-core';
+import { keyId, mergeRevocations, resolveMachineRef, signRevocation } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { adminMachineUuid, adminRelayAccess, distributeRevocation, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { PromptTimeoutError } from './prompt.js';
-import { installRevocation, loadNetwork, registeredSerial } from './network.js';
+import { loadNetwork, registeredSerial, signAndInstallRevocation } from './network.js';
 import type { RelayClient } from './relayClient.js';
 import { readAliases } from './state.js';
 
@@ -71,8 +71,11 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
 
   o.say('Enter the admin passphrase to sign the revocation, Ctrl-C to cancel.\n');
   const pair = await unlockAdminKey(configDir, o.prompt);
-  const signed = signRevocation({ v: 1, adminKeyId: pin.adminKeyId, issuedAt: o.now(), entries: [{ uuid: peer.peerId, serial }] }, pair.privateKeyPkcs8);
-  installRevocation(configDir, signed);
+  // The union of what is installed AT THIS MOMENT (read inside the lock, after the prompt: an install that landed meanwhile is part of it), with a
+  // version strictly above the held ones, signed and installed in one locked step.
+  signAndInstallRevocation(configDir, ({ entries, version }) =>
+    signRevocation({ v: 1, adminKeyId: pin.adminKeyId, issuedAt: Math.max(o.now(), version + 1), entries: mergeRevocations(entries, [{ uuid: peer.peerId, serial }]) }, pair.privateKeyPkcs8),
+  );
   o.say(`[ok] "${peer.name}" revoked on this machine: it no longer appears in the peers and \`machine run\` refuses it\n`);
 
   // The revocation stands whatever happens next: distribution failures are reported, never undone.

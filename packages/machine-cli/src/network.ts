@@ -1,14 +1,18 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DOCUMENT_SKEW_SECONDS,
   POLICY_DOMAIN,
   applyPolicy,
   applyRevocation,
+  canonicalSignedRevocation,
   decodeBase64urlStrict,
   isUuid,
   machineNameProblem,
+  mergeRevocations,
+  revocationDigest,
+  verifyRevocation,
   signRegistration,
   tryKeyId,
   verifyDocument,
@@ -22,7 +26,7 @@ import {
 } from '@wadeck-app/machine-core';
 import { readAdminPin, unlockAdminKey, adminPinFile, type Prompt } from './admin.js';
 import { buildDirectory, type Directory, type PairedRegistration } from './directory.js';
-import { writeFileAtomic } from './fsutil.js';
+import { withFileLock, writeFileAtomic } from './fsutil.js';
 import { readMachine } from './identity.js';
 import { SECRETS_DIRNAME } from './paths.js';
 
@@ -45,6 +49,10 @@ export interface PeerBundle {
 
 const peersFile = (configDir: string) => join(configDir, SECRETS_DIRNAME, 'peers.json');
 const revocationsFile = (configDir: string) => join(configDir, 'revocations.json');
+// The admin-signed lists kept for the catch-up between peers (bounded set): the merged entries carry no signature of their own.
+const revocationListsFile = (configDir: string) => join(configDir, 'revocation-lists.json');
+// The revocation version each peer announced at its last handshake: shown by `machine list`, so the admin sees who is behind.
+const revocationSeenFile = (configDir: string) => join(configDir, 'revocation-seen.json');
 const policyFile = (configDir: string) => join(configDir, 'policy.json');
 const policyStateFile = (configDir: string) => join(configDir, 'policy-state.json');
 
@@ -154,13 +162,193 @@ function readRevocations(configDir: string): RevocationEntry[] {
   return raw.entries as RevocationEntry[];
 }
 
-/** Merge an admin-signed revocation list. A list can only add revocations, never remove one. */
-export function installRevocation(configDir: string, signed: SignedRevocation): { changed: boolean } {
-  const pin = readAdminPin(configDir);
-  const applied = applyRevocation(readRevocations(configDir), signed, { adminPublicKey: pin.adminPublicKey });
+/** Signed lists kept for the catch-up between peers: bounded, so a flood of lists cannot fill the disk or a frame. */
+export const MAX_STORED_LISTS = 32;
+const MAX_STORED_BYTES = 2 * 1024 * 1024;
+/** A list dated further ahead than this (against the caller's clock) is refused: a far future date would hide it among older ones. */
+export const MAX_FUTURE_SECONDS = 86_400;
+
+export interface InstallOptions {
+  /** The caller's clock (epoch seconds). Given: a list dated more than a day ahead is refused. */
+  now?: number;
+  /** How long to wait for another process that holds the lock (default 5 s). */
+  lockTimeoutMs?: number;
+  /** Tests: runs between the read and the write, inside the lock. */
+  afterRead?: () => void;
+}
+
+export interface InstallResult {
+  /** The merged entries grew. */
+  changed: boolean;
+  /** Lists dropped to stay within the bound (the oldest). */
+  dropped: number;
+}
+
+const lockOptions = (o: InstallOptions) => (o.lockTimeoutMs !== undefined ? { timeoutMs: o.lockTimeoutMs } : {});
+
+function covers(union: RevocationEntry[], list: RevocationEntry[]): boolean {
+  return list.every((entry) => union.some((u) => u.uuid === entry.uuid && u.serial >= entry.serial));
+}
+
+/** Dedupe by signature, drop every list fully covered (uuid and serial) by the union of the others, then bound the set (oldest dropped first). */
+function pruneLists(lists: SignedRevocation[]): { kept: SignedRevocation[]; dropped: number } {
+  const bySignature = new Map<string, SignedRevocation>();
+  for (const l of lists) bySignature.set(l.signature, l);
+  let kept = [...bySignature.values()].sort((p, q) => p.body.issuedAt - q.body.issuedAt || p.body.entries.length - q.body.entries.length || (p.signature < q.signature ? -1 : 1));
+  for (const candidate of [...kept]) {
+    const others = kept.filter((l) => l !== candidate);
+    if (others.length > 0 && covers(mergeRevocations(...others.map((l) => l.body.entries)), candidate.body.entries)) kept = others;
+  }
+  let dropped = 0;
+  while (kept.length > MAX_STORED_LISTS || (kept.length > 1 && Buffer.byteLength(JSON.stringify(kept)) > MAX_STORED_BYTES)) {
+    kept = kept.slice(1);
+    dropped += 1;
+  }
+  return { kept, dropped };
+}
+
+function readStoredLists(configDir: string, adminPublicKey: string): SignedRevocation[] {
+  const file = revocationListsFile(configDir);
+  const raw = readJsonObject(file, 'delete it: the next admin revocation list restores it');
+  if (!raw) return [];
+  if (raw.v !== 1 || !Array.isArray(raw.lists)) throw new Error(`${file} is corrupt or invalid (unexpected shape): delete it, the next admin revocation list restores it`);
+  return (raw.lists as unknown[]).map((value) => {
+    const signed = canonicalSignedRevocation(value);
+    const verified = verifyRevocation(signed, { adminPublicKey });
+    if (!verified.ok) {
+      throw new Error(`${file} does not match its admin signature (${verified.reason}: ${verified.message}): delete it, the next admin revocation list restores it`);
+    }
+    return signed;
+  });
+}
+
+/** The body of an install, with the lock held and everything re-read: what another process wrote meanwhile is kept. */
+function installLocked(configDir: string, adminPublicKey: string, signed: SignedRevocation, options: InstallOptions): InstallResult {
+  const stored = readStoredLists(configDir, adminPublicKey);
+  // A list already held is not verified again (cheap against a peer that repeats it).
+  if (stored.some((l) => l.signature === signed.signature)) return { changed: false, dropped: 0 };
+  const local = readRevocations(configDir);
+  const applied = applyRevocation(local, signed, { adminPublicKey });
   if (!applied.ok) throw new Error(`revocation refused (${applied.reason}): ${applied.message}`);
+  if (options.now !== undefined && signed.body.issuedAt > options.now + MAX_FUTURE_SECONDS) {
+    throw new Error(`revocation refused (future): the list is dated ${signed.body.issuedAt}, more than a day in the future of this machine's clock (${options.now}): check the clock of the machine that signed it, or of this one`);
+  }
+  options.afterRead?.();
   if (applied.changed) writeFileAtomic(revocationsFile(configDir), `${JSON.stringify({ v: 1, entries: applied.entries }, null, 2)}\n`, 0o644);
-  return { changed: applied.changed };
+  const { kept, dropped } = pruneLists([...stored, signed]);
+  writeFileAtomic(revocationListsFile(configDir), `${JSON.stringify({ v: 1, lists: kept }, null, 2)}\n`, 0o644);
+  return { changed: applied.changed, dropped };
+}
+
+/**
+ * Merge an admin-signed revocation list (grow-only, whatever its date) and keep it for the catch-up between peers. Runs under a lock shared
+ * with every other writer of the revocation files: the daemon, the inbox and the CLI never lose each other's update.
+ */
+export function installRevocation(configDir: string, signed: SignedRevocation, options: InstallOptions = {}): InstallResult {
+  const pin = readAdminPin(configDir);
+  let list: SignedRevocation;
+  try {
+    list = canonicalSignedRevocation(signed);
+  } catch (e) {
+    throw new Error(`revocation refused (malformed): ${(e as Error).message}`);
+  }
+  return withFileLock(revocationsFile(configDir), () => installLocked(configDir, pin.adminPublicKey, list, options), lockOptions(options));
+}
+
+/**
+ * Admin side: build the list to sign from what is installed AT THIS MOMENT (read inside the lock, after any slow prompt), sign it with `build`,
+ * and install it in the same locked step: an install that landed during the passphrase prompt is part of the signed union.
+ */
+export function signAndInstallRevocation(
+  configDir: string,
+  build: (current: { entries: RevocationEntry[]; version: number }) => SignedRevocation,
+  options: InstallOptions = {},
+): InstallResult & { signed: SignedRevocation } {
+  const pin = readAdminPin(configDir);
+  return withFileLock(
+    revocationsFile(configDir),
+    () => {
+      const entries = readRevocations(configDir);
+      const version = Math.max(0, ...readStoredLists(configDir, pin.adminPublicKey).map((l) => l.body.issuedAt));
+      const signed = canonicalSignedRevocation(build({ entries, version }));
+      return { ...installLocked(configDir, pin.adminPublicKey, signed, options), signed };
+    },
+    lockOptions(options),
+  );
+}
+
+export interface RevocationState {
+  /** revocationDigest of the merged entries. */
+  digest: string;
+  /** Informational: the highest issuedAt among the signed lists held here, 0 when none. */
+  version: number;
+  /** The admin-signed lists kept for the catch-up (canonical, verified against the pinned key). */
+  lists: SignedRevocation[];
+}
+
+const stateCache = new Map<string, { key: string; state: RevocationState }>();
+
+function fileKey(file: string): string {
+  try {
+    const s = statSync(file);
+    return `${s.mtimeMs}:${s.size}:${s.ino}`;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw e;
+  }
+}
+
+/** What this machine tells a peer at handshake time about its revocations. Re-read only when one of the files changed. */
+export function revocationState(configDir: string): RevocationState {
+  const pin = readAdminPin(configDir);
+  const key = [revocationsFile(configDir), revocationListsFile(configDir), adminPinFile(configDir)].map(fileKey).join('|');
+  const cached = stateCache.get(configDir);
+  if (cached && cached.key === key) return cached.state;
+  const lists = readStoredLists(configDir, pin.adminPublicKey);
+  const state: RevocationState = { digest: revocationDigest(readRevocations(configDir)), version: Math.max(0, ...lists.map((l) => l.body.issuedAt)), lists };
+  stateCache.set(configDir, { key, state });
+  return state;
+}
+
+export interface RevocationSeen {
+  version: number;
+  /** revocationDigest the peer announced: compared with ours to see who is out of sync. */
+  digest: string;
+  /** Epoch seconds of that handshake. */
+  at: number;
+}
+
+const SEEN_HINT = 'it is rebuilt at the next handshake';
+
+/** A corrupt file counts as empty and is reported through `onWarning`: it must never make `list` or `status` fail. */
+export function readRevocationSeen(configDir: string, onWarning?: (message: string) => void): Record<string, RevocationSeen> {
+  const file = revocationSeenFile(configDir);
+  let raw: Record<string, unknown> | undefined;
+  try {
+    raw = readJsonObject(file, SEEN_HINT);
+    if (!raw) return {};
+    const peers = raw.peers;
+    if (raw.v !== 1 || typeof peers !== 'object' || peers === null || Array.isArray(peers)) throw new Error(`${file} is corrupt or invalid (unexpected shape): ${SEEN_HINT}`);
+    const out: Record<string, RevocationSeen> = {};
+    for (const [uuid, value] of Object.entries(peers as Record<string, unknown>)) {
+      const v = value as { version?: unknown; digest?: unknown; at?: unknown } | null;
+      if (!isUuid(uuid) || typeof v?.version !== 'number' || typeof v.digest !== 'string' || typeof v.at !== 'number') throw new Error(`${file} is corrupt or invalid (bad entry for "${uuid}"): ${SEEN_HINT}`);
+      out[uuid] = { version: v.version, digest: v.digest, at: v.at };
+    }
+    return out;
+  } catch (e) {
+    onWarning?.(`${(e as Error).message}; it is treated as empty`);
+    return {};
+  }
+}
+
+/** Remember what a peer announced. Locked read-modify-write: the daemon and the CLI do not lose each other's entries. */
+export function recordRevocationSeen(configDir: string, peerUuid: string, announced: { version: number; digest: string }, now: number, onWarning?: (message: string) => void): void {
+  withFileLock(revocationSeenFile(configDir), () => {
+    const seen = readRevocationSeen(configDir, onWarning);
+    seen[peerUuid] = { version: announced.version, digest: announced.digest, at: now };
+    writeFileAtomic(revocationSeenFile(configDir), `${JSON.stringify({ v: 1, peers: seen }, null, 2)}\n`, 0o644);
+  });
 }
 
 interface PolicyState {

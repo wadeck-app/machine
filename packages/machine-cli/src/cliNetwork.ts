@@ -17,10 +17,11 @@ import { readMachine } from './identity.js';
 import { APPROVAL_MAX_AGE_SECONDS, classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { createRelayClient, RelayError } from './relayClient.js';
 import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
-import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
+import { exportMachineInfo, importPeer, installPolicy, installRevocation, loadNetwork, recordRevocationSeen, registerMachine, revocationState, type MachineInfo, type PeerBundle } from './network.js';
 import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
 import { readAliases } from './state.js';
 import { runOnPeer } from './peerService.js';
+import { catchUpRevocations } from './revocationSync.js';
 
 // The commands that deal with the network: admin signing, peers, policy and remote execution.
 
@@ -511,6 +512,20 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   }
   let answer;
   try {
+    // Before any request: exchange the revocation lists (a revocation the relay never delivered still reaches whoever meets a peer that has it).
+    const catchUp = await catchUpRevocations(session, {
+      state: () => revocationState(configDir),
+      install: (signed) => installRevocation(configDir, signed, { now: epochSeconds() }),
+      seen: (peerUuid, announced) => recordRevocationSeen(configDir, peerUuid, announced, epochSeconds(), (warning) => io.stderr(`[warn] ${warning}
+`)),
+      peerId: peer.peerId,
+      peerLabel: peer.name,
+      peerTrusted: () => loadNetwork(configDir, epochSeconds()).directory.find(peer.peerId) !== undefined,
+    });
+    for (const warning of catchUp.warnings) io.stderr(`[warn] ${warning}
+`);
+    if (catchUp.installed) io.stderr(`[info] ${peer.name} handed over revocations this machine did not have yet: they are installed
+`);
     // The request is dated now, after the connection exists: a slow connection must not age it.
     answer = await runOnPeer(session, { identity: self.identity, source: self.uuid, target: peer.peerId, shell: shell as Shell, command, now: epochSeconds() });
   } finally {

@@ -1,7 +1,7 @@
 import { resolveMachineRef, type MachineEntry, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
-import { loadNetwork } from './network.js';
+import { loadNetwork, readRevocationSeen, revocationState } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
@@ -21,6 +21,10 @@ export interface StatusAnswer {
   peers: number;
   /** Version of the policy in force on this machine; absent when there is none (everything is refused). */
   policyVersion?: number;
+  /** Version (issuedAt of the newest admin-signed list) of the revocations held here; 0 when none. Present when enrolled. */
+  revocationVersion?: number;
+  /** Peers whose revocations, announced (digest) at their last handshake, differ from ours: they may still trust a revoked machine until they meet a peer that has the lists. The version is informational. */
+  peersBehind?: Array<{ uuid: string; name: string; revocationVersionSeen: number }>;
   /** What was left out of the network and why (invalid registration, tampered policy, ...). */
   problems: string[];
   configDir: string;
@@ -30,7 +34,10 @@ export interface StatusAnswer {
 export interface ListAnswer {
   initialized: true;
   self: MachineEntry;
-  peers: Array<MachineEntry & { aliases: string[] }>;
+  /** revocationVersionSeen: the revocation version the peer announced at its last handshake (absent: never seen), revocationSeenAt: when (epoch seconds). */
+  peers: Array<MachineEntry & { aliases: string[]; revocationVersionSeen?: number; revocationSeenAt?: number }>;
+  /** Why the revocation versions are missing (unreadable state file). */
+  revocationWarning?: string;
   enrolled: boolean;
   note?: string;
 }
@@ -69,6 +76,21 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
       const network = loadNetwork(configDir, now());
+      const problems = [...network.problems];
+      let revocation: Pick<StatusAnswer, 'revocationVersion' | 'peersBehind'> = {};
+      if (network.enrolled) {
+        try {
+          const own = revocationState(configDir);
+          const seen = readRevocationSeen(configDir, (warning) => problems.push(warning));
+          const behind = network.directory.machines().flatMap((m) => {
+            const s = seen[m.uuid];
+            return s !== undefined && s.digest !== own.digest ? [{ uuid: m.uuid, name: m.name, revocationVersionSeen: s.version }] : [];
+          });
+          revocation = { revocationVersion: own.version, peersBehind: behind };
+        } catch (e) {
+          problems.push(`revocation catch-up state unavailable: ${(e as Error).message}`);
+        }
+      }
       return {
         initialized: true,
         uuid: self.uuid,
@@ -77,7 +99,8 @@ export function makeCommands(configDir: string, version: string | (() => string)
         enrolled: network.enrolled,
         peers: network.directory.machines().length,
         ...(network.policy ? { policyVersion: network.policy.version } : {}),
-        problems: network.problems,
+        ...revocation,
+        problems,
         configDir,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };
@@ -88,10 +111,17 @@ export function makeCommands(configDir: string, version: string | (() => string)
       if ('initialized' in self) return self;
       const network = loadNetwork(configDir, now());
       const aliases = readAliases(configDir);
+      let revocationWarning: string | undefined;
+      const seen = readRevocationSeen(configDir, (warning) => (revocationWarning = `the revocation versions are not shown: ${warning}`));
       return {
         initialized: true,
         self: { uuid: self.uuid, name: self.name },
-        peers: network.directory.machines().map((p) => ({ ...p, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias) })),
+        peers: network.directory.machines().map((p) => ({
+          ...p,
+          aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias),
+          ...(seen[p.uuid] ? { revocationVersionSeen: seen[p.uuid]?.version as number, revocationSeenAt: seen[p.uuid]?.at as number } : {}),
+        })),
+        ...(revocationWarning ? { revocationWarning } : {}),
         enrolled: network.enrolled,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };

@@ -19,8 +19,10 @@ Usage: machine <command> [options]
 
 Commands:
   init --name <name>                 create this machine's UUID and identity key
-  status                             identity, enrollment state, policy, what was left out
-  list                               this machine and its registered peers; with a relay also their last known
+  status                             identity, enrollment state, policy, revocation version and peers last seen
+                                     behind on it, what was left out
+  list                               this machine and its registered peers (and the revocation version each peer
+                                     announced at its last handshake); with a relay also their last known
                                      addresses and whether the relay says they are online (a relay problem is a
                                      warning line, never an error)
   resolve <reference>                show which machine a reference means
@@ -29,7 +31,9 @@ Commands:
                                      run one allowed command on a peer. Without --address the addresses come from
                                      the relay (the signed address record of the peer, verified against its
                                      registration), tried in order with 3 s each; --address overrides it and is the
-                                     only way without a relay
+                                     only way without a relay. Before the command, the two machines compare their
+                                     admin revocation lists and hand each other what the other lacks (a revocation the
+                                     relay never delivered still arrives); a peer that turns out revoked is refused
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>] [--advertise <host[:port]>]...
                                      run the daemon in the foreground (started by orch). With a relay (after join)
                                      it publishes its signed address record: the non-loopback interface addresses
@@ -284,6 +288,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
           `version: ${r.version}`,
           `config: ${r.configDir}`,
           r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
+          ...(r.revocationVersion === undefined ? [] : [`revocations: version ${r.revocationVersion}`]),
+          ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
         ];
         emit(r, `${lines.join('\n')}\n`);
@@ -294,7 +300,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         if (notInitialized(r)) return fail(r.message);
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
         const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000), undefined, { allowLocal: io.allowLoopbackPeers === true });
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...relayLines(p.relay)])];
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay)])];
+        if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
+`);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
         emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}`);
         return EXIT.ok;

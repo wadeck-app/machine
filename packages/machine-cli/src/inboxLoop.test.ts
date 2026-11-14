@@ -69,7 +69,7 @@ async function enroll(name: string): Promise<void> {
 }
 
 /** The machine `laptop` as the daemon sees it: admin key pinned, relay token stored, and it owns its inbox. */
-function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; client?: ReturnType<typeof createRelayClient>; now?: () => number; handledCap?: number } = {}) {
+function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; client?: ReturnType<typeof createRelayClient>; now?: () => number; handledCap?: number; onRevocationInstalled?: () => void } = {}) {
   const timer = options.timer ?? fakeTimer();
   const audit = new FileAuditLog(join(dirOf(name), 'audit.log'));
   const loop = startInboxLoop({
@@ -81,6 +81,7 @@ function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; 
     log: (line) => logs.push(line),
     timer,
     ...(options.handledCap !== undefined ? { handledCap: options.handledCap } : {}),
+    ...(options.onRevocationInstalled ? { onRevocationInstalled: options.onRevocationInstalled } : {}),
   });
   loops.push(loop);
   return { loop, timer };
@@ -284,6 +285,22 @@ describe('the inbox loop: documents from the admin', () => {
     await loop.runOnce();
     expect(machineNames('laptop')).toEqual([]);
     expect(auditText('laptop')).toMatch(/"reason":"revoked"/);
+  });
+
+  it('tells the daemon when a revocation document was installed (so the open sessions of the revoked peer are closed)', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    let calls = 0;
+    const { loop } = loopFor('laptop', { onRevocationInstalled: () => (calls += 1) });
+    await loop.ready;
+    expect(calls).toBe(0);
+    const r = await cli(adminDir, ['admin', 'revoke', 'server'], pass, { ask: yes });
+    expect(r.code, r.err).toBe(0);
+    await loop.runOnce();
+    expect(calls).toBe(1);
+    // Replayed list: nothing new, no notification.
+    await loop.runOnce();
+    expect(calls).toBe(1);
   });
 
   it('a document that starts in the future is kept (not deleted), recorded once, and installed when the clock reaches it', async () => {
