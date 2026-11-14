@@ -111,3 +111,7 @@ Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<co
 - `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a " (2)" suffix).
 - Console (full access only): the Tokens page lists waiting requests (user code, label, observed address, age). The approver TYPES the user code shown by the CLI; 5 wrong codes deny the request. The token is scope `machine` only. An approved token not collected within 5 minutes is revoked.
 - The pairing claim stays as the fallback.
+
+## Enrollment screens (UX requirement, user 2026-11-14)
+
+Every screen that guides enrollment shows a vertical timeline on the left (current step highlighted) and, beside each step, an "i" tooltip saying what the step is for and which threat it addresses. Two places: the relay console approval of the device login (relay access only: request received, origin check on address and label, typed code, token delivered; owner poc-owner) and the admin signing page of `app-module-machine` (candidacy review, passphrase and signature, final code comparison, distribution; WP8). The relay stays a dumb registry: it never shows trust decisions.
