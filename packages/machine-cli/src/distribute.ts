@@ -3,7 +3,7 @@ import {
   DOCUMENT_RETENTION_SECONDS,
   buildDocument,
   decodeBase64urlStrict,
-  derivePairSecret,
+  derivePairSecretV2,
   documentId,
   pairSecretDocumentContext,
   sealTo,
@@ -135,7 +135,7 @@ export async function distributeMachine(configDir: string, subjectUuid: string, 
   const others = registrations.filter((r) => r.body.uuid !== subjectUuid);
   report.machines = others.length;
   for (const other of others) {
-    const secret = derivePairSecret(sender.adminPrivateKeyPkcs8, { uuid: subject.body.uuid, serial: subject.body.serial }, { uuid: other.body.uuid, serial: other.body.serial });
+    const secret = derivePairSecretV2(sender.adminPrivateKeyPkcs8, { uuid: subject.body.uuid, serial: subject.body.serial }, { uuid: other.body.uuid, serial: other.body.serial });
     // About the new machine, to the old one; then about the old one, to the new machine.
     if (!(await put(sender, report, { uuid: other.body.uuid, name: other.body.name }, 'peer', () => peerDocument(sender, other, subject, secret)))) break;
     if (!(await put(sender, report, { uuid: subject.body.uuid, name: subject.body.name }, 'peer', () => peerDocument(sender, subject, other, secret)))) break;

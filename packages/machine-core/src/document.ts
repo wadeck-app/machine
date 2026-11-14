@@ -97,7 +97,7 @@ const PAIR_SECRET_V2_DOMAIN = 'machine/pair-secret/v2';
  * non-extractable browser key can compute it). Ed25519 is deterministic and unforgeable without the key, so the signature over a
  * domain-separated string naming both machines and serials is a keyed PRF; HKDF-SHA256 of the 64 signature bytes gives 32 bytes.
  * Both orders of the pair give the same value (sorted by uuid), and a retry seals the SAME secret. Same inputs and outputs as the
- * WebCrypto `derivePairSecretFromSignature` of machine-webcrypto. No caller uses it yet: `derivePairSecret` is still the live one.
+ * WebCrypto `derivePairSecretFromSignature` of machine-webcrypto. `distribute.ts` uses it; `derivePairSecret` (seed-based) is deprecated.
  */
 export function derivePairSecretV2(adminPrivateKeyPkcs8: Uint8Array, a: { uuid: string; serial: number }, b: { uuid: string; serial: number }): string {
   if (adminPrivateKeyPkcs8.length !== PKCS8_ED25519_BYTES) throw new Error('the admin private key is not an Ed25519 PKCS8 key of 48 bytes: the admin key file may be damaged');
