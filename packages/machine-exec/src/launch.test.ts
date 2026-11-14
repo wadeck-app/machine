@@ -1,0 +1,72 @@
+import { describe, expect, it } from 'vitest';
+import { launchSpec, scrubEnv } from './launch.js';
+
+const WIN_ENV = { SystemRoot: 'C:\\Windows' };
+
+describe('launchSpec on Windows', () => {
+  it('runs cmd with the approved string as ONE verbatim argument, never re-quoted', () => {
+    const spec = launchSpec('cmd', 'echo "a b" & dir', 'win32', WIN_ENV);
+    expect(spec.file).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(spec.windowsVerbatimArguments).toBe(true);
+    // /s makes cmd strip exactly the outer pair of quotes we add, whatever quotes the approved string contains.
+    expect(spec.args).toEqual(['/d', '/s', '/c', '"echo "a b" & dir"']);
+  });
+
+  it('runs PowerShell with the string base64-encoded (UTF-16LE), so no quoting layer exists', () => {
+    const spec = launchSpec('ps', "Write-Output 'x' \"y\"", 'win32', WIN_ENV);
+    expect(spec.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    expect(spec.args.slice(0, 4)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand']);
+    expect(Buffer.from(spec.args[4] as string, 'base64').toString('utf16le')).toBe("Write-Output 'x' \"y\"");
+    expect(spec.windowsVerbatimArguments).toBe(false);
+  });
+
+  it.each(['bash', 'sh'] as const)('refuses %s on Windows and says why (bash.exe may be WSL)', (shell) => {
+    expect(() => launchSpec(shell, 'ls', 'win32', WIN_ENV)).toThrow(/not supported on Windows/);
+  });
+
+  it('names the missing variable when SystemRoot is unknown', () => {
+    expect(() => launchSpec('cmd', 'dir', 'win32', {})).toThrow(/SystemRoot/);
+  });
+});
+
+describe('launchSpec on Unix', () => {
+  it.each(['linux', 'darwin'] as const)('runs bash and sh with -c and the string untouched on %s', (platform) => {
+    expect(launchSpec('bash', "ls 'a b'", platform, {})).toMatchObject({ file: '/bin/bash', args: ['--noprofile', '--norc', '-c', "ls 'a b'"] });
+    expect(launchSpec('sh', 'ls | wc -l', platform, {})).toMatchObject({ file: '/bin/sh', args: ['-c', 'ls | wc -l'] });
+  });
+
+  it('refuses cmd on Unix and says why', () => {
+    expect(() => launchSpec('cmd', 'dir', 'linux', {})).toThrow(/only exists on Windows/);
+  });
+
+  it('runs PowerShell through pwsh', () => {
+    expect(launchSpec('ps', 'Get-Date', 'linux', {}).file).toBe('pwsh');
+  });
+});
+
+describe('launchSpec command checks', () => {
+  it.each([
+    ['', /empty/],
+    ['a\nb', /printable ASCII/],
+    ['caf\u00e9', /printable ASCII/],
+    ['x'.repeat(2049), /longer than/],
+  ])('refuses %j before building any command line', (command, message) => {
+    expect(() => launchSpec('sh', command, 'linux', {})).toThrow(message);
+  });
+
+  it('refuses an unknown shell', () => {
+    expect(() => launchSpec('zsh' as never, 'ls', 'linux', {})).toThrow(/unknown shell/);
+  });
+});
+
+describe('scrubEnv', () => {
+  it('keeps only the allow-listed variables, whatever their case on Windows', () => {
+    const out = scrubEnv({ Path: 'p', SYSTEMROOT: 's', NODE_AUTH_TOKEN: 'secret', MACHINE_PASSPHRASE: 'secret', ComSpec: 'c' }, 'win32');
+    expect(out).toEqual({ Path: 'p', SYSTEMROOT: 's', ComSpec: 'c' });
+  });
+
+  it('is case-sensitive on Unix', () => {
+    const out = scrubEnv({ PATH: 'p', path: 'q', HOME: 'h', AWS_SECRET_ACCESS_KEY: 'secret', LC_ALL: 'C' }, 'linux');
+    expect(out).toEqual({ PATH: 'p', HOME: 'h', LC_ALL: 'C' });
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateSigningKeyPair, keyId } from './keys.js';
-import { applyPolicy, authorize, entryKey, signPolicy, type PolicyBody, type PolicyEntry } from './policy.js';
+import { applyPolicy, authorize, commandTextProblem, entryKey, signPolicy, type PolicyBody, type PolicyEntry } from './policy.js';
 
 const NOW = 1_800_000_000;
 const TARGET = '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
@@ -187,5 +187,20 @@ describe('policy edge cases (review findings)', () => {
     const usedUnderOldKey = (k: string) => (k === entryKey('default', exhausted.defaults[0] as PolicyEntry) ? 3 : 0);
     expect(authorize(exhausted, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, usedUnderOldKey)).toMatchObject({ allowed: false, reason: 'exhausted' });
     expect(authorize(withLimits({ maxCalls: 10 }), PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, usedUnderOldKey)).toMatchObject({ allowed: true });
+  });
+});
+
+describe('commandTextProblem (shared by the policy and the launcher)', () => {
+  it('accepts a plain command', () => {
+    expect(commandTextProblem('ipconfig /all')).toBeUndefined();
+  });
+  it.each([
+    ['', /empty/],
+    ['x'.repeat(2049), /longer than 2048/],
+    ['echo a\necho b', /printable ASCII/],
+    ['echo café', /printable ASCII/],
+    ['echo \u0000', /printable ASCII/],
+  ])('refuses %j', (text, message) => {
+    expect(commandTextProblem(text)).toMatch(message);
   });
 });

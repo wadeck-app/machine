@@ -58,11 +58,18 @@ function posInt(x: unknown): x is number {
   return typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
 }
 
+/** Why a command text cannot be allowed or launched, or undefined when it is acceptable. One rule for policy and launcher. */
+export function commandTextProblem(command: string): string | undefined {
+  if (command.length === 0) return 'command must not be empty';
+  if (command.length > MAX_COMMAND) return `command is longer than ${MAX_COMMAND} characters`;
+  if (!PRINTABLE_ASCII.test(command)) return 'command must use printable ASCII only (no control or non-ASCII characters)';
+  return undefined;
+}
+
 function assertCommand(command: unknown, where: string): asserts command is string {
   if (typeof command !== 'string') throw new Error(`policy: ${where} command must be a string`);
-  if (command.length === 0) throw new Error(`policy: ${where} command must not be empty`);
-  if (command.length > MAX_COMMAND) throw new Error(`policy: ${where} command is longer than ${MAX_COMMAND} characters`);
-  if (!PRINTABLE_ASCII.test(command)) throw new Error(`policy: ${where} command must use printable ASCII only (no control or non-ASCII characters)`);
+  const problem = commandTextProblem(command);
+  if (problem) throw new Error(`policy: ${where} ${problem}`);
 }
 
 function assertEntries(list: unknown, where: string): asserts list is PolicyEntry[] {

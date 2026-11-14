@@ -1,0 +1,19 @@
+{
+  "name": "@wadeck-app/machine-exec",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runs one approved command in a named shell: exact launch without re-quoting, scrubbed environment, timeout, output cap, no stdin. Knows nothing about policy or network.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --bail=1"
+  },
+  "dependencies": {
+    "@wadeck-app/machine-core": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

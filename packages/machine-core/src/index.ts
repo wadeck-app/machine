@@ -32,6 +32,7 @@ export {
   applyPolicy,
   assertPolicyBody,
   authorize,
+  commandTextProblem,
   entryKey,
   signPolicy,
   type ApplyPolicyContext,
