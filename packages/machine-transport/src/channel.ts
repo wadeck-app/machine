@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import type net from 'node:net';
 import tls from 'node:tls';
 import type { SigningKeyPair } from '@wadeck-app/machine-core';
 import { mintCertificate, publicKeyOfCertificate } from './cert.js';
@@ -15,6 +16,10 @@ const PROOF_VERSION = 1;
 const PROOF_LABEL = 'EXPORTER-machine-pair-proof';
 const PROOF_BYTES = 33;
 const PAIR_SECRET_BYTES = 32;
+// Before authentication only the 33-byte proof is expected: anything beyond a few hundred bytes is hostile.
+const PRE_AUTH_MAX_BUFFERED = 1024;
+const MAX_READ_AHEAD_BYTES = 128 * 1024;
+const MAX_QUEUED_MESSAGES = 64;
 
 type Role = 'client' | 'server';
 
@@ -35,9 +40,18 @@ class ByteStream {
   private pending: { n: number; resolve: (b: Buffer) => void; reject: (e: Error) => void } | undefined;
   private failure: Error | undefined;
 
-  constructor(socket: tls.TLSSocket) {
+  /** maxBuffered bounds what a peer can make us hold: exceeding it drops the connection. */
+  constructor(
+    private readonly socket: tls.TLSSocket,
+    public maxBuffered: number,
+  ) {
     socket.on('data', (chunk: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
+      if (this.buffer.length > this.maxBuffered) {
+        this.fail(new Error(`peer sent more than ${this.maxBuffered} bytes without being read: connection dropped`));
+        socket.destroy();
+        return;
+      }
       this.flush();
     });
     socket.on('close', () => this.fail(new Error('connection closed')));
@@ -46,10 +60,22 @@ class ByteStream {
 
   take(n: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      if (this.failure) return reject(this.failure);
       this.pending = { n, resolve, reject };
+      // Bytes received before a close or error stay readable: only an unsatisfiable read fails.
       this.flush();
+      if (this.pending && this.failure) {
+        this.pending = undefined;
+        reject(this.failure);
+      }
     });
+  }
+
+  pause(): void {
+    this.socket.pause();
+  }
+
+  resume(): void {
+    this.socket.resume();
   }
 
   fail(error: Error): void {
@@ -84,6 +110,7 @@ class Session implements PeerSession {
   private readonly queue: unknown[] = [];
   private readonly waiters: Array<{ resolve: (m: unknown) => void; reject: (e: Error) => void }> = [];
   private failure: Error | undefined;
+  private onDrained: (() => void) | undefined;
 
   constructor(
     private readonly socket: tls.TLSSocket,
@@ -92,6 +119,12 @@ class Session implements PeerSession {
     readonly peerId: string,
     private readonly maxFrameBytes: number,
   ) {
+    // Authenticated: a whole frame plus one network read may be buffered.
+    this.stream.maxBuffered = maxFrameBytes + 4 + MAX_READ_AHEAD_BYTES;
+    // While the read loop is parked on backpressure it cannot see the close itself; otherwise the stream reports it in order.
+    socket.once('close', () => {
+      if (this.onDrained) this.fail(new Error('connection closed'));
+    });
     void this.readLoop();
   }
 
@@ -106,7 +139,11 @@ class Session implements PeerSession {
   }
 
   next(): Promise<unknown> {
-    if (this.queue.length > 0) return Promise.resolve(this.queue.shift());
+    if (this.queue.length > 0) {
+      const message = this.queue.shift();
+      if (this.queue.length < MAX_QUEUED_MESSAGES) this.onDrained?.();
+      return Promise.resolve(message);
+    }
     if (this.failure) return Promise.reject(this.failure);
     return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
   }
@@ -124,13 +161,26 @@ class Session implements PeerSession {
   private async readLoop(): Promise<void> {
     try {
       for (;;) {
+        // Backpressure: a consumer that does not read stops the peer instead of filling memory.
+        if (this.queue.length >= MAX_QUEUED_MESSAGES) {
+          this.stream.pause();
+          await new Promise<void>((resolve) => (this.onDrained = resolve));
+          this.onDrained = undefined;
+          this.stream.resume();
+        }
         const header = await this.stream.take(4);
         const length = header.readUInt32BE(0);
+        if (length === 0) throw new Error('empty frame: the peer does not follow the machine framing (4-byte length then JSON)');
         if (length > this.maxFrameBytes) {
           throw new Error(`frame limit exceeded: peer announced ${length} bytes, limit is ${this.maxFrameBytes}; connection dropped`);
         }
         const body = await this.stream.take(length);
-        const message: unknown = JSON.parse(body.toString('utf8'));
+        let message: unknown;
+        try {
+          message = JSON.parse(body.toString('utf8'));
+        } catch (e) {
+          throw new Error(`frame is not valid JSON (${(e as Error).message}): the peer runs an incompatible version`);
+        }
         const waiter = this.waiters.shift();
         if (waiter) waiter.resolve(message);
         else this.queue.push(message);
@@ -192,8 +242,13 @@ export function listenForPeers(options: ListenOptions): Promise<PeerListener> {
   const pending = new Map<string, { release: () => void }>();
   const keyOfSocket = (s: { remoteAddress?: string; remotePort?: number }) => `${s.remoteAddress ?? '?'}:${s.remotePort ?? '?'}`;
 
+  // Every raw connection, so close() ends sessions and half-open handshakes alike.
+  const live = new Set<net.Socket>();
+
   server.on('connection', (raw) => {
     const key = keyOfSocket(raw);
+    live.add(raw);
+    raw.on('close', () => live.delete(raw));
     if (pending.size >= maxPending) {
       options.onRejected(`too many unauthenticated connections (limit ${maxPending}): dropped ${key}`);
       raw.destroy();
@@ -218,13 +273,21 @@ export function listenForPeers(options: ListenOptions): Promise<PeerListener> {
 
   server.on('secureConnection', (socket) => {
     const key = keyOfSocket(socket);
-    const stream = new ByteStream(socket);
+    const stream = new ByteStream(socket, PRE_AUTH_MAX_BUFFERED);
     socket.on('error', () => undefined);
     const reject = (reason: string) => {
       options.onRejected(`${reason} (from ${key})`);
       socket.destroy();
     };
     void (async () => {
+      try {
+        await authenticateServerSide();
+      } catch (e) {
+        // A failing lookup or callback must cost one connection, never the daemon.
+        reject(`internal error while accepting a peer: ${(e as Error).message}`);
+      }
+    })();
+    async function authenticateServerSide(): Promise<void> {
       let peerPublicKey: string;
       try {
         peerPublicKey = peerKeyOf(socket);
@@ -243,17 +306,26 @@ export function listenForPeers(options: ListenOptions): Promise<PeerListener> {
       }
       pending.get(key)?.release();
       options.onSession(new Session(socket, stream, peerPublicKey, peer.peerId, maxFrameBytes));
-    })();
+    }
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', (e) =>
-      reject(new Error(`cannot listen on ${options.host}:${options.port}: ${e.message}. Free the port or choose another one in the machine configuration`)),
-    );
+    const onStartupError = (e: Error) =>
+      reject(new Error(`cannot listen on ${options.host}:${options.port}: ${e.message}. Free the port or choose another one in the machine configuration`));
+    server.once('error', onStartupError);
     server.listen(options.port, options.host, () => {
+      server.off('error', onStartupError);
+      // After startup an error (for example running out of file handles) is reported, never an uncaught exception.
+      server.on('error', (e) => options.onRejected(`listener error: ${e.message}`));
       const address = server.address();
       if (!address || typeof address === 'string') return reject(new Error('listener has no TCP address'));
-      resolve({ port: address.port, close: () => server.close() });
+      resolve({
+        port: address.port,
+        close: () => {
+          server.close();
+          for (const socket of live) socket.destroy();
+        },
+      });
     });
   });
 }
@@ -287,7 +359,7 @@ export function connectToPeer(options: ConnectOptions): Promise<PeerSession> {
       // Pinning replaces certificate authority validation, see the server side.
       rejectUnauthorized: false,
     });
-    const stream = new ByteStream(socket);
+    const stream = new ByteStream(socket, PRE_AUTH_MAX_BUFFERED);
     let settled = false;
     const fail = (message: string) => {
       if (settled) return;

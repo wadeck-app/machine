@@ -1,5 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
+import tls from 'node:tls';
+import { createHmac } from 'node:crypto';
+import { mintCertificate } from './cert.js';
 import { generateSigningKeyPair, type SigningKeyPair } from '@wadeck-app/machine-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectToPeer, listenForPeers, type PeerListener, type PeerSession } from './channel.js';
@@ -25,8 +28,10 @@ async function start(
     maxPending?: number;
     handshakeTimeoutMs?: number;
     maxFrameBytes?: number;
+    resolveThrowsOnce?: boolean;
   } = {},
 ): Promise<Harness> {
+  let thrown = false;
   const server = generateSigningKeyPair();
   const client = generateSigningKeyPair();
   const secret = randomBytes(32);
@@ -36,7 +41,13 @@ async function start(
     identity: server,
     host: '127.0.0.1',
     port: 0,
-    resolvePeer: (publicKey) => (options.knownClient === false || publicKey !== client.publicKey ? undefined : { peerId: 'client-1', pairSecret: options.serverSecret ?? secret }),
+    resolvePeer: (publicKey) => {
+      if (options.resolveThrowsOnce && !thrown) {
+        thrown = true;
+        throw new Error('registry unreadable');
+      }
+      return options.knownClient === false || publicKey !== client.publicKey ? undefined : { peerId: 'client-1', pairSecret: options.serverSecret ?? secret };
+    },
     onSession: (session) => {
       sessions.push(session);
       closers.push(() => session.close());
@@ -59,6 +70,28 @@ function connect(h: Harness, overrides: { expectedPeerPublicKey?: string; pairSe
     pairSecret: overrides.pairSecret ?? h.secret,
     ...(overrides.maxFrameBytes !== undefined ? { maxFrameBytes: overrides.maxFrameBytes } : {}),
   });
+}
+
+// A hand-driven peer, to send what the real client never would.
+async function rawClient(h: Harness): Promise<tls.TLSSocket> {
+  const { certificatePem, privateKeyPem } = mintCertificate(h.client);
+  const socket = tls.connect({ host: '127.0.0.1', port: h.listener.port, key: privateKeyPem, cert: certificatePem, minVersion: 'TLSv1.3', rejectUnauthorized: false });
+  socket.on('error', () => undefined);
+  socket.on('data', () => undefined);
+  closers.push(() => socket.destroy());
+  await new Promise((r) => socket.once('secureConnect', r));
+  return socket;
+}
+
+function sendProof(socket: tls.TLSSocket, secret: Buffer): void {
+  const exported = socket.exportKeyingMaterial(32, 'EXPORTER-machine-pair-proof', Buffer.from('client'));
+  socket.write(Buffer.concat([Buffer.from([1]), createHmac('sha256', secret).update(exported).digest()]));
+}
+
+function frame(body: Buffer, declared = body.length): Buffer {
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(declared);
+  return Buffer.concat([header, body]);
 }
 
 async function until(condition: () => boolean, label: string): Promise<void> {
@@ -157,6 +190,65 @@ describe('peer channel', () => {
     });
     expect(closed).toBe(true);
     await until(() => h.rejections.some((r) => /timed out/.test(r)), 'timeout report');
+  });
+
+  it('survives a registry lookup that throws, reports it and keeps serving', async () => {
+    const h = await start({ resolveThrowsOnce: true });
+    await expect(connect(h)).rejects.toThrow();
+    await until(() => h.rejections.length === 1, 'rejection report');
+    expect(h.rejections[0]).toMatch(/internal error.*registry unreadable/);
+    const client = await connect(h);
+    closers.push(() => client.close());
+    await until(() => h.sessions.length === 1, 'server session after the failed lookup');
+  });
+
+  it('drops a peer that floods bytes before authenticating', async () => {
+    const h = await start();
+    const socket = await rawClient(h);
+    const closed = new Promise<boolean>((resolve) => {
+      socket.on('close', () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    socket.write(Buffer.alloc(200_000));
+    expect(await closed).toBe(true);
+    await until(() => h.rejections.some((r) => /more than/.test(r)), 'flood report');
+  });
+
+  it('refuses an empty frame with a message naming the framing', async () => {
+    const h = await start();
+    const socket = await rawClient(h);
+    sendProof(socket, h.secret);
+    await until(() => h.sessions.length === 1, 'server session');
+    socket.write(frame(Buffer.alloc(0)));
+    await expect((h.sessions[0] as PeerSession).next()).rejects.toThrow(/empty frame/);
+  });
+
+  it('refuses a frame that is not JSON with a message naming the cause', async () => {
+    const h = await start();
+    const socket = await rawClient(h);
+    sendProof(socket, h.secret);
+    await until(() => h.sessions.length === 1, 'server session');
+    socket.write(frame(Buffer.from('abc')));
+    await expect((h.sessions[0] as PeerSession).next()).rejects.toThrow(/not valid JSON/);
+  });
+
+  it('still delivers a frame the peer sent right before closing', async () => {
+    const h = await start();
+    const socket = await rawClient(h);
+    sendProof(socket, h.secret);
+    await until(() => h.sessions.length === 1, 'server session');
+    socket.end(frame(Buffer.from('{"last":true}')));
+    expect(await (h.sessions[0] as PeerSession).next()).toEqual({ last: true });
+  });
+
+  it('closing the listener also ends live sessions', async () => {
+    const h = await start();
+    const client = await connect(h);
+    closers.push(() => client.close());
+    await until(() => h.sessions.length === 1, 'server session');
+    h.listener.close();
+    await expect((h.sessions[0] as PeerSession).next()).rejects.toThrow();
+    await expect(client.next()).rejects.toThrow();
   });
 
   it('frees a pre-authentication slot once the connection is gone', async () => {

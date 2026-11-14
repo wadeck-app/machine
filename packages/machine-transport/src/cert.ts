@@ -40,9 +40,10 @@ export function mintCertificate(identity: SigningKeyPair, options: { now?: Date 
   // Validity is not a trust input here (pinning is); a wide window avoids spurious expiry failures on machines with a wrong clock.
   const notBefore = new Date(now.getTime() - 86_400_000);
   const notAfter = new Date(now.getTime() + 3650 * 86_400_000);
-  // Positive 8-byte serial: clear the top bit so the DER INTEGER stays positive.
+  // Positive, minimally encoded 8-byte serial: top bit clear (positive) and second bit set (first byte never 0x00,
+  // which DER forbids unless the next byte has its top bit set; OpenSSL rejects it as "illegal padding").
   const serial = randomBytes(8);
-  serial[0] = (serial[0] as number) & 0x7f;
+  serial[0] = ((serial[0] as number) & 0x7f) | 0x40;
   const algorithm = tlv(0x30, tlv(0x06, OID_ED25519));
   const name = distinguishedName('machine');
   const tbs = tlv(0x30, tlv(0xa0, tlv(0x02, Buffer.from([2]))), tlv(0x02, serial), algorithm, name, tlv(0x30, utcTime(notBefore), utcTime(notAfter)), name, publicKeyDer);

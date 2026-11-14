@@ -25,6 +25,14 @@ describe('self-signed identity certificate', () => {
     expect(a.serialNumber).not.toBe(b.serialNumber);
   });
 
+  it('always yields a parsable certificate, whatever the random serial looks like', () => {
+    // A serial starting with a zero byte used to give a non-minimal DER INTEGER, rejected by OpenSSL about 1 time in 256.
+    const identity = generateSigningKeyPair();
+    for (let i = 0; i < 2000; i++) {
+      expect(() => new X509Certificate(mintCertificate(identity).certificatePem)).not.toThrow();
+    }
+  });
+
   it('refuses a certificate that does not hold an Ed25519 key, naming the problem', () => {
     // An RSA-free way to get a non-Ed25519 certificate is not available; a truncated DER must be refused loudly instead.
     expect(() => publicKeyOfCertificate(Buffer.from('not a certificate'))).toThrow(/peer certificate/);
