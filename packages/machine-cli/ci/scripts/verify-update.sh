@@ -49,8 +49,16 @@ update_to "$VERSION"
 run_machine cli self-check || fail "machine cli self-check exited with status $?"
 echo "ok: self-check of the updated install passed"
 
-step "(e2b) the update asked the daemon of $PREVIOUS to quit (post-update; no startup job relaunches it here)"
-assert_daemon_gone
+# Without a startup job nothing would relaunch a daemon that post-update stops, so it keeps running the previous version
+# (the update says so: "A daemon you started by hand keeps running the previous version until you restart it").
+step "(e2b) no startup job: the daemon of $PREVIOUS keeps running, and a restart runs $VERSION"
+run_machine status || fail "machine status exited with status $?"
+assert_contains "machine status after the update (the daemon still runs the previous version)" "$PREVIOUS" "$(last_stdout)"
+run_machine stop || fail "machine stop exited with status $?"
+assert_contains "machine stop after the update" "daemon stopped" "$(last_stdout)"
+start_daemon
+run_machine status || fail "machine status exited with status $?"
+assert_contains "machine status after the restart (the daemon runs the updated version)" "$VERSION" "$(last_stdout)"
 
 step "(e2c) the updated package ships the app-module and registers it (deferred: app-core is not running)"
 assert_file "the packaged manifest of the app-module" "$(installed_package_dir)/app-module/manifest.json"
