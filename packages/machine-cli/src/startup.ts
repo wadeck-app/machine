@@ -19,6 +19,13 @@ export const LAUNCHER_BUNDLE_SPEC = '@wadeck-app/machine-cli/machine.cjs';
 
 export class StartupError extends Error {}
 
+/** orch is not on this machine: callers that can do without it (post-update) test the type, not the wording. */
+export class OrchNotInstalledError extends StartupError {
+  constructor() {
+    super(NOT_INSTALLED);
+  }
+}
+
 /** The program to run for orch. Production never sets it (there is no option for it); tests inject a stub. */
 export interface OrchCommand {
   file: string;
@@ -274,7 +281,7 @@ function runOrch(ctx: StartupContext, args: string[]): Promise<OrchResult> {
     argv = [...(ctx.orch.args ?? []), ...args];
   } else if (platform === 'win32') {
     const found = findOnPath('orch', ctx.env ?? process.env, platform);
-    if (found === undefined) return Promise.reject(new StartupError(NOT_INSTALLED));
+    if (found === undefined) return Promise.reject(new OrchNotInstalledError());
     if (/\.exe$/i.test(found)) {
       file = found;
       argv = args;
@@ -300,7 +307,7 @@ function runOrch(ctx: StartupContext, args: string[]): Promise<OrchResult> {
     child.stderr.on('data', (c: Buffer) => (stderr += c.toString()));
     child.on('error', (e: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      reject(e.code === 'ENOENT' ? new StartupError(NOT_INSTALLED) : new StartupError(`cannot run orch: ${e.message}`));
+      reject(e.code === 'ENOENT' ? new OrchNotInstalledError() : new StartupError(`cannot run orch: ${e.message}`));
     });
     child.on('close', (code) => {
       clearTimeout(timer);

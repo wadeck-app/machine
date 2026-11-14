@@ -71,6 +71,10 @@ describe('updateStartLoopProblem', () => {
     expect(problem).toMatch(/machine cli self-check/);
   });
 
+  it('a start dated in the future (the clock went back) does not count as recent forever', () => {
+    expect(updateStartLoopProblem([NOW + 10 * 24 * 60 * MIN, NOW + 10 * 24 * 60 * MIN, NOW - 1 * MIN], NOW)).toBeNull();
+  });
+
   it('restarts older than the window are forgotten', () => {
     expect(updateStartLoopProblem([NOW - 90 * MIN, NOW - 80 * MIN, NOW - 70 * MIN, NOW - 1 * MIN], NOW)).toBeNull();
   });
@@ -86,6 +90,12 @@ describe('the record of the starts that followed an update', () => {
     recordUpdateStart(f, NOW - 120 * MIN);
     expect(recordUpdateStart(f, NOW - 5 * MIN)).toEqual([NOW - 5 * MIN]);
     expect(loadUpdateStarts(f).starts).toEqual([NOW - 5 * MIN]);
+  });
+
+  it('a start dated in the future is dropped from the record when the next one is written', () => {
+    const f = startsFile();
+    writeFileSync(f, JSON.stringify([NOW + 10 * 24 * 60 * MIN]));
+    expect(recordUpdateStart(f, NOW)).toEqual([NOW]);
   });
 
   it('records accumulate inside the window', () => {

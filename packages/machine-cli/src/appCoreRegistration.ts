@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { describeRegistration, describeRegistrationFailure, registerModule } from '@wadeck-app/app-core-sdk/register';
@@ -59,6 +60,23 @@ function findAppModule(packageRoot: string): FoundModule | undefined {
   return undefined;
 }
 
+const PARTIAL_SUFFIX = '.partial';
+/** A partial copy older than this belongs to a staging that died; a younger one may be a concurrent staging, and is left alone. */
+const PARTIAL_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** The first symbolic link (or junction) under `dir`, or undefined. */
+function findSymbolicLink(dir: string): string | undefined {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) return full;
+    if (entry.isDirectory()) {
+      const nested = findSymbolicLink(full);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
 /** A stamp is a folder name chosen by us (a package version), never a path. */
 const STAMP_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -89,22 +107,38 @@ export function stageAppModule(sourceDir: string, machineConfigDir: string, stam
   if (fs.existsSync(manifest)) {
     return manifest;
   }
+  const link = findSymbolicLink(sourceDir);
+  if (link !== undefined) {
+    throw new Error(`Cannot stage the app-core module: ${link} is a symbolic link. A copy would keep it and point outside the module; the packaged module must hold plain files. Rebuild the package with its app-module.`);
+  }
+  // A name of its own: a daemon start and `machine cli register` can stage the same stamp at the same time.
+  const partial = `${target}.${process.pid}-${randomBytes(4).toString('hex')}${PARTIAL_SUFFIX}`;
   try {
-    const partial = `${target}.partial`;
-    fs.rmSync(partial, { recursive: true, force: true });
-    fs.rmSync(target, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.cpSync(sourceDir, partial, { recursive: true });
-    fs.renameSync(partial, target);
+    if (fs.existsSync(manifest)) {
+      // Staged by someone else while we copied: theirs is complete, ours is not needed.
+      fs.rmSync(partial, { recursive: true, force: true });
+      return manifest;
+    }
+    fs.rmSync(target, { recursive: true, force: true });
+    try {
+      fs.renameSync(partial, target);
+    } catch (renameError) {
+      fs.rmSync(partial, { recursive: true, force: true });
+      if (!fs.existsSync(manifest)) throw renameError;
+    }
   } catch (err) {
+    fs.rmSync(partial, { recursive: true, force: true });
     throw new Error(`Cannot stage the app-core module into ${target} (${errorMessage(err)}). It is copied out of the npm folder on purpose, so that updating or removing the package cannot break what app-core remembers.`);
   }
   return manifest;
 }
 
 /**
- * Removes the staged copies of every version but `keepStamp`, and returns how many went. A failure to remove
- * one is skipped: the next start tries again, and a leftover copy costs disk, not correctness.
+ * Removes the staged copies of every version but `keepStamp`, and returns how many went. Only folders named like a stamp go: a
+ * foreign file or folder stays, and so does a recent `.partial` (a concurrent staging); an old one is crash residue and goes.
+ * A failure to remove one is skipped: the next start tries again, and a leftover copy costs disk, not correctness.
  */
 export function pruneStagedModules(machineConfigDir: string, keepStamp: string): number {
   let entries: fs.Dirent[];
@@ -115,8 +149,15 @@ export function pruneStagedModules(machineConfigDir: string, keepStamp: string):
   }
   let removed = 0;
   for (const entry of entries) {
-    if (entry.name === keepStamp) {
+    if (entry.name === keepStamp || !entry.isDirectory() || !STAMP_RE.test(entry.name)) {
       continue;
+    }
+    if (entry.name.endsWith(PARTIAL_SUFFIX)) {
+      try {
+        if (Date.now() - fs.statSync(path.join(stagedModulesRoot(machineConfigDir), entry.name)).mtimeMs < PARTIAL_MAX_AGE_MS) continue;
+      } catch {
+        continue;
+      }
     }
     try {
       fs.rmSync(path.join(stagedModulesRoot(machineConfigDir), entry.name), { recursive: true, force: true });

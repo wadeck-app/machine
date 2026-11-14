@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { updaterMain, type UpdaterMainDeps } from './updaterMain.js';
+import type { BlockedUpdate, PendingPostUpdate, UpdateRecords } from './updateRecords.js';
 
 // The updater entry, with every side effect injected: nothing here runs npm, touches the real install or spawns a process.
 
@@ -15,6 +16,15 @@ function make(over: Partial<UpdaterMainDeps> = {}, runs: { cfg?: Cfg; envAtRun?:
   const err: string[] = [];
   const calls = { npmRoot: 0, postUpdate: [] as string[] };
   const env: Record<string, string | undefined> = {};
+  const store: { pending: PendingPostUpdate | null; blocked: BlockedUpdate | null } = { pending: null, blocked: null };
+  const records: UpdateRecords = {
+    readPending: () => store.pending,
+    writePending: (p) => void (store.pending = p),
+    clearPending: () => void (store.pending = null),
+    readBlocked: () => store.blocked,
+    writeBlocked: (b) => void (store.blocked = b),
+    clearBlocked: () => void (store.blocked = null),
+  };
   const deps: UpdaterMainDeps = {
     pkgName: '@wadeck-app/machine-cli',
     configDir: '/cfg',
@@ -39,9 +49,10 @@ function make(over: Partial<UpdaterMainDeps> = {}, runs: { cfg?: Cfg; envAtRun?:
       return { code: 0, output: '[ok] post-update done\n' };
     },
     now: () => 1_000,
+    records,
     ...over,
   };
-  return { deps, logs, err, calls, env, runs };
+  return { deps, logs, err, calls, env, runs, store };
 }
 
 describe('a development build', () => {
@@ -186,5 +197,84 @@ describe('after the updater ran', () => {
     t.env.UPDATER_SELF_CHECK_CMD = 'custom check';
     expect(await updaterMain(t.deps)).toBe(1);
     expect(t.err.join('')).toMatch(/\[fail\].*npm root -g.*gone.*machine cli post-update/s);
+  });
+});
+
+describe('a post-update that failed in a background run', () => {
+  const success = { status: 'success', currentVersion: CURRENT, targetVersion: TARGET, previousVersion: CURRENT, timestamp: 2_000 };
+
+  it('logs its output (the background updater has no stderr) and persists the failure, so that the notice shows it', async () => {
+    const t = make({ readState: () => success, spawnPostUpdate: async () => ({ code: 1, output: '[fail] orch refused the job\n' }) });
+    expect(await updaterMain(t.deps)).toBe(1);
+    expect(t.logs.join('\n')).toMatch(/error: .*post-update exited with code 1.*orch refused the job/s);
+    expect(t.store.pending).toMatchObject({ targetVersion: TARGET, timestamp: 1_000 });
+    expect(t.store.pending?.error).toContain('orch refused the job');
+  });
+
+  it('a later run retries it before anything else and clears the record when it succeeds', async () => {
+    const t = make();
+    t.store.pending = { targetVersion: TARGET, error: 'old failure', timestamp: 5 };
+    expect(await updaterMain(t.deps)).toBe(0);
+    expect(t.calls.postUpdate).toEqual([NPM_ROOT]);
+    expect(t.store.pending).toBeNull();
+    expect(t.logs.join('\n')).toMatch(/retry/i);
+  });
+
+  it('keeps the record, and says so, when the retry fails again (the update itself still goes on)', async () => {
+    const t = make({ spawnPostUpdate: async () => ({ code: 1, output: 'still broken' }) });
+    t.store.pending = { targetVersion: TARGET, error: 'old failure', timestamp: 5 };
+    await updaterMain(t.deps);
+    expect(t.store.pending).toMatchObject({ targetVersion: TARGET });
+    expect(t.store.pending?.error).toContain('still broken');
+    expect(t.runs.cfg).toBeDefined();
+  });
+});
+
+describe('an update that failed or was rolled back', () => {
+  const failed = (status: string) => ({ status, currentVersion: CURRENT, targetVersion: TARGET, error: 'self-check failed', timestamp: 2_000 });
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('records its target, logs how to force it, and a background run does not retry that version', async () => {
+    const first = make({ readState: () => failed('rolled-back') });
+    expect(await updaterMain(first.deps)).toBe(1);
+    expect(first.store.blocked).toMatchObject({ version: TARGET });
+    expect(first.store.blocked?.error).toContain('self-check failed');
+    expect(first.logs.join('\n')).toMatch(/error: .*not be retried automatically.*machine cli update/s);
+
+    const second = make();
+    second.store.blocked = first.store.blocked;
+    await updaterMain(second.deps);
+    expect(second.runs.decisions).toEqual([{ defer: true, retryIn: DAY }]);
+    expect(second.logs.filter((l) => l.includes('machine cli update'))).toHaveLength(1);
+    expect(second.store.blocked?.skipLogged).toBe(true);
+
+    const third = make();
+    third.store.blocked = second.store.blocked;
+    await updaterMain(third.deps);
+    expect(third.runs.decisions).toEqual([{ defer: true, retryIn: DAY }]);
+    expect(third.logs.filter((l) => l.includes('machine cli update'))).toHaveLength(0);
+  });
+
+  it('a newer version than the blocked one is applied', async () => {
+    const t = make();
+    t.store.blocked = { version: '2026.11.13-500-cccccccc', error: 'x', timestamp: 1 };
+    await updaterMain(t.deps);
+    expect(t.runs.decisions).toEqual(['apply-now']);
+  });
+
+  it('an explicit update (UPDATER_FORCE=1) applies the blocked version anyway', async () => {
+    const t = make();
+    t.env.UPDATER_FORCE = '1';
+    t.store.blocked = { version: TARGET, error: 'x', timestamp: 1 };
+    await updaterMain(t.deps);
+    expect(t.runs.decisions).toEqual(['apply-now']);
+  });
+
+  it('a success clears the record', async () => {
+    const t = make({ readState: () => ({ status: 'success', currentVersion: CURRENT, targetVersion: TARGET, timestamp: 2_000 }) });
+    t.store.blocked = { version: TARGET, error: 'x', timestamp: 1 };
+    t.env.UPDATER_FORCE = '1';
+    await updaterMain(t.deps);
+    expect(t.store.blocked).toBeNull();
   });
 });

@@ -1,21 +1,22 @@
 import { registerOnStart, type RegisterOnStartOptions } from './appCoreRegistration.js';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { cliLogsCommand, cliRollbackCommand, cliUpdateCommand, cliVersionCommand } from '@wadeck-app/shared-cli/CliMetaCommands';
 import { execNpm } from '@wadeck-app/shared-cli/NpmRunner';
-import { UpdateManager } from '@wadeck-app/shared-cli/UpdateManager';
 import { devBuildRefusalMessage, isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { makeCommands } from './commands.js';
 import { postUpdate, type PostUpdateDeps } from './postUpdate.js';
 import { findLauncher } from './platformBinary.js';
 import { runSelfCheck, type SelfCheckResult } from './selfCheck.js';
-import { enableStartup, startupStatus, StartupError, type StartupContext } from './startup.js';
+import { enableStartup, OrchNotInstalledError, startupStatus, StartupError, type StartupContext } from './startup.js';
 import { spawnPostUpdate } from './updater/spawnPostUpdate.js';
 import { UPDATER_BUNDLE_NAME } from './updateScheduling.js';
-import { updateNotice } from './updateNotice.js';
+import { writeFileAtomic } from './fsutil.js';
+import { noticeKey, NOTICE_SEEN_FILE, postUpdatePendingNotice, readUpdateStateReadOnly, updateNotice } from './updateNotice.js';
+import { POST_UPDATE_PENDING_FILE } from './updater/updateRecords.js';
 import { appVersion } from './version.js';
 
 // `machine cli version | update | rollback | self-check | logs | post-update`: thin front-end. The update itself is the updater
@@ -43,12 +44,32 @@ export interface CliMetaDeps {
 }
 
 /**
- * Shows the result of a background update on stderr (so --json stdout stays one document). A terminal state is shown once and cleared;
- * 'applying' is the updater's journal and stays (its next run repairs it).
+ * Shows the result of a background update on stderr (so --json stdout stays one document). Read-only: the state stays on disk for the
+ * daemon's update-loop guard (which clears it at its start). A terminal state is shown once, through a marker file; 'applying' is the
+ * updater's journal and is shown every time (its next run repairs it). A development build shows nothing: the state belongs to the install.
  */
-export function printUpdateNotice(configDir: string, stderr: (text: string) => void): void {
-  const notice = updateNotice(new UpdateManager(PACKAGE_NAME, configDir).readAndClearState());
-  if (notice) stderr(`[machine] ${notice.text}\n`);
+export function printUpdateNotice(configDir: string, version: string, stderr: (text: string) => void): void {
+  if (!isReleaseVersion(version)) return;
+  const pending = postUpdatePendingNotice(configDir);
+  if (pending) stderr(`[machine] ${pending.text}\n`);
+  const state = readUpdateStateReadOnly(configDir);
+  const notice = updateNotice(state);
+  if (state === null || notice === null) return;
+  if (state.status !== 'applying') {
+    const key = noticeKey(state);
+    const seenFile = join(configDir, NOTICE_SEEN_FILE);
+    try {
+      if ((JSON.parse(readFileSync(seenFile, 'utf8')) as { key?: unknown }).key === key) return;
+    } catch {
+      // No marker yet (or an unreadable one): the notice is shown.
+    }
+    try {
+      writeFileAtomic(seenFile, `${JSON.stringify({ key })}\n`, 0o600);
+    } catch (e) {
+      stderr(`[warn] cannot record that this update notice was shown (${(e as Error).message}): it will be shown again\n`);
+    }
+  }
+  stderr(`[machine] ${notice.text}\n`);
 }
 
 /** The folder of the running bundle (the installed package folder); from the sources, the src folder. */
@@ -104,6 +125,7 @@ function resolveDeps(ctx: CommandContext): CliMetaDeps {
         runSelfCheck({
           version,
           configDir,
+          packageRoot: packageRoot(),
           nodeVersion: process.version,
           platform: process.platform,
           arch: process.arch,
@@ -118,7 +140,7 @@ function resolveDeps(ctx: CommandContext): CliMetaDeps {
             return await startupStatus(startupCtx);
           } catch (e) {
             // No orch means no startup job: not every user supervises the daemon with orch, and that must not make every update a failure.
-            if (e instanceof StartupError && e.message.startsWith('orch is not installed')) return { exists: false };
+            if (e instanceof OrchNotInstalledError) return { exists: false };
             throw e;
           }
         },
@@ -204,6 +226,8 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
         // post-update: the new install, after an update or a rollback.
         const lines: string[] = [];
         const result = await postUpdate({ newVersion: deps.version, ...(deps.postUpdate as Pick<PostUpdateDeps, 'startup' | 'daemon'>), say: (line) => lines.push(line) });
+        // Done: the record of a post-update that failed in a background run is obsolete.
+        rmSync(join(configDir, POST_UPDATE_PENDING_FILE), { force: true });
         emit({ ...result, newVersion: deps.version }, lines.join(''));
         return EXIT.ok;
       }

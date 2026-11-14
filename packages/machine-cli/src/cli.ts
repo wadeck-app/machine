@@ -243,7 +243,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     const ctx: CommandContext = { args, rest, io, configDir, env, fail, emit };
 
     // The result of a background update, once, on stderr. Not for `daemon` (it reads the state for its update-loop guard) nor `cli` (the updater and post-update).
-    if (command !== 'daemon' && command !== 'cli') printUpdateNotice(configDir, io.stderr);
+    if (command !== 'daemon' && command !== 'cli') printUpdateNotice(configDir, io.cliMeta?.version ?? appVersion(), io.stderr);
 
     if (command === 'init') {
       if (args.name === undefined) return fail('init needs --name <name>, for example `machine init --name desktop`', EXIT.usage);

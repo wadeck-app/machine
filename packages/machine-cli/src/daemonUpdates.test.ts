@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { startMachineDaemon, type DaemonStart } from './daemonEntry.js';
 import { initMachine } from './identity.js';
 
@@ -45,6 +46,7 @@ function fakes(initialState?: unknown) {
   let state = initialState ?? null;
   const updates: NonNullable<DaemonStart['updates']> = {
     bundlePath: '/pkg/machine.cjs',
+    updaterExists: () => true,
     manager: {
       scheduleBackgroundUpdate: (bundle, name, version) => void spawns.push({ bundle, name, version, configDir: process.env.MACHINE_CONFIG_DIR, fromDaemon: process.env.MACHINE_UPDATER_FROM_DAEMON }),
       readAndClearState: () => {
@@ -111,6 +113,33 @@ describe('the update check of the daemon', () => {
   });
 });
 
+describe('where the updater is looked for', () => {
+  it('an updater that is not next to the bundle is an error in the log naming the path and the fix, once, and nothing is spawned', async () => {
+    const f = fakes();
+    f.updates.updaterExists = () => false;
+    await start(RELEASE, f);
+    f.timers[0]?.fn();
+    expect(f.spawns).toEqual([]);
+    const errors = f.logs.filter((l) => l.startsWith('ERROR') && l.includes('machine-updater.cjs'));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/npm install -g @wadeck-app\/machine-cli/);
+    expect(errors[0]).toContain('pkg');
+  });
+
+  it('without an explicit bundle path, it is the location of the running bundle, not process.argv[1] (a shim, or nothing)', async () => {
+    const f = fakes();
+    delete f.updates.bundlePath;
+    const savedArgv = process.argv[1];
+    process.argv[1] = '/some/shim/machine';
+    try {
+      await start(RELEASE, f);
+    } finally {
+      process.argv[1] = savedArgv as string;
+    }
+    expect(f.spawns[0]?.bundle).toBe(fileURLToPath(new URL('./daemonUpdates.ts', import.meta.url)));
+  });
+});
+
 describe('what the daemon does with the update state it finds at start', () => {
   it('logs the notice (an interrupted or finished update is news)', async () => {
     const f = fakes({ status: 'success', targetVersion: RELEASE, timestamp: Date.now() });
@@ -170,5 +199,14 @@ describe('POST /quit (what the post-update restart sends)', () => {
     const response = await fetch(`http://127.0.0.1:${daemon.port}/quit`, { method: 'POST' });
     expect(response.status).toBe(401);
     expect(existsSync(join(dir, 'daemon.port.json'))).toBe(true);
+  });
+});
+
+describe('a post-update that failed in a background run', () => {
+  it('is an error in the daemon log at start, with the command to run', async () => {
+    writeFileSync(join(dir, 'post-update-pending.json'), JSON.stringify({ targetVersion: RELEASE, error: '[fail] orch refused the job', timestamp: 1 }));
+    const f = fakes();
+    await start(RELEASE, f);
+    expect(f.logs.some((l) => l.startsWith('ERROR') && l.includes('orch refused the job') && l.includes('machine cli post-update'))).toBe(true);
   });
 });

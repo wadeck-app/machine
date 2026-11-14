@@ -1,6 +1,7 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
+import { UPDATER_BUNDLE_NAME } from './updateScheduling.js';
 import { PLATFORM_TARGETS, platformKey, platformPackageName, type AbsentLauncher, type FoundLauncher } from './platformBinary.js';
 
 // `machine cli self-check` (packaging.md 3.4). Run by node (never the launcher) from the NEW install, by the updater, before the update is accepted:
@@ -9,6 +10,8 @@ import { PLATFORM_TARGETS, platformKey, platformPackageName, type AbsentLauncher
 export interface SelfCheckDeps {
   version: string;
   configDir: string;
+  /** The installed package folder (the folder of the bundle): the updater bundle and app-module/ must be there. */
+  packageRoot: string;
   /** process.version */
   nodeVersion: string;
   platform: string;
@@ -57,10 +60,19 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckResult
   const binDir = join(deps.configDir, 'bin');
   try {
     probeWritable(binDir);
-    add('staged-launcher', true);
+    add('launcher-folder', true);
   } catch (e) {
-    add('staged-launcher', false, `the folder of the staged launcher ${binDir} cannot be created or written (${(e as Error).message}): \`machine startup enable\` could not stage the launcher`);
+    add('launcher-folder', false, `the folder of the staged launcher ${binDir} cannot be created or written (${(e as Error).message}): \`machine startup enable\` could not stage the launcher`);
   }
+
+  // Files a published install ships next to the bundle. Without the updater the NEXT update could not run (the daemon's spawner returns in silence),
+  // without the app-module the admin page is never registered.
+  const updater = join(deps.packageRoot, UPDATER_BUNDLE_NAME);
+  if (existsSync(updater)) add('updater-bundle', true);
+  else add('updater-bundle', false, `${updater} does not exist: this install cannot update itself. Reinstall with \`npm install -g @wadeck-app/machine-cli@latest\``);
+  const appModule = join(deps.packageRoot, 'app-module', 'manifest.json');
+  if (existsSync(appModule)) add('app-module', true);
+  else add('app-module', false, `${appModule} does not exist: the admin page module would never be registered with app-core. Reinstall with \`npm install -g @wadeck-app/machine-cli@latest\``);
 
   const key = platformKey(deps.platform, deps.arch);
   if (PLATFORM_TARGETS[key] === undefined) {

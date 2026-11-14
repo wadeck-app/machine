@@ -10,7 +10,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "bundle": "npm run bundle --workspace machine-cli && npm run bundle:app-module --workspace machine-cli"
+    "bundle": "npm run bundle --workspace machine-cli",
+    "bundle:all": "npm run bundle --workspace machine-cli && npm run bundle:app-module --workspace machine-cli"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

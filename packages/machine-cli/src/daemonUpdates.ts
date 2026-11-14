@@ -1,9 +1,10 @@
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { UpdateManager } from '@wadeck-app/shared-cli/UpdateManager';
 import { PACKAGE_NAME } from './cliMeta.js';
 import { guardUpdates, UPDATE_STARTS_FILE } from './updateGuard.js';
-import { updateNotice, type UpdateStateLike } from './updateNotice.js';
+import { postUpdatePendingNotice, updateNotice, type UpdateStateLike } from './updateNotice.js';
 import { createUpdateScheduler, type UpdateSpawner } from './updateScheduling.js';
 
 /** The daemon asks for an update check at start and then at this interval (the updater skips its own time gate for it). */
@@ -12,8 +13,10 @@ export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 export interface DaemonUpdates {
   /** Tests only: what spawns the updater and reads the update state (default: shared-cli UpdateManager). */
   manager?: UpdateSpawner & { readAndClearState(): UpdateStateLike | null };
-  /** Absolute path of the running bundle; the updater is looked for next to it. Default: the script node runs. */
+  /** Absolute path of the running bundle; the updater is looked for next to it. Default: this bundle's own file (never process.argv[1]: a shim or a wrapper is not it). */
   bundlePath?: string;
+  /** Tests only: does the updater bundle exist (default: existsSync). */
+  updaterExists?: (path: string) => boolean;
   /** Tests only: the periodic timer (default: setInterval, unref'd so that it never keeps the process alive). */
   timer?: (fn: () => void, ms: number) => { stop: () => void };
 }
@@ -31,13 +34,14 @@ const defaultTimer = (fn: () => void, ms: number) => {
  */
 export function startUpdates(configDir: string, version: string, options: DaemonUpdates | undefined, log: (line: string) => void): { stop: () => void } {
   const manager = options?.manager ?? new UpdateManager(PACKAGE_NAME, configDir);
-  const bundlePath = options?.bundlePath ?? process.argv[1] ?? '';
+  const bundlePath = options?.bundlePath ?? fileURLToPath(import.meta.url);
   let suspended: string | null = null;
   const scheduler = createUpdateScheduler({
     version,
     bundlePath,
     manager,
     log,
+    ...(options?.updaterExists === undefined ? {} : { updaterExists: options.updaterExists }),
     suspended: () => suspended,
     // The updater resolves its configuration directory from the environment only: a daemon started with --config-dir X must hand X over.
     spawnEnv: { MACHINE_CONFIG_DIR: configDir, MACHINE_UPDATER_FROM_DAEMON: '1' },
@@ -52,6 +56,9 @@ export function startUpdates(configDir: string, version: string, options: Daemon
 
   // A development build never updates, so the state of an installed release (which a later `machine` command shows) is not its business.
   if (isReleaseVersion(version)) {
+    // Persisted by an updater whose post-update failed: it ran detached with stdio ignored, so nobody saw its output.
+    const pending = postUpdatePendingNotice(configDir);
+    if (pending) log(`ERROR ${pending.text}`);
     const state = manager.readAndClearState();
     const notice = updateNotice(state);
     if (notice) log(`update state: ${notice.text}`);

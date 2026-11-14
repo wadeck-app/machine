@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCli } from './cli.js';
-import { startMachineDaemon } from './daemonEntry.js';
+import { startMachineDaemon, type DaemonStart } from './daemonEntry.js';
 import { initMachine } from './identity.js';
 
 let dir: string;
@@ -110,6 +110,14 @@ describe('the daemon port file (what orch reads to know the daemon is alive)', (
   });
 });
 
+// A release version makes the daemon schedule an update check: these tests never build the real UpdateManager (it spawns the updater).
+const inertUpdates = (spawned: string[] = []): NonNullable<DaemonStart['updates']> => ({
+  bundlePath: '/pkg/machine.cjs',
+  updaterExists: () => true,
+  manager: { scheduleBackgroundUpdate: (_bundle, _name, version) => void spawned.push(version), readAndClearState: () => null },
+  timer: () => ({ stop: () => undefined }),
+});
+
 describe('startMachineDaemon app-core registration', () => {
   it('registers the module once the daemon is up, with its own config dir and version, and never blocks the start', async () => {
     initMachine(dir, 'desktop');
@@ -117,6 +125,7 @@ describe('startMachineDaemon app-core registration', () => {
     const daemon = await startMachineDaemon(dir, {
       port: 0,
       version: '2026.11.14-001-abcdef12',
+      updates: inertUpdates(),
       register: async (o) => {
         // The port file means everything is up: registration comes after it.
         expect(existsSync(join(dir, 'daemon.port.json'))).toBe(true);

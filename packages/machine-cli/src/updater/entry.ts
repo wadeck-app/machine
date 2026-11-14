@@ -6,6 +6,7 @@ import { resolveConfigDir } from '../paths.js';
 import { resolveSelfCheckTarget } from './selfCheckTarget.js';
 import { spawnPostUpdate } from './spawnPostUpdate.js';
 import { updaterMain } from './updaterMain.js';
+import { createUpdateRecords } from './updateRecords.js';
 
 /** Inlined by the bundler (src/bundle.ts); absent when this file runs from the sources. */
 declare const __MACHINE_VERSION__: string | undefined;
@@ -21,26 +22,29 @@ if (typeof __MACHINE_VERSION__ !== 'string') {
 const configDir = resolveConfigDir(undefined, process.env);
 const stateFile = stateFilePath(configDir);
 
+const log = (level: 'info' | 'warn' | 'error', message: string): void => {
+  try {
+    appendLog(configDir, level, message);
+  } catch {
+    // The message is also on stderr when someone is watching; a log that cannot be written must not stop the update.
+  }
+};
+
 updaterMain({
   pkgName: PKG_NAME,
   configDir,
   currentVersion: __MACHINE_VERSION__,
   env: process.env,
   nodeExe: process.execPath,
-  log: (level, message) => {
-    try {
-      appendLog(configDir, level, message);
-    } catch {
-      // The message is also on stderr when someone is watching; a log that cannot be written must not stop the update.
-    }
-  },
+  log,
   stderr: (text) => process.stderr.write(text),
   npmRootGlobal: () => execNpm(['root', '-g'], { timeout: 10_000 }),
   resolveTarget: (npmRoot) => resolveSelfCheckTarget(npmRoot, PKG_NAME),
   readState: () => readState(stateFile),
   runUpdater,
-  spawnPostUpdate: (npmRoot) => spawnPostUpdate({ nodeExe: process.execPath, npmRoot, configDir, env: process.env }),
+  spawnPostUpdate: (npmRoot) => spawnPostUpdate({ nodeExe: process.execPath, npmRoot, configDir, env: process.env, log }),
   now: () => Date.now(),
+  records: createUpdateRecords(configDir),
 }).then(
   (code) => {
     process.exitCode = code;

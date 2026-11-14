@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { devBuildRefusalMessage, isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 
 // Port of orch's update-scheduling ('machine', machine-updater.cjs).
@@ -13,7 +15,7 @@ export interface RequestOptions {
   force?: boolean;
 }
 
-export type RequestResult = 'scheduled' | 'skipped-already' | 'skipped-dev' | 'skipped-suspended';
+export type RequestResult = 'scheduled' | 'skipped-already' | 'skipped-dev' | 'skipped-suspended' | 'skipped-no-updater';
 
 /** Name of the updater bundle, next to machine.cjs. */
 export const UPDATER_BUNDLE_NAME = 'machine-updater.cjs';
@@ -34,10 +36,14 @@ export function createUpdateScheduler(deps: {
    * the updater resolves its configuration directory from the environment, so a daemon started with --config-dir X must hand X over.
    */
   spawnEnv?: Record<string, string>;
+  /** Tests only: does the updater bundle exist (default: existsSync). */
+  updaterExists?: (path: string) => boolean;
 }) {
   let requested = false;
   let devExplained = false;
   let suspensionSaid = false;
+  let noUpdaterSaid = false;
+  const updaterPath = join(dirname(deps.bundlePath), UPDATER_BUNDLE_NAME);
   return {
     request(reason: string, opts: RequestOptions = {}): RequestResult {
       if (!isReleaseVersion(deps.version)) {
@@ -55,6 +61,14 @@ export function createUpdateScheduler(deps: {
           suspensionSaid = true;
         }
         return 'skipped-suspended';
+      }
+      // shared-cli's spawner returns in silence when the updater is not there (and falls back to another name): said here, once per run.
+      if (!(deps.updaterExists ?? existsSync)(updaterPath)) {
+        if (!noUpdaterSaid) {
+          deps.log(`ERROR background update check (${reason}) cannot run: ${updaterPath} does not exist (the daemon runs from ${deps.bundlePath}). Automatic updates do not work until it is there: reinstall with \`npm install -g @wadeck-app/machine-cli@latest\``);
+          noUpdaterSaid = true;
+        }
+        return 'skipped-no-updater';
       }
       if (opts.oncePerRun) {
         if (requested) {

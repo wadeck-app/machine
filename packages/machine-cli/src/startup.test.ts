@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from './testing.js';
 import { makeOrchStub, type OrchStub } from './orchStub.js';
-import { buildShellLine, daemonCommand, disableStartup, enableStartup, findOnPath, quoteArg, startupStatus, StartupError, type DaemonSource } from './startup.js';
+import { buildShellLine, daemonCommand, disableStartup, enableStartup, findOnPath, quoteArg, startupStatus, OrchNotInstalledError, StartupError, type DaemonSource } from './startup.js';
 
 let root: string;
 let configDir: string;
@@ -157,6 +157,7 @@ describe('enableStartup', () => {
   it('orch not installed (program not found): says how to install it', async () => {
     const e = await enableStartup({ ...ctx(), orch: missingOrch() }).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(StartupError);
+    expect(e).toBeInstanceOf(OrchNotInstalledError);
     expect((e as Error).message).toBe('orch is not installed: npm i -g @wadeck-app/orchestrator-cli');
   });
 

@@ -18,9 +18,19 @@ function tmp(): string {
   return d;
 }
 
+// A package folder with the files a published install ships next to the bundle.
+function packageRoot(): string {
+  const d = tmp();
+  writeFileSync(join(d, 'machine-updater.cjs'), '');
+  mkdirSync(join(d, 'app-module'));
+  writeFileSync(join(d, 'app-module', 'manifest.json'), '{}');
+  return d;
+}
+
 function deps(over: Partial<SelfCheckDeps> = {}): SelfCheckDeps {
   const configDir = tmp();
   return {
+    packageRoot: packageRoot(),
     version: VERSION,
     configDir,
     nodeVersion: 'v24.1.0',
@@ -107,7 +117,28 @@ describe('machine cli self-check', () => {
     // <configDir>/bin is a file: the folder of a staged launcher cannot be created.
     writeFileSync(join(dir, 'bin'), 'x');
     const r = await runSelfCheck(deps({ configDir: dir }));
-    expect(r.checks.find((c) => c.name === 'staged-launcher')?.ok).toBe(false);
+    expect(r.checks.find((c) => c.name === 'launcher-folder')?.ok).toBe(false);
+  });
+
+  it('fails when machine-updater.cjs is not next to the bundle: the next update could not run, in silence', async () => {
+    const root = packageRoot();
+    rmSync(join(root, 'machine-updater.cjs'));
+    const r = await runSelfCheck(deps({ packageRoot: root }));
+    expect(r.ok).toBe(false);
+    const c = r.checks.find((x) => x.name === 'updater-bundle');
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain(join(root, 'machine-updater.cjs'));
+    expect(c?.detail).toMatch(/npm install -g/);
+  });
+
+  it('fails when app-module/manifest.json is not next to the bundle', async () => {
+    const root = packageRoot();
+    rmSync(join(root, 'app-module'), { recursive: true });
+    const r = await runSelfCheck(deps({ packageRoot: root }));
+    expect(r.ok).toBe(false);
+    const c = r.checks.find((x) => x.name === 'app-module');
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toContain(join(root, 'app-module', 'manifest.json'));
   });
 
   it('leaves no probe file behind in the configuration directory', async () => {

@@ -50,6 +50,23 @@ describe('copyAppModule script', () => {
     expect(result.stdout).toContain(join(out, 'app-module'));
   });
 
+  it('refuses a target that is the source or inside it: removing the target would delete the module it is about to copy', async () => {
+    const out = join(root, 'out-same');
+    const source = join(out, 'app-module');
+    mkdirSync(join(source, 'views'), { recursive: true });
+    writeFileSync(join(source, 'manifest.json'), '{"version":"1"}');
+    const r = await copy(source, '--out', out);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/\[fail\].*is the source/);
+    expect(readFileSync(join(source, 'manifest.json'), 'utf8')).toBe('{"version":"1"}');
+
+    // The source holds the target: <source>/app-module would be removed with its parent.
+    const parent = fakeModule('holds-target');
+    const r2 = await copy(parent, '--out', parent);
+    expect(r2.code).toBe(1);
+    expect(r2.stderr).toMatch(/\[fail\].*inside the source/);
+  });
+
   it('replaces a previous copy instead of merging into it', async () => {
     const out = join(root, 'out2');
     mkdirSync(join(out, 'app-module'), { recursive: true });

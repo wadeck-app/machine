@@ -146,17 +146,36 @@ describe('stageAppModule', () => {
     expect(fs.readFileSync(manifest, 'utf8')).toBe('{"v":1}');
   });
 
-  it('replaces a leftover .partial and a target without manifest (crash residue)', () => {
+  it('replaces a target without manifest (crash residue) and leaves no partial copy of its own behind', () => {
     const source = writeModule(path.join(root, 'src-module'));
     const target = path.join(root, 'cfg', 'app-module', '1.0.0');
-    fs.mkdirSync(`${target}.partial`, { recursive: true });
-    fs.writeFileSync(path.join(`${target}.partial`, 'stale.txt'), 'x');
     fs.mkdirSync(target, { recursive: true });
     fs.writeFileSync(path.join(target, 'half.txt'), 'x');
     const manifest = stageAppModule(source, path.join(root, 'cfg'), '1.0.0');
     expect(fs.existsSync(manifest)).toBe(true);
     expect(fs.existsSync(path.join(target, 'half.txt'))).toBe(false);
-    expect(fs.existsSync(`${target}.partial`)).toBe(false);
+    expect(fs.readdirSync(path.join(root, 'cfg', 'app-module'))).toEqual(['1.0.0']);
+  });
+
+  it('does not touch the partial copy of a concurrent staging (each one writes its own)', () => {
+    const source = writeModule(path.join(root, 'src-module'));
+    const stagedRoot = path.join(root, 'cfg', 'app-module');
+    const foreignPartial = path.join(stagedRoot, '1.0.0.4242-aaaa.partial');
+    fs.mkdirSync(foreignPartial, { recursive: true });
+    fs.writeFileSync(path.join(foreignPartial, 'manifest.json'), 'theirs');
+    stageAppModule(source, path.join(root, 'cfg'), '1.0.0');
+    expect(fs.readFileSync(path.join(foreignPartial, 'manifest.json'), 'utf8')).toBe('theirs');
+  });
+
+  it('refuses a module that holds a symbolic link (a copy would keep it and point out of the module), naming it', () => {
+    const source = writeModule(path.join(root, 'src-module'));
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 's');
+    // A junction needs no privilege on Windows; it is a symbolic link for lstat.
+    fs.symlinkSync(outside, path.join(source, 'views', 'link'), 'junction');
+    expect(() => stageAppModule(source, path.join(root, 'cfg'), '1.0.0')).toThrow(/link is a symbolic link/);
+    expect(fs.existsSync(path.join(root, 'cfg', 'app-module', '1.0.0'))).toBe(false);
   });
 
   it.each(['', '..', '../x', 'a/b', 'a\\b', '.hidden', 'a b'])('refuses the stamp %j, naming it', stamp => {
@@ -178,6 +197,29 @@ describe('pruneStagedModules', () => {
     for (const stamp of ['1.0.0', '1.1.0', '1.2.0']) stageAppModule(source, path.join(root, 'cfg'), stamp);
     expect(pruneStagedModules(path.join(root, 'cfg'), '1.2.0')).toBe(2);
     expect(fs.readdirSync(path.join(root, 'cfg', 'app-module'))).toEqual(['1.2.0']);
+  });
+
+  it('removes only the folders named like a stamp: a foreign file or a folder of another kind stays', () => {
+    const source = writeModule(path.join(root, 'src-module'));
+    stageAppModule(source, path.join(root, 'cfg'), '1.0.0');
+    const stagedRoot = path.join(root, 'cfg', 'app-module');
+    fs.writeFileSync(path.join(stagedRoot, 'notes.txt'), 'x');
+    fs.writeFileSync(path.join(stagedRoot, '0.9.0'), 'a file named like a stamp');
+    fs.mkdirSync(path.join(stagedRoot, 'my folder'));
+    expect(pruneStagedModules(path.join(root, 'cfg'), '2.0.0')).toBe(1);
+    expect(fs.readdirSync(stagedRoot).sort()).toEqual(['0.9.0', 'my folder', 'notes.txt']);
+  });
+
+  it('keeps a recent partial copy (a concurrent staging) and removes an old one (crash residue)', () => {
+    const stagedRoot = path.join(root, 'cfg', 'app-module');
+    const recent = path.join(stagedRoot, '1.0.0.1-aaaa.partial');
+    const old = path.join(stagedRoot, '0.9.0.2-bbbb.partial');
+    fs.mkdirSync(recent, { recursive: true });
+    fs.mkdirSync(old, { recursive: true });
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(old, longAgo, longAgo);
+    expect(pruneStagedModules(path.join(root, 'cfg'), '2.0.0')).toBe(1);
+    expect(fs.readdirSync(stagedRoot)).toEqual(['1.0.0.1-aaaa.partial']);
   });
 
   it('returns 0 when nothing was ever staged', () => {

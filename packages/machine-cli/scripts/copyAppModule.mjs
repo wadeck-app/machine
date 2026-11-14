@@ -4,7 +4,7 @@
 // `app-core-cli package`, BUNDLE_VERSION passed through) and its dist-module/ is copied.
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const usage = 'usage: node scripts/copyAppModule.mjs --out <dir> [<dist-module>]';
@@ -49,6 +49,12 @@ if (!existsSync(manifest)) {
 }
 
 const target = join(out, 'app-module');
+// The target is removed before the copy: when it is the source (or holds it) the module would be deleted before it is read.
+const rel = relative(distModule, target);
+if (rel === '') fail(`the target ${target} is the source ${distModule}: pass an --out folder that is not the parent of the module`);
+if (!rel.startsWith('..') && !isAbsolute(rel)) fail(`the target ${target} is inside the source ${distModule}: pass an --out folder outside of it`);
+const back = relative(target, distModule);
+if (!back.startsWith('..') && !isAbsolute(back)) fail(`the source ${distModule} is inside the target ${target}, which is removed before the copy: pass another --out folder`);
 rmSync(target, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 cpSync(distModule, target, { recursive: true });

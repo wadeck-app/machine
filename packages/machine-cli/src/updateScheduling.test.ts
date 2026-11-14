@@ -23,7 +23,7 @@ function make(version: string, extra: { suspended?: () => string | null; spawnEn
       spawned.push({ bundle, name, currentVersion, force: process.env.UPDATER_FORCE, dir: process.env.MACHINE_CONFIG_DIR, fromDaemon: process.env.MACHINE_UPDATER_FROM_DAEMON });
     },
   };
-  const scheduler = createUpdateScheduler({ version, bundlePath: BUNDLE, manager, log: (m) => logs.push(m), ...extra });
+  const scheduler = createUpdateScheduler({ version, bundlePath: BUNDLE, manager, log: (m) => logs.push(m), updaterExists: () => true, ...extra });
   return { scheduler, spawned, logs };
 }
 
@@ -74,10 +74,23 @@ describe('a release build', () => {
       bundlePath: BUNDLE,
       manager: { scheduleBackgroundUpdate: () => { throw new Error('spawn failed'); } },
       log: () => undefined,
+      updaterExists: () => true,
       spawnEnv: { MACHINE_CONFIG_DIR: '/custom/dir' },
     });
     expect(() => scheduler.request('startup')).toThrow('spawn failed');
     expect(process.env.MACHINE_CONFIG_DIR).toBe('/before');
+  });
+});
+
+describe('an updater that is not next to the bundle', () => {
+  it('spawns nothing, says so once per run with the path and the fix', () => {
+    const { scheduler, spawned, logs } = make(RELEASE, { updaterExists: () => false } as never);
+    expect(scheduler.request('startup')).toBe('skipped-no-updater');
+    expect(scheduler.request('periodic')).toBe('skipped-no-updater');
+    expect(spawned).toEqual([]);
+    expect(logs.filter((l) => l.startsWith('ERROR'))).toHaveLength(1);
+    expect(logs[0]).toContain('machine-updater.cjs');
+    expect(logs[0]).toContain('npm install -g');
   });
 });
 

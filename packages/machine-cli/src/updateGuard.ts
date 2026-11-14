@@ -14,6 +14,10 @@ export const UPDATE_LOOP_LIMIT = 3;
 export const UPDATE_LOOP_WINDOW_MS = 30 * 60_000;
 export const UPDATE_STARTS_FILE = 'update-starts.json';
 
+/** A start dated later than this (the clock was set back) is not a recent one: it would otherwise count until the clock catches up. */
+const CLOCK_SKEW_MS = 60_000;
+const isRecent = (t: number, now: number): boolean => now - t < UPDATE_LOOP_WINDOW_MS && t - now <= CLOCK_SKEW_MS;
+
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
@@ -33,7 +37,7 @@ export function staleUpdateProblem(runningVersion: string, state: UpdateStateLik
 
 /** Restarts caused by updates that are too frequent: a loop, whatever its cause. Null when the rate is fine. */
 export function updateStartLoopProblem(starts: readonly number[], now: number): string | null {
-  const recent = starts.filter((t) => now - t < UPDATE_LOOP_WINDOW_MS);
+  const recent = starts.filter((t) => isRecent(t, now));
   if (recent.length < UPDATE_LOOP_LIMIT) return null;
   return (
     `the daemon was restarted ${recent.length} times in the last ${UPDATE_LOOP_WINDOW_MS / 60_000} minutes by updates. ` +
@@ -62,7 +66,7 @@ export function loadUpdateStarts(file: string): { starts: number[]; problem: str
 
 /** Adds a start to the record, drops what left the window, writes it, and returns what is kept. Throws if it cannot write. */
 export function recordUpdateStart(file: string, now: number): number[] {
-  const kept = [...loadUpdateStarts(file).starts.filter((t) => now - t < UPDATE_LOOP_WINDOW_MS), now];
+  const kept = [...loadUpdateStarts(file).starts.filter((t) => isRecent(t, now)), now];
   writeFileAtomic(file, `${JSON.stringify(kept)}\n`, 0o600);
   return kept;
 }

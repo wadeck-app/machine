@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -223,19 +223,37 @@ describe('the pending update notice', () => {
     await run(['init', '--name', 'desktop']);
   }
 
-  it('a terminal state is shown once on stderr by an ordinary command, and cleared', async () => {
+  it('a terminal state is shown once on stderr by an ordinary command, and NOT deleted (the daemon reads it for its loop guard and clears it)', async () => {
     await initMachine();
     state('success', { targetVersion: RELEASE });
-    const first = await run(['status']);
+    const first = await run(['status'], { version: RELEASE });
     expect(first.err).toMatch(/\[machine\] Updated to v2026\.11\.14-592-bbbbbbbb/);
-    expect(existsSync(join(dir, 'update-state.json'))).toBe(false);
-    expect((await run(['status'])).err).not.toMatch(/Updated to/);
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
+    expect((await run(['status'], { version: RELEASE })).err).not.toMatch(/Updated to/);
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
+  });
+
+  it('a state that is replaced by a newer one is shown again', async () => {
+    await initMachine();
+    state('success', { targetVersion: RELEASE, timestamp: 1000 });
+    await run(['status'], { version: RELEASE });
+    state('rolled-back', { previousVersion: '1.0.0', timestamp: 2000 });
+    expect((await run(['status'], { version: RELEASE })).err).toMatch(/Rollback to v1\.0\.0/);
+  });
+
+  it('a development build neither shows nor touches the state of the real install', async () => {
+    await initMachine();
+    state('success', { targetVersion: RELEASE });
+    const r = await run(['status'], { version: '0.1.0' });
+    expect(r.err).not.toMatch(/Updated to/);
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
+    expect(readdirSync(dir).filter((n) => n.includes('notice'))).toEqual([]);
   });
 
   it('--json stdout stays one JSON document', async () => {
     await initMachine();
     state('rolled-back', { previousVersion: '1.0.0' });
-    const r = await run(['status', '--json']);
+    const r = await run(['status', '--json'], { version: RELEASE });
     expect(() => JSON.parse(r.out)).not.toThrow();
     expect(r.err).toMatch(/Rollback to v1\.0\.0/);
   });
@@ -243,7 +261,7 @@ describe('the pending update notice', () => {
   it("'applying' is the updater's journal: shown, never cleared", async () => {
     await initMachine();
     state('applying', { pid: 2 ** 31 - 2, targetVersion: RELEASE });
-    const r = await run(['status']);
+    const r = await run(['status'], { version: RELEASE });
     expect(r.err).toMatch(/interrupted/);
     expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
   });
@@ -252,6 +270,29 @@ describe('the pending update notice', () => {
     state('success', { targetVersion: RELEASE });
     await run(['cli', 'logs'], { showLogs: async () => undefined });
     expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
+  });
+});
+
+describe('a failed post-update of a background update', () => {
+  const pending = () => writeFileSync(join(dir, 'post-update-pending.json'), JSON.stringify({ targetVersion: RELEASE, error: '[fail] orch refused the job', timestamp: 1 }));
+
+  it('is shown by every ordinary command until it is fixed, with the command to run', async () => {
+    await run(['init', '--name', 'desktop']);
+    pending();
+    for (let i = 0; i < 2; i++) {
+      const r = await run(['status'], { version: RELEASE });
+      expect(r.err).toMatch(/post-update failed.*orch refused the job.*machine cli post-update/s);
+    }
+  });
+
+  it('is cleared by a post-update that succeeds', async () => {
+    pending();
+    const r = await run(['cli', 'post-update'], {
+      version: RELEASE,
+      postUpdate: { startup: { status: async () => ({ exists: false }), enable: async () => ({ action: 'x' }) }, daemon: { version: async () => undefined, quit: async () => undefined } },
+    });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(dir, 'post-update-pending.json'))).toBe(false);
   });
 });
 
