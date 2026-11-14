@@ -1,0 +1,159 @@
+import { describe, expect, it } from 'vitest';
+import { generateSigningKeyPair, keyId } from './keys.js';
+import { applyPolicy, authorize, entryKey, signPolicy, type PolicyBody, type PolicyEntry } from './policy.js';
+
+const NOW = 1_800_000_000;
+const TARGET = '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
+const PEER = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
+const OTHER_PEER = '11111111-2222-4333-8444-555555555555';
+
+function setup(overrides: Partial<PolicyBody> = {}) {
+  const admin = generateSigningKeyPair();
+  const body: PolicyBody = {
+    v: 1,
+    target: TARGET,
+    version: 1,
+    baseVersion: 0,
+    adminKeyId: keyId(admin.publicKey),
+    issuedAt: NOW,
+    notBefore: NOW - 60,
+    notAfter: NOW + 3600,
+    defaults: [{ shell: 'cmd', command: 'ipconfig' }],
+    peers: {},
+    ...overrides,
+  };
+  return { admin, body };
+}
+
+const ctx = (admin: { publicKey: string }, extra = {}) => ({ adminPublicKey: admin.publicKey, now: NOW, targetUuid: TARGET, ...extra });
+
+describe('applyPolicy (compare-and-set, decision 27)', () => {
+  it('applies a first policy based on version 0', () => {
+    const { admin, body } = setup();
+    const result = applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(body, admin.privateKeyPkcs8), ctx(admin));
+    expect(result).toEqual({ ok: true, body });
+  });
+
+  it('refuses a policy edited from an older version, with a reload message', () => {
+    const { admin, body } = setup({ version: 3, baseVersion: 2 });
+    const result = applyPolicy({ version: 4, highestSeen: 4 }, signPolicy(body, admin.privateKeyPkcs8), ctx(admin));
+    expect(result).toMatchObject({ ok: false, reason: 'stale-base' });
+    if (!result.ok) expect(result.message).toMatch(/policy changed, reload.*version 4.*version 2/);
+  });
+
+  it('refuses a rollback even when the base matches (the highest version ever seen is kept apart)', () => {
+    const { admin, body } = setup({ version: 2, baseVersion: 1 });
+    // Local store was wiped to version 1, but the separate record knows version 5 was applied once.
+    const result = applyPolicy({ version: 1, highestSeen: 5 }, signPolicy(body, admin.privateKeyPkcs8), ctx(admin));
+    expect(result).toMatchObject({ ok: false, reason: 'rollback' });
+  });
+
+  it('refuses a policy written for another machine', () => {
+    const { admin, body } = setup({ target: OTHER_PEER });
+    const result = applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(body, admin.privateKeyPkcs8), ctx(admin));
+    expect(result).toMatchObject({ ok: false, reason: 'wrong-target' });
+  });
+
+  it('refuses a policy outside its application window', () => {
+    const early = setup({ notBefore: NOW + 100 });
+    const late = setup({ notAfter: NOW - 1 });
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(early.body, early.admin.privateKeyPkcs8), ctx(early.admin))).toMatchObject({ ok: false, reason: 'not-yet-valid' });
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(late.body, late.admin.privateKeyPkcs8), ctx(late.admin))).toMatchObject({ ok: false, reason: 'expired' });
+  });
+
+  it('refuses a tampered policy and a policy signed by another admin key', () => {
+    const { admin, body } = setup();
+    const signed = signPolicy(body, admin.privateKeyPkcs8);
+    const tampered = { ...signed, body: { ...signed.body, defaults: [{ shell: 'cmd' as const, command: 'del *' }] } };
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, tampered, ctx(admin))).toMatchObject({ ok: false, reason: 'bad-signature' });
+    const other = generateSigningKeyPair();
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signed, ctx(other))).toMatchObject({ ok: false, reason: 'wrong-admin-key' });
+  });
+
+  it('refuses to sign a body whose version is not base + 1', () => {
+    const { admin, body } = setup({ version: 3, baseVersion: 1 });
+    expect(() => signPolicy(body, admin.privateKeyPkcs8)).toThrow(/version must be baseVersion \+ 1/);
+  });
+});
+
+describe('policy entries (strict exact commands, T-15)', () => {
+  const bad = (entry: unknown) => {
+    const { admin, body } = setup({ defaults: [entry as PolicyEntry] });
+    return () => signPolicy(body, admin.privateKeyPkcs8);
+  };
+
+  it('refuses control characters, non-ASCII, empty and oversized commands', () => {
+    expect(bad({ shell: 'cmd', command: 'dir\r\ndel x' })).toThrow(/printable ASCII/);
+    expect(bad({ shell: 'cmd', command: 'echo é' })).toThrow(/printable ASCII/);
+    expect(bad({ shell: 'cmd', command: '' })).toThrow(/command/);
+    expect(bad({ shell: 'cmd', command: 'a'.repeat(2049) })).toThrow(/2048/);
+  });
+
+  it('refuses an unknown shell, unknown fields and bad limits', () => {
+    expect(bad({ shell: 'fish', command: 'ls' })).toThrow(/shell/);
+    expect(bad({ shell: 'cmd', command: 'dir', extra: 1 })).toThrow(/unknown field.*extra/);
+    expect(bad({ shell: 'cmd', command: 'dir', limits: { maxCalls: 0 } })).toThrow(/maxCalls/);
+    expect(bad({ shell: 'cmd', command: 'dir', limits: { expiresAt: 1.5 } })).toThrow(/expiresAt/);
+  });
+
+  it('refuses the same entry twice in one list', () => {
+    const { admin, body } = setup({ defaults: [{ shell: 'cmd', command: 'dir' }, { shell: 'cmd', command: 'dir' }] });
+    expect(() => signPolicy(body, admin.privateKeyPkcs8)).toThrow(/duplicate/);
+  });
+});
+
+describe('authorize', () => {
+  const policy = (extra: Partial<PolicyBody> = {}) => setup(extra).body;
+  const unused = () => 0;
+
+  it('allows an exact entry of the default list', () => {
+    const decision = authorize(policy(), PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, unused);
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it('denies anything not listed, with the exact string and the fix', () => {
+    const decision = authorize(policy(), PEER, { shell: 'cmd', command: 'ipconfig /all' }, NOW, unused);
+    expect(decision).toMatchObject({ allowed: false, reason: 'not-listed' });
+    if (!decision.allowed) expect(decision.message).toContain('ipconfig /all');
+  });
+
+  it('does not normalize: case, trailing space and another shell all miss', () => {
+    for (const request of [{ shell: 'cmd' as const, command: 'IPCONFIG' }, { shell: 'cmd' as const, command: 'ipconfig ' }, { shell: 'ps' as const, command: 'ipconfig' }]) {
+      expect(authorize(policy(), PEER, request, NOW, unused)).toMatchObject({ allowed: false, reason: 'not-listed' });
+    }
+  });
+
+  it('refuses a request with control or non-ASCII characters before matching', () => {
+    expect(authorize(policy(), PEER, { shell: 'cmd', command: 'ipconfig\u0000' }, NOW, unused)).toMatchObject({ allowed: false, reason: 'invalid-request' });
+    expect(authorize(policy(), PEER, { shell: 'cmd', command: 'ipconfıg' }, NOW, unused)).toMatchObject({ allowed: false, reason: 'invalid-request' });
+  });
+
+  it('lets a per-peer list REPLACE the default for that peer only', () => {
+    const p = policy({ peers: { [PEER]: [{ shell: 'ps', command: 'ls' }] } });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, unused)).toMatchObject({ allowed: false, reason: 'not-listed' });
+    expect(authorize(p, PEER, { shell: 'ps', command: 'ls' }, NOW, unused)).toMatchObject({ allowed: true });
+    expect(authorize(p, OTHER_PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, unused)).toMatchObject({ allowed: true });
+  });
+
+  it('an empty per-peer list blocks that peer completely', () => {
+    const p = policy({ peers: { [PEER]: [] } });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, unused)).toMatchObject({ allowed: false });
+  });
+
+  it('enforces the expiry of an entry', () => {
+    const p = policy({ defaults: [{ shell: 'cmd', command: 'ipconfig', limits: { expiresAt: NOW + 10 } }] });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW + 10, unused)).toMatchObject({ allowed: true });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW + 11, unused)).toMatchObject({ allowed: false, reason: 'expired' });
+  });
+
+  it('enforces the maximum number of calls using the usage reader', () => {
+    const p = policy({ defaults: [{ shell: 'cmd', command: 'ipconfig', limits: { maxCalls: 2 } }] });
+    const key = entryKey('default', { shell: 'cmd', command: 'ipconfig' });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, k => (k === key ? 1 : 0))).toMatchObject({ allowed: true, entryKey: key });
+    expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, k => (k === key ? 2 : 0))).toMatchObject({ allowed: false, reason: 'exhausted' });
+  });
+
+  it('keeps default counters apart from per-peer counters', () => {
+    expect(entryKey('default', { shell: 'cmd', command: 'x' })).not.toBe(entryKey(PEER, { shell: 'cmd', command: 'x' }));
+  });
+});
