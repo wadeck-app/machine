@@ -152,9 +152,9 @@ Every screen that guides enrollment shows a vertical timeline on the left (curre
 - 404/405 on `start`: reported as "no device login, use a pairing code".
 - `join` never enables a startup job; it suggests `machine startup enable` (not implemented). `--auto-startup` is refused (exit 2) until it exists.
 
-## Pending relay change (poc-owner #12)
+## Ownership bound at approval (deployed, poc-owner commit 719f36f)
 
-DRAFT, not part of the contract until poc-owner confirms. The client and `fakeRelay.ts` (`bindOwnershipAtApproval`) already follow it.
+LIVE on the relay since 2026-11-14 (version 2026.11.14-144). Details below are the deployed behaviour; deviations from the draft are listed after the table.
 
 A machine token may write the address record, send heartbeats and read or delete the inbox only for a uuid bound at approval to the token that posted the candidacy. The first writer no longer binds anything (AR-8 pre-binding disappears).
 
@@ -167,3 +167,13 @@ A machine token may write the address record, send heartbeats and read or delete
 | `GET` candidacies (A) | each entry adds `uuidBound` (boolean) and, when true, `boundTokenLabel` |
 
 Client: `not_registered` says "this machine is not approved yet: run machine join and ask the admin to approve it". The daemon treats it as a state (no backoff) and publishes in the next round after approval. `machine admin approve` shows a warning in the list and detail, and in the y/N question, when `uuidBound` is true (names the label, says approving replaces the binding).
+
+Deployed details beyond the table:
+
+- `uuid` in a candidacy never changes for the same identity key: re-posting with another uuid answers 409 `candidacy_uuid_changed`.
+- Approve binds in ONE step with the decision (if the binding cannot be saved the candidacy stays pending; an expired candidacy undoes it). A bound uuid without a record is not listed by `GET /api/machines` until the record exists.
+- Admin candidacy list adds `boundToCandidateToken` (true = re-approval for the same token, not a rebind). Warn loudly only when `uuidBound && !boundToCandidateToken`. `boundTokenLabel` is `(revoked token)` when the token is gone.
+- Limits now apply at approval: 50 machines per token and 1000 in total, `429 too_many_machines` on the decision (the candidacy stays pending; the message names `DELETE /api/machines/<uuid>` for machines that are gone).
+- `DELETE /api/machines/{uuid}` also forgets the binding: a machine that comes back must post a new candidacy and be approved again. A token rotation does not need it any more: a new candidacy plus approval rebinds.
+- `not_registered` message (403): "This machine is not registered on the relay: approve this machine first (the admin approves its candidacy, `machine admin approve`), then retry."
+- Residual unchanged: the relay cannot verify the machine key; a squatter whose candidacy the admin approves by mistake owns the uuid (the admin check is the barrier). Not tested on production with a machine token.
