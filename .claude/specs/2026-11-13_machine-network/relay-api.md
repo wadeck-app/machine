@@ -61,3 +61,11 @@ Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid
 ## Not in this version
 
 Distribution of registrations, revocation lists and policies through the relay is a separate contract (it follows once the local flow is validated). Until then `machine admin register`, `machine peer import` and `machine policy install` move those documents by file (decision 48).
+
+## Deployed limits (relay 2026.11.14-140, reported by poc-owner)
+
+- At most 50 machine records per token (`429 too_many_machines`); the global cap stays 1000.
+- Re-`PUT` of an identical record only refreshes presence.
+- A record stays bound to the token that first wrote it. After a token rotation, a full-access token must write it once; there is no delete or reassign endpoint yet.
+- Malformed ids or uuids (upper-case, trailing slash) are refused by the scope gate with `403`, not `400`: the client must send canonical lower-case uuids and no trailing slash.
+- A `machine` token is created in the relay console: Tokens, Add token, "Limited to scopes", machine. Not yet tested authenticated against the live relay.
