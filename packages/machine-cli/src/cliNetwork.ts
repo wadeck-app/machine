@@ -426,7 +426,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n' + startupHint);
     } else {
       const e = result.enrolled;
-      const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : 'peers trusted: none (the admin included none)\n';
+      const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : e.isAdminMachine ? 'no other machine yet: this machine is the first of the network\n' : 'peers trusted: none (the admin included none)\n';
       emit(
         { ...e, relayUrl: result.posted.relayUrl },
         '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n' + startupHint,

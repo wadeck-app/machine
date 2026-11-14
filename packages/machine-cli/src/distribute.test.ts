@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { newCandidacyRandom, openPairSecret, verifyInboxDocument, type SignedRegistration } from '@wadeck-app/machine-core';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { derivePairSecretV2, generateSigningKeyPair, newCandidacyRandom, openPairSecret, verifyInboxDocument, type SignedRegistration } from '@wadeck-app/machine-core';
+import { unlockAdminKey } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { exportMachineInfo, loadNetwork } from './network.js';
@@ -12,6 +13,8 @@ let root: string;
 let adminDir: string;
 let relay: FakeRelay;
 let admin: TestAdmin;
+// A relay that reports `uuidBound` (the binding relay), for the suites that need it.
+let bindMode = false;
 
 const yes = async () => 'y';
 const pass = async () => admin.passphrase;
@@ -21,11 +24,14 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 const approveArgs = (id: string) => ['admin', 'approve', id, '--relay', relay.url];
 
 /** The relay lists a candidacy the machine in `name` would have posted (the admin side does not need the join itself). */
-async function enroll(name: string, options: { ask?: (l: string) => Promise<string> } = {}) {
+async function enroll(name: string, options: { ask?: (l: string) => Promise<string>; again?: number; identityPublicKey?: string } = {}) {
   const info = exportMachineInfo(dirOf(name));
-  const id = `cand-${name}`;
-  relay.addCandidacy(id, { name: info.name, hostname: 'h', identityPublicKey: info.identityPublicKey, random: newCandidacyRandom(), uuid: info.uuid });
-  return { id, result: await cli(adminDir, approveArgs(id), pass, { ask: options.ask ?? yes }) };
+  // A renewal is a second candidacy of the same machine, a few seconds later (the serial of a registration is its date in seconds).
+  const id = `cand-${name}${options.again !== undefined ? `-${options.again}` : ''}`;
+  relay.addCandidacy(id, { name: info.name, hostname: 'h', identityPublicKey: options.identityPublicKey ?? info.identityPublicKey, random: newCandidacyRandom(), uuid: info.uuid });
+  const again = options.again;
+  const clock = again !== undefined ? { now: () => new Date((nowSeconds() + again * 2) * 1000) } : {};
+  return { id, result: await cli(adminDir, approveArgs(id), pass, { ask: options.ask ?? yes, ...clock }) };
 }
 
 const inboxOf = (name: string) => relay.inbox(uuidOf(name));
@@ -39,7 +45,7 @@ beforeEach(async () => {
     mkdirSync(dirOf(name));
     await ok(dirOf(name), ['init', '--name', name]);
   }
-  relay = await startFakeRelay();
+  relay = await startFakeRelay({ bindOwnershipAtApproval: bindMode });
   admin = makeAdmin(adminDir);
   await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
 });
@@ -93,6 +99,22 @@ describe('machine admin approve distributes the new machine to the existing peer
     // Neither the secret nor a token reaches the output.
     expect(result.out + result.err).not.toContain(secretOfLaptop);
     expect(result.out + result.err).not.toContain(relay.adminToken);
+  });
+
+  it('the delivered pair secret is exactly derivePairSecretV2 of the admin key and both registrations (unlocked in the test)', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    const aboutServer = verified('laptop', inboxOf('laptop')[0]?.document);
+    const aboutLaptop = verified('server', inboxOf('server')[0]?.document);
+    if (!aboutServer.ok || aboutServer.kind !== 'peer' || !aboutLaptop.ok || aboutLaptop.kind !== 'peer') throw new Error('expected two verified peer documents');
+    const key = await unlockAdminKey(adminDir, pass);
+    const expected = derivePairSecretV2(
+      key.privateKeyPkcs8,
+      { uuid: aboutServer.registration.uuid, serial: aboutServer.registration.serial },
+      { uuid: aboutLaptop.registration.uuid, serial: aboutLaptop.registration.serial },
+    );
+    expect(openPairSecret(aboutServer, readMachine(dirOf('laptop')).identity.privateKeyPkcs8)).toBe(expected);
+    expect(openPairSecret(aboutLaptop, readMachine(dirOf('server')).identity.privateKeyPkcs8)).toBe(expected);
   });
 
   it('ids, issuedAt and expiry are stable: they come from the registrations, not from the clock', async () => {
@@ -189,6 +211,116 @@ describe('machine admin distribute', () => {
     expect(r.code, r.err).toBe(0);
     const never = await cli(adminDir, ['admin', 'distribute', 'server', '--prompt-timeout', '0'], pass);
     expect(never.code).toBe(2);
+  });
+});
+
+describe('machine admin distribute on the admin machine itself', () => {
+  it('says there is nothing to distribute to itself, exit 0, nothing sent, by name or by uuid', async () => {
+    await enroll('laptop');
+    const mark = relay.requests.length;
+    for (const ref of ['desktop', uuidOf('desktop')]) {
+      const r = await cli(adminDir, ['admin', 'distribute', ref], pass);
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toMatch(/this is the admin machine itself: nothing to distribute to itself/);
+    }
+    expect(relay.requests.length).toBe(mark);
+  });
+});
+
+describe('re-approving a machine that is already known', () => {
+  it('same identity key (a renewal): the peers get the new registration, with a higher serial, exactly like a new machine', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    const before = (verified('server', inboxOf('server')[0]?.document) as unknown as { registration: SignedRegistration['body'] }).registration;
+    const { result } = await enroll('laptop', { again: 1 });
+    expect(result.code, result.err).toBe(0);
+    const docs = inboxOf('server').map((d) => verified('server', d.document) as unknown as { ok: boolean; kind: string; registration: SignedRegistration['body'] });
+    expect(docs).toHaveLength(2);
+    const renewed = docs.filter((d) => d.ok && d.kind === 'peer' && d.registration.uuid === uuidOf('laptop')).map((d) => d.registration.serial);
+    expect(renewed).toHaveLength(2);
+    expect(Math.max(...renewed)).toBeGreaterThan(before.serial);
+    expect(inboxOf('laptop')).toHaveLength(2);
+    expect(result.out).toMatch(/2 document\(s\) stored by the relay for 1 machine/);
+  });
+
+  it('the admin machine itself (self-approval renewal): every peer gets the new registration of the admin machine, sealed with the pair secret it already shares with it', async () => {
+    const first = await enroll('desktop');
+    expect(first.result.code, first.result.err).toBe(0);
+    await enroll('laptop');
+    await enroll('server');
+    const mark = inboxPuts().length;
+    const renewal = await enroll('desktop', { again: 1 });
+    expect(renewal.result.code, renewal.result.err).toBe(0);
+    expect(inboxPuts().length - mark).toBe(2);
+    const adminNetwork = loadNetwork(adminDir, nowSeconds());
+    for (const name of ['laptop', 'server']) {
+      const about = inboxOf(name)
+        .map((d) => verified(name, d.document))
+        .filter((v) => v.ok && v.kind === 'peer' && v.registration.uuid === uuidOf('desktop'));
+      expect(about).toHaveLength(1);
+      const doc = about[0];
+      if (!doc || !doc.ok || doc.kind !== 'peer') throw new Error('expected a verified peer document about the admin machine');
+      expect(doc.registration.identityPublicKey).toBe(exportMachineInfo(adminDir).identityPublicKey);
+      // The pair secret of the admin with this machine does not change: both sides keep agreeing.
+      expect(openPairSecret(doc, readMachine(dirOf(name)).identity.privateKeyPkcs8)).toBe(adminNetwork.directory.find(uuidOf(name))?.pairSecret.toString('base64url'));
+    }
+    expect(renewal.result.out).toMatch(/2 document\(s\) stored by the relay for 2 machine/);
+    // The admin machine is not in its own inbox.
+    expect(inboxOf('desktop')).toHaveLength(0);
+  });
+
+  it('the admin machine renewing with nobody else yet: nothing is sent and nothing is claimed', async () => {
+    await enroll('desktop');
+    const { result } = await enroll('desktop', { again: 1 });
+    expect(result.code, result.err).toBe(0);
+    expect(inboxPuts()).toHaveLength(0);
+  });
+
+  it('a different identity key on a relay that does not say the uuid is bound: refused before anything is asked, signed or sent', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    const decisionsBefore = relay.requests.filter((q) => q.path.endsWith('/decision')).length;
+    const putsBefore = inboxPuts().length;
+    const asked: string[] = [];
+    const other = generateSigningKeyPair().publicKey;
+    const { result } = await enroll('laptop', { again: 1, identityPublicKey: other, ask: async (l) => (asked.push(l), 'y') });
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/another identity key/);
+    expect(result.err).toMatch(/uuid is bound|binds the uuid/);
+    expect(asked).toHaveLength(0);
+    expect(relay.requests.filter((q) => q.path.endsWith('/decision')).length).toBe(decisionsBefore);
+    expect(inboxPuts().length).toBe(putsBefore);
+    // The old key is still the one trusted here.
+    expect(loadNetwork(adminDir, nowSeconds()).directory.find(uuidOf('laptop'))?.identityPublicKey).toBe(exportMachineInfo(dirOf('laptop')).identityPublicKey);
+  });
+
+  describe('on a relay that reports the binding', () => {
+    beforeAll(() => {
+      bindMode = true;
+    });
+    afterAll(() => {
+      bindMode = false;
+    });
+
+    it('a different identity key with uuidBound: allowed after the explicit question, replaced locally, peers told, nothing revoked, and the output says so', async () => {
+      await enroll('laptop');
+      await enroll('server');
+      relay.setOwner(uuidOf('laptop'), relay.token);
+      const asked: string[] = [];
+      const newKey = generateSigningKeyPair().publicKey;
+      const { result } = await enroll('laptop', { again: 1, identityPublicKey: newKey, ask: async (l) => (asked.push(l), 'y') });
+      expect(result.code, result.err).toBe(0);
+      expect(asked.join('\n')).toMatch(/already bound/);
+      expect(asked.join('\n')).toMatch(/another identity key/);
+      expect(result.out).toMatch(/old key of "laptop" is replaced on this machine/);
+      expect(result.out).toContain('machine admin revoke');
+      expect(loadNetwork(adminDir, nowSeconds()).revocations).toEqual([]);
+      // The renewal is dated a few seconds ahead (the test clock), hence the later reading date.
+      expect(loadNetwork(adminDir, nowSeconds() + 10).directory.find(uuidOf('laptop'))?.identityPublicKey).toBe(newKey);
+      // The server learns the new registration (with the new key).
+      const keys = inboxOf('server').map((d) => (verified('server', d.document) as unknown as { registration: SignedRegistration['body'] }).registration.identityPublicKey);
+      expect(keys).toContain(newKey);
+    });
   });
 });
 

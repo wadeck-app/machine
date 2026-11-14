@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { sealBundle } from './approval.js';
-import { distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
+import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
-import { exportMachineInfo, importPeer, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
+import { exportMachineInfo, importPeer, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
 import { viaAdminToken } from './adminRelay.js';
 import { createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
@@ -296,11 +296,20 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     );
   }
 
+  // A uuid this machine already trusts with another identity key is a replacement of the key, not a renewal: only when the relay says the
+  // uuid is bound (the explicit rebind, confirmed below) is it allowed.
+  const known = selfApproval ? undefined : loadNetwork(configDir, o.now()).directory.find(uuid);
+  const keyChanged = known !== undefined && known.identityPublicKey !== view.identityPublicKey;
+  if (keyChanged && view.uuidBound !== true) {
+    throw new Error(
+      `refusing to approve ${printable(view.id)}: it claims the uuid of "${printable(known?.name ?? view.name)}" (${uuid}), already trusted here, with another identity key. The relay did not report that the uuid is bound (a binding relay says it), so this cannot be told from someone taking the uuid. Nothing was signed or sent. Reject it (\`machine admin approve ${printable(view.id)} --reject\`); if the machine really has a new key, revoke the old machine (\`machine admin revoke ${printable(view.name)}\`) and enroll it again`,
+    );
+  }
   const rebind = bindingWarning(view);
   let answer: string;
   try {
     answer = await o.ask(
-      `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''} [y/N] `,
+      `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''}${keyChanged ? ' WARNING: this uuid is already trusted here with another identity key: approving replaces the old key on this machine (it is not revoked).' : ''} [y/N] `,
     );
   } catch (e) {
     if (e instanceof PromptTimeoutError) throw e;
@@ -371,8 +380,24 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   let report: DistributionReport | undefined;
   let formatted: FormattedDistribution;
   if (selfApproval) {
-    // Nothing to send: the other machines learned this one when they were approved by it.
-    formatted = { out: '', err: '', failed: false };
+    // A renewal of the registration of this machine: the peers must learn the new one (they learned the first when they were approved).
+    // The very first approval has nobody to tell, and says nothing about it.
+    const retryRenewal = 'machine join --resume, then `machine admin approve <id>` again';
+    if (trustedRegistrations(configDir, o.now()).length === 0) {
+      formatted = { out: '', err: '', failed: false };
+    } else {
+      try {
+        const unlocked = await unlockAdminKey(configDir, prompt);
+        report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });
+        formatted = formatDistribution(report, 'the approval', retryRenewal);
+      } catch (e) {
+        formatted = {
+          out: '',
+          err: `[error] the other peers could not be informed about the renewal of "${printable(view.name)}": ${(e as Error).message}\n[warn] the approval stands: nothing was undone. Run \`${retryRenewal}\` to send it again; it is safe to run again\n`,
+          failed: true,
+        };
+      }
+    }
   } else if (!adminSelfImported) {
     formatted = {
       out: '',
@@ -393,6 +418,11 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     }
   }
   if (formatted.out) o.say(formatted.out);
+  if (keyChanged) {
+    o.say(
+      `[warn] the old key of "${printable(view.name)}" is replaced on this machine by the key of this candidacy, and the other peers were told the new registration. Nothing was revoked automatically: \`machine admin revoke ${printable(view.name)}\` revokes the machine (its uuid), not only the old key\n`,
+    );
+  }
   return {
     kind: 'approved',
     candidacy: view,

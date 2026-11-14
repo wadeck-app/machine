@@ -284,22 +284,30 @@ describe('address publisher', () => {
       const p = publisher();
       const path = `/api/machines/${self().uuid}`;
       for (let i = 0; i < 6; i++) relay.force(path, 503, { success: false, error: 'store_unavailable', message: 'down' }, {}, 'PUT');
-      const attemptAt: number[] = [];
-      const before = () => puts().length;
-      // Walk the clock one second at a time: an attempt is a new PUT.
-      for (let t = 0; t < 2400 && attemptAt.length < 6; t++) {
-        const n = before();
+      // The clock is set to the instant before and the instant of each expected attempt (no second-by-second walk: it cost about 3000 real
+      // HTTP-free ticks with a state-file read each, which made the test slow on a loaded machine). An attempt is a new PUT.
+      const attempts = [0, 60, 180, 420, 900, 1500];
+      for (const at of attempts) {
+        if (at > 0) {
+          now = START + at - 1;
+          const n = puts().length;
+          await p.tick();
+          expect(puts().length, `no attempt one second before t+${at}`).toBe(n);
+        }
+        now = START + at;
+        const n = puts().length;
         await p.tick();
-        if (puts().length > n) attemptAt.push(now - START);
-        now += 1;
+        expect(puts().length, `an attempt at t+${at}`).toBe(n + 1);
       }
-      expect(attemptAt.slice(0, 6)).toEqual([0, 60, 180, 420, 900, 1500]);
       expect(logs.filter((l) => /failed \(503\)/.test(l))).toHaveLength(1);
-      // The next attempt succeeds: said once.
-      for (let i = 0; i < 700 && puts().length < 7; i++) {
-        await p.tick();
-        now += 1;
-      }
+      // The backoff is now capped at 600 s: the seventh attempt comes at t+2100 and succeeds, said once.
+      now = START + 1500 + 599;
+      const n = puts().length;
+      await p.tick();
+      expect(puts().length).toBe(n);
+      now = START + 1500 + 600;
+      await p.tick();
+      expect(puts().length).toBe(n + 1);
       expect(logs.filter((l) => /address record: the relay is working again|published again after/.test(l)).length).toBe(1);
       expect((await verifyOnRelay()).seq).toBe(S(1));
     });

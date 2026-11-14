@@ -105,3 +105,10 @@ Ownership: the owner of `uuid` is the first token that wrote its address record.
 
 - A revocation reaches a peer only through its inbox (30 days of retention) and is merged grow-only; each revocation document carries the whole list of the admin, so a later one repairs an earlier loss. A peer offline longer than that, or one whose document the relay dropped, stays unaware until a later list reaches it.
 - Not built: catch-up between peers at the handshake with `revocationDigest`, and an admin view of which machine holds which revocation (todo #21, threat-model T-06).
+
+## Re-approval of a known uuid and the admin machine itself (2026-11-14)
+
+- First machine = admin machine: its candidacy is approved by itself; no peer entry for itself, no document to itself, no final code to compare (nothing differs between the two sides), `join` says "no other machine yet".
+- Renewal (same uuid, same identity key): `admin approve` distributes the new registration (higher serial) to the existing peers like a new machine; for the admin machine itself each peer receives a `peer` document carrying the pair secret it already shares with the admin (unchanged, otherwise both sides would disagree).
+- Different identity key for a known uuid: refused before any question or signature unless the relay reports `uuidBound` (explicit rebind, confirmed by a y/N text naming the key change); the old key is replaced locally, peers learn the higher serial, nothing is revoked automatically; `machine admin revoke` revokes the whole uuid, not only the old key.
+- `machine admin distribute <admin machine>` is a deliberate no-op (exit 0, says so).

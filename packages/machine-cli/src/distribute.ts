@@ -62,13 +62,18 @@ interface Recipient {
 const emptyReport = (): DistributionReport => ({ delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: 0 });
 
 /** The identity of the admin machine, or null when it has none (`machine init` was never run here). */
-export function adminMachineUuid(configDir: string): string | null {
+export function adminMachineIdentity(configDir: string): { uuid: string; name: string } | null {
   try {
-    return exportMachineInfo(configDir).uuid;
+    const info = exportMachineInfo(configDir);
+    return { uuid: info.uuid, name: info.name };
   } catch (e) {
     if (e instanceof NotInitializedError) return null;
     throw e;
   }
+}
+
+export function adminMachineUuid(configDir: string): string | null {
+  return adminMachineIdentity(configDir)?.uuid ?? null;
 }
 
 /** Build and send one document. Returns false when the rest must not be attempted (the relay cannot be used at all). */
@@ -139,6 +144,25 @@ export async function distributeMachine(configDir: string, subjectUuid: string, 
     // About the new machine, to the old one; then about the old one, to the new machine.
     if (!(await put(sender, report, { uuid: other.body.uuid, name: other.body.name }, 'peer', () => peerDocument(sender, other, subject, secret)))) break;
     if (!(await put(sender, report, { uuid: subject.body.uuid, name: subject.body.name }, 'peer', () => peerDocument(sender, subject, other, secret)))) break;
+  }
+  return report;
+}
+
+/**
+ * The admin machine renewed its own registration: tell every trusted peer about the new one (a higher serial replaces the old one there).
+ * The pair secret each peer already shares with this machine is sealed again, unchanged: a new one would leave this machine and that peer
+ * disagreeing, since this machine keeps the secret it already has.
+ */
+export async function distributeAdminRenewal(configDir: string, renewed: SignedRegistration, sender: Sender): Promise<DistributionReport> {
+  const report = emptyReport();
+  const directory = loadNetwork(configDir, sender.now()).directory;
+  const peers = trustedRegistrations(configDir, sender.now());
+  report.machines = peers.length;
+  for (const peer of peers) {
+    const known = directory.find(peer.body.uuid);
+    if (!known) continue;
+    const secret = known.pairSecret.toString('base64url');
+    if (!(await put(sender, report, { uuid: peer.body.uuid, name: peer.body.name }, 'peer', () => peerDocument(sender, peer, renewed, secret)))) break;
   }
   return report;
 }

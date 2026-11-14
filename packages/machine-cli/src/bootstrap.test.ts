@@ -112,7 +112,8 @@ describe.each([
       expect(joined.out).toMatch(/already pinned/);
       expect(joined.out).not.toMatch(/Is this the code/);
       expect(readFileSync(join(a, 'admin.json'), 'utf8')).toBe(before);
-      expect(joined.out).toMatch(/peers trusted: none/);
+      expect(joined.out).toMatch(/no other machine yet: this machine is the first of the network/);
+      expect(joined.out).not.toMatch(/peers trusted: none|the admin included none/);
       // The candidacy file is gone: nothing left to resume.
       expect(existsSync(join(a, '_secrets_', 'candidacy.json'))).toBe(false);
     });
@@ -144,8 +145,8 @@ describe.each([
     });
   });
 
-  it.runIf(bind)('a daemon started before the approval says what to do, keeps no backoff, and publishes by itself in the next round after the approval', async () => {
-    const id = await firstMachinePosts();
+  /** A daemon of the first machine, started before its approval, with a manual timer. */
+  async function daemonBeforeApproval() {
     const logs: string[] = [];
     const pending = new Map<number, () => void>();
     let next = 0;
@@ -153,23 +154,46 @@ describe.each([
     const daemon = await startMachineDaemon(a, { port: 0, version: 'bootstrap', peerPort: 0, peerHost: '127.0.0.1', advertise: [{ host: '127.0.0.1' }], log: (l) => logs.push(l), inbox: { timer } });
     daemons.push(daemon);
     await daemon.inbox?.ready;
-    const text = () => logs.join(' | ');
-    expect(text()).toMatch(/address record NOT published:.*this machine is not approved yet: run machine join and ask the admin to approve it/s);
-    expect(text()).toMatch(/inbox: .*this machine is not approved yet: run machine join and ask the admin to approve it/s);
-    // Said once, not at every round.
-    await daemon.inbox?.runOnce();
-    expect(logs.filter((l) => /not approved yet/.test(l))).toHaveLength(2);
-    // The loop is not slowed down: the next round is one heartbeat away, not an exponential backoff.
-    expect(pending.size).toBe(1);
+    return { daemon, logs, pending, text: () => logs.join(' | ') };
+  }
 
-    expect((await approve(a, id)).code).toBe(0);
-    expect((await cli(a, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: forbidden('the final code') })).code).toBe(0);
-    await daemon.inbox?.runOnce();
-    expect(text()).toMatch(/address record published/);
-    expect(text()).toMatch(/inbox: this machine is approved on the relay now/);
-    const entry = await relay.inbox(readMachine(a).uuid);
-    expect(entry).toEqual([]);
-  });
+  // The two relays behave differently before the approval, so each mode has its own expectations (defined per mode, never skipped).
+  if (bind) {
+    it('a daemon started before the approval says what to do, keeps no backoff, and publishes by itself in the next round after the approval', async () => {
+      const id = await firstMachinePosts();
+      const { daemon, logs, pending, text } = await daemonBeforeApproval();
+      expect(text()).toMatch(/address record NOT published:.*this machine is not approved yet: run machine join and ask the admin to approve it/s);
+      expect(text()).toMatch(/inbox: .*this machine is not approved yet: run machine join and ask the admin to approve it/s);
+      // Said once, not at every round.
+      await daemon.inbox?.runOnce();
+      expect(logs.filter((l) => /not approved yet/.test(l))).toHaveLength(2);
+      // The loop is not slowed down: the next round is one heartbeat away, not an exponential backoff.
+      expect(pending.size).toBe(1);
+
+      expect((await approve(a, id)).code).toBe(0);
+      expect((await cli(a, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: forbidden('the final code') })).code).toBe(0);
+      await daemon.inbox?.runOnce();
+      expect(text()).toMatch(/address record published/);
+      expect(text()).toMatch(/inbox: this machine is approved on the relay now/);
+      const entry = await relay.inbox(readMachine(a).uuid);
+      expect(entry).toEqual([]);
+    });
+  } else {
+    it('a daemon started before the approval: the relay as deployed has no approval gate, so nothing says "not approved yet" and the loop keeps its normal pace', async () => {
+      const id = await firstMachinePosts();
+      const { daemon, logs, pending, text } = await daemonBeforeApproval();
+      expect(text()).not.toMatch(/not approved yet/);
+      expect(text()).toMatch(/address record published/);
+      await daemon.inbox?.runOnce();
+      expect(pending.size).toBe(1);
+
+      expect((await approve(a, id)).code).toBe(0);
+      expect((await cli(a, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: forbidden('the final code') })).code).toBe(0);
+      await daemon.inbox?.runOnce();
+      expect(logs.filter((l) => /not approved yet/.test(l))).toHaveLength(0);
+      expect(await relay.inbox(readMachine(a).uuid)).toEqual([]);
+    });
+  }
 
   describe('the second machine joins and is approved by the first', () => {
     /** The first machine is enrolled; the second one joins with its own token and is approved. Returns the id of the second candidacy. */
@@ -230,7 +254,8 @@ describe.each([
       expect(peersOf(a).map((p) => p.registration.body.uuid).sort()).toEqual([ub, uc].sort());
       // The admin machine is not a distribution subject for itself: a clear refusal, no document.
       const self = await cli(a, ['admin', 'distribute', 'desktop'], async () => passphrase);
-      expect(self.code).toBe(3);
+      expect(self.code, self.err).toBe(0);
+      expect(self.out).toMatch(/this is the admin machine itself: nothing to distribute to itself/);
       expect(relay.inbox(ua)).toEqual([]);
     });
 

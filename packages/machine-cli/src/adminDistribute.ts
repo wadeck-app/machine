@@ -3,6 +3,7 @@ import { isUuid, resolveMachineRef, type SignedPolicy } from '@wadeck-app/machin
 import { unlockAdminKey, type Prompt } from './admin.js';
 import { UnresolvedReferenceError, retryDistribution } from './adminRevoke.js';
 import {
+  adminMachineIdentity,
   adminMachineUuid,
   adminRelayAccess,
   distributeMachine,
@@ -57,6 +58,16 @@ function readSignedPolicy(file: string): SignedPolicy {
 
 export async function runDistribute(configDir: string, o: DistributeOptions): Promise<DistributeResult> {
   requireAdminKeyFile(configDir);
+  // The admin machine is no peer of itself: it has nobody to be distributed to, and saying so is not a failure.
+  if (o.policyFile === undefined && o.reference !== undefined) {
+    const self = adminMachineIdentity(configDir);
+    const wanted = o.reference.toLowerCase();
+    if (self !== null && (wanted === self.uuid || wanted === self.name.toLowerCase())) {
+      const out = 'this is the admin machine itself: nothing to distribute to itself (the other machines learn about it when it is approved or renewed with `machine admin approve`)\n';
+      const report: DistributionReport = { delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: 0 };
+      return { what: `machine ${self.uuid}`, report, formatted: { out, err: '', failed: false } };
+    }
+  }
   const access = adminRelayAccess(configDir, o.client);
   if (access === undefined) throw new Error(noAdminRelayTokenMessage(configDir));
 

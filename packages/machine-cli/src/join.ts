@@ -316,6 +316,8 @@ export interface Enrolled {
   finalCode: string;
   self: { uuid: string; name: string };
   peers: { uuid: string; name: string }[];
+  /** The approval was signed by this very machine: it is the admin machine, the first of its network. */
+  isAdminMachine: boolean;
 }
 
 export type FlowResult = { status: 'posted'; posted: JoinResult } | { status: 'enrolled'; posted: JoinResult; enrolled: Enrolled };
@@ -476,6 +478,7 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
     finalCode: code,
     self: { uuid: checked.selfBody.uuid, name: checked.selfBody.name },
     peers: checked.peerBodies.map((b) => ({ uuid: b.uuid, name: b.name })),
+    isAdminMachine: checked.approval.adminUuid === checked.selfBody.uuid,
   };
 }
 
