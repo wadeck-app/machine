@@ -56,6 +56,29 @@ afterEach(async () => {
   rmSync(stub.dir, { recursive: true, force: true });
 });
 
+// State of the two machines, printed with a failing assertion so that a rare failure explains itself (status of both, peers of both, the decisions seen by the relay, the clock).
+async function diagnose(): Promise<string> {
+  const statusOf = async (dir: string) => {
+    const r = await cli(dir, ['status', '--json']);
+    return `code ${r.code} out ${r.out.trim()} err ${r.err.trim()}`;
+  };
+  const peers = (dir: string) => peersOf(dir).map((p) => ({ uuid: p.registration.body.uuid, registration: p.registration, pairSecretLength: p.pairSecret.length }));
+  return JSON.stringify(
+    {
+      nowEpochSeconds: Math.floor(Date.now() / 1000),
+      uuids: { a: readMachine(a).uuid, b: readMachine(b).uuid },
+      statusA: await statusOf(a),
+      statusB: await statusOf(b),
+      peersA: peers(a),
+      peersB: peers(b),
+      decisions: decisions().map((d) => d.path),
+      pending: relay.pendingIds(),
+    },
+    null,
+    1,
+  );
+}
+
 /** init, admin init, admin login, join (token and candidacy). Returns the id of the candidacy of the first machine. */
 async function firstMachinePosts(): Promise<string> {
   await ok(a, ['init', '--name', 'desktop']);
@@ -217,22 +240,24 @@ describe.each([
       await bothEnrolled();
       const ua = readMachine(a).uuid;
       const ub = readMachine(b).uuid;
-      expect(peersOf(a).map((p) => p.registration.body.uuid)).toEqual([ub]);
-      expect(peersOf(b).map((p) => p.registration.body.uuid)).toEqual([ua]);
-      expect((peersOf(a)[0] as { pairSecret: string }).pairSecret).toBe((peersOf(b)[0] as { pairSecret: string }).pairSecret);
-      expect(JSON.parse((await ok(a, ['status', '--json'])).out)).toMatchObject({ enrolled: true, peers: 1, problems: [] });
-      expect(JSON.parse((await ok(b, ['status', '--json'])).out)).toMatchObject({ enrolled: true, peers: 1, problems: [] });
+      const why = await diagnose();
+      expect(peersOf(a).map((p) => p.registration.body.uuid), why).toEqual([ub]);
+      expect(peersOf(b).map((p) => p.registration.body.uuid), why).toEqual([ua]);
+      expect((peersOf(a)[0] as { pairSecret: string }).pairSecret, why).toBe((peersOf(b)[0] as { pairSecret: string }).pairSecret);
+      expect(JSON.parse((await ok(a, ['status', '--json'])).out), why).toMatchObject({ enrolled: true, peers: 1, problems: [] });
+      expect(JSON.parse((await ok(b, ['status', '--json'])).out), why).toMatchObject({ enrolled: true, peers: 1, problems: [] });
       // The second approval was sealed to the key of the second machine, with the first machine as the only peer.
       const sent = (decisions()[1]?.body as { approval: { adminUuid: string; random: string; peers: { sealedPairSecret: string }[] } }).approval;
-      expect(sent.peers).toHaveLength(1);
+      expect(sent.peers, why).toHaveLength(1);
       const opened = Buffer.from(openSealed(readMachine(b).identity.privateKeyPkcs8, sent.peers[0]?.sealedPairSecret as string, pairSecretContext({ adminUuid: ua, candidateUuid: ub, random: sent.random, slot: `peer:${ua}` }))).toString('base64url');
-      expect(opened).toBe((peersOf(b)[0] as { pairSecret: string }).pairSecret);
+      expect(opened, why).toBe((peersOf(b)[0] as { pairSecret: string }).pairSecret);
     });
 
     it('the admin sent nothing to its own inbox and nothing to the new machine beyond the approval (no other peer yet)', async () => {
       await bothEnrolled();
-      expect(relay.inbox(readMachine(a).uuid)).toEqual([]);
-      expect(relay.inbox(readMachine(b).uuid)).toEqual([]);
+      const why = await diagnose();
+      expect(relay.inbox(readMachine(a).uuid), why).toEqual([]);
+      expect(relay.inbox(readMachine(b).uuid), why).toEqual([]);
     });
 
     it('a third machine: the others get one peer document each about each other, none is sent to the admin machine about itself, none to a machine about itself', async () => {
