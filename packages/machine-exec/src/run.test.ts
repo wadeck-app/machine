@@ -69,7 +69,7 @@ describe.runIf(onWindows)('real PowerShell', () => {
     const r = await runCommand({ shell: 'ps', command: `Write-Output 'a b'; Write-Output "c d"`, ...quick });
     // The message carries stderr so that a failure says why the output is empty (CI: empty after 30 s). stderr is not compared:
     // PowerShell writes its "preparing modules for first use" progress there.
-    expect(r.timedOut, `timed out, stderr: ${r.stderr}`).toBe(false);
+    expect(r.timedOut, `timed out after ${r.durationMs} ms, exitCode ${String(r.exitCode)}, stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`).toBe(false);
     expect(lines(r.stdout)).toEqual(['a b', 'c d']);
   });
 

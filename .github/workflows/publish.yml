@@ -1,7 +1,9 @@
 name: CI / Publish
 
-# Pull requests and pushes to main run the tests on three OS. A push to main, or a manual dispatch on main, then publishes:
-# every push to main publishes an edge build, a dispatch can set a stable version. The version comes from compute-version, not from a tag.
+# Pull requests and pushes to main run the tests on three OS and build the four packages, which are smoke-tested packed on macOS and Linux.
+# A push to main, or a manual dispatch on main, then publishes exactly those packages (the artifact, never a rebuild) and checks the
+# published version installs and updates on three OS. Every push to main publishes an edge build, a dispatch can set a stable version.
+# The version comes from compute-version, not from a tag.
 on:
     push:
         branches: [main]
@@ -52,7 +54,7 @@ jobs:
                   scope: '@wadeck-app'
                   cache: npm
 
-            # The launcher tests (src/launcherGo.test.ts) build the Go launcher. Same patch as the publish job.
+            # The launcher tests (src/launcherGo.test.ts) build the Go launcher. Same patch as the build-packages job.
             - uses: actions/setup-go@v5
               with:
                   go-version: '1.26.8'
@@ -71,19 +73,25 @@ jobs:
             - name: Typecheck
               run: npm run typecheck
 
+            # The log is kept to put its end in an annotation: the job logs are not readable without admin rights (project does the same)
             - name: Test
-              run: npm test
+              run: |
+                  set -o pipefail
+                  npm test 2>&1 | tee "${{ runner.temp }}/tests.log"
 
-    publish:
-        needs: [build-and-test]
-        # Only main publishes: a pull request, or a dispatch on a branch or a tag, must not.
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+            - name: Annotate the failure of the tests
+              if: failure()
+              run: node packages/machine-cli/ci/scripts/annotate-failure.mjs "tests (${{ matrix.os }})" "${{ runner.temp }}/tests.log"
+
+    # Builds the four packages once. Publish uploads these very files (the artifact), after packed-smoke tested them, so what is tested is
+    # what is published and the version cannot differ between the jobs. Runs on pull requests too: a broken package is found before the merge.
+    build-packages:
         runs-on: ubuntu-latest
-        # TODO(user): GitHub Packages access for the four new package names (@wadeck-app/machine-cli and its three platform packages)
-        # is unproven for this repo: the first run decides (packaging.md section 5, 9.10).
-        permissions:
-            contents: read
-            packages: write
+        # TODO(user): the duration of this job is not measured yet; adjust after the first runs.
+        timeout-minutes: 20
+        outputs:
+            version: ${{ steps.version.outputs.version }}
+            dist_tag: ${{ steps.version.outputs.dist_tag }}
         env:
             PKG_OUT: ${{ github.workspace }}/dist-packages
         steps:
@@ -162,17 +170,94 @@ jobs:
             - name: Generate the packages
               run: node packages/machine-cli/ci/scripts/generate-platform-packages.mjs --out "$PKG_OUT" --version "${{ steps.version.outputs.version }}"
 
+            - name: Upload artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: machine-cli-packages
+                  path: dist-packages
+                  retention-days: 1
+
+    # Real macOS and Linux verification of the PACKED packages (nothing published, throwaway npm prefix, config folder and home): `machine --version`,
+    # `machine --help` and `machine cli self-check` from the installed tarballs of the wrapper and of the platform package of the runner,
+    # with and without the platform package.
+    # Gates publish on a REAL failure only: a packed CLI that fails on an Apple silicon or Linux runner must not ship (the 0644 binary
+    # incident of task). A smoke job that never got a runner ends `cancelled` after 15 minutes (seen on macos-latest in task, after one green
+    # run): that must not block the publish, so publish runs unless the smoke result is `failure`.
+    # Apple silicon only: macos-latest is arm64. Windows is not smoked packed: verify-install covers it from the registry, after the publish.
+    packed-smoke:
+        needs: build-packages
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [macos-latest, ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        # A runner that never comes ends `cancelled` after the limit (see above); TODO(user): adjust once the duration is measured.
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: machine-cli-packages
+                  path: dist-packages
+
+            - name: Restore exec bits lost by the artifact transfer
+              run: bash packages/machine-cli/ci/scripts/restore-exec-bits.sh dist-packages machine win32-x64,darwin-arm64,linux-x64
+
+            - name: Smoke test the packed CLI
+              run: bash packages/machine-cli/ci/scripts/smoke-packed.sh dist-packages machine "${{ needs.build-packages.outputs.version }}" win32-x64,darwin-arm64,linux-x64
+
+    publish:
+        needs: [build-and-test, build-packages, packed-smoke]
+        # Only main publishes: a pull request, or a dispatch on a branch or a tag, must not. `!cancelled()` lets this job run when packed-smoke
+        # ended `cancelled` (no runner); a failed build-and-test or build-packages still blocks it (explicit `success`).
+        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.build-and-test.result == 'success' && needs.build-packages.result == 'success' && needs.packed-smoke.result != 'failure' }}
+        runs-on: ubuntu-latest
+        # TODO(user): the duration of this job is not measured yet; adjust after the first runs.
+        timeout-minutes: 15
+        # TODO(user): GitHub Packages access for the four new package names (@wadeck-app/machine-cli and its three platform packages)
+        # is unproven for this repo: the first run decides (packaging.md section 5, 9.10).
+        permissions:
+            contents: read
+            packages: write
+        # The version that was published: verify-install and verify-update install exactly this one
+        outputs:
+            version: ${{ needs.build-packages.outputs.version }}
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+                  registry-url: 'https://npm.pkg.github.com'
+                  scope: '@wadeck-app'
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: machine-cli-packages
+                  path: dist-packages
+
+            # upload/download-artifact drop file modes: without this the published launcher is 0644 (EACCES on macOS).
+            - name: Restore exec bits lost by the artifact transfer
+              run: bash packages/machine-cli/ci/scripts/restore-exec-bits.sh dist-packages machine win32-x64,darwin-arm64,linux-x64
+
             # Nothing is published here: file list of the four packages, then the exec bit INSIDE the tarballs
-            # (same check as the queue workflow; a launcher or shim packed as 0644 gives EACCES on macOS and Linux).
-            - name: Packed smoke (file lists and exec bits)
+            # (a launcher or shim packed as 0644 gives EACCES on macOS and Linux). The last gate before the registry.
+            - name: Tarballs (file lists and exec bits)
               run: |
                   out="$(mktemp -d)"
-                  for d in "$PKG_OUT"/*/; do
+                  for d in dist-packages/*/; do
                     echo "--- $(basename "$d")"
                     (cd "$d" && npm pack --dry-run)
                   done
                   for d in machine-cli-dist machine-cli-darwin-arm64 machine-cli-linux-x64; do
-                    (cd "$PKG_OUT/$d" && npm pack --silent --pack-destination "$out" >/dev/null)
+                    (cd "dist-packages/$d" && npm pack --silent --pack-destination "$out" >/dev/null)
                   done
                   fail=0
                   count=0
@@ -190,12 +275,86 @@ jobs:
             # Reads the registry, publishes the three platform packages only when the launcher bytes changed (else checks all three
             # are already published), then pins the exact versions into the wrapper. It does not publish the wrapper.
             - name: Publish platform packages (hash-reuse) and pin the wrapper
-              run: node packages/machine-cli/ci/scripts/publish-platform-packages.mjs --dir "$PKG_OUT" --build-version "${{ steps.version.outputs.version }}" --dist-tag "${{ steps.version.outputs.dist_tag }}" --publish
+              run: node packages/machine-cli/ci/scripts/publish-platform-packages.mjs --dir dist-packages --build-version "${{ needs.build-packages.outputs.version }}" --dist-tag "${{ needs.build-packages.outputs.dist_tag }}" --publish
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Publish the wrapper
               working-directory: dist-packages/machine-cli-dist
-              run: npm publish --tag ${{ steps.version.outputs.dist_tag }}
+              run: npm publish --tag ${{ needs.build-packages.outputs.dist_tag }}
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # What was just published is installed from the registry on the three systems, in an isolated temp environment (npm prefix, config folder,
+    # app-core folder, home). Skipped when publish did not run. The same scripts can be run locally: see the header of verify-install.sh.
+    verify-install:
+        needs: [publish]
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+        runs-on: ${{ matrix.os }}
+        # TODO(user): the duration of this job per OS is not measured yet (it retries while the registry indexes the new version); adjust after the first runs.
+        timeout-minutes: 20
+        permissions:
+            contents: read
+            packages: read
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+                  registry-url: 'https://npm.pkg.github.com'
+                  scope: '@wadeck-app'
+
+            - name: Install the published version and check it works (install, --version, self-check, daemon, app-module)
+              run: |
+                  set -o pipefail
+                  bash packages/machine-cli/ci/scripts/verify-install.sh "${{ needs.publish.outputs.version }}" 2>&1 | tee "${{ runner.temp }}/verify-install.log"
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Annotate the failure of the install check
+              if: failure()
+              run: node packages/machine-cli/ci/scripts/annotate-failure.mjs "verify-install (${{ matrix.os }})" "${{ runner.temp }}/verify-install.log"
+
+    # The real update path: the PREVIOUS published version, with its daemon running, updates itself to the new one, rolls back, updates again.
+    # A separate job from verify-install so that one failure does not hide the other. Skipped, with a log line, on the first publication.
+    verify-update:
+        needs: [publish]
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+        runs-on: ${{ matrix.os }}
+        # TODO(user): the duration of this job per OS is not measured yet; adjust after the first runs.
+        timeout-minutes: 20
+        permissions:
+            contents: read
+            packages: read
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+                  registry-url: 'https://npm.pkg.github.com'
+                  scope: '@wadeck-app'
+
+            - name: Update from the previous published version, roll back, update again
+              run: |
+                  set -o pipefail
+                  bash packages/machine-cli/ci/scripts/verify-update.sh "${{ needs.publish.outputs.version }}" 2>&1 | tee "${{ runner.temp }}/verify-update.log"
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Annotate the failure of the update check
+              if: failure()
+              run: node packages/machine-cli/ci/scripts/annotate-failure.mjs "verify-update (${{ matrix.os }})" "${{ runner.temp }}/verify-update.log"
