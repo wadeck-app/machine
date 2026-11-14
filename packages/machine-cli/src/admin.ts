@@ -188,3 +188,8 @@ export async function signPolicyFile(configDir: string, draftFile: string, optio
   const pair = await unlock(configDir, pin, options.prompt);
   return { signed: signPolicy(body, pair.privateKeyPkcs8), summary };
 }
+
+/** Decrypt the admin key after a passphrase prompt. The caller signs one document with it and drops it. */
+export async function unlockAdminKey(configDir: string, prompt: Prompt) {
+  return unlock(configDir, readAdminPin(configDir), prompt);
+}
