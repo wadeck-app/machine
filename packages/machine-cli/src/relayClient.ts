@@ -44,7 +44,8 @@ export interface RelayClientOptions {
 export interface ClaimAnswer {
   token: string;
   label: string;
-  scopes: string[];
+  /** `null` is a full-access token (only `machine admin login` accepts one). */
+  scopes: string[] | null;
 }
 
 export interface CandidacyPost {
@@ -64,6 +65,8 @@ export type CandidacyStatus = { status: 'pending' } | { status: 'approved'; appr
 
 export interface PendingCandidacy extends CandidacyPost {
   id: string;
+  /** Not carried by the deployed relay yet (relay-api.md, Approval section): `machine admin approve` refuses a candidacy without it. */
+  uuid?: string;
   observedIp: string;
   createdAt: number;
   expiresAt: number;
@@ -102,7 +105,8 @@ export function normalizeRelayUrl(input: string): string {
 
 export interface RelayClient {
   readonly baseUrl: string;
-  claimPairing(code: string): Promise<ClaimAnswer>;
+  /** `access` is the kind of token the caller agrees to store: a machine token (default, `join`) or a full-access one (`admin login`). The other kind is refused and never returned. */
+  claimPairing(code: string, access?: 'machine' | 'full'): Promise<ClaimAnswer>;
   postCandidacy(candidacy: CandidacyPost): Promise<CandidacyPosted>;
   getCandidacy(id: string): Promise<CandidacyStatus>;
   putRecord(uuid: string, record: SignedAddressRecord, etag?: string): Promise<{ etag: string }>;
@@ -131,6 +135,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     headers?: Record<string, string>;
     /** Pairing routes answer `error` as human text, the others as a code plus `message`. */
     pairing?: boolean;
+    /** The pairing is for `machine admin login` (full access): the advice in errors differs. */
+    forAdmin?: boolean;
     /** Statuses returned as `undefined` instead of an error. */
     accept?: number[];
   }
@@ -184,9 +190,11 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     const detail = humanText ? `: ${humanText}` : code ? ` (${code})` : '';
     let message: string;
     if (c.pairing && (status === 400 || status === 401)) {
-      message = `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
+      message = c.forAdmin
+        ? `the pairing code was refused${detail}: open a new pairing in the relay console (Tokens, Add token, WITHOUT "Limited to scopes") and run \`machine admin login <code>\` again`
+        : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
-      message = `the pairing code was valid but is now used up${detail}: ask the admin for a new code and run \`machine join <code>\` again`;
+      message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
     } else if (status === 429) {
       const wait = retryAfterSeconds !== undefined ? `wait ${retryAfterSeconds} s and try again` : 'wait a little and try again';
       message = `the relay ${baseUrl} is rate limiting this request${detail}: ${wait}`;
@@ -223,10 +231,19 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   return {
     baseUrl,
 
-    async claimPairing(code) {
-      const r = (await call({ method: 'POST', path: '/api/pairings/claim', body: { code }, pairing: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+    async claimPairing(code, access = 'machine') {
+      const r = (await call({ method: 'POST', path: '/api/pairings/claim', body: { code }, pairing: true, ...(access === 'full' ? { forAdmin: true } : {}) })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       const { token: claimed, label, scopes } = r.body;
       if (typeof claimed !== 'string' || claimed.length === 0) throw malformed('the pairing claim');
+      if (access === 'full') {
+        if (scopes !== null) {
+          throw new RelayError({
+            status: r.status,
+            message: `the pairing code gives a token limited to scopes (${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}): it could not list or decide candidacies, and the token was NOT saved. Open a pairing WITHOUT "Limited to scopes" in the relay console (Tokens, Add token), note that the code is now used up, and run \`machine admin login <code>\` again`,
+          });
+        }
+        return { token: claimed, label: typeof label === 'string' ? label : '', scopes: null };
+      }
       if (!Array.isArray(scopes) || !scopes.includes('machine')) {
         throw new RelayError({
           status: r.status,

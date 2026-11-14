@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
-import { adminInit, pinAdminKey, signPolicyFile } from './admin.js';
+import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
+import { adminLogin, runApprove } from './adminApprove.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
@@ -129,7 +130,63 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       emit({ uuid: bundle.registration.body.uuid, out: args.out }, `[ok] registration written to ${args.out}: copy it to the machine that must trust "${bundle.registration.body.name}" (it contains a secret)\n`);
       return EXIT.ok;
     }
-    return fail('usage: machine admin init | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    if (sub === 'login') {
+      if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force]', EXIT.usage);
+      let code = first;
+      if (code === undefined) {
+        try {
+          code = await prompt('Full-access pairing code from the relay console: ');
+        } catch {
+          return fail('no pairing code given and no terminal to ask for it: pass it as `machine admin login <code>` (relay console: Tokens, Add token, WITHOUT "Limited to scopes")', EXIT.usage);
+        }
+      }
+      code = code.trim();
+      if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
+      try {
+        const r = await adminLogin(configDir, { code, relayUrl: args.relay ?? DEFAULT_RELAY_URL, force: args.force });
+        if (!existsSync(adminKeyFile(configDir))) io.stderr('[warn] this machine has no admin key yet: run `machine admin init` before `machine admin approve`\n');
+        emit({ relayUrl: r.relayUrl, label: r.label }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}; next: \`machine admin approve\` lists the pending candidacies\n`);
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof RelayError) return fail(e.message);
+        throw e;
+      }
+    }
+    if (sub === 'approve') {
+      if (second !== undefined) return fail('usage: machine admin approve [<id>] [--relay <url>] [--days <n>] [--reject]', EXIT.usage);
+      // Options of `join` are refused rather than silently ignored: the comparison of the code is never skippable.
+      if (args.yesFinalCode !== undefined) return fail('`machine admin approve` has no option to skip the comparison of the code: confirm it at the prompt, in a terminal', EXIT.usage);
+      if (args.resume || args.noWait || args.timeout !== undefined) return fail('--resume, --no-wait and --timeout belong to `machine join`, not to `machine admin approve`', EXIT.usage);
+      const days = args.days === undefined ? 365 : Number(args.days);
+      if (!Number.isInteger(days) || days < 1 || days > 3650) return fail(`--days must be a whole number from 1 to 3650, got "${args.days}"`, EXIT.usage);
+      if (args.reject && first === undefined) return fail('--reject needs the id of the candidacy to reject: run `machine admin approve` to list them', EXIT.usage);
+      if (first !== undefined && first.trim().length === 0) return fail('the candidacy id is empty', EXIT.usage);
+      try {
+        const result = await runApprove(configDir, {
+          ...(first !== undefined ? { id: first.trim() } : {}),
+          ...(args.relay !== undefined ? { relayUrl: args.relay } : {}),
+          days,
+          reject: args.reject,
+          prompt,
+          ask: io.ask ?? promptLine,
+          // With --json stdout carries the final JSON only: the human text goes to stderr.
+          say: args.json ? io.stderr : io.stdout,
+          now: epochSeconds,
+        });
+        if (result.kind === 'list') {
+          emit(result.candidacies, '');
+          // A relay that contradicts itself is a failure, not a warning in a list that exits 0.
+          return result.candidacies.some((c) => c.blockers.some((b) => b.startsWith('the relay sent a verification code'))) ? EXIT.failure : EXIT.ok;
+        }
+        if (result.kind === 'rejected') emit({ id: result.candidacy.id, decision: 'reject' }, '');
+        else emit({ id: result.candidacy.id, decision: 'approve', name: result.candidacy.name, uuid: result.registered.uuid, adminKeyId: result.adminKeyId, finalCode: result.finalCode }, '');
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
+    }
+    return fail('usage: machine admin init | login [<code>] | approve [<id>] | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
   }
 
   if (command === 'peer') {

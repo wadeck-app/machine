@@ -1,0 +1,434 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { candidacyCode, finalCode, newCandidacyRandom } from '@wadeck-app/machine-core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readAdminPin } from './admin.js';
+import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
+import { readMachine } from './identity.js';
+import { loadNetwork } from './network.js';
+import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
+import { cli, fakeTiming, makeAdmin, ok, type TestAdmin } from './testing.js';
+
+let root: string;
+let cand: string;
+let adminDir: string;
+let relay: FakeRelay;
+let admin: TestAdmin;
+
+const ADMIN_CODE = '87654321';
+const yes = async () => 'y';
+const no = async () => 'n';
+const noTty = async (): Promise<string> => {
+  throw new Error('no tty');
+};
+const forbidden = (what: string) => async (): Promise<string> => {
+  throw new Error(`${what} must not be asked`);
+};
+const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].at(-1)?.[1] as string;
+const login = () => cli(adminDir, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+const approve = (args: string[] = [], io: { ask?: (l: string) => Promise<string>; prompt?: () => Promise<string> } = {}) =>
+  cli(adminDir, ['admin', 'approve', ...args, '--relay', relay.url], io.prompt ?? (async () => admin.passphrase), { ask: io.ask ?? yes });
+const decisions = () => relay.requests.filter((q) => q.method === 'PUT' && q.path.endsWith('/decision'));
+const noToken = (...texts: string[]) => {
+  for (const t of [relay.token, relay.adminToken]) expect(texts.join('\n')).not.toContain(t);
+};
+
+/** The candidate joins without waiting; the relay (as it will soon) knows its uuid. */
+async function candidatePosts(withUuid = true): Promise<{ id: string; code: string }> {
+  const joined = await ok(cand, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+  const id = [...relay.candidacies.keys()].at(-1) as string;
+  if (withUuid) (relay.candidacies.get(id) as Record<string, unknown>).uuid = readMachine(cand).uuid;
+  return { id, code: lastCodeLine(joined.out) };
+}
+
+beforeEach(async () => {
+  root = mkdtempSync(join(tmpdir(), 'machine-approve-'));
+  cand = join(root, 'cand');
+  adminDir = join(root, 'admin');
+  mkdirSync(cand);
+  mkdirSync(adminDir);
+  relay = await startFakeRelay();
+  await ok(cand, ['init', '--name', 'laptop']);
+  await ok(adminDir, ['init', '--name', 'desktop']);
+  admin = makeAdmin(adminDir);
+});
+afterEach(async () => {
+  await relay.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('machine admin login', () => {
+  it('claims a full-access pairing, stores the token privately, never prints it', async () => {
+    const r = await login();
+    expect(r.code, r.err).toBe(0);
+    const stored = readRelayAdminConfig(adminDir);
+    expect(stored?.token).toBe(relay.adminToken);
+    expect(stored?.relayUrl).toBe(relay.url);
+    expect(stored?.label).toBe('admin-pairing');
+    expect(stored?.claimedAt).toMatch(/^20\d\d-/);
+    noToken(r.out, r.err);
+    expect(r.out).toContain('admin-pairing');
+    if (process.platform !== 'win32') expect(statSync(relayAdminFile(adminDir)).mode & 0o077).toBe(0);
+    // Kept apart from the machine token.
+    expect(existsSync(join(adminDir, '_secrets_', 'relay.json'))).toBe(false);
+  });
+
+  it('refuses a machine-scoped token with the fix, stores nothing, never prints it', async () => {
+    await relay.close();
+    relay = await startFakeRelay({ adminScopes: ['machine'] });
+    const r = await login();
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/limited to scopes/);
+    expect(r.err).toMatch(/WITHOUT "Limited to scopes"/);
+    expect(r.err).toMatch(/NOT saved/);
+    expect(existsSync(relayAdminFile(adminDir))).toBe(false);
+    noToken(r.out, r.err);
+  });
+
+  it('an existing admin token is kept: refused before the code is spent unless --force', async () => {
+    expect((await login()).code).toBe(0);
+    const claims = () => relay.requests.filter((q) => q.path === '/api/pairings/claim').length;
+    const before = claims();
+    const again = await login();
+    expect(again.code).toBe(1);
+    expect(again.err).toMatch(/--force/);
+    expect(claims()).toBe(before);
+    expect(readRelayAdminConfig(adminDir)?.token).toBe(relay.adminToken);
+  });
+
+  it('a wrong code is explained with the admin advice, not the join one', async () => {
+    const r = await cli(adminDir, ['admin', 'login', '00000000', '--relay', relay.url]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/machine admin login <code>/);
+    expect(r.err).not.toMatch(/machine join/);
+  });
+
+  it('join still refuses a full-access token (the check was not weakened)', async () => {
+    await relay.close();
+    relay = await startFakeRelay({ scopes: null });
+    const r = await cli(cand, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/full-access/);
+    expect(existsSync(join(cand, '_secrets_', 'relay.json'))).toBe(false);
+  });
+
+  it('no code and no terminal: usage error naming the fix', async () => {
+    const r = await cli(adminDir, ['admin', 'login', '--relay', relay.url], async () => {
+      throw new Error('no tty');
+    });
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/machine admin login <code>/);
+  });
+});
+
+describe('machine admin approve: preconditions', () => {
+  it('without a token from `admin login`: names the command', async () => {
+    const r = await approve();
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/machine admin login/);
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it('on a machine without admin key: names `machine admin init`, sends nothing', async () => {
+    writeRelayAdminConfig(cand, { relayUrl: relay.url, token: relay.adminToken, label: 'x', claimedAt: new Date().toISOString() }, false);
+    const r = await cli(cand, ['admin', 'approve', '--relay', relay.url]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/machine admin init/);
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it('a machine-scoped token saved as admin token: the relay refuses, the message says how to log in again', async () => {
+    writeRelayAdminConfig(adminDir, { relayUrl: relay.url, token: relay.token, label: 'x', claimedAt: new Date().toISOString() }, false);
+    const r = await approve();
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not a full-access token/);
+    expect(r.err).toMatch(/machine admin login <code> --force/);
+    noToken(r.out, r.err);
+  });
+
+  it('a revoked admin token (401) says how to replace it', async () => {
+    await login();
+    relay.force('/api/machines/candidacies', 401, { success: false, error: 'unauthorized', message: 'revoked' }, {}, 'GET');
+    const r = await approve();
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/refused the admin token/);
+    expect(r.err).toMatch(/machine admin login <code> --force/);
+    noToken(r.out, r.err);
+  });
+
+  it('another --relay than the saved token: refused', async () => {
+    await login();
+    const r = await cli(adminDir, ['admin', 'approve', '--relay', 'https://other.example'], async () => admin.passphrase, { ask: yes });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(relay.url);
+  });
+
+  it('usage errors: --reject without id, an extra argument, a bad --days', async () => {
+    await login();
+    expect((await approve(['--reject'])).code).toBe(2);
+    expect((await approve(['a', 'b'])).code).toBe(2);
+    expect((await approve(['a', '--days', '0'])).code).toBe(2);
+    expect((await approve(['a', '--days', 'x'])).code).toBe(2);
+  });
+});
+
+describe('machine admin approve: listing', () => {
+  beforeEach(async () => {
+    await login();
+  });
+
+  it('no pending candidacy is not an error', async () => {
+    const r = await approve();
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/no pending candidacy/);
+  });
+
+  it('one candidacy: id, name, hostname, address, age and the code recomputed here (equal to the candidate screen)', async () => {
+    const { id, code } = await candidatePosts();
+    const r = await approve();
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(id);
+    expect(r.out).toContain('laptop');
+    expect(r.out).toContain('127.0.0.1');
+    expect(r.out).toMatch(/age \d+ s/);
+    expect(r.out).toContain(code);
+    const posted = relay.candidacies.get(id) as unknown as { identityPublicKey: string; random: string };
+    expect(code).toBe(candidacyCode(posted.identityPublicKey, posted.random));
+    noToken(r.out, r.err);
+  });
+
+  it('--json lists the candidacies with the recomputed code', async () => {
+    const { id, code } = await candidatePosts();
+    const r = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
+    expect(r.code, r.err).toBe(0);
+    const parsed = JSON.parse(r.out) as { id: string; code: string; blockers: string[] }[];
+    expect(parsed[0]?.id).toBe(id);
+    expect(parsed[0]?.code).toBe(code);
+    expect(parsed[0]?.blockers).toEqual([]);
+  });
+
+  it('a candidacy without uuid is listed with a warning (the relay must be updated)', async () => {
+    await candidatePosts(false);
+    const r = await approve();
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/\[warn\] cannot be approved: .*no uuid yet/);
+  });
+
+  it('a relay code that differs from the code of the key and random it sent: listed with the real code, exit 1', async () => {
+    const { id, code } = await candidatePosts();
+    (relay.candidacies.get(id) as Record<string, unknown>).code = 'AAAA-AAAA-AAAA-AAAA';
+    const r = await approve();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(code);
+    expect(r.out).toMatch(/does not match the key and random/);
+  });
+});
+
+describe('machine admin approve: deciding', () => {
+  let id: string;
+  let candidateCode: string;
+  beforeEach(async () => {
+    await login();
+    ({ id, code: candidateCode } = await candidatePosts());
+  });
+
+  it('end to end with the real join: code compared, passphrase typed once, registration signed, final codes equal on both sides', async () => {
+    const asked: string[] = [];
+    let typed = 0;
+    const approved = await approve([id.slice(0, 6)], {
+      ask: async (label) => (asked.push(label), 'y'),
+      prompt: async () => (typed++, admin.passphrase),
+    });
+    expect(approved.code, approved.err).toBe(0);
+    expect(typed).toBe(1);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('laptop');
+    expect(asked[0]).toContain(readMachine(cand).uuid);
+    // The code was shown BEFORE the question, recomputed here.
+    expect(approved.out).toContain(candidateCode);
+    expect(decisions()).toHaveLength(1);
+    expect(decisions()[0]?.authorization).toBe(`Bearer ${relay.adminToken}`);
+    const body = decisions()[0]?.body as { decision: string; approval: { v: number; self: unknown; admin: { adminKeyId: string }; peers: unknown[] } };
+    expect(body.decision).toBe('approve');
+    expect(body.approval.admin.adminKeyId).toBe(admin.adminKeyId);
+    expect(body.approval.peers).toHaveLength(1);
+    noToken(approved.out, approved.err);
+
+    const random = (relay.candidacies.get(id) as unknown as { random: string }).random;
+    const expectedFinal = finalCode(readMachine(cand).identity.publicKey, admin.adminPublicKey, random);
+    expect(approved.out.split('\n')).toContain(`  ${expectedFinal}`);
+
+    // The candidate side, the existing code: it shows the same final code, pins, imports the admin machine as a peer.
+    const candidateAsked: string[] = [];
+    const joined = await cli(cand, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: async (l) => (candidateAsked.push(l), 'y') });
+    expect(joined.code, joined.err).toBe(0);
+    expect(lastCodeLine(joined.out.split('[ok] enrolled')[0] as string)).toBe(expectedFinal);
+    expect(readAdminPin(cand).adminKeyId).toBe(admin.adminKeyId);
+    expect(loadNetwork(cand, Math.floor(Date.now() / 1000)).directory.machines().map((m) => m.name)).toEqual(['desktop']);
+    // And the admin machine trusts the candidate with the same pair secret.
+    const adminPeer = loadNetwork(adminDir, Math.floor(Date.now() / 1000)).directory.machines();
+    expect(adminPeer.map((m) => m.name)).toEqual(['laptop']);
+    noToken(joined.out, joined.err);
+  });
+
+  it('an answer other than y: nothing signed, no passphrase asked, nothing sent', async () => {
+    const r = await approve([id], { ask: no, prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not approved/);
+    expect(decisions()).toHaveLength(0);
+    expect(relay.pendingIds()).toEqual([id]);
+  });
+
+  it('no terminal: fails with the fix (the comparison is by eye, no flag skips it), nothing sent', async () => {
+    const r = await approve([id], { ask: noTty, prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/no terminal/);
+    expect(r.err).toMatch(/by eye/);
+    expect(r.err).toContain(candidateCode);
+    expect(decisions()).toHaveLength(0);
+    // No option exists to skip the comparison.
+    expect((await cli(adminDir, ['admin', 'approve', id, '--yes', '--relay', relay.url])).code).toBe(2);
+    const skip = await cli(adminDir, ['admin', 'approve', id, '--yes-final-code', 'AAAA', '--relay', relay.url]);
+    expect(skip.code).toBe(2);
+    expect(skip.err).toMatch(/no option to skip/);
+  });
+
+  it('a wrong passphrase: nothing sent, the candidacy stays pending', async () => {
+    const r = await approve([id], { prompt: async () => 'not the right passphrase at all' });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/passphrase|decrypt/i);
+    expect(decisions()).toHaveLength(0);
+    expect(relay.pendingIds()).toEqual([id]);
+    expect(loadNetwork(adminDir, Math.floor(Date.now() / 1000)).directory.machines()).toHaveLength(0);
+  });
+
+  it('a prompt without terminal: nothing sent, passphrase never taken elsewhere', async () => {
+    const r = await approve([id], {
+      prompt: async () => {
+        throw new Error('a passphrase is only read from an interactive terminal');
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/interactive terminal/);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('reject: no question, no passphrase, the candidate learns it', async () => {
+    const r = await approve([id, '--reject'], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/rejected/);
+    expect((decisions()[0]?.body as { decision: string }).decision).toBe('reject');
+    const candidate = await cli(cand, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: yes });
+    expect(candidate.code).toBe(1);
+    expect(candidate.err).toMatch(/rejected/);
+  });
+
+  it('a relay that swaps the key but keeps its code: refused, nothing signed, and the shown code is not the candidate one', async () => {
+    const other = readMachine(adminDir).identity.publicKey;
+    const entry = relay.candidacies.get(id) as Record<string, unknown>;
+    entry.code = candidateCode;
+    entry.identityPublicKey = other;
+    const r = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/does not match the key and random/);
+    expect(r.err).toMatch(/do NOT approve/);
+    // What the admin is shown is what the relay's key gives: it differs from the candidate screen.
+    const shown = lastCodeLine(r.out);
+    expect(shown).not.toBe(candidateCode);
+    expect(shown).toBe(candidacyCode(other, entry.random as string));
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('a relay that swaps the key and says nothing else: the admin sees another code than the candidate', async () => {
+    const other = readMachine(adminDir).identity.publicKey;
+    (relay.candidacies.get(id) as Record<string, unknown>).identityPublicKey = other;
+    const asked: string[] = [];
+    const r = await approve([id], { ask: async (l) => (asked.push(l), 'n') });
+    expect(r.code).toBe(1);
+    expect(lastCodeLine(r.out)).not.toBe(candidateCode);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('a candidacy without uuid: refused loudly, nothing invented, nothing signed', async () => {
+    delete (relay.candidacies.get(id) as Record<string, unknown>).uuid;
+    const r = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/no uuid yet/);
+    expect(r.err).toMatch(/relay must be updated/);
+    expect(decisions()).toHaveLength(0);
+    // Rejecting stays possible.
+    expect((await approve([id, '--reject'])).code).toBe(0);
+  });
+
+  it('an invalid uuid or an expired candidacy: refused', async () => {
+    const entry = relay.candidacies.get(id) as Record<string, unknown>;
+    entry.uuid = 'not-a-uuid';
+    const bad = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/not a lower-case UUID/);
+    entry.uuid = readMachine(cand).uuid;
+    entry.expiresAt = Math.floor(Date.now() / 1000) - 5;
+    const old = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(old.code).toBe(1);
+    expect(old.err).toMatch(/expired/);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('the relay refuses the decision (409): says so, the candidate is not approved', async () => {
+    relay.force('/api/machines/candidacies/', 409, { success: false, error: 'not_pending', message: 'already decided' }, {}, 'PUT');
+    const r = await approve([id]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/NOT approved/);
+    expect(r.err).toMatch(/no longer pending/);
+  });
+});
+
+describe('machine admin approve: ids', () => {
+  beforeEach(async () => {
+    await login();
+  });
+
+  const plant = (id: string) =>
+    relay.addCandidacy(id, { name: `m-${id.slice(-1)}`, hostname: 'h', identityPublicKey: readMachine(cand).identity.publicKey, random: newCandidacyRandom(), uuid: readMachine(cand).uuid });
+
+  it('an ambiguous prefix lists the candidates and decides nothing; a unique prefix or the full id works', async () => {
+    plant('abcd1111');
+    plant('abcd2222');
+    const ambiguous = await approve(['abcd', '--reject']);
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.err).toContain('abcd1111');
+    expect(ambiguous.err).toContain('abcd2222');
+    expect(decisions()).toHaveLength(0);
+
+    const unique = await approve(['abcd1', '--reject']);
+    expect(unique.code, unique.err).toBe(0);
+    expect(decisions().map((d) => d.path)).toEqual(['/api/machines/candidacies/abcd1111/decision']);
+    const exact = await approve(['abcd2222', '--reject']);
+    expect(exact.code, exact.err).toBe(0);
+  });
+
+  it('an unknown id: says how to list', async () => {
+    plant('abcd1111');
+    const r = await approve(['zzzz']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/no pending candidacy matches "zzzz"/);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('relay text is shown as printable ASCII only (no escape sequence reaches the terminal)', async () => {
+    relay.addCandidacy('esc00001', { name: 'laptop', hostname: 'evil\u001b[2Jhost', identityPublicKey: readMachine(cand).identity.publicKey, random: newCandidacyRandom(), uuid: readMachine(cand).uuid });
+    const r = await approve(['esc00001', '--reject']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).not.toContain('\u001b');
+    expect(r.out).toContain('evil?[2Jhost');
+  });
+});
+
+describe('the stored admin token', () => {
+  it('is mode 0600 content only: url, token, label, claimedAt', async () => {
+    await login();
+    const raw = JSON.parse(readFileSync(relayAdminFile(adminDir), 'utf8')) as Record<string, string>;
+    expect(Object.keys(raw).sort()).toEqual(['claimedAt', 'label', 'relayUrl', 'token']);
+  });
+});

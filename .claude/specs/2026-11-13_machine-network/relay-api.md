@@ -61,6 +61,8 @@ Candidate behaviour (`machine join [<code>]`, `machine join --resume`): polls `G
 
 **Open (blocks the admin side, needs poc-owner):** the candidacy carries no `uuid`, but the admin must sign a registration for the candidate's uuid, and the candidate refuses any other. Proposal: add `uuid` (lower-case v4) to the candidacy body. It is NOT sent yet because the deployed relay refuses unknown fields (400).
 
+**Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a pairing opened WITHOUT "Limited to scopes" (`scopes: null`); the client refuses a scoped one. The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
+
 ## Machines resource: address and presence (decision 34)
 
 | Call | Scope | Body | Answer |

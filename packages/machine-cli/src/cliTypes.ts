@@ -48,6 +48,7 @@ export interface Parsed {
   relay?: string;
   resume: boolean;
   noWait: boolean;
+  reject: boolean;
   timeout?: string;
   yesFinalCode?: string;
 }

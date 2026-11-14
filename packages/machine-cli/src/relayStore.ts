@@ -14,9 +14,18 @@ export interface RelayConfig {
 }
 
 export const relayFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay.json');
+/** The full-access token of the admin console (`machine admin login`): kept apart from the machine token, same format and protection. */
+export const relayAdminFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay-admin.json');
 
 export function readRelayConfig(configDir: string): RelayConfig | undefined {
-  const path = relayFile(configDir);
+  return readConfigAt(relayFile(configDir), 'machine join <code>', 'a new code from the admin');
+}
+
+export function readRelayAdminConfig(configDir: string): RelayConfig | undefined {
+  return readConfigAt(relayAdminFile(configDir), 'machine admin login <code>', 'a new pairing opened in the relay console');
+}
+
+function readConfigAt(path: string, command: string, codeSource: string): RelayConfig | undefined {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
@@ -24,7 +33,7 @@ export function readRelayConfig(configDir: string): RelayConfig | undefined {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw new Error(`cannot read ${path}: ${(e as Error).message}`);
   }
-  const corrupt = (why: string) => new Error(`${path} is corrupt or invalid (${why}): delete it and run \`machine join <code>\` again with a new code from the admin`);
+  const corrupt = (why: string) => new Error(`${path} is corrupt or invalid (${why}): delete it and run \`${command}\` again with ${codeSource}`);
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -42,7 +51,14 @@ export function readRelayConfig(configDir: string): RelayConfig | undefined {
 
 /** Without `replace`, an existing relay.json is never overwritten (exclusive link, no check-then-write race). */
 export function writeRelayConfig(configDir: string, config: RelayConfig, replace: boolean): void {
-  const target = relayFile(configDir);
+  writeConfigAt(configDir, relayFile(configDir), config, replace, 'this machine already joined a relay');
+}
+
+export function writeRelayAdminConfig(configDir: string, config: RelayConfig, replace: boolean): void {
+  writeConfigAt(configDir, relayAdminFile(configDir), config, replace, 'this machine already holds an admin relay token');
+}
+
+function writeConfigAt(configDir: string, target: string, config: RelayConfig, replace: boolean, already: string): void {
   const content = `${JSON.stringify(config, null, 2)}\n`;
   if (replace) {
     writeFileAtomic(target, content, 0o600);
@@ -54,7 +70,7 @@ export function writeRelayConfig(configDir: string, config: RelayConfig, replace
   try {
     linkSync(temp, target);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`${target} already exists: this machine already joined a relay; pass --force to replace it`);
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`${target} already exists: ${already}; pass --force to replace it`);
     throw e;
   } finally {
     unlinkSync(temp);

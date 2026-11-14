@@ -32,7 +32,16 @@ Commands:
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired)
 
-Administration (manual enrollment, until the relay does it):
+Administration (enrollment through the relay, or by files):
+  admin login [<code>] [--relay <url>] [--force]
+                                     claim a FULL-ACCESS pairing code of the relay console and keep the token in
+                                     _secrets_/relay-admin.json (a machine-scoped token is refused)
+  admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
+                                     without id: list the pending candidacies (id, name, host, address, age, code);
+                                     with an id (or unique prefix): show it, compare the code with the candidate's
+                                     screen (y/N, terminal only, no way to skip it), type the admin passphrase,
+                                     sign and send the approval, then print the final code to compare again;
+                                     --reject refuses it (no passphrase)
   admin init                         create the admin key on this machine (passphrase shown once)
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout)
   admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]
@@ -44,7 +53,7 @@ Administration (manual enrollment, until the relay does it):
 
 Options:
   --json                 machine-readable output
-  --relay <url>          relay for \`join\` (default https://relay.example.test; https only, http on 127.0.0.1 for tests)
+  --relay <url>          relay for \`join\` and \`admin login\` (default https://relay.example.test; https only, http on 127.0.0.1 for tests)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
@@ -58,7 +67,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -75,6 +84,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--force') out.force = true;
     else if (a === '--resume') out.resume = true;
     else if (a === '--no-wait') out.noWait = true;
+    else if (a === '--reject') out.reject = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
     else if (a === '--name') out.name = valueOf('--name');

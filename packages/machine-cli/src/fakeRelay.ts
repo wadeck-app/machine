@@ -10,6 +10,9 @@ export interface FakeRelayOptions {
   code?: string;
   /** Scopes of the claimed token: `null` means full access. */
   scopes?: string[] | null;
+  /** Second pairing code, claimed by `admin login`: its token has scopes `adminScopes` (default null = full access). */
+  adminCode?: string;
+  adminScopes?: string[] | null;
   token?: string;
   label?: string;
 }
@@ -17,6 +20,8 @@ export interface FakeRelayOptions {
 export interface FakeRelay {
   url: string;
   token: string;
+  /** Token given by the second pairing code (full access unless `adminScopes` says otherwise). */
+  adminToken: string;
   /** Every request received: method, path and the Authorization header. */
   requests: { method: string; path: string; authorization: string | undefined; body: unknown }[];
   candidacies: Map<string, Record<string, unknown> & { status: string }>;
@@ -27,6 +32,8 @@ export interface FakeRelay {
   reject: (id: string) => void;
   /** The relay forgot the candidacy (15 minutes passed, or a restart): the candidate gets a 404. */
   expire: (id: string) => void;
+  /** Plant a pending candidacy as the relay would list it (tests of the admin side). */
+  addCandidacy: (id: string, fields: Record<string, unknown>) => void;
   /** Ids of the candidacies still pending, oldest first. */
   pendingIds: () => string[];
   close: () => Promise<void>;
@@ -37,6 +44,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const token = options.token ?? `tok_${randomBytes(12).toString('hex')}`;
   const scopes = options.scopes === undefined ? ['machine'] : options.scopes;
   let codeUsed = false;
+  let adminCodeUsed = false;
+  const adminCode = options.adminCode ?? '87654321';
+  const adminScopes = options.adminScopes === undefined ? null : options.adminScopes;
+  const adminToken = `adm_${randomBytes(12).toString('hex')}`;
   const forced: { prefix: string; status: number; body: unknown; headers: Record<string, string>; method: string | undefined }[] = [];
   const records = new Map<string, { record: unknown; etag: number }>();
   const candidacies: FakeRelay['candidacies'] = new Map();
@@ -66,24 +77,39 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
 
     if (method === 'POST' && path === '/api/pairings/claim') {
       const given = String((body as { code?: unknown } | undefined)?.code ?? '').replace(/[\s-]/g, '');
+      if (given === adminCode && !adminCodeUsed) {
+        adminCodeUsed = true;
+        return send(res, 200, { success: true, serverTime: 1, token: adminToken, label: 'admin-pairing', scopes: adminScopes });
+      }
       if (codeUsed || given !== code) return send(res, 401, { success: false, error: 'Invalid or expired code.', serverTime: 1 });
       codeUsed = true;
       return send(res, 200, { success: true, serverTime: 1, token, label: options.label ?? 'machine-pairing', scopes });
     }
 
     if (!path.startsWith('/api/machines')) return err(res, 404, 'not_found', 'no such route');
-    if (authorization !== `Bearer ${token}`) return err(res, 401, 'unauthorized', 'invalid token');
+    const isAdminToken = authorization === `Bearer ${adminToken}`;
+    if (authorization !== `Bearer ${token}` && !isAdminToken) return err(res, 401, 'unauthorized', 'invalid token');
     // A machine token reaches only the machine routes, and never the admin ones.
-    const admin = scopes === null;
+    const admin = isAdminToken ? adminScopes === null : scopes === null;
 
     if (method === 'POST' && path === '/api/machines/candidacies') {
       const id = randomBytes(16).toString('base64url');
-      candidacies.set(id, { status: 'pending', ...(body as object) });
-      return send(res, 201, { id, createdAt: 1_800_000_000, expiresAt: 1_800_000_900 });
+      const createdAt = Math.floor(Date.now() / 1000);
+      candidacies.set(id, { status: 'pending', ...(body as object), createdAt, expiresAt: createdAt + 900 });
+      return send(res, 201, { id, createdAt, expiresAt: createdAt + 900 });
     }
     if (method === 'GET' && path === '/api/machines/candidacies') {
       if (!admin) return err(res, 403, 'full_access_required', 'listing candidacies needs a full-access token');
-      return send(res, 200, { candidacies: [...candidacies.entries()].filter(([, c]) => c.status === 'pending').map(([id, c]) => ({ id, ...c, observedIp: '127.0.0.1', createdAt: 1, expiresAt: 2 })) });
+      return send(res, 200, {
+        candidacies: [...candidacies.entries()]
+          .filter(([, c]) => c.status === 'pending')
+          .map(([id, c]) => {
+            // Everything stored is served as is, so a test can plant extra or tampered fields (a `code`, another key, a `uuid`).
+            const { status: _status, approval: _approval, ...fields } = c;
+            const createdAt = Math.floor(Date.now() / 1000);
+            return { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...fields };
+          }),
+      });
     }
     const cand = /^\/api\/machines\/candidacies\/([^/]+)(\/decision)?$/.exec(path);
     if (cand) {
@@ -131,6 +157,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   return {
     url: `http://127.0.0.1:${port}`,
     token,
+    adminToken,
     requests,
     candidacies,
     force: (prefix, status, body, headers = {}, method) => void forced.push({ prefix, status, body, headers, method }),
@@ -145,6 +172,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'rejected';
     },
+    addCandidacy: (id, fields) => void candidacies.set(id, { status: 'pending', ...fields }),
     expire: (id) => void candidacies.delete(id),
     pendingIds: () => [...candidacies.entries()].filter(([, c]) => c.status === 'pending').map(([id]) => id),
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
