@@ -75,5 +75,5 @@ Contact the owner sessions with `SendMessage` (facts and requests only, they dec
 | WP1 | Done | `packages/machine-core` (keys, registration, revocation, policy, codes, admin key file, machine references) |
 | WP2 | Done on Windows; Unix block written, not run | `packages/machine-exec` (cmd, PowerShell; scrubbed env, timeout, output cap) |
 | WP3 | Done except the real-process smoke | `packages/machine-cli` (identity under `_secrets_`, aliases, `init`, `status`, `list`, `resolve`, `alias`, `daemon`, exit codes 0/1/2/3, daemon port 47920); the bundled binary is verified in WP9 (esbuild is not a dependency yet) |
-| WP5 | Transport done, exec done, not yet joined | `packages/machine-transport` (pinned mutual TLS, pair proof, framing, limits); missing: signed requests (nonce, expiry, target), audit log, wiring of `resolvePeer` to registrations |
+| WP5 | Done except wiring | `packages/machine-transport` + `machine-cli/src/peerService.ts` (signed requests, replay cache, policy, concurrency, audit chain, real-shell end to end on loopback); missing: loading the directory, policy and counters into the daemon (WP6/WP7), `machine run` client command |
 | WP4, WP6 to WP10 | Not started | |
