@@ -7,6 +7,7 @@ import {
   MAX_DOCUMENT_BYTES,
   buildDocument,
   derivePairSecret,
+  derivePairSecretV2,
   documentId,
   openPairSecret,
   pairSecretDocumentContext,
@@ -390,5 +391,35 @@ describe('derivePairSecret key separation', () => {
     const subkey = Buffer.from(hkdfSync('sha256', seed, Buffer.alloc(0), 'machine/pair-secret/v1', 32));
     const expected = createHmac('sha256', subkey).update(sorted, 'utf8').digest().toString('base64url');
     expect(derivePairSecret(s.admin.privateKeyPkcs8, a, b)).toBe(expected);
+  });
+});
+
+describe('derivePairSecretV2 (deterministic signature, no raw seed needed)', () => {
+  const a = { uuid: PEER, serial: 5 };
+  const b = { uuid: TO, serial: 9 };
+
+  it('is 32 bytes, the same for both orders and every run', () => {
+    const s = setup();
+    const x = derivePairSecretV2(s.admin.privateKeyPkcs8, a, b);
+    expect(Buffer.from(x, 'base64url')).toHaveLength(32);
+    expect(derivePairSecretV2(s.admin.privateKeyPkcs8, b, a)).toBe(x);
+    expect(derivePairSecretV2(s.admin.privateKeyPkcs8, a, b)).toBe(x);
+  });
+
+  it('changes with the admin key, the machines and the serials, and differs from the v1 secret', () => {
+    const s = setup();
+    const x = derivePairSecretV2(s.admin.privateKeyPkcs8, a, b);
+    expect(derivePairSecretV2(generateSigningKeyPair().privateKeyPkcs8, a, b)).not.toBe(x);
+    expect(derivePairSecretV2(s.admin.privateKeyPkcs8, a, { ...b, uuid: OTHER })).not.toBe(x);
+    expect(derivePairSecretV2(s.admin.privateKeyPkcs8, a, { ...b, serial: 10 })).not.toBe(x);
+    expect(derivePairSecretV2(s.admin.privateKeyPkcs8, a, b)).not.toBe(derivePairSecret(s.admin.privateKeyPkcs8, a, b));
+  });
+
+  it('refuses a key that is not Ed25519 PKCS8, a bad uuid or serial, and a machine paired with itself', () => {
+    const s = setup();
+    expect(() => derivePairSecretV2(new Uint8Array(10), a, b)).toThrow(/private key/);
+    expect(() => derivePairSecretV2(s.admin.privateKeyPkcs8, { uuid: 'nope', serial: 1 }, b)).toThrow(/uuid/);
+    expect(() => derivePairSecretV2(s.admin.privateKeyPkcs8, { uuid: PEER, serial: 0 }, b)).toThrow(/serial/);
+    expect(() => derivePairSecretV2(s.admin.privateKeyPkcs8, a, a)).toThrow(/itself/);
   });
 });

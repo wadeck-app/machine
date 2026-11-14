@@ -77,6 +77,7 @@ export {
   MAX_DOCUMENT_BYTES,
   buildDocument,
   derivePairSecret,
+  derivePairSecretV2,
   documentId,
   openPairSecret,
   pairSecretDocumentContext,

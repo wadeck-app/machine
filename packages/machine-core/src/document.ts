@@ -1,6 +1,6 @@
 import { createHash, createHmac, hkdfSync } from 'node:crypto';
 import type { Json } from './canonical.js';
-import { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, tryKeyId } from './keys.js';
+import { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, signBytes, tryKeyId } from './keys.js';
 import { POLICY_DOMAIN, assertPolicyBody, type SignedPolicy } from './policy.js';
 import { verifyRegistration, type RegistrationBody, type SignedRegistration } from './registration.js';
 import { verifyRevocation, type SignedRevocation } from './revocation.js';
@@ -74,6 +74,8 @@ const PKCS8_ED25519_PREFIX_BYTES = 16;
  * The pair secret of two machines, derived from the admin private key: HMAC-SHA256 over both uuids and serials (sorted by uuid, so both
  * sides get the same value). A retry of a distribution therefore seals the SAME secret, and the two machines of a pair always agree.
  * Anyone who holds the admin key can already sign any registration, so deriving from it widens nothing.
+ * @deprecated Needs the raw admin seed in memory, which a non-extractable browser key cannot give. Use `derivePairSecretV2`
+ * (decision pending, no caller switched yet).
  */
 export function derivePairSecret(adminPrivateKeyPkcs8: Uint8Array, a: { uuid: string; serial: number }, b: { uuid: string; serial: number }): string {
   if (adminPrivateKeyPkcs8.length !== PKCS8_ED25519_BYTES) throw new Error('the admin private key is not an Ed25519 PKCS8 key of 48 bytes: the admin key file may be damaged');
@@ -85,6 +87,32 @@ export function derivePairSecret(adminPrivateKeyPkcs8: Uint8Array, a: { uuid: st
     return createHmac('sha256', subkey).update(data, 'utf8').digest().toString('base64url');
   } finally {
     subkey.fill(0);
+  }
+}
+
+const PAIR_SECRET_V2_DOMAIN = 'machine/pair-secret/v2';
+
+/**
+ * The pair secret of two machines, derived from a deterministic Ed25519 signature of the admin key (no raw seed needed, so a
+ * non-extractable browser key can compute it). Ed25519 is deterministic and unforgeable without the key, so the signature over a
+ * domain-separated string naming both machines and serials is a keyed PRF; HKDF-SHA256 of the 64 signature bytes gives 32 bytes.
+ * Both orders of the pair give the same value (sorted by uuid), and a retry seals the SAME secret. Same inputs and outputs as the
+ * WebCrypto `derivePairSecretFromSignature` of machine-webcrypto. No caller uses it yet: `derivePairSecret` is still the live one.
+ */
+export function derivePairSecretV2(adminPrivateKeyPkcs8: Uint8Array, a: { uuid: string; serial: number }, b: { uuid: string; serial: number }): string {
+  if (adminPrivateKeyPkcs8.length !== PKCS8_ED25519_BYTES) throw new Error('the admin private key is not an Ed25519 PKCS8 key of 48 bytes: the admin key file may be damaged');
+  for (const m of [a, b]) {
+    if (typeof m.uuid !== 'string' || !UUID_V4.test(m.uuid)) throw new Error('pair secret: uuid must be a lowercase version 4 UUID');
+    if (!Number.isSafeInteger(m.serial) || m.serial < 1) throw new Error('pair secret: serial must be a positive integer');
+  }
+  if (a.uuid === b.uuid) throw new Error('pair secret: a machine is never paired with itself; the two uuids must differ');
+  const [first, second] = a.uuid < b.uuid ? [a, b] : [b, a];
+  const data = `${PAIR_SECRET_V2_DOMAIN}\0${first.uuid}:${first.serial}\0${second.uuid}:${second.serial}`;
+  const signature = Buffer.from(signBytes(adminPrivateKeyPkcs8, new TextEncoder().encode(data)), 'base64url');
+  try {
+    return Buffer.from(hkdfSync('sha256', signature, Buffer.alloc(0), PAIR_SECRET_V2_DOMAIN, 32)).toString('base64url');
+  } finally {
+    signature.fill(0);
   }
 }
 

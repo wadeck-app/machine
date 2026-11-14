@@ -1,0 +1,19 @@
+{
+  "name": "@wadeck-app/machine-webcrypto",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-safe WebCrypto implementation of the machine-core operations the admin page needs: key file unlock (non-extractable key), canonical JSON, signing, sealing, verification codes. No node: imports.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --bail=1"
+  },
+  "devDependencies": {
+    "@wadeck-app/machine-core": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
