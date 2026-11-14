@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { derivePairSecretV2, generateSigningKeyPair, newCandidacyRandom, openPairSecret, verifyInboxDocument, type SignedRegistration } from '@wadeck-app/machine-core';
 import { unlockAdminKey } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
@@ -13,8 +13,6 @@ let root: string;
 let adminDir: string;
 let relay: FakeRelay;
 let admin: TestAdmin;
-// A relay that reports `uuidBound` (the binding relay), for the suites that need it.
-let bindMode = false;
 
 const yes = async () => 'y';
 const pass = async () => admin.passphrase;
@@ -45,7 +43,7 @@ beforeEach(async () => {
     mkdirSync(dirOf(name));
     await ok(dirOf(name), ['init', '--name', name]);
   }
-  relay = await startFakeRelay({ bindOwnershipAtApproval: bindMode });
+  relay = await startFakeRelay();
   admin = makeAdmin(adminDir);
   await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
 });
@@ -276,7 +274,7 @@ describe('re-approving a machine that is already known', () => {
     expect(inboxPuts()).toHaveLength(0);
   });
 
-  it('a different identity key on a relay that does not say the uuid is bound: refused before anything is asked, signed or sent', async () => {
+  it('a different identity key while the relay says the uuid is NOT bound (uuidBound false): refused before anything is asked, signed or sent', async () => {
     await enroll('laptop');
     await enroll('server');
     const decisionsBefore = relay.requests.filter((q) => q.path.endsWith('/decision')).length;
@@ -295,13 +293,6 @@ describe('re-approving a machine that is already known', () => {
   });
 
   describe('on a relay that reports the binding', () => {
-    beforeAll(() => {
-      bindMode = true;
-    });
-    afterAll(() => {
-      bindMode = false;
-    });
-
     it('a different identity key with uuidBound: allowed after the explicit question, replaced locally, peers told, nothing revoked, and the output says so', async () => {
       await enroll('laptop');
       await enroll('server');

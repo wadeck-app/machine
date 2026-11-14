@@ -94,11 +94,12 @@ Administration (enrollment through the relay, or by files):
   admin distribute --policy <signed.json>
                                      send a policy signed earlier (admin sign-policy --out) to its target machine
   admin forget-relay-record <machine|uuid>
-                                     fix for \`not_owner\` on an address record or an inbox (after a relay token change):
-                                     the relay binds a machine's record and inbox to the first token that wrote it. This
-                                     deletes the record, the binding and the inbox of that machine on the relay (y/N,
-                                     needs the admin relay token, no passphrase). The machine's daemon then publishes
-                                     again by itself; what waited in its inbox is gone (admin distribute sends it again)
+                                     remove the record, the binding of the uuid to a token and the inbox of a machine on
+                                     the relay (y/N, needs the admin relay token, no passphrase): the way to make room when
+                                     the relay answers \`too_many_machines\` (50 machines per token) at \`admin approve\`, for
+                                     machines that are gone. A machine that comes back must run \`join --resume\` and be
+                                     approved again; what waited in its inbox is gone (admin distribute sends it again).
+                                     After a token change it is not needed: a new join and an approval rebind the uuid
   admin init                         create the admin key on this machine (passphrase shown once)
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout); with the admin relay
                                      token it is also sent to its target machine through the relay

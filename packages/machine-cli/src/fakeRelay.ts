@@ -28,13 +28,13 @@ export interface FakeRelayOptions {
   inboxPageSize?: number;
   /** More pairing codes, each claimed once and giving its OWN machine token, labelled "<label>-2", "<label>-3", ... (two machines on one relay). */
   moreCodes?: string[];
-  /**
-   * Pending relay change (relay-api.md, "Pending relay change (poc-owner #12)"): a machine token can write records, heartbeat and read its
-   * inbox only for a uuid bound at approval to the token that posted the candidacy. The uuid is required in a candidacy; an unbound uuid is
-   * 403 not_registered; the admin list carries `uuidBound` and `boundTokenLabel`; the first writer no longer binds anything.
-   */
-  bindOwnershipAtApproval?: boolean;
+  /** Machines one token may hold (approved uuids bound to it); the 51st approval is `429 too_many_machines`. Default 50, as the deployed relay. */
+  maxMachinesPerToken?: number;
 }
+
+// Models the DEPLOYED relay (relay-api.md, "Ownership bound at approval", poc-owner 719f36f): a machine token can write records, heartbeat and
+// read its inbox only for a uuid bound at approval to the token that posted the candidacy. The uuid is required in a candidacy; an unbound uuid
+// is 403 not_registered; the admin list carries `uuidBound`, `boundTokenLabel` and `boundToCandidateToken`; the first writer binds nothing.
 
 export interface FakeInboxDocument {
   id: string;
@@ -76,11 +76,10 @@ export interface FakeRelay {
   expire: (id: string) => void;
   /** Plant a pending candidacy as the relay would list it (tests of the admin side). */
   addCandidacy: (id: string, fields: Record<string, unknown>) => void;
-  /**
-   * Who owns the inbox (and the address record) of `uuid`: a token string, or undefined for no owner. Tests only: the real relay
-   * binds the first token that wrote the address record, which this fake also does when a machine token PUTs a record.
-   */
+  /** The token `uuid` is bound to (undefined: unbound). Tests only: the real relay binds at approval, which `approve` also does. */
   setOwner: (uuid: string, token: string | undefined) => void;
+  /** The console revokes a machine token: it answers 401 from now on, and the admin list names it "(revoked token)". */
+  revokeMachineToken: (token: string) => void;
   /** Another machine token (scope machine): tests with two machines on one relay. Returns it. */
   addMachineToken: (label?: string) => string;
   /** The clock of the relay in epoch seconds (presence: lastSeen and online). Default: the real clock. */
@@ -108,13 +107,12 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const baseLabel = options.label ?? 'machine-pairing';
   // Token -> label, for every machine token of this relay.
   const machineTokens = new Map<string, string>([[token, baseLabel]]);
-  const bind = options.bindOwnershipAtApproval === true;
+  const maxMachinesPerToken = options.maxMachinesPerToken ?? 50;
   const extraCodes = (options.moreCodes ?? []).map((c, i) => ({ code: c, used: false, token: `tok_${randomBytes(12).toString('hex')}`, label: `${baseLabel}-${i + 2}` }));
   // The token that posted each candidacy: what an approval binds the uuid to (never served).
   const postedBy = new Map<string, string>();
   let clock: () => number = () => Math.floor(Date.now() / 1000);
   const ONLINE_SECONDS = 120;
-  const MAX_RECORDS_PER_TOKEN = 50;
   const MAX_RECORD_BYTES = 2048;
   const candidacies: FakeRelay['candidacies'] = new Map();
   const requests: FakeRelay['requests'] = [];
@@ -133,11 +131,18 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     return entry;
   };
 
+  // The limit applies at approval: a token already holding the maximum of OTHER uuids cannot get one more (the candidacy stays pending).
+  const overLimit = (id: string): boolean => {
+    const entry = candidacies.get(id);
+    const poster = postedBy.get(id);
+    if (entry === undefined || typeof entry.uuid !== 'string' || poster === undefined) return false;
+    return [...owners.entries()].filter(([uuid, owner]) => owner === poster && uuid !== entry.uuid).length >= maxMachinesPerToken;
+  };
   // The approval binds the uuid of the candidacy to the token that posted it, replacing any earlier binding.
   const bindAtApproval = (id: string) => {
     const entry = candidacies.get(id);
     const poster = postedBy.get(id);
-    if (bind && entry !== undefined && typeof entry.uuid === 'string' && poster !== undefined) owners.set(entry.uuid, poster);
+    if (entry !== undefined && typeof entry.uuid === 'string' && poster !== undefined) owners.set(entry.uuid, poster);
   };
   const presence = (uuid: string) => {
     const seen = lastSeen.get(uuid);
@@ -209,18 +214,20 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     const admin = isAdminToken ? adminScopes === null : presented === token && scopes === null;
     // A uuid that was never bound by an approval: a machine token cannot use it at all.
     const notRegistered = (uuid: string): boolean => {
-      if (!bind || admin || owners.get(uuid) !== undefined) return false;
-      err(res, 403, 'not_registered', 'this uuid was not approved for any token: post a candidacy and have the admin approve it');
+      if (admin || owners.get(uuid) !== undefined) return false;
+      // The relay's own text (relay-api.md, deployed details).
+      err(res, 403, 'not_registered', 'This machine is not registered on the relay: approve this machine first (the admin approves its candidacy, `machine admin approve`), then retry.');
       return true;
     };
 
     if (method === 'POST' && path === '/api/machines/candidacies') {
-      if (bind) {
-        const given = (body as { uuid?: unknown } | undefined)?.uuid;
-        if (typeof given !== 'string' || given !== given.toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(given)) {
-          return err(res, 400, 'invalid_body', 'uuid is required: a lower-case canonical v4 UUID');
-        }
+      const given = (body as { uuid?: unknown } | undefined)?.uuid;
+      if (typeof given !== 'string' || given !== given.toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(given)) {
+        return err(res, 400, 'invalid_body', 'uuid is required: a lower-case canonical v4 UUID');
       }
+      // The uuid of an identity key never changes: while a candidacy of this key is pending, another uuid is refused.
+      const sameKey = [...candidacies.values()].find((c) => c.status === 'pending' && c.identityPublicKey === (body as { identityPublicKey?: unknown }).identityPublicKey && c.uuid !== given);
+      if (sameKey !== undefined) return err(res, 409, 'candidacy_uuid_changed', 'this identity key already has a candidacy with another uuid: it must expire or be rejected first');
       const id = randomBytes(16).toString('base64url');
       const createdAt = Math.floor(Date.now() / 1000);
       postedBy.set(id, presented);
@@ -236,8 +243,9 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
             // Everything stored is served as is, so a test can plant extra or tampered fields (a `code`, another key, a `uuid`).
             const { status: _status, approval: _approval, ...fields } = c;
             const createdAt = Math.floor(Date.now() / 1000);
-            const bound = bind && typeof fields.uuid === 'string' ? owners.get(fields.uuid) : undefined;
-            const binding = bind ? { uuidBound: bound !== undefined, ...(bound !== undefined ? { boundTokenLabel: machineTokens.get(bound) ?? 'unknown' } : {}) } : {};
+            const bound = typeof fields.uuid === 'string' ? owners.get(fields.uuid) : undefined;
+            // A token revoked in the console no longer has a label: the relay says so with a placeholder.
+            const binding = { uuidBound: bound !== undefined, ...(bound !== undefined ? { boundTokenLabel: machineTokens.get(bound) ?? '(revoked token)' } : {}), boundToCandidateToken: bound !== undefined && bound === postedBy.get(id) };
             return { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...binding, ...fields };
           }),
       });
@@ -251,6 +259,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         if (!admin) return err(res, 403, 'full_access_required', 'deciding needs a full-access token');
         if (entry.status !== 'pending') return err(res, 409, 'not_pending', 'already decided');
         const b = body as { decision?: string; approval?: unknown };
+        // The binding is saved in one step with the decision: over the limit, the candidacy stays pending.
+        if (b.decision === 'approve' && overLimit(decodeURIComponent(cand[1] as string))) {
+          return err(res, 429, 'too_many_machines', 'This token already holds the maximum number of machines (50). Remove the machines that are gone with DELETE /api/machines/<uuid>, then approve again.');
+        }
         entry.status = b.decision === 'approve' ? 'approved' : 'rejected';
         if (b.decision === 'approve') {
           entry.approval = b.approval;
@@ -328,7 +340,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (method === 'PUT' && !machine[2]) {
         if (notRegistered(uuid)) return;
         const current = records.get(uuid);
-        // The first token to PUT a uuid owns it: later writes need the same token or full access.
+        // Only the token bound at approval writes (a full-access token always may).
         const owner = owners.get(uuid);
         if (owner !== undefined && owner !== bearer && !admin) return err(res, 403, 'not_owner', 'this token does not own that machine record');
         const shape = body as { body?: { uuid?: unknown } } | undefined;
@@ -339,15 +351,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         if (Buffer.byteLength(raw) > MAX_RECORD_BYTES) return err(res, 400, 'invalid_body', 'a record is at most 2 KiB');
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && String(current?.etag) !== ifMatch) return err(res, 412, 'precondition_failed', 'etag mismatch', { currentEtag: String(current?.etag ?? '') });
-        if (current === undefined && !admin && [...owners.entries()].filter(([u, o]) => o === bearer && records.has(u)).length >= MAX_RECORDS_PER_TOKEN) {
-          return err(res, 429, 'too_many_machines', 'at most 50 machine records per token');
-        }
         // The same bytes again only refresh presence.
         const etag = current !== undefined && current.text === raw ? current.etag : (current?.etag ?? 0) + 1;
         records.set(uuid, { record: body, etag, text: raw });
         lastSeen.set(uuid, clock());
-        // The first token that writes a record owns the uuid.
-        if (!bind && !owners.has(uuid) && !isAdminToken) owners.set(uuid, bearer);
         return send(res, 200, { success: true, etag: String(etag) }, { ETag: String(etag) });
       }
     }
@@ -377,6 +384,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     approve: (id, approval, options = {}) => {
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
+      if (overLimit(id)) throw new Error(`fake relay: approving ${id} is over the limit of ${maxMachinesPerToken} machines per token (the real relay answers 429 too_many_machines)`);
       entry.status = 'approved';
       // An approval built by buildApproval is sealed now that the random it answers is known.
       completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));
@@ -394,6 +402,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       machineTokens.set(added, label ?? `machine-token-${machineTokens.size + 1}`);
       return added;
     },
+    revokeMachineToken: (revoked) => void machineTokens.delete(revoked),
     setClock: (now) => {
       clock = now;
     },

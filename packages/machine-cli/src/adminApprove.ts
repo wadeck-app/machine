@@ -62,10 +62,12 @@ export interface CandidacyView {
   createdAt: number;
   expiresAt: number;
   uuid: string | undefined;
-  /** Relay that binds a uuid to a token at approval (relay-api.md, pending change): the uuid is already bound. Absent: the relay did not say. */
+  /** Relay that binds a uuid to a token at approval (relay-api.md, ownership bound at approval): the uuid is already bound. Absent: the relay did not say. */
   uuidBound: boolean | undefined;
-  /** The label of the token the uuid is bound to, as the relay says it (informative only). */
+  /** The label of the token the uuid is bound to, as the relay says it (informative only; "(revoked token)" when that token is gone). */
   boundTokenLabel: string | undefined;
+  /** True: the uuid is bound to the token that posted THIS candidacy (a re-approval, not a rebind). Absent: the relay did not say. */
+  boundToCandidateToken: boolean | undefined;
   /** Recomputed here from identityPublicKey and random, never taken from the relay. */
   code: string;
   /** Why this candidacy must not be approved (reject stays possible). */
@@ -143,15 +145,26 @@ export function reviewCandidacy(raw: unknown, nowSeconds: number): CandidacyView
     if (typeof o.uuidBound === 'boolean') uuidBound = o.uuidBound;
     else blockers.push('the relay sent an invalid "uuidBound" (not true or false): it may be an incompatible version');
   }
+  let boundToCandidateToken: boolean | undefined;
+  if (o.boundToCandidateToken !== undefined) {
+    if (typeof o.boundToCandidateToken === 'boolean') boundToCandidateToken = o.boundToCandidateToken;
+    else blockers.push('the relay sent an invalid "boundToCandidateToken" (not true or false): it may be an incompatible version');
+  }
   const boundTokenLabel = typeof o.boundTokenLabel === 'string' && o.boundTokenLabel.length > 0 ? o.boundTokenLabel : undefined;
   if (expiresAt !== 0 && nowSeconds >= expiresAt) blockers.push(`this candidacy expired at ${iso(expiresAt)}: the candidate must post a new one (\`machine join --resume\`)`);
 
-  return { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt, uuid, uuidBound, boundTokenLabel, code, blockers };
+  return { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt, uuid, uuidBound, boundTokenLabel, boundToCandidateToken, code, blockers };
 }
 
-/** What approving a uuid that is already bound to a token does, to be read before answering (relay-api.md, pending relay change). */
+/** A uuid bound to the token of this very candidacy: approving it again changes nothing (a re-approval). */
+const isReapproval = (v: CandidacyView): boolean => v.uuidBound === true && v.boundToCandidateToken === true;
+
+/**
+ * What approving a uuid that is already bound to ANOTHER token does, to be read before answering (relay-api.md, ownership bound at approval).
+ * Only when `uuidBound && !boundToCandidateToken`: a relay that does not say whom the binding is for is read the safe way (a rebind).
+ */
 function bindingWarning(v: CandidacyView): string | undefined {
-  if (v.uuidBound !== true) return undefined;
+  if (v.uuidBound !== true || v.boundToCandidateToken === true) return undefined;
   const which = v.boundTokenLabel !== undefined ? `the token labelled "${printable(v.boundTokenLabel)}"` : 'another token (the relay did not say which)';
   return `the uuid is already bound to ${which}`;
 }
@@ -183,6 +196,7 @@ function formatDetail(v: CandidacyView, nowSeconds: number): string {
     `  seen from  ${printable(v.observedIp)} (seen by the relay, informative only)`,
     `  uuid       ${v.uuid ?? '(missing)'}`,
     ...(binding !== undefined ? [`  [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`] : []),
+    ...(isReapproval(v) ? ['  binding    the uuid is already bound to the same token as this candidacy: a re-approval, nothing is rebound'] : []),
     `  created    ${iso(v.createdAt)} (${age(nowSeconds, v.createdAt)} ago), expires ${iso(v.expiresAt)}`,
     '',
     'Verification code, recomputed here from the key and random received (information only, nothing to compare now; the one comparison comes after signing):',
@@ -302,7 +316,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const keyChanged = known !== undefined && known.identityPublicKey !== view.identityPublicKey;
   if (keyChanged && view.uuidBound !== true) {
     throw new Error(
-      `refusing to approve ${printable(view.id)}: it claims the uuid of "${printable(known?.name ?? view.name)}" (${uuid}), already trusted here, with another identity key. The relay did not report that the uuid is bound (a binding relay says it), so this cannot be told from someone taking the uuid. Nothing was signed or sent. Reject it (\`machine admin approve ${printable(view.id)} --reject\`); if the machine really has a new key, revoke the old machine (\`machine admin revoke ${printable(view.name)}\`) and enroll it again`,
+      `refusing to approve ${printable(view.id)}: it claims the uuid of "${printable(known?.name ?? view.name)}" (${uuid}), already trusted here, with another identity key. The relay does not say that the uuid is bound to a token (uuidBound is not true), so this cannot be told from someone taking the uuid. Nothing was signed or sent. Reject it (\`machine admin approve ${printable(view.id)} --reject\`); if the machine really has a new key, revoke the old machine (\`machine admin revoke ${printable(view.name)}\`) and enroll it again`,
     );
   }
   const rebind = bindingWarning(view);

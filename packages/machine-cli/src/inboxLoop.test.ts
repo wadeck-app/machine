@@ -671,15 +671,21 @@ describe('the inbox loop: the relay misbehaves or is not ready', () => {
   });
 
   it('a machine that does not own its inbox says why, once, and keeps trying to read it on every round', async () => {
-    relay.setOwner(uuidOf('laptop'), undefined);
+    // Another token is bound to the uuid (deployed relay: the binding is made at approval).
+    relay.setOwner(uuidOf('laptop'), 'tok_another');
     await enroll('laptop');
     await enroll('server');
     const { loop } = loopFor('laptop');
     await loop.ready;
     await loop.runOnce();
     await loop.runOnce();
-    expect(logs.filter((l) => /does not own its inbox/.test(l))).toHaveLength(1);
-    expect(logs.join('\n')).toMatch(/address record/);
+    const said = logs.filter((l) => /does not own its inbox/.test(l));
+    expect(said).toHaveLength(1);
+    // The first-writer story is gone: the text says another token is bound and how to fix it.
+    expect(said[0]).toMatch(/another token is bound/);
+    expect(said[0]).toContain('machine join');
+    expect(said[0]).toMatch(/approve/);
+    expect(said[0]).not.toMatch(/first machine token|publishes the address record/);
     expect(relay.requests.filter((q) => q.method === 'GET' && q.path.endsWith('/inbox')).length).toBe(3);
     expect(machineNames('laptop')).toEqual([]);
 

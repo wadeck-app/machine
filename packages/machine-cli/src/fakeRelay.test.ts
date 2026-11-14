@@ -3,7 +3,7 @@ import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { createRelayClient, RelayError, type SignedAddressRecord } from './relayClient.js';
 
 // The fake relay is a test double, but the daemon, the CLI and the distribution tests rely on its record semantics:
-// they are pinned here against relay-api.md (owner rule, compare-and-set, limits, presence).
+// they are pinned here against relay-api.md (ownership bound at approval, compare-and-set, limits, presence).
 
 let relay: FakeRelay | undefined;
 afterEach(async () => {
@@ -23,9 +23,11 @@ const failure = async (p: Promise<unknown>): Promise<RelayError> => {
 };
 
 describe('fake relay: address records', () => {
-  it('the first machine token to PUT a uuid owns it; another machine token gets 403 not_owner', async () => {
+  it('a uuid bound to a token: another machine token gets 403 not_owner on it', async () => {
     relay = await startFakeRelay();
     const second = relay.addMachineToken();
+    relay.setOwner(uuidN(1), relay.token);
+    relay.setOwner(uuidN(2), second);
     const a = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const b = createRelayClient({ baseUrl: relay.url, token: second });
     await a.putRecord(uuidN(1), recordFor(uuidN(1)));
@@ -42,13 +44,16 @@ describe('fake relay: address records', () => {
     const admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     await admin.putRecord(uuidN(1), recordFor(uuidN(1)));
-    // Still unowned: the machine token claims it.
+    // Still unbound: the machine token cannot take it, until an approval binds it.
+    expect((await failure(machine.putRecord(uuidN(1), recordFor(uuidN(1), 2)))).code).toBe('not_registered');
+    relay.setOwner(uuidN(1), relay.token);
     await machine.putRecord(uuidN(1), recordFor(uuidN(1), 2));
     expect((await machine.getMachine(uuidN(1)))?.record.body.seq).toBe(2);
   });
 
   it('refuses a body whose uuid differs from the path, an unknown field and a record over 2 KiB (400)', async () => {
     relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
     const c = createRelayClient({ baseUrl: relay.url, token: relay.token });
     expect((await failure(c.putRecord(uuidN(1), recordFor(uuidN(2))))).code).toBe('invalid_body');
     expect((await failure(c.putRecord(uuidN(1), { ...recordFor(uuidN(1)), extra: 1 } as SignedAddressRecord))).status).toBe(400);
@@ -61,6 +66,7 @@ describe('fake relay: address records', () => {
 
   it('keeps the etag when the same bytes are written again, changes it when they differ, answers 412 with the current etag', async () => {
     relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
     const c = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const first = await c.putRecord(uuidN(1), recordFor(uuidN(1)));
     expect((await c.putRecord(uuidN(1), recordFor(uuidN(1)), first.etag)).etag).toBe(first.etag);
@@ -74,6 +80,7 @@ describe('fake relay: address records', () => {
 
   it('presence: lastSeen is the last PUT or owner heartbeat, online while under 120 s', async () => {
     relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
     let now = 1_800_000_000;
     relay.setClock(() => now);
     const c = createRelayClient({ baseUrl: relay.url, token: relay.token });
@@ -90,36 +97,30 @@ describe('fake relay: address records', () => {
 
   it('a heartbeat of a token that does not own the uuid does not make it look online', async () => {
     relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
     let now = 1_800_000_000;
     relay.setClock(() => now);
-    const stranger = createRelayClient({ baseUrl: relay.url, token: relay.addMachineToken() });
+    const strangerToken = relay.addMachineToken();
+    // The stranger is registered for another uuid: its heartbeat on uuid 1 never refreshes the presence of uuid 1.
+    relay.setOwner(uuidN(2), strangerToken);
+    const stranger = createRelayClient({ baseUrl: relay.url, token: strangerToken });
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
     now += 500;
     await stranger.heartbeat(uuidN(1));
     expect(await stranger.getMachine(uuidN(1))).toMatchObject({ online: false });
   });
 
-  it('at most 50 records per token (429 too_many_machines)', async () => {
+  it('DELETE needs a full-access token, removes the record, the binding and the presence', async () => {
     relay = await startFakeRelay();
-    const c = createRelayClient({ baseUrl: relay.url, token: relay.token });
-    for (let i = 1; i <= 50; i++) await c.putRecord(uuidN(i), recordFor(uuidN(i)));
-    const e = await failure(c.putRecord(uuidN(51), recordFor(uuidN(51))));
-    expect(e.status).toBe(429);
-    expect(e.code).toBe('too_many_machines');
-    // Writing a record the token already owns is still fine.
-    await c.putRecord(uuidN(1), recordFor(uuidN(1), 2));
-  });
-
-  it('DELETE needs a full-access token, removes the record, the owner and the presence', async () => {
-    relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
     await machine.putRecord(uuidN(1), recordFor(uuidN(1)));
     expect((await failure(machine.deleteMachine(uuidN(1)))).code).toBe('scope_denied');
     await admin.deleteMachine(uuidN(1));
     expect(await machine.getMachine(uuidN(1))).toBeUndefined();
-    // Free again: a different token may now own it.
-    await createRelayClient({ baseUrl: relay.url, token: relay.addMachineToken() }).putRecord(uuidN(1), recordFor(uuidN(1), 9));
+    // The binding is gone too: the machine must post a new candidacy and be approved again.
+    expect((await failure(machine.putRecord(uuidN(1), recordFor(uuidN(1), 9)))).code).toBe('not_registered');
   });
 
   it('GET of an unknown uuid is 404', async () => {
@@ -141,47 +142,36 @@ describe('fake relay: more pairing codes', () => {
   });
 });
 
-describe('fake relay: bindOwnershipAtApproval (pending relay change, poc-owner #12)', () => {
+describe('fake relay: ownership bound at approval (deployed, poc-owner 719f36f)', () => {
   const NAME_KEY = { name: 'laptop', hostname: 'host', identityPublicKey: 'k'.repeat(43), random: 'r'.repeat(22) };
-  const post = (token: string, uuid: string) => createRelayClient({ baseUrl: (relay as FakeRelay).url, token }).postCandidacy({ ...NAME_KEY, uuid });
+  const post = (token: string, uuid: string, key = NAME_KEY.identityPublicKey) => createRelayClient({ baseUrl: (relay as FakeRelay).url, token }).postCandidacy({ ...NAME_KEY, identityPublicKey: key, uuid });
   const admin = () => createRelayClient({ baseUrl: (relay as FakeRelay).url, token: (relay as FakeRelay).adminToken });
   const approveWith = async (id: string) => admin().decideCandidacy(id, { decision: 'approve', approval: { v: 1 } });
 
-  it('a candidacy without uuid is refused (400 invalid_body)', async () => {
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true });
+  it('a candidacy without uuid is refused (400 invalid_body), with no option needed', async () => {
+    relay = await startFakeRelay();
     const res = await fetch(`${relay.url}/api/machines/candidacies`, { method: 'POST', headers: { Authorization: `Bearer ${relay.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(NAME_KEY) });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe('invalid_body');
   });
 
-  it('without the flag nothing changes: a candidacy without uuid is stored and the first writer owns the uuid', async () => {
-    relay = await startFakeRelay();
-    const res = await fetch(`${relay.url}/api/machines/candidacies`, { method: 'POST', headers: { Authorization: `Bearer ${relay.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(NAME_KEY) });
-    expect(res.status).toBe(201);
-    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
-    const listed = await admin().listCandidacies();
-    expect(listed[0]).not.toHaveProperty('uuidBound');
-  });
-
   it('an unbound uuid: record, heartbeat and inbox read of a machine token are 403 not_registered, and the first writer binds nothing', async () => {
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true });
+    relay = await startFakeRelay();
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     for (const call of [() => machine.putRecord(uuidN(1), recordFor(uuidN(1))), () => machine.heartbeat(uuidN(1)), () => machine.listInbox(uuidN(1)), () => machine.deleteInboxDocument(uuidN(1), 'x'.repeat(22))]) {
       const e = await failure(call());
       expect([e.status, e.code]).toEqual([403, 'not_registered']);
     }
-    // Still unbound afterwards.
     expect((await failure(machine.putRecord(uuidN(1), recordFor(uuidN(1))))).code).toBe('not_registered');
     // A full-access token still writes records.
     await admin().putRecord(uuidN(1), recordFor(uuidN(1)));
   });
 
   it('the approval binds the uuid to the token that posted the candidacy: it then works for that token only', async () => {
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true });
+    relay = await startFakeRelay();
     const other = relay.addMachineToken();
     const id = (await post(relay.token, uuidN(1))).id;
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
-    // Pending is not approved: still not registered.
     expect((await failure(machine.putRecord(uuidN(1), recordFor(uuidN(1))))).code).toBe('not_registered');
     await approveWith(id);
     await machine.putRecord(uuidN(1), recordFor(uuidN(1)));
@@ -189,30 +179,68 @@ describe('fake relay: bindOwnershipAtApproval (pending relay change, poc-owner #
     await expect(machine.listInbox(uuidN(1))).resolves.toEqual([]);
     const e = await failure(createRelayClient({ baseUrl: relay.url, token: other }).putRecord(uuidN(1), recordFor(uuidN(1), 2)));
     expect([e.status, e.code]).toEqual([403, 'not_owner']);
-    // The other token has no binding for its own uuid either.
     expect((await failure(createRelayClient({ baseUrl: relay.url, token: other }).putRecord(uuidN(2), recordFor(uuidN(2))))).code).toBe('not_registered');
   });
 
+  it('a bound uuid without a record is not listed by GET /api/machines', async () => {
+    relay = await startFakeRelay();
+    relay.approve((await post(relay.token, uuidN(1))).id, { v: 1 });
+    expect(await createRelayClient({ baseUrl: relay.url, token: relay.token }).getMachines()).toEqual([]);
+  });
+
   it('the test helper approve() binds like the decision route', async () => {
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true });
+    relay = await startFakeRelay();
     const id = (await post(relay.token, uuidN(1))).id;
     relay.approve(id, { v: 1 });
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
   });
 
-  it('the admin list says whether the uuid is already bound and to which token label; approving again replaces the binding', async () => {
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true, moreCodes: ['22223333'] });
-    const anonymous = createRelayClient({ baseUrl: relay.url });
-    const second = await anonymous.claimPairing('22223333');
+  it('the admin list: unbound, bound to the candidate token (re-approval), bound to another token, bound to a revoked token', async () => {
+    relay = await startFakeRelay({ moreCodes: ['22223333'] });
+    const second = await createRelayClient({ baseUrl: relay.url }).claimPairing('22223333');
     const firstId = (await post(relay.token, uuidN(1))).id;
-    expect(await admin().listCandidacies()).toMatchObject([{ id: firstId, uuidBound: false }]);
-    expect((await admin().listCandidacies())[0]).not.toHaveProperty('boundTokenLabel');
+    const listed = await admin().listCandidacies();
+    expect(listed).toMatchObject([{ id: firstId, uuid: uuidN(1), uuidBound: false, boundToCandidateToken: false }]);
+    expect(listed[0]).not.toHaveProperty('boundTokenLabel');
     await approveWith(firstId);
-    // The same uuid is posted again by ANOTHER token (a rogue token, or the real machine with a new token).
-    const secondId = (await post(second.token, uuidN(1))).id;
-    expect(await admin().listCandidacies()).toMatchObject([{ id: secondId, uuid: uuidN(1), uuidBound: true, boundTokenLabel: 'machine-pairing' }]);
-    await approveWith(secondId);
+    // The same token posts again (a new candidacy of the same machine): bound, but to the candidate token.
+    const sameId = (await post(relay.token, uuidN(1), 'a'.repeat(43))).id;
+    expect((await admin().listCandidacies()).find((c) => c.id === sameId)).toMatchObject({ uuidBound: true, boundTokenLabel: 'machine-pairing', boundToCandidateToken: true });
+    // ANOTHER token posts the same uuid: a rebind.
+    const otherId = (await post(second.token, uuidN(1), 'b'.repeat(43))).id;
+    expect((await admin().listCandidacies()).find((c) => c.id === otherId)).toMatchObject({ uuidBound: true, boundTokenLabel: 'machine-pairing', boundToCandidateToken: false });
+    // The bound token is revoked in the console: the label is the relay's placeholder.
+    relay.revokeMachineToken(relay.token);
+    expect((await admin().listCandidacies()).find((c) => c.id === otherId)).toMatchObject({ uuidBound: true, boundTokenLabel: '(revoked token)', boundToCandidateToken: false });
+    await approveWith(otherId);
     await createRelayClient({ baseUrl: relay.url, token: second.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
-    expect((await failure(createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1), 2)))).code).toBe('not_owner');
+  });
+
+  it('the decision answers 429 too_many_machines past the limit per token; the candidacy stays pending', async () => {
+    relay = await startFakeRelay({ maxMachinesPerToken: 2 });
+    const ids: string[] = [];
+    for (const n of [1, 2, 3]) ids.push((await post(relay.token, uuidN(n), String(n).repeat(43))).id);
+    await approveWith(ids[0] as string);
+    await approveWith(ids[1] as string);
+    const e = await failure(approveWith(ids[2] as string));
+    expect([e.status, e.code]).toEqual([429, 'too_many_machines']);
+    expect(relay.pendingIds()).toEqual([ids[2]]);
+    // Approving a uuid the token already holds is not a new machine.
+    const again = (await post(relay.token, uuidN(1), 'z'.repeat(43))).id;
+    await approveWith(again);
+    // The admin forgets a machine that is gone (DELETE): room again.
+    await admin().deleteMachine(uuidN(1));
+    await approveWith(ids[2] as string);
+  });
+
+  it('posting the same identity key with another uuid while the first candidacy is pending is 409 candidacy_uuid_changed; the same uuid is fine', async () => {
+    relay = await startFakeRelay();
+    await post(relay.token, uuidN(1));
+    const e = await failure(post(relay.token, uuidN(2)));
+    expect([e.status, e.code]).toEqual([409, 'candidacy_uuid_changed']);
+    await post(relay.token, uuidN(1));
+    // Once the candidacies are gone (rejected), the key may come back with another uuid.
+    for (const id of relay.pendingIds()) relay.reject(id);
+    await post(relay.token, uuidN(2));
   });
 });

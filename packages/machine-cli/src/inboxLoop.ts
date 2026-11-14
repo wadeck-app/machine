@@ -376,7 +376,7 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
         notOwner = true;
         notice(
           'not-owner',
-          'inbox: this machine does not own its inbox on the relay yet, so documents addressed to it cannot be read. The relay binds an inbox to the first machine token that publishes the address record of this machine: look for an "address record" line above (not enrolled, no address to publish, or not_owner after a token change, with its fix). The documents wait on the relay',
+          'inbox: this machine does not own its inbox on the relay: another token is bound to its uuid (the relay binds a uuid to the token of the candidacy the admin approved), so documents addressed to it cannot be read. Run `machine join --resume` (same token) or `machine join <code> --force` (new token) and ask the admin to approve the new candidacy: approving replaces the binding. The documents wait on the relay',
         );
         return false;
       }

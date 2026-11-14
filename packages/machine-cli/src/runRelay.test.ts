@@ -40,7 +40,10 @@ const joinRelay = (dir: string, token: string) => writeRelayConfig(dir, { relayU
 
 /** B's daemon with its own relay token, publishing `advertise` (the port defaults to its peer port). */
 async function startLaptop(advertise: Array<{ host: string; port?: number }>): Promise<RunningDaemon> {
-  joinRelay(b, relay.addMachineToken());
+  // The relay bound the uuid of B to its token when the admin approved it.
+  const token = relay.addMachineToken();
+  relay.setOwner(readMachine(b).uuid, token);
+  joinRelay(b, token);
   const daemon = await startMachineDaemon(b, { port: 0, version: 'e2e', peerPort: 0, peerHost: '127.0.0.1', advertise, inbox: { timer: idleTimer }, log: () => undefined });
   stoppers.push(daemon.stop);
   await daemon.inbox?.ready;
@@ -88,6 +91,7 @@ describe('machine run without --address', () => {
     const r = await runHello();
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/no address record for "laptop"/);
+    expect(r.err).toMatch(/no record published yet/);
     expect(r.err).toContain('--address');
   });
 
@@ -237,7 +241,9 @@ describe('machine list with a relay', () => {
     joinRelay(a, relay.addMachineToken());
     const r = await cli(a, ['list']);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/laptop.*\n.*no address record/);
+    expect(r.out).toMatch(/laptop.*\n.*no record published yet/);
+    // Not a warning and not an error: the line is a plain note.
+    expect(r.err).toBe('');
   });
 
   it('a refused record is a warning for that peer, exit 0', async () => {

@@ -157,7 +157,7 @@ export async function resolvePeerAddresses(configDir: string, peer: PeerRef, cli
   }
   if (entry === undefined) {
     throw new PeerAddressError(
-      `the relay has no address record for "${peer.name}" (${peer.uuid}): its daemon has not published one. Check that \`machine daemon\` runs on that machine with a relay (\`machine status\` there, and its daemon log), or ${BYPASS}`,
+      `the relay has no address record for "${peer.name}" (${peer.uuid}): no record published yet. The relay lists a machine only once its daemon has published its address record, which is normal for a machine approved a moment ago or whose daemon is not running. Start \`machine daemon\` on that machine (\`machine status\` there, and its daemon log), wait a minute, or ${BYPASS}`,
     );
   }
   const verified = accept(configDir, peer, entry.record, now, known, options);
@@ -202,7 +202,7 @@ export async function lookupPeerPresence(configDir: string, peers: PeerRef[], cl
     const known = remembered[peer.uuid];
     const lastKnown = (problem: string): PeerPresence => (known === undefined ? { uuid: peer.uuid, name: peer.name, addresses: [], source: 'none', problem } : { uuid: peer.uuid, name: peer.name, addresses: known.addresses, source: 'last-known', seq: known.seq, problem });
     const entry = byUuid.get(peer.uuid);
-    if (entry === undefined) return lastKnown('no address record on the relay: its daemon has not published one');
+    if (entry === undefined) return lastKnown('no record published yet (the relay lists a machine once its daemon has published its address record)');
     const verified = accept(configDir, peer, entry.record, now, known, options);
     if (!verified.ok) return lastKnown(`address record refused: ${verified.message}`);
     toCommit[peer.uuid] = verified.entry;

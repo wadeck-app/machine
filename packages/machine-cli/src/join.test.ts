@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { sanitizeHostname } from './join.js';
-import { readRelayConfig, relayFile } from './relayStore.js';
+import { candidacyFile, readRelayConfig, relayFile } from './relayStore.js';
 import { cli, ok } from './testing.js';
 
 let dir: string;
@@ -115,6 +115,44 @@ describe('machine join', () => {
     expect(r.err).toMatch(/saved/);
     expect(r.err).toMatch(/--resume/);
     expect(r.err).not.toContain(relay.token);
+  });
+
+  it('409 candidacy_uuid_changed: the identity key already has a candidacy with another uuid; the message says to wait or have it rejected, then join --resume, which posts with the SAME uuid', async () => {
+    relay = await startFakeRelay();
+    await ok(dir, ['init', '--name', 'laptop']);
+    const me = readMachine(dir);
+    // Another entry of the same identity key, with another uuid, is still pending on the relay.
+    const otherUuid = '99999999-2222-4333-8444-555555555555';
+    relay.addCandidacy('stale-entry', { name: 'laptop', hostname: 'h', identityPublicKey: me.identity.publicKey, random: 'r'.repeat(22), uuid: otherUuid });
+    const r = await cli(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('candidacy_uuid_changed');
+    expect(r.err).toMatch(/identity key already has a candidacy with another uuid/);
+    expect(r.err).toMatch(/expire|reject/);
+    expect(r.err).toContain('machine join --resume');
+    expect(r.err).not.toContain(relay.token);
+    // The token is saved: once the entry is gone, resume posts a new candidacy that carries the uuid of this machine.
+    expect(readRelayConfig(dir)).toMatchObject({ token: relay.token });
+    relay.reject('stale-entry');
+    const resumed = await ok(dir, ['join', '--resume', '--no-wait']);
+    expect(resumed.code).toBe(0);
+    const posted = [...relay.candidacies.entries()].filter(([id]) => id !== 'stale-entry').map(([, c]) => c as Record<string, unknown>);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ uuid: me.uuid, identityPublicKey: me.identity.publicKey });
+  });
+
+  it('join --resume with a saved candidacy of an older version (no uuid) posts a NEW candidacy carrying the same uuid as the machine', async () => {
+    relay = await startFakeRelay();
+    await ok(dir, ['init', '--name', 'laptop']);
+    await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    const me = readMachine(dir);
+    const file = candidacyFile(dir);
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    delete saved.uuid;
+    writeFileSync(file, JSON.stringify(saved));
+    await ok(dir, ['join', '--resume', '--no-wait', '--relay', relay.url]);
+    const uuids = [...relay.candidacies.values()].map((c) => (c as Record<string, unknown>).uuid);
+    expect(uuids).toEqual([me.uuid, me.uuid]);
   });
 
   it('a malformed relay.json is reported by file name, exit 1, nothing sent', async () => {

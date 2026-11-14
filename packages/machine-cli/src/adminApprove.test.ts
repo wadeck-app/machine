@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readAdminPin } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
-import { loadNetwork } from './network.js';
+import { exportMachineInfo, loadNetwork } from './network.js';
+import { createRelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
 import { cli, fakeTiming, makeAdmin, ok, type TestAdmin } from './testing.js';
 
@@ -554,12 +555,12 @@ describe('machine admin revoke', () => {
   });
 });
 
-describe('machine admin approve: a uuid already bound to a token (pending relay change, poc-owner #12)', () => {
+describe('machine admin approve: a uuid already bound to a token (deployed relay, poc-owner 719f36f)', () => {
   const SECOND = '22223333';
   let firstId: string;
   beforeEach(async () => {
     await relay.close();
-    relay = await startFakeRelay({ bindOwnershipAtApproval: true, moreCodes: [SECOND] });
+    relay = await startFakeRelay({ moreCodes: [SECOND] });
     await login();
     ({ id: firstId } = await candidatePosts());
   });
@@ -595,12 +596,72 @@ describe('machine admin approve: a uuid already bound to a token (pending relay 
     expect(decisions()).toHaveLength(1);
   });
 
-  it('--json carries uuidBound and boundTokenLabel', async () => {
+  /** The same machine posts a new candidacy with the SAME token (a resume): the uuid is bound to the candidate token. */
+  async function sameTokenPosts(): Promise<string> {
+    const info = exportMachineInfo(cand);
+    const posted = await createRelayClient({ baseUrl: relay.url, token: relay.token }).postCandidacy({ name: info.name, hostname: 'h', identityPublicKey: info.identityPublicKey, random: newCandidacyRandom(), uuid: info.uuid });
+    return posted.id;
+  }
+
+  it('a uuid bound to the token of the candidacy itself (re-approval) carries NO rebind warning, in the list, the detail and the question; the detail says it quietly', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const again = await sameTokenPosts();
+    const list = await approve();
+    expect(list.out).not.toMatch(/already bound|replaces/);
+    const asked: string[] = [];
+    const r = await approve([again], { ask: async (l) => (asked.push(l), 'y') });
+    expect(r.code, r.err).toBe(0);
+    expect(asked[0]).not.toMatch(/already bound|replaces|WARNING/);
+    expect(r.out).not.toMatch(/\[warn\].*bound/);
+    expect(r.out).toMatch(/same token as this candidacy: a re-approval, nothing is rebound/);
+  });
+
+  it('a uuid bound to another token whose label is "(revoked token)" is still a rebind warning, naming the placeholder', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const second = await secondTokenPosts();
+    relay.revokeMachineToken(relay.token);
+    const asked: string[] = [];
+    const r = await approve([second], { ask: async (l) => (asked.push(l), 'n') });
+    expect(r.code).toBe(1);
+    expect(asked[0]).toContain('already bound to the token labelled "(revoked token)"');
+  });
+
+  it('a relay that says uuidBound without boundToCandidateToken is treated as a rebind (the safe reading)', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const second = await secondTokenPosts();
+    delete (relay.candidacies.get(second) as Record<string, unknown>).boundToCandidateToken;
+    const r = await approve([second], { ask: async () => 'n' });
+    expect(r.out).toMatch(/already bound to/);
+  });
+
+  it('an invalid boundToCandidateToken blocks the approval, loudly', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const second = await secondTokenPosts();
+    (relay.candidacies.get(second) as Record<string, unknown>).boundToCandidateToken = 'yes';
+    const r = await approve([second], { ask: forbidden('the question') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/invalid "boundToCandidateToken"/);
+  });
+
+  it('429 too_many_machines at the decision: nothing approved, the candidacy is still pending, the message names DELETE through forget-relay-record', async () => {
+    relay.force('/api/machines/candidacies', 429, { success: false, error: 'too_many_machines', message: 'This token already holds 50 machines.' }, {}, 'PUT');
+    const r = await approve([firstId]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/still pending/);
+    expect(r.err).toContain('DELETE /api/machines/<uuid>');
+    expect(r.err).toContain('machine admin forget-relay-record <machine>');
+    expect(r.err).toContain('This token already holds 50 machines.');
+    expect(relay.pendingIds()).toContain(firstId);
+    // After the room is made, the same command goes through.
+    expect((await approve([firstId])).code).toBe(0);
+  });
+
+  it('--json carries uuidBound, boundTokenLabel and boundToCandidateToken', async () => {
     expect((await approve([firstId])).code).toBe(0);
     await secondTokenPosts();
     const r = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
     const parsed = JSON.parse(r.out) as { uuidBound: boolean; boundTokenLabel?: string }[];
-    expect(parsed).toMatchObject([{ uuidBound: true, boundTokenLabel: 'machine-pairing' }]);
+    expect(parsed).toMatchObject([{ uuidBound: true, boundTokenLabel: 'machine-pairing', boundToCandidateToken: false }]);
   });
 
   it('confirmed: the binding moves to the new token; text from the relay is shown as printable ASCII', async () => {

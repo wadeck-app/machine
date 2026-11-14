@@ -48,6 +48,8 @@ beforeEach(async () => {
   admin = makeAdmin(adminDir);
   await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
   await enroll('laptop');
+  // The relay bound the uuid of laptop to its token when the candidacy of that token was approved.
+  relay.setOwner(uuidOf('laptop'), relay.token);
 });
 afterEach(async () => {
   await relay.close();
@@ -66,12 +68,15 @@ describe('machine admin forget-relay-record', () => {
     expect(del[0]?.authorization).toBe(`Bearer ${relay.adminToken}`);
     expect(r.out).toMatch(/the relay forgot/);
     expect(r.out).toContain(uuidOf('laptop'));
-    // What happens next is said: the daemon publishes by itself, the inbox content must be sent again.
-    expect(r.out).toMatch(/publishes again by itself/);
+    // What happens next is said: the binding is gone too (deployed relay), so the machine does NOT publish again by itself.
+    expect(r.out).not.toMatch(/publishes again by itself/);
+    expect(r.out).toMatch(/not registered|approved again/);
+    expect(r.out).toContain('machine join --resume');
+    expect(r.out).toMatch(/machine admin approve/);
     expect(r.out).toContain('machine admin distribute');
   });
 
-  it('the old owner is gone: another token can now publish the record (the fix really fixes the not_owner)', async () => {
+  it('the binding goes with the record: the machine is not_registered afterwards until a new candidacy is approved (rebind)', async () => {
     await publishRecord('laptop');
     const rotated = createRelayClient({ baseUrl: relay.url, token: relay.addMachineToken() });
     const self = readMachine(dirOf('laptop'));
@@ -79,7 +84,8 @@ describe('machine admin forget-relay-record', () => {
     await expect(rotated.putRecord(self.uuid, record)).rejects.toMatchObject({ code: 'not_owner' });
     const r = await cli(adminDir, ['admin', 'forget-relay-record', 'laptop'], undefined, { ask: yes });
     expect(r.code, r.err).toBe(0);
-    await expect(rotated.putRecord(self.uuid, record)).resolves.toMatchObject({ etag: expect.any(String) });
+    await expect(rotated.putRecord(self.uuid, record)).rejects.toMatchObject({ code: 'not_registered' });
+    await expect(asMachine().putRecord(self.uuid, record)).rejects.toMatchObject({ code: 'not_registered' });
   });
 
   it('asks first: a "no" removes nothing and exits 1 with what was not done', async () => {
@@ -144,9 +150,11 @@ describe('machine admin forget-relay-record', () => {
     expect((await cli(adminDir, ['admin', 'forget-relay-record', 'a', 'b'], undefined, { ask: yes })).code).toBe(2);
   });
 
-  it('is in the help, with the not_owner fix', async () => {
+  it('is in the help: for machines that are gone (and the too_many_machines limit), not the first-writer story', async () => {
     const r = await cli(adminDir, ['--help']);
     expect(r.out).toMatch(/admin forget-relay-record <machine\|uuid>/);
-    expect(r.out).toMatch(/not_owner/);
+    expect(r.out).toMatch(/too_many_machines/);
+    expect(r.out).toMatch(/are gone/);
+    expect(r.out).not.toMatch(/first token that wrote/);
   });
 });

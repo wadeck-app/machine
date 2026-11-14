@@ -86,6 +86,12 @@ export interface PendingCandidacy extends Omit<CandidacyPost, 'uuid'> {
   id: string;
   /** Absent for an entry posted by an older `machine join`: `machine admin approve` refuses it. */
   uuid?: string;
+  /** Deployed relay (ownership bound at approval): the uuid is already bound to a token. */
+  uuidBound?: boolean;
+  /** Label of the bound token, or "(revoked token)" when that token is gone. Present when `uuidBound` is true. */
+  boundTokenLabel?: string;
+  /** True: the uuid is bound to the token that posted this candidacy (a re-approval, not a rebind). */
+  boundToCandidateToken?: boolean;
   observedIp: string;
   createdAt: number;
   expiresAt: number;
@@ -217,6 +223,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     inbox?: { uuid: string; id?: string };
     /** The call writes the address record of this machine: errors name the uuid and the fix. */
     record?: { uuid: string };
+    /** The call posts a candidacy: a 409 `candidacy_uuid_changed` is explained for the candidate. */
+    candidacyPost?: boolean;
+    /** The call is the admin decision on a candidacy: a 429 `too_many_machines` means it is still pending. */
+    decision?: boolean;
     /** The answer is read at most this many bytes: a relay is untrusted and must not make this machine buffer an answer of any size. */
     maxBytes?: number;
     /** Names the call in the error of an oversized answer. */
@@ -278,10 +288,13 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
     } else if (status === 403 && code === 'not_registered') {
-      // The relay binds a uuid to a machine token only when the admin approves the candidacy (pending relay change, relay-api.md).
+      // The relay binds a uuid to a machine token only when the admin approves the candidacy (relay-api.md, ownership bound at approval).
+      // The relay's own text comes first (in `detail`), then the client hint.
       message = `the relay ${baseUrl} does not know this machine as approved (not_registered)${detail}: this machine is not approved yet: run machine join and ask the admin to approve it`;
     } else if (c.record && status === 403 && code === 'not_owner') {
-      message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: the record is bound to another token than the one of this machine (the first token to write it owns it): either the token of this machine was replaced, or ANOTHER machine token claimed this uuid first, which also hijacks the inbox of this machine (the documents of the admin to it would be withheld). Tell the admin to run \`machine admin forget-relay-record <machine>\` (it removes the old record and its inbox on the relay); this daemon then publishes again by itself`;
+      message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: another token is bound to this uuid (a uuid is bound to the token of the candidacy the admin approved): either the token of this machine was replaced, or the admin approved a candidacy of ANOTHER token for this uuid, which also withholds the inbox of this machine. Run \`machine join --resume\` (same token) or \`machine join <code> --force\` (new token) and ask the admin to approve the new candidacy: approving replaces the binding with the token of this machine (the admin is warned that it is a rebind); this daemon then publishes again by itself`;
+    } else if (c.decision && status === 429 && code === 'too_many_machines') {
+      message = `the relay ${baseUrl} refused to approve this machine (too_many_machines)${detail}: this token already holds the maximum number of machines (50 per token, 1000 on the relay). The candidacy is still pending and nothing was approved. Remove the machines that are gone (\`DELETE /api/machines/<uuid>\`, which \`machine admin forget-relay-record <machine>\` sends), then run \`machine admin approve <id>\` again`;
     } else if (c.record && status === 429 && code === 'too_many_machines') {
       message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (too_many_machines)${detail}: this token already holds too many machine records (50 at most per token, 1000 on the relay); tell the relay owner`;
     } else if (c.record && status === 400) {
@@ -293,7 +306,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     } else if (c.inbox && status === 429 && code === 'relay_inbox_full') {
       message = `the relay ${baseUrl} has no room left for inbox documents (relay_inbox_full)${detail}: this is the relay as a whole, not this machine; tell the relay owner, then run \`machine admin distribute <machine>\` again`;
     } else if (c.inbox && status === 403 && code === 'not_owner') {
-      message = `this token does not own the inbox of machine ${c.inbox.uuid} (not_owner)${detail}: a machine owns its inbox once it has published its address record with its own token; after a token rotation the admin removes the old binding and the machine publishes again`;
+      message = `this token does not own the inbox of machine ${c.inbox.uuid} (not_owner)${detail}: another token is bound to this uuid (the binding is made when the admin approves a candidacy). If the token of this machine was replaced, run \`machine join --resume\` (same token) or \`machine join <code> --force\` (new token) and ask the admin to approve the new candidacy: approving replaces the binding`;
     } else if (c.inbox && status === 413) {
       message = `the relay ${baseUrl} refused a document of this size (body_too_large)${detail}: a request is at most 32 KiB and a document at most 16 KiB; a policy this big must be split or reduced`;
     } else if (c.inbox && status === 400 && (code === 'invalid_cursor' || code === 'invalid_id')) {
@@ -312,8 +325,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
           : `the relay ${baseUrl} refused this request (403)${detail}: the token may lack the "machine" scope, or the request was malformed; run \`machine join <code>\` again if the token was rotated`;
     } else if (status === 404) {
       message = `not found on the relay ${baseUrl}${detail}: it may have expired (a candidacy lives 15 minutes), or the id is wrong`;
+    } else if (c.candidacyPost && status === 409 && code === 'candidacy_uuid_changed') {
+      message = `the relay ${baseUrl} refused the candidacy (candidacy_uuid_changed)${detail}: this identity key already has a candidacy with another uuid (the uuid of an identity key never changes). That entry must expire (15 minutes) or an admin must reject it (\`machine admin approve <id> --reject\`); run \`machine join --resume\` after it is gone`;
     } else if (status === 409) {
-      message = `conflict on the relay ${baseUrl}${detail}: ${code === 'identity_key_in_use' ? 'another token already holds a pending candidacy for this identity key; wait for it to expire (15 minutes) or have the admin reject it' : 'the entry is no longer pending'}`;
+      message =`conflict on the relay ${baseUrl}${detail}: ${code === 'identity_key_in_use' ? 'another token already holds a pending candidacy for this identity key; wait for it to expire (15 minutes) or have the admin reject it' : 'the entry is no longer pending'}`;
     } else if (status === 412) {
       message = `the record changed on the relay${detail}: read it again (current etag ${currentEtag ?? 'unknown'}) and retry`;
     } else if (status === 503 || status >= 500) {
@@ -401,7 +416,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     },
 
     async postCandidacy(candidacy) {
-      const r = (await call({ method: 'POST', path: '/api/machines/candidacies', body: candidacy })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      const r = (await call({ method: 'POST', path: '/api/machines/candidacies', body: candidacy, candidacyPost: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       const { id, createdAt, expiresAt } = r.body;
       if (typeof id !== 'string' || typeof createdAt !== 'number' || typeof expiresAt !== 'number') throw malformed('the candidacy post');
       return { id, createdAt, expiresAt };
@@ -488,7 +503,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     },
 
     async decideCandidacy(id, decision) {
-      await call({ method: 'PUT', path: `/api/machines/candidacies/${idPath(id)}/decision`, body: decision });
+      await call({ method: 'PUT', path: `/api/machines/candidacies/${idPath(id)}/decision`, body: decision, decision: true });
     },
   };
 }

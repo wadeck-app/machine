@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { finalCode, openSealed } from '@wadeck-app/machine-core';
 import { pairSecretContext } from './approval.js';
 import { startMachineDaemon, type RunningDaemon } from './daemonEntry.js';
@@ -30,7 +30,6 @@ let b: string;
 let relay: FakeRelay;
 let passphrase: string;
 let stub: OrchStub;
-let bindMode = false;
 const daemons: RunningDaemon[] = [];
 
 const decisions = () => relay.requests.filter((q) => q.method === 'PUT' && q.path.endsWith('/decision'));
@@ -47,7 +46,7 @@ beforeEach(async () => {
   mkdirSync(a);
   mkdirSync(b);
   stub = makeOrchStub();
-  relay = await startFakeRelay({ code: MACHINE_CODE, moreCodes: [SECOND_CODE, THIRD_CODE], adminCode: ADMIN_CODE, bindOwnershipAtApproval: bindMode });
+  relay = await startFakeRelay({ code: MACHINE_CODE, moreCodes: [SECOND_CODE, THIRD_CODE], adminCode: ADMIN_CODE });
 });
 afterEach(async () => {
   while (daemons.length > 0) await daemons.pop()?.stop();
@@ -90,14 +89,8 @@ async function firstMachinePosts(): Promise<string> {
   return relay.pendingIds()[0] as string;
 }
 
-describe.each([
-  ['relay as deployed', false],
-  ['relay that binds the uuid at approval', true],
-])('%s', (_label, bind) => {
-  beforeAll(() => {
-    bindMode = bind;
-  });
-
+// The fake relay models the deployed relay: ownership bound at approval (the legacy first-writer relay is gone).
+describe('relay with ownership bound at approval', () => {
   describe('the first machine of a network is also its admin machine', () => {
     it('approves its own candidacy: no passphrase typed twice, no error, nothing about a peer', async () => {
       const id = await firstMachinePosts();
@@ -180,8 +173,7 @@ describe.each([
     return { daemon, logs, pending, text: () => logs.join(' | ') };
   }
 
-  // The two relays behave differently before the approval, so each mode has its own expectations (defined per mode, never skipped).
-  if (bind) {
+  {
     it('a daemon started before the approval says what to do, keeps no backoff, and publishes by itself in the next round after the approval', async () => {
       const id = await firstMachinePosts();
       const { daemon, logs, pending, text } = await daemonBeforeApproval();
@@ -200,21 +192,6 @@ describe.each([
       expect(text()).toMatch(/inbox: this machine is approved on the relay now/);
       const entry = await relay.inbox(readMachine(a).uuid);
       expect(entry).toEqual([]);
-    });
-  } else {
-    it('a daemon started before the approval: the relay as deployed has no approval gate, so nothing says "not approved yet" and the loop keeps its normal pace', async () => {
-      const id = await firstMachinePosts();
-      const { daemon, logs, pending, text } = await daemonBeforeApproval();
-      expect(text()).not.toMatch(/not approved yet/);
-      expect(text()).toMatch(/address record published/);
-      await daemon.inbox?.runOnce();
-      expect(pending.size).toBe(1);
-
-      expect((await approve(a, id)).code).toBe(0);
-      expect((await cli(a, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: forbidden('the final code') })).code).toBe(0);
-      await daemon.inbox?.runOnce();
-      expect(logs.filter((l) => /not approved yet/.test(l))).toHaveLength(0);
-      expect(await relay.inbox(readMachine(a).uuid)).toEqual([]);
     });
   }
 

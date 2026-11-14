@@ -116,15 +116,25 @@ describe('address record errors (injected fetch)', () => {
     }
   });
 
-  it('not_owner on a record write names the cause and the exact fix, not the generic scope advice', async () => {
+  it('not_registered carries the relay own text when present, plus the hint; the hint alone when the relay sent no text', async () => {
+    const own = 'This machine is not registered on the relay: approve this machine first (the admin approves its candidacy, `machine admin approve`), then retry.';
+    const withText = await failure(clientWith(() => json(403, { success: false, error: 'not_registered', message: own })).heartbeat(UUID));
+    expect(withText.message).toContain(own);
+    expect(withText.message).toContain('this machine is not approved yet: run machine join and ask the admin to approve it');
+    const bare = await failure(clientWith(() => json(403, { success: false, error: 'not_registered' })).heartbeat(UUID));
+    expect(bare.message).toContain('not_registered');
+    expect(bare.message).toContain('this machine is not approved yet: run machine join and ask the admin to approve it');
+  });
+
+  it('not_owner on a record write says another token is bound to this uuid, and the fix: join again, the admin approves (rebind); no first-writer story', async () => {
     const e = await failure(clientWith(() => json(403, { success: false, error: 'not_owner', message: 'owned by another token' })).putRecord(UUID, record));
     expect(e.code).toBe('not_owner');
     expect(e.message).toContain(UUID);
-    expect(e.message).toMatch(/another token|first token/);
-    expect(e.message).toContain('machine admin forget-relay-record');
-    // Another machine token may have taken the uuid first: the documents of this machine (its inbox) may be suppressed too.
-    expect(e.message).toMatch(/inbox/);
-    expect(e.message).toMatch(/another machine|first/);
+    expect(e.message).toMatch(/another token is bound/);
+    expect(e.message).toContain('machine join');
+    expect(e.message).toMatch(/approve/);
+    expect(e.message).toMatch(/rebind|replaces the binding/);
+    expect(e.message).not.toMatch(/first token|first to write|first machine/);
     expect(e.message).not.toMatch(/lack the "machine" scope/);
     expect(e.message).not.toContain('SECRET-TOKEN');
   });
@@ -139,6 +149,30 @@ describe('address record errors (injected fetch)', () => {
     const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'bad' })).putRecord(UUID, record));
     expect(e.status).toBe(400);
     expect(e.message).toMatch(/address record/);
+  });
+});
+
+describe('candidacy errors (injected fetch)', () => {
+  const candidacy = { name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: '11111111-2222-4333-8444-555555555555' };
+
+  it('409 candidacy_uuid_changed on a post: this identity key already has a candidacy with another uuid; wait for it to expire or have the admin reject it, then join --resume', async () => {
+    const e = await failure(clientWith(() => json(409, { success: false, error: 'candidacy_uuid_changed', message: 'uuid differs' })).postCandidacy(candidacy));
+    expect(e.status).toBe(409);
+    expect(e.code).toBe('candidacy_uuid_changed');
+    expect(e.message).toMatch(/identity key already has a candidacy with another uuid/);
+    expect(e.message).toMatch(/expire|reject/);
+    expect(e.message).toContain('machine join --resume');
+    expect(e.message).not.toContain('no longer pending');
+  });
+
+  it('429 too_many_machines on the decision: the candidacy is still pending, the machines that are gone are removed with forget-relay-record (DELETE /api/machines/<uuid>)', async () => {
+    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', message: 'at most 50' })).decideCandidacy('id', { decision: 'approve', approval: {} }));
+    expect(e.status).toBe(429);
+    expect(e.code).toBe('too_many_machines');
+    expect(e.message).toMatch(/still pending/);
+    expect(e.message).toContain('DELETE /api/machines/<uuid>');
+    expect(e.message).toContain('machine admin forget-relay-record <machine>');
+    expect(e.message).not.toMatch(/rate limiting/);
   });
 });
 
@@ -178,6 +212,7 @@ describe('against the fake relay', () => {
 
   it('records: lower-cases the uuid, compare-and-set, heartbeat, listing', async () => {
     relay = await startFakeRelay();
+    relay.setOwner('aaaaaaaa-0000-4000-8000-000000000000', relay.token);
     const client = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const upper = 'AAAAAAAA-0000-4000-8000-000000000000';
     const record = { body: { v: 1 as const, uuid: upper.toLowerCase(), addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: 1 }, signature: 's' };
@@ -314,6 +349,11 @@ describe('inbox (documents distributed through the relay)', () => {
       expect(e.status).toBe(403);
       expect(e.code).toBe('not_owner');
       expect(e.message).toMatch(/does not own the inbox/);
+      // The first-writer rule is gone: the text names the binding made at approval and the fix (join again, the admin approves = rebind).
+      expect(e.message).toMatch(/another token is bound/);
+      expect(e.message).toContain('machine join');
+      expect(e.message).toMatch(/approve/);
+      expect(e.message).not.toMatch(/first|published its address record/);
       expect(e.message).not.toContain(r.token);
     }
   });
@@ -401,17 +441,20 @@ describe('inbox (documents distributed through the relay)', () => {
     expect(((await raw.json()) as { error: string }).error).toBe('invalid_cursor');
   });
 
-  it('an inbox written before the machine wrote its address record is claimed by the first machine token that writes the record', async () => {
+  it('an inbox written before the approval is readable only after the approval binds the uuid to the token; a machine that was removed is not registered any more', async () => {
     const { relay: r, machine, admin } = await clients();
     await admin.putInboxDocument(TO, doc(1));
-    expect((await failure(machine.listInbox(TO))).code).toBe('not_owner');
+    // Not approved: not_registered, and writing a record does not bind anything (the first writer rule is gone).
+    expect((await failure(machine.listInbox(TO))).code).toBe('not_registered');
     const record = { body: { v: 1 as const, uuid: TO, addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: 1 }, signature: 's' };
-    await machine.putRecord(TO, record);
+    expect((await failure(machine.putRecord(TO, record))).code).toBe('not_registered');
+    const candidacy = await machine.postCandidacy({ name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: TO });
+    await admin.decideCandidacy(candidacy.id, { decision: 'approve', approval: { v: 1 } });
     expect((await machine.listInbox(TO)).map((e) => e.id)).toEqual([idOf(1)]);
-    // The admin removes the machine: the binding and the inbox are gone and the next machine token can claim it.
+    // The admin removes the machine: the binding and the inbox are gone, the machine must be approved again.
     await admin.deleteMachine(TO);
     expect(r.inbox(TO)).toEqual([]);
-    expect((await failure(machine.listInbox(TO))).code).toBe('not_owner');
+    expect((await failure(machine.listInbox(TO))).code).toBe('not_registered');
   });
 
   it('no error ever contains the token', async () => {

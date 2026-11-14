@@ -51,6 +51,8 @@ beforeEach(async () => {
   await provision(root, dirOf('desktop'), dirOf('laptop'), []);
   relay = await startFakeRelay();
   writeRelayConfig(dirOf('laptop'), { relayUrl: relay.url, token: relay.token, label: 'laptop', claimedAt: new Date().toISOString() }, false);
+  // The admin approved laptop with this token: the relay bound its uuid to it (ownership bound at approval).
+  relay.setOwner(uuidOf('laptop'), relay.token);
   logs = [];
   daemons = [];
 });
@@ -87,7 +89,7 @@ describe('the daemon publishes its signed address record', () => {
     expect(logs.join('\n')).toMatch(/address record published \(seq \d{10}\)/);
   });
 
-  it('the machine then owns its inbox: the very first round reads it without not_owner', async () => {
+  it('the approved machine owns its inbox: the very first round reads it without not_owner', async () => {
     const { daemon } = await start({ advertise: [{ host: '127.0.0.1' }] });
     await daemon.inbox?.ready;
     expect(logs.filter((l) => /does not own its inbox|not_owner/.test(l))).toEqual([]);

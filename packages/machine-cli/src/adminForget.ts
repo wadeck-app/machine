@@ -7,9 +7,10 @@ import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
 import { readAliases } from './state.js';
 
-// `machine admin forget-relay-record <machine>`: DELETE /api/machines/{uuid} with the admin relay token. It is the fix of the `not_owner`
-// that a machine gets when it publishes its address record after a token rotation: the relay binds a record (and the inbox) to the first
-// token that wrote it, and only a full-access token can free it (relay-api.md "Deployed limits", distribution.md "Ownership").
+// `machine admin forget-relay-record <machine>`: DELETE /api/machines/{uuid} with the admin relay token. It removes the address record, the
+// inbox AND the binding of the uuid to a token (relay-api.md, "Ownership bound at approval"): the way to free the room taken by machines that
+// are gone (`429 too_many_machines` at approval). A machine that comes back must post a new candidacy and be approved again. It is no longer
+// needed after a token rotation: a new candidacy plus the approval rebinds.
 
 export interface ForgetOptions {
   reference: string;
@@ -49,8 +50,8 @@ export async function runForgetRelayRecord(configDir: string, o: ForgetOptions):
   o.say(
     [
       `Forgetting ${label} on the relay ${access.relayUrl}`,
-      '  removes its address record, the binding of the record to a relay token, and every document waiting in its inbox',
-      '  the machine itself is not touched: its daemon publishes its address record again by itself at its next heartbeat (60 s) with its CURRENT token',
+      '  removes its address record, the binding of its uuid to a relay token, and every document waiting in its inbox',
+      '  the machine itself is not touched, but it is not registered on the relay any more: it must post a new candidacy and be approved again',
       '',
       '',
     ].join('\n'),
@@ -67,7 +68,7 @@ export async function runForgetRelayRecord(configDir: string, o: ForgetOptions):
   await viaAdminToken(() => access.client.deleteMachine(uuid));
   o.say(
     `[ok] the relay forgot ${label}: record, owner binding and inbox removed.\n` +
-      `The daemon of that machine publishes again by itself (within about 60 s) and owns its record again. ` +
+      `If this machine is still in use: it is not registered on the relay any more (not_registered). Run \`machine join --resume\` on it, then \`machine admin approve\` here to approve the new candidacy: only then does it publish its record and read its inbox again. ` +
       `What waited in its inbox is gone: run \`machine admin distribute ${name ?? uuid}\` to send the peer documents again, and \`machine admin distribute --policy <signed.json>\` for its policy\n`,
   );
   return { uuid, name };

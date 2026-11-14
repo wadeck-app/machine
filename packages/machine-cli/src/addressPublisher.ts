@@ -182,7 +182,7 @@ export function createAddressPublisher(o: AddressPublisherOptions): AddressPubli
       await send(key, wanted.addresses);
     } catch (e) {
       if (e instanceof RelayError && e.status === 403 && e.code === 'not_owner') {
-        // A state, not an outage: no backoff, so that the machine recovers by itself once the admin removed the old record.
+        // A state, not an outage: no backoff, so that the machine recovers by itself once the admin approved a new candidacy of this token (the approval rebinds the uuid).
         notOwner = true;
         failures = 0;
         blockedUntil = 0;

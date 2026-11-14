@@ -35,7 +35,7 @@ The recipient verifies the admin signature against its pinned admin key, `to` eq
 
 Limits: 256 documents and 16 KiB each per inbox, a global cap of 64 MiB for all inboxes; `429 too_many_documents` (one inbox full, the message names the uuid not draining) and `429 relay_inbox_full` (global); retention 30 days from `storedAt`, swept hourly and at read. Writes are audited as `machine_inbox_put` (uuid, id, size, never the document). One file per document on the relay, so address writes stay small.
 
-Ownership: the owner of `uuid` is the first token that wrote its address record. The admin may PUT documents for a uuid that has no record yet (normal case: approval precedes the first record); that inbox is ownerless, subject to the same limits and retention, and the machine owns it when it first PUTs its record. After a token rotation the admin calls `DELETE /api/machines/{uuid}`, the machine writes its record again and owns it again.
+Ownership: the owner of `uuid` is the token bound to it at approval (relay-api.md, "Ownership bound at approval"). The admin may PUT documents for a uuid before its record exists (approval precedes the first record). After a token rotation a new candidacy plus approval rebinds; `DELETE /api/machines/{uuid}` also forgets the binding.
 
 ## Flow
 
@@ -89,7 +89,7 @@ Ownership: the owner of `uuid` is the first token that wrote its address record.
   - Possibly passing causes (not valid yet, a policy whose predecessor is not installed yet, a sealed secret that cannot be opened, local read or write trouble): kept in the inbox, said once, examined again at every round until it expires; after something was installed, waiting policies get one more look in the same round, so version 3 before version 2 converges.
   - Valid: installed through `importPeer`, `installPolicy`, `installRevocation`; audited (`document-accepted`, kind, id); remembered; DELETEd. The same policy already in force is accepted as `already-installed`.
 - Not owner of the inbox: said once (no backoff), the inbox is tried again every round and recovers by itself.
-- A machine owns its inbox once it publishes its signed address record (relay-api.md, "Client behaviour of address records"); the daemon does it at the start of each round, before the heartbeat. After a token rotation `not_owner` is said once with the fix `machine admin forget-relay-record <machine>`. Fake relay only; never run against the real relay.
+- A machine owns its inbox once the admin approved its candidacy (binding at approval). `not_registered` (not approved) and `not_owner` (another token bound) are said once, no backoff; the fix of `not_owner` is `machine join` again and an admin approval (rebind).
 
 ## Deployed behaviour (poc-owner, commit 4ff0469)
 

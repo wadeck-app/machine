@@ -89,7 +89,7 @@ Signed address record, at most 2 KiB, stored as is:
 
 The relay cannot verify the signature (it does not know which key is registered); peers do, against the admin-signed registration, and ignore a record that does not verify or whose `seq` is lower than the highest they saw (T-33). The relay only checks the JSON shape, the size and that `body.uuid` equals the path `{uuid}`.
 
-Writes are compare-and-set: `If-Match: <etag>` is honoured when present (as the other file-based resources). The first token to `PUT` a `uuid` owns it: later writes to that `uuid` need the same token or full access (limits a rogue machine token to its own record).
+Writes are compare-and-set: `If-Match: <etag>` is honoured when present (as the other file-based resources). A machine token writes a `uuid` only if the uuid is bound to it at approval (see "Ownership bound at approval"); a full-access token always may.
 
 Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid`, in memory. `online` is `true` when `lastSeen` is less than 120 s old. Machines send a heartbeat every 60 s. The address records themselves persist in the file-based resource.
 
@@ -99,7 +99,7 @@ Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid
 - Publisher (daemon, enrolled machine with relay.json): ticked by the inbox-loop timer, right after each heartbeat. Publishes at start, when the address set changes, and every 7 days. Seq in `_secrets_/address-state.json`, written before signing; a failed PUT is retried with the same record. The first GET adopts the relay's seq only when that record verifies with this machine's own key; `If-Match` from the last etag, one retry after 412.
 - Seq: above max(state file, seq of the relay's record if signed by this machine, the clock) so a lost state starts above anything published before.
 - Addresses: `--advertise <host[:port]>` (repeatable; 0.0.0.0 and :: refused) replaces everything; else the single bound `--peer-host`; else non-internal interface addresses (no 169.254/16, no fe80::/10), IPv4 first, 8 at most (private ranges and interfaces not named like a virtual adapter first: a name and range heuristic, no route table; a truncation is a loud warning). Nothing to publish = loud warning, no publication. Loopback bind without `--advertise` = same.
-- Errors: `not_owner` once, no backoff, recovers by itself after `machine admin forget-relay-record <machine|uuid>` (DELETE with the admin token, y/N, also deletes the inbox). 429 (Retry-After) and 5xx back off 60 s doubling to 600 s; one warning per distinct message.
+- Errors: `not_registered` and `not_owner` are states: said once, no backoff, the record goes out in the round after the admin approves a new candidacy of this token (rebind). `machine admin forget-relay-record <machine|uuid>` (DELETE with the admin token, y/N) also removes the binding and the inbox: for machines that are gone (`429 too_many_machines` at approval). 429 (Retry-After) and 5xx back off 60 s doubling to 600 s; one warning per distinct message.
 - Readers (`machine run` without `--address`, `machine list`): record verified against the local registration, highest seq kept per peer in `peer-records.json`; addresses tried in order, 3 s each, every failure reported. `list` uses one `GET /api/machines`; relay trouble is a warning line, last known addresses stay shown. Offline per the relay is a warning, the addresses are still tried.
 - Reader destination rules (audit S-14): per address of a peer record, loopback, unspecified and link-local (169.254/16 incl. the metadata service, fe80::/10), also as IPv4-mapped IPv6, are refused with a visible reason; all refused = an error. Hosts ending in a number (`0x7f.1`, `1.2.3.0x4`) are refused in records.
 - Every relay answer is read with a cap (64 KiB by default, 4 KiB one record, 3 MiB the machine list, 1 MiB an inbox page); a larger one is a loud error naming the limit.
@@ -113,7 +113,7 @@ Distribution of registrations, revocation lists and policies through the relay (
 
 - At most 50 machine records per token (`429 too_many_machines`); the global cap stays 1000.
 - Re-`PUT` of an identical record only refreshes presence.
-- A record stays bound to the token that first wrote it. After a token rotation, a full-access token must write it once; there is no delete or reassign endpoint yet.
+- Superseded by "Ownership bound at approval": the binding is made by the approval, and `DELETE /api/machines/{uuid}` exists.
 - Malformed ids or uuids (upper-case, trailing slash) are refused by the scope gate with `403`, not `400`: the client must send canonical lower-case uuids and no trailing slash.
 - A `machine` token is created in the relay console: Tokens, Add token, "Limited to scopes", machine. Not yet tested authenticated against the live relay.
 
@@ -154,7 +154,7 @@ Every screen that guides enrollment shows a vertical timeline on the left (curre
 
 ## Ownership bound at approval (deployed, poc-owner commit 719f36f)
 
-LIVE on the relay since 2026-11-14 (version 2026.11.14-144). Details below are the deployed behaviour; deviations from the draft are listed after the table.
+LIVE on the relay since 2026-11-14 (version 2026.11.14-144). Details below are the deployed behaviour.
 
 A machine token may write the address record, send heartbeats and read or delete the inbox only for a uuid bound at approval to the token that posted the candidacy. The first writer no longer binds anything (AR-8 pre-binding disappears).
 
@@ -166,7 +166,7 @@ A machine token may write the address record, send heartbeats and read or delete
 | Bound to another token | 403 `not_owner`, as today |
 | `GET` candidacies (A) | each entry adds `uuidBound` (boolean) and, when true, `boundTokenLabel` |
 
-Client: `not_registered` says "this machine is not approved yet: run machine join and ask the admin to approve it". The daemon treats it as a state (no backoff) and publishes in the next round after approval. `machine admin approve` shows a warning in the list and detail, and in the y/N question, when `uuidBound` is true (names the label, says approving replaces the binding).
+Client: `not_registered` says "this machine is not approved yet: run machine join and ask the admin to approve it". The daemon treats it as a state (no backoff) and publishes in the next round after approval. `machine admin approve` shows a warning in the list and detail, and in the y/N question, only when `uuidBound && !boundToCandidateToken` (names the label, says approving replaces the binding); a re-approval of the same token gets a quiet line in the detail. `candidacy_uuid_changed` (409 on post) and `too_many_machines` (429 on the decision, candidacy still pending) have their own messages. A registered peer without a record is "no record published yet" in `machine list` and `machine run`, not a fault.
 
 Deployed details beyond the table:
 

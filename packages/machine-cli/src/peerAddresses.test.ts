@@ -31,6 +31,8 @@ beforeEach(async () => {
   relay = await startFakeRelay();
   now = Math.floor(Date.now() / 1000);
   relay.setClock(() => now);
+  // The admin approved laptop with this token: the relay bound its uuid to it (ownership bound at approval).
+  relay.setOwner(laptop().uuid, relay.token);
   publisher = createRelayClient({ baseUrl: relay.url, token: relay.token });
   admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
 });
@@ -139,6 +141,9 @@ describe('resolvePeerAddresses', () => {
   it('says there is no record, and what to do, when the relay knows nothing of the peer', async () => {
     const e = await refused();
     expect(e.message).toMatch(/no address record for "laptop"/);
+    // Calm: a registered machine is not listed by the relay until its daemon has published; nothing is broken.
+    expect(e.message).toMatch(/no record published yet/);
+    expect(e.message).not.toMatch(/has not published one/);
     expect(e.message).toContain('--address');
   });
 
@@ -185,7 +190,9 @@ describe('lookupPeerPresence (machine list)', () => {
 
   it('a peer without a record is reported as such, not as a failure of the others', async () => {
     const [row] = await lookupPeerPresence(a, [peerOf()], publisher, now);
-    expect(row).toMatchObject({ uuid: laptop().uuid, problem: expect.stringMatching(/no address record/) });
+    expect(row).toMatchObject({ uuid: laptop().uuid, problem: expect.stringMatching(/no record published yet/) });
+    expect(row?.problem).not.toMatch(/has not published one|error|failed/i);
+    expect(row?.source).toBe('none');
   });
 
   it('a record that does not verify is a problem line for that peer only; the last known addresses are kept', async () => {

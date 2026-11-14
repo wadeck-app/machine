@@ -30,6 +30,8 @@ beforeEach(async () => {
   initMachine(dir, 'laptop');
   relay = await startFakeRelay();
   relay.setClock(() => now);
+  // The admin approved this machine: the relay bound its uuid to this token (relay-api.md, ownership bound at approval).
+  relay.setOwner(readMachine(dir).uuid, relay.token);
   now = START;
   logs = [];
   enrolled = true;
@@ -75,12 +77,35 @@ describe('address publisher', () => {
     expect(logs.join('\n')).toContain(`address record published (seq ${S(1)}): 192.168.1.20:47921`);
   });
 
-  it('writes the seq under _secrets_/address-state.json and the first PUT binds the inbox to this token', async () => {
+  it('writes the seq under _secrets_/address-state.json; the inbox of the approved machine is readable with its token', async () => {
     await publisher().tick();
     expect(addressStateFile(dir)).toContain('_secrets_');
     expect(stateSeq()).toBe(S(1));
-    // The inbox of this machine can now be read with its token (not_owner before).
     await expect(createRelayClient({ baseUrl: relay.url, token: relay.token }).listInbox(self().uuid)).resolves.toEqual([]);
+  });
+
+  describe('not_registered (not approved yet)', () => {
+    it('is a state with the relay own text and the hint, said once, no backoff: the record goes out in the very next round after the approval', async () => {
+      relay.setOwner(self().uuid, undefined);
+      const p = publisher();
+      await p.tick();
+      now += 5;
+      await p.tick();
+      now += 5;
+      await p.tick();
+      const lines = logs.filter((l) => /not_registered/.test(l));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('This machine is not registered on the relay');
+      expect(lines[0]).toContain('run machine join and ask the admin to approve it');
+      // No backoff: every round tried again.
+      expect(puts()).toHaveLength(3);
+      // The admin approves: the next round publishes and says so.
+      relay.setOwner(self().uuid, relay.token);
+      now += 5;
+      await p.tick();
+      expect((await verifyOnRelay()).hosts).toEqual(['192.168.1.20:47921']);
+      expect(logs.join('\n')).toContain('this machine is approved on the relay now');
+    });
   });
 
   it('does nothing while the set is unchanged (no PUT, and no GET after the first publication)', async () => {
@@ -236,18 +261,23 @@ describe('address publisher', () => {
       await p.tick();
       const lines = logs.filter((l) => /not_owner/.test(l));
       expect(lines).toHaveLength(1);
-      expect(lines[0]).toContain('machine admin forget-relay-record');
+      // The first-writer rule is gone: another token is bound at approval, the fix is a new join and an approval (rebind).
+      expect(lines[0]).toMatch(/another token is bound/);
+      expect(lines[0]).toContain('machine join');
+      expect(lines[0]).toMatch(/approve/);
+      expect(lines[0]).not.toMatch(/first token|first to write|first machine/);
       expect(lines[0]).toMatch(/inbox/);
       expect(lines[0]).toContain(self().uuid);
       // No backoff for a state: every round tries again.
       expect(puts().length - before).toBe(3);
     });
 
-    it('recovers by itself once the admin removed the old record, and says so', async () => {
+    it('recovers by itself once the admin approved the new candidacy of this token (rebind), and says so', async () => {
       relay.setOwner(self().uuid, 'tok_old');
       const p = publisher();
       await p.tick();
-      await createRelayClient({ baseUrl: relay.url, token: relay.adminToken }).deleteMachine(self().uuid);
+      // The admin approves the candidacy of this machine: the binding moves to this token.
+      relay.setOwner(self().uuid, relay.token);
       now += 60;
       await p.tick();
       expect((await verifyOnRelay()).seq).toBeGreaterThanOrEqual(S(1));
