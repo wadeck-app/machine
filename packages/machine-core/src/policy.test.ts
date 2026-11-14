@@ -148,12 +148,44 @@ describe('authorize', () => {
 
   it('enforces the maximum number of calls using the usage reader', () => {
     const p = policy({ defaults: [{ shell: 'cmd', command: 'ipconfig', limits: { maxCalls: 2 } }] });
-    const key = entryKey('default', { shell: 'cmd', command: 'ipconfig' });
+    const key = entryKey('default', { shell: 'cmd', command: 'ipconfig', limits: { maxCalls: 2 } });
     expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, k => (k === key ? 1 : 0))).toMatchObject({ allowed: true, entryKey: key });
     expect(authorize(p, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, k => (k === key ? 2 : 0))).toMatchObject({ allowed: false, reason: 'exhausted' });
   });
 
   it('keeps default counters apart from per-peer counters', () => {
     expect(entryKey('default', { shell: 'cmd', command: 'x' })).not.toBe(entryKey(PEER, { shell: 'cmd', command: 'x' }));
+  });
+});
+
+describe('policy edge cases (review findings)', () => {
+  it('reports a broken pinned admin key as a result', () => {
+    const { admin, body } = setup();
+    const signed = signPolicy(body, admin.privateKeyPkcs8);
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signed, { adminPublicKey: 'garbage', now: NOW, targetUuid: TARGET })).toMatchObject({ ok: false, reason: 'invalid-admin-key' });
+  });
+
+  it('refuses an undefined limits field at validation time, not later in the signature layer', () => {
+    const first = setup({ defaults: [{ shell: 'cmd', command: 'dir', limits: undefined }] });
+    expect(() => signPolicy(first.body, first.admin.privateKeyPkcs8)).toThrow(/limits.*omitted/);
+    const second = setup({ defaults: [{ shell: 'cmd', command: 'dir', limits: { maxCalls: undefined, expiresAt: NOW + 5 } }] });
+    expect(() => signPolicy(second.body, second.admin.privateKeyPkcs8)).toThrow(/maxCalls.*omitted/);
+  });
+
+  it('starts a fresh counter when the admin changes the limits of an entry (renewal) and keeps it when nothing changes', () => {
+    const base = { shell: 'cmd' as const, command: 'ipconfig' };
+    const same = entryKey('default', { ...base, limits: { maxCalls: 3 } });
+    expect(entryKey('default', { ...base, limits: { maxCalls: 3 } })).toBe(same);
+    expect(entryKey('default', { ...base, limits: { maxCalls: 10 } })).not.toBe(same);
+    expect(entryKey('default', { ...base, limits: { maxCalls: 3, expiresAt: NOW + 5 } })).not.toBe(same);
+    expect(entryKey('default', base)).not.toBe(same);
+  });
+
+  it('renewing a limit really lets the command run again', () => {
+    const withLimits = (limits: { maxCalls: number }) => setup({ defaults: [{ shell: 'cmd', command: 'ipconfig', limits }] }).body;
+    const exhausted = withLimits({ maxCalls: 3 });
+    const usedUnderOldKey = (k: string) => (k === entryKey('default', exhausted.defaults[0] as PolicyEntry) ? 3 : 0);
+    expect(authorize(exhausted, PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, usedUnderOldKey)).toMatchObject({ allowed: false, reason: 'exhausted' });
+    expect(authorize(withLimits({ maxCalls: 10 }), PEER, { shell: 'cmd', command: 'ipconfig' }, NOW, usedUnderOldKey)).toMatchObject({ allowed: true });
   });
 });

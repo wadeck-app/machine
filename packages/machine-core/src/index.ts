@@ -1,5 +1,5 @@
 export { canonicalize, signingInput, type Json } from './canonical.js';
-export { generateSigningKeyPair, keyId, signBytes, verifyBytes, type SigningKeyPair } from './keys.js';
+export { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, generateSigningKeyPair, keyId, signBytes, tryKeyId, verifyBytes, type SigningKeyPair } from './keys.js';
 export { signDocument, verifyDocument } from './signed.js';
 export {
   REGISTRATION_DOMAIN,
@@ -14,6 +14,7 @@ export {
 } from './registration.js';
 export {
   REVOCATION_DOMAIN,
+  applyRevocation,
   assertRevocationBody,
   isRevoked,
   mergeRevocations,

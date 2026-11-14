@@ -84,6 +84,23 @@ describe('registration records', () => {
     expect(() => signRegistration({ ...body, validTo: body.validFrom }, admin.privateKeyPkcs8)).toThrow(/validTo/);
   });
 
+  it('applies the clock skew to validTo too, and says which clock to check (review finding)', () => {
+    const { admin, body } = setup();
+    const signed = signRegistration({ ...body, validTo: NOW - 3 }, admin.privateKeyPkcs8);
+    expect(verifyRegistration(signed, { adminPublicKey: admin.publicKey, now: NOW, skewSeconds: 5 }).ok).toBe(true);
+    const expired = verifyRegistration(signed, { adminPublicKey: admin.publicKey, now: NOW, skewSeconds: 1 });
+    expect(expired).toMatchObject({ ok: false, reason: 'expired' });
+    if (!expired.ok) expect(expired.message).toMatch(/clock/);
+  });
+
+  it('reports a broken pinned admin key as a result, not as an exception (review finding)', () => {
+    const { admin, body } = setup();
+    const signed = signRegistration(body, admin.privateKeyPkcs8);
+    const result = verifyRegistration(signed, { adminPublicKey: 'garbage', now: NOW });
+    expect(result).toMatchObject({ ok: false, reason: 'invalid-admin-key' });
+    if (!result.ok) expect(result.message).toMatch(/pinned admin public key/);
+  });
+
   it('reports a malformed received record instead of throwing', () => {
     const { admin } = setup();
     expect(verifyRegistration({ nonsense: true } as never, { adminPublicKey: admin.publicKey, now: NOW })).toMatchObject({ ok: false, reason: 'malformed' });

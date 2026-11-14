@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Json } from './canonical.js';
-import { keyId } from './keys.js';
+import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 
 export const POLICY_DOMAIN = 'machine/policy/v1';
@@ -44,7 +44,7 @@ export interface SignedPolicy {
   signature: string;
 }
 
-export type PolicyFailure = 'malformed' | 'wrong-admin-key' | 'bad-signature' | 'wrong-target' | 'not-yet-valid' | 'expired' | 'stale-base' | 'rollback';
+export type PolicyFailure = 'malformed' | 'invalid-admin-key' | 'wrong-admin-key' | 'bad-signature' | 'wrong-target' | 'not-yet-valid' | 'expired' | 'stale-base' | 'rollback';
 export type PolicyResult = { ok: true; body: PolicyBody } | { ok: false; reason: PolicyFailure; message: string };
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -77,11 +77,13 @@ function assertEntries(list: unknown, where: string): asserts list is PolicyEntr
     }
     if (!SHELLS.includes(entry.shell as Shell)) throw new Error(`policy: shell must be one of ${SHELLS.join(', ')} (got ${String(entry.shell)})`);
     assertCommand(entry.command, where);
+    if ('limits' in entry && entry.limits === undefined) throw new Error(`policy: limits of an entry of ${where} must be omitted, not undefined`);
     if (entry.limits !== undefined) {
       const limits = entry.limits as Record<string, unknown>;
       if (typeof limits !== 'object' || limits === null) throw new Error(`policy: limits of an entry of ${where} must be an object`);
       for (const key of Object.keys(limits)) {
         if (key !== 'maxCalls' && key !== 'expiresAt') throw new Error(`policy: unknown limit "${key}"`);
+        if (limits[key] === undefined) throw new Error(`policy: limits.${key} must be omitted, not undefined`);
       }
       if (limits.maxCalls !== undefined && !posInt(limits.maxCalls)) throw new Error('policy: limits.maxCalls must be a positive integer');
       if (limits.expiresAt !== undefined && !posInt(limits.expiresAt)) throw new Error('policy: limits.expiresAt must be epoch seconds (a positive integer)');
@@ -149,7 +151,8 @@ export function applyPolicy(state: PolicyState, signed: SignedPolicy, ctx: Apply
     return { ok: false, reason: 'malformed', message: (e as Error).message };
   }
   const { body } = signed;
-  const pinned = keyId(ctx.adminPublicKey);
+  const pinned = tryKeyId(ctx.adminPublicKey);
+  if (pinned === undefined) return { ok: false, reason: 'invalid-admin-key', message: INVALID_ADMIN_KEY_MESSAGE };
   if (body.adminKeyId !== pinned) {
     return { ok: false, reason: 'wrong-admin-key', message: `policy is certified by admin key ${body.adminKeyId}, but this machine pins ${pinned}` };
   }
@@ -183,9 +186,14 @@ export interface CommandRequest {
   command: string;
 }
 
-/** Key of the call counter: scope is "default" or the peer UUID whose own list holds the entry. */
-export function entryKey(scope: string, request: CommandRequest): string {
-  return `${scope}:${createHash('sha256').update(`${request.shell}\u0000${request.command}`).digest('hex').slice(0, 32)}`;
+/**
+ * Key of the call counter: scope is "default" or the peer UUID whose own list holds the entry.
+ * The limits are part of the key: when the admin changes them (a renewal) the counter starts again, and
+ * while they stay the same the counter survives new policy versions.
+ */
+export function entryKey(scope: string, entry: CommandRequest & { limits?: Limits }): string {
+  const limits = `${entry.limits?.maxCalls ?? ''}\u0000${entry.limits?.expiresAt ?? ''}`;
+  return `${scope}:${createHash('sha256').update(`${entry.shell}\u0000${entry.command}\u0000${limits}`).digest('hex').slice(0, 32)}`;
 }
 
 export type Decision =
@@ -211,7 +219,7 @@ export function authorize(body: PolicyBody, peerUuid: string, request: CommandRe
       message: `"${request.command}" (shell ${request.shell}) is not allowed for this peer; the admin must add this exact string to the ${own ? 'peer list' : 'default list'}`,
     };
   }
-  const key = entryKey(scope, request);
+  const key = entryKey(scope, entry);
   if (entry.limits?.expiresAt !== undefined && now > entry.limits.expiresAt) {
     return { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask the admin to renew it` };
   }

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { decodeBase64urlStrict } from './keys.js';
 
 // Verification codes for enrollment by candidacy (decisions 35, 35a).
 // 80 bits, shown as four groups of four Crockford base32 characters. The relay cannot find another key that
@@ -9,15 +10,11 @@ const FINAL_DOMAIN = 'machine/final-code/v1';
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 function rawKey(publicKey: string, label: string): Buffer {
-  const bytes = Buffer.from(publicKey, 'base64url');
-  if (bytes.length !== 32) throw new Error(`${label} must be a 32-byte public key as unpadded base64url`);
-  return bytes;
+  return decodeBase64urlStrict(publicKey, 32, label);
 }
 
 function rawRandom(random: string): Buffer {
-  const bytes = Buffer.from(random, 'base64url');
-  if (bytes.length !== 16) throw new Error('candidacy random must be 16 bytes as unpadded base64url');
-  return bytes;
+  return decodeBase64urlStrict(random, 16, 'candidacy random');
 }
 
 function format(digest: Buffer): string {

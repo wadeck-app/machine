@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateSigningKeyPair, keyId } from './keys.js';
-import { isRevoked, mergeRevocations, revocationDigest, signRevocation, verifyRevocation, type RevocationBody } from './revocation.js';
+import { applyRevocation, isRevoked, mergeRevocations, revocationDigest, signRevocation, verifyRevocation, type RevocationBody } from './revocation.js';
 
 const A = '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
 const B = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
@@ -53,6 +53,31 @@ describe('revocation', () => {
     expect(merged).toEqual([{ uuid: B, serial: 1 }, { uuid: A, serial: 5 }].sort((x, y) => (x.uuid < y.uuid ? -1 : 1)));
     expect(isRevoked(merged, A, 5)).toBe(true);
     expect(isRevoked(merged, B, 1)).toBe(true);
+  });
+
+  it('applyRevocation merges a verified list into the local one and reports whether anything changed (review finding)', () => {
+    const { admin, body } = setup();
+    const signed = signRevocation(body, admin.privateKeyPkcs8);
+    const first = applyRevocation([], signed, { adminPublicKey: admin.publicKey });
+    expect(first).toEqual({ ok: true, entries: [{ uuid: A, serial: 2 }], changed: true });
+    const again = applyRevocation(first.ok ? first.entries : [], signed, { adminPublicKey: admin.publicKey });
+    expect(again).toMatchObject({ ok: true, changed: false });
+  });
+
+  it('applyRevocation keeps entries that an older signed list does not contain: a stale list never un-revokes', () => {
+    const { admin, body } = setup();
+    const old = signRevocation(body, admin.privateKeyPkcs8);
+    const local = [{ uuid: A, serial: 2 }, { uuid: B, serial: 1 }].sort((x, y) => (x.uuid < y.uuid ? -1 : 1));
+    const result = applyRevocation(local, old, { adminPublicKey: admin.publicKey });
+    expect(result).toMatchObject({ ok: true, changed: false });
+    if (result.ok) expect(result.entries).toEqual(local);
+  });
+
+  it('reports a broken pinned admin key as a result (review finding)', () => {
+    const { admin, body } = setup();
+    const signed = signRevocation(body, admin.privateKeyPkcs8);
+    expect(verifyRevocation(signed, { adminPublicKey: 'garbage' })).toMatchObject({ ok: false, reason: 'invalid-admin-key' });
+    expect(applyRevocation([], signed, { adminPublicKey: 'garbage' })).toMatchObject({ ok: false, reason: 'invalid-admin-key' });
   });
 
   it('has a digest that ignores the order of merging but changes with any entry', () => {

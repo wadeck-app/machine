@@ -27,6 +27,11 @@ function walk(value: unknown, path: string): string {
   if (Array.isArray(value)) {
     return `[${value.map((item, i) => walk(item, `${path}[${i}]`)).join(',')}]`;
   }
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    const kind = (value as { constructor?: { name?: string } }).constructor?.name ?? 'object';
+    throw new Error(`canonicalize: ${path} is a ${kind}, not a plain JSON object; convert it to plain data before signing`);
+  }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
   const parts = keys.map(key => {

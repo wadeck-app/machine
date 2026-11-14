@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateSigningKeyPair, keyId, signBytes, verifyBytes } from './keys.js';
+import { decodeBase64urlStrict, generateSigningKeyPair, keyId, signBytes, verifyBytes } from './keys.js';
 
 const message = new TextEncoder().encode('hello');
 
@@ -44,5 +44,19 @@ describe('signing keys', () => {
 
   it('refuses a key id for a malformed public key, naming the problem', () => {
     expect(() => keyId('short')).toThrow(/public key.*32 bytes/);
+  });
+});
+
+describe('strict base64url decoding (review finding)', () => {
+  it('refuses padding, wrong length and non-canonical trailing bits', () => {
+    const kp = generateSigningKeyPair();
+    expect(decodeBase64urlStrict(kp.publicKey, 32, 'key')).toHaveLength(32);
+    expect(() => decodeBase64urlStrict(`${kp.publicKey}=`, 32, 'key')).toThrow(/key.*32 bytes.*unpadded base64url/);
+    expect(() => decodeBase64urlStrict('AAAA', 32, 'key')).toThrow(/key.*32 bytes/);
+    // 43 characters carry 258 bits for 256: the last character has 2 unused bits that must be zero.
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = kp.publicKey.slice(-1);
+    const other = alphabet[alphabet.indexOf(last) ^ 1] as string;
+    expect(() => decodeBase64urlStrict(kp.publicKey.slice(0, -1) + other, 32, 'key')).toThrow(/canonical/);
   });
 });

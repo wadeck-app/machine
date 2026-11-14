@@ -1,5 +1,5 @@
 import type { Json } from './canonical.js';
-import { keyId } from './keys.js';
+import { INVALID_ADMIN_KEY_MESSAGE, keyId, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 
 export const REGISTRATION_DOMAIN = 'machine/registration/v1';
@@ -23,7 +23,7 @@ export interface SignedRegistration {
   signature: string;
 }
 
-export type RegistrationFailure = 'malformed' | 'wrong-admin-key' | 'bad-signature' | 'revoked' | 'not-yet-valid' | 'expired';
+export type RegistrationFailure = 'malformed' | 'invalid-admin-key' | 'wrong-admin-key' | 'bad-signature' | 'revoked' | 'not-yet-valid' | 'expired';
 
 export type RegistrationResult = { ok: true; body: RegistrationBody } | { ok: false; reason: RegistrationFailure; message: string };
 
@@ -88,7 +88,8 @@ export function verifyRegistration(signed: SignedRegistration, ctx: VerifyRegist
     return { ok: false, reason: 'malformed', message: (e as Error).message };
   }
   const { body } = signed;
-  const pinnedId = keyId(ctx.adminPublicKey);
+  const pinnedId = tryKeyId(ctx.adminPublicKey);
+  if (pinnedId === undefined) return { ok: false, reason: 'invalid-admin-key', message: INVALID_ADMIN_KEY_MESSAGE };
   if (body.adminKeyId !== pinnedId) {
     return {
       ok: false,
@@ -105,8 +106,12 @@ export function verifyRegistration(signed: SignedRegistration, ctx: VerifyRegist
   if (ctx.now + (ctx.skewSeconds ?? 0) < body.validFrom) {
     return { ok: false, reason: 'not-yet-valid', message: `registration of "${body.name}" starts at ${new Date(body.validFrom * 1000).toISOString()}; check the clock of this machine or of the admin machine` };
   }
-  if (ctx.now > body.validTo) {
-    return { ok: false, reason: 'expired', message: `registration of "${body.name}" expired at ${new Date(body.validTo * 1000).toISOString()}; ask the admin to renew it` };
+  if (ctx.now - (ctx.skewSeconds ?? 0) > body.validTo) {
+    return {
+      ok: false,
+      reason: 'expired',
+      message: `registration of "${body.name}" expired at ${new Date(body.validTo * 1000).toISOString()}; ask the admin to renew it, or check the clock of this machine if the date looks wrong`,
+    };
   }
   return { ok: true, body };
 }

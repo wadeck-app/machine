@@ -48,3 +48,20 @@ describe('signingInput', () => {
     expect(() => signingInput('a\u0000b', {})).toThrow(/domain/);
   });
 });
+
+describe('canonicalize refuses non-JSON objects (review finding)', () => {
+  it('refuses Date, Map, Set and class instances instead of signing them as {}', () => {
+    expect(() => canonicalize({ when: new Date() } as never)).toThrow(/when.*not a plain/);
+    expect(() => canonicalize({ m: new Map() } as never)).toThrow(/m.*not a plain/);
+    expect(() => canonicalize({ s: new Set() } as never)).toThrow(/s.*not a plain/);
+    class Foo {
+      a = 1;
+    }
+    expect(() => canonicalize({ f: new Foo() } as never)).toThrow(/f.*not a plain/);
+  });
+
+  it('accepts an object without a prototype', () => {
+    const bare = Object.assign(Object.create(null) as object, { a: 1 });
+    expect(canonicalize(bare as never)).toBe('{"a":1}');
+  });
+});

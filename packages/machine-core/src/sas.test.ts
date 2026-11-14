@@ -47,6 +47,13 @@ describe('verification codes (enrollment)', () => {
     expect(() => candidacyCode(candidate.publicKey, 'abc')).toThrow(/random.*16 bytes/);
   });
 
+  it('refuses a padded or non-canonical public key and random (review finding)', () => {
+    const candidate = generateSigningKeyPair();
+    const random = newCandidacyRandom();
+    expect(() => candidacyCode(`${candidate.publicKey}=`, random)).toThrow(/candidate public key/);
+    expect(() => candidacyCode(candidate.publicKey, `${random}=`)).toThrow(/random/);
+  });
+
   it('grinding is out of reach: 2000 swapped keys never reproduce the displayed code', () => {
     // Not a proof (the work factor is 2^80), a regression guard against a shortened code.
     const real = generateSigningKeyPair();

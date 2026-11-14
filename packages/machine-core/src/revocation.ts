@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalize, type Json } from './canonical.js';
-import { keyId } from './keys.js';
+import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 
 export const REVOCATION_DOMAIN = 'machine/revocation/v1';
@@ -24,7 +24,8 @@ export interface SignedRevocation {
   signature: string;
 }
 
-export type RevocationResult = { ok: true; body: RevocationBody } | { ok: false; reason: 'malformed' | 'wrong-admin-key' | 'bad-signature'; message: string };
+export type RevocationFailure = 'malformed' | 'invalid-admin-key' | 'wrong-admin-key' | 'bad-signature';
+export type RevocationResult = { ok: true; body: RevocationBody } | { ok: false; reason: RevocationFailure; message: string };
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const KEY_ID = /^[0-9a-f]{32}$/;
@@ -66,7 +67,8 @@ export function verifyRevocation(signed: SignedRevocation, ctx: { adminPublicKey
   } catch (e) {
     return { ok: false, reason: 'malformed', message: (e as Error).message };
   }
-  const pinned = keyId(ctx.adminPublicKey);
+  const pinned = tryKeyId(ctx.adminPublicKey);
+  if (pinned === undefined) return { ok: false, reason: 'invalid-admin-key', message: INVALID_ADMIN_KEY_MESSAGE };
   if (signed.body.adminKeyId !== pinned) {
     return { ok: false, reason: 'wrong-admin-key', message: `revocation list is certified by admin key ${signed.body.adminKeyId}, but this machine pins ${pinned}` };
   }
@@ -74,6 +76,21 @@ export function verifyRevocation(signed: SignedRevocation, ctx: { adminPublicKey
     return { ok: false, reason: 'bad-signature', message: 'revocation list has an invalid signature; it was altered or not signed by the admin key' };
   }
   return { ok: true, body: signed.body };
+}
+
+/**
+ * The only way a received list changes local state: verify it, then MERGE into the local entries.
+ * A verified list is never a replacement, so an old signed list replayed by the relay cannot un-revoke anyone.
+ */
+export function applyRevocation(
+  local: RevocationEntry[],
+  signed: SignedRevocation,
+  ctx: { adminPublicKey: string },
+): { ok: true; entries: RevocationEntry[]; changed: boolean } | { ok: false; reason: RevocationFailure; message: string } {
+  const verified = verifyRevocation(signed, ctx);
+  if (!verified.ok) return verified;
+  const entries = mergeRevocations(local, verified.body.entries);
+  return { ok: true, entries, changed: revocationDigest(entries) !== revocationDigest(local) };
 }
 
 /** Grow-only merge: union of the lists, highest serial per machine, sorted by uuid. Nothing is ever removed. */

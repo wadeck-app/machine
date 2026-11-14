@@ -19,17 +19,34 @@ export function generateSigningKeyPair(): SigningKeyPair {
   return { publicKey: jwk.x, privateKeyPkcs8: new Uint8Array(privateKey.export({ format: 'der', type: 'pkcs8' })) };
 }
 
-function rawPublicKeyBytes(publicKey: string): Buffer {
-  const bytes = Buffer.from(publicKey, 'base64url');
-  if (bytes.length !== 32 || bytes.toString('base64url') !== publicKey) {
-    throw new Error(`public key must be 32 bytes as unpadded base64url (got ${bytes.length} bytes)`);
-  }
+/** Decodes unpadded base64url and refuses any other spelling of the same bytes (padding, stray characters, non-zero trailing bits). */
+export function decodeBase64urlStrict(text: unknown, expectedBytes: number, label: string): Buffer {
+  if (typeof text !== 'string') throw new Error(`${label} must be ${expectedBytes} bytes as unpadded base64url (got a ${typeof text})`);
+  const bytes = Buffer.from(text, 'base64url');
+  if (bytes.length !== expectedBytes) throw new Error(`${label} must be ${expectedBytes} bytes as unpadded base64url (got ${bytes.length} bytes)`);
+  if (bytes.toString('base64url') !== text) throw new Error(`${label} must be ${expectedBytes} bytes as unpadded base64url; this string is not the canonical encoding`);
   return bytes;
+}
+
+function rawPublicKeyBytes(publicKey: string): Buffer {
+  return decodeBase64urlStrict(publicKey, 32, 'public key');
 }
 
 export function keyId(publicKey: string): string {
   return createHash('sha256').update(rawPublicKeyBytes(publicKey)).digest('hex').slice(0, 32);
 }
+
+/** Like keyId, but returns undefined for a malformed key so that verifiers can answer with a result instead of throwing. */
+export function tryKeyId(publicKey: string): string | undefined {
+  try {
+    return keyId(publicKey);
+  } catch {
+    return undefined;
+  }
+}
+
+export const INVALID_ADMIN_KEY_MESSAGE =
+  'the pinned admin public key of this machine is invalid (the local configuration is damaged); re-enroll this machine or restore the key from another machine';
 
 export function signBytes(privateKeyPkcs8: Uint8Array, data: Uint8Array): string {
   const key = createPrivateKey({ key: Buffer.from(privateKeyPkcs8), format: 'der', type: 'pkcs8' });
