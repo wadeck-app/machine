@@ -207,6 +207,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     accept?: number[];
     /** The call is about the inbox of this machine (and this document): errors name them and give the inbox advice. */
     inbox?: { uuid: string; id?: string };
+    /** The call writes the address record of this machine: errors name the uuid and the fix. */
+    record?: { uuid: string };
     /** The answer is read at most this many bytes: a relay is untrusted and must not make this machine buffer an answer of any size. */
     maxBytes?: number;
   }
@@ -265,6 +267,12 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
+    } else if (c.record && status === 403 && code === 'not_owner') {
+      message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: the record is bound to another token than the one of this machine (the first token to write it owns it; the token was probably replaced). Tell the admin to run \`machine admin forget-relay-record <machine>\` (it removes the old record and its inbox on the relay); this daemon then publishes again by itself`;
+    } else if (c.record && status === 429 && code === 'too_many_machines') {
+      message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (too_many_machines)${detail}: this token already holds too many machine records (50 at most per token, 1000 on the relay); tell the relay owner`;
+    } else if (c.record && status === 400) {
+      message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (${code ?? '400'})${detail}: the relay and this machine disagree on the record format, tell the relay owner and update machine`;
     } else if (c.inbox && status === 409 && code === 'id_conflict') {
       message = `the inbox of machine ${c.inbox.uuid} already holds a DIFFERENT document under the id ${c.inbox.id ?? '(unknown)'} (id_conflict)${detail}: the same document was built again with other bytes (a sealed secret is random). It is already on the relay; if the machine consumed it and you need it again, run \`machine admin distribute\``;
     } else if (c.inbox && status === 429 && code === 'too_many_documents') {
@@ -396,7 +404,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     },
 
     async putRecord(uuid, record, etag) {
-      const r = (await call({ method: 'PUT', path: `/api/machines/${uuidPath(uuid)}`, body: record, ...(etag !== undefined ? { headers: { 'If-Match': etag } } : {}) })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      const r = (await call({ method: 'PUT', path: `/api/machines/${uuidPath(uuid)}`, body: record, record: { uuid: uuid.toLowerCase() }, ...(etag !== undefined ? { headers: { 'If-Match': etag } } : {}) })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       const newEtag = typeof r.body.etag === 'string' ? r.body.etag : r.headers.get('etag');
       if (newEtag === null || newEtag === undefined) throw malformed('the record write');
       return { etag: newEtag };

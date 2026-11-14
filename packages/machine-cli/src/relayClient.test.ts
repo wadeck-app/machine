@@ -100,6 +100,32 @@ describe('error mapping (injected fetch)', () => {
   });
 });
 
+describe('address record errors (injected fetch)', () => {
+  const record = { body: { v: 1 as const, uuid: UUID, addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: 1 }, signature: 's' };
+
+  it('not_owner on a record write names the cause and the exact fix, not the generic scope advice', async () => {
+    const e = await failure(clientWith(() => json(403, { success: false, error: 'not_owner', message: 'owned by another token' })).putRecord(UUID, record));
+    expect(e.code).toBe('not_owner');
+    expect(e.message).toContain(UUID);
+    expect(e.message).toMatch(/another token|first token/);
+    expect(e.message).toContain('machine admin forget-relay-record');
+    expect(e.message).not.toMatch(/lack the "machine" scope/);
+    expect(e.message).not.toContain('SECRET-TOKEN');
+  });
+
+  it('too_many_machines (429) says the token holds too many records', async () => {
+    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', message: 'at most 50' })).putRecord(UUID, record));
+    expect(e.code).toBe('too_many_machines');
+    expect(e.message).toMatch(/too many machine records/);
+  });
+
+  it('invalid_body (400) says the record was refused and to update machine', async () => {
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'bad' })).putRecord(UUID, record));
+    expect(e.status).toBe(400);
+    expect(e.message).toMatch(/address record/);
+  });
+});
+
 describe('against the fake relay', () => {
   let relay: FakeRelay | undefined;
   afterEach(async () => {

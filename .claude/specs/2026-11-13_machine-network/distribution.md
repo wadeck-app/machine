@@ -89,7 +89,7 @@ Ownership: the owner of `uuid` is the first token that wrote its address record.
   - Possibly passing causes (not valid yet, a policy whose predecessor is not installed yet, a sealed secret that cannot be opened, local read or write trouble): kept in the inbox, said once, examined again at every round until it expires; after something was installed, waiting policies get one more look in the same round, so version 3 before version 2 converges.
   - Valid: installed through `importPeer`, `installPolicy`, `installRevocation`; audited (`document-accepted`, kind, id); remembered; DELETEd. The same policy already in force is accepted as `already-installed`.
 - Not owner of the inbox: said once (no backoff), the inbox is tried again every round and recovers by itself.
-- OPEN: a machine owns its inbox once its signed address record is published (T-33, not built). Until then a real machine gets 403 `not_owner` and never receives documents. The loop is tested against the fake relay with an injected owner only.
+- A machine owns its inbox once it publishes its signed address record (relay-api.md, "Client behaviour of address records"); the daemon does it at the start of each round, before the heartbeat. After a token rotation `not_owner` is said once with the fix `machine admin forget-relay-record <machine>`. Fake relay only; never run against the real relay.
 
 ## Deployed behaviour (poc-owner, commit 4ff0469)
 

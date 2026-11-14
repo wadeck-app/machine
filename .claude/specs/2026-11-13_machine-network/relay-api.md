@@ -93,6 +93,15 @@ Writes are compare-and-set: `If-Match: <etag>` is honoured when present (as the 
 
 Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid`, in memory. `online` is `true` when `lastSeen` is less than 120 s old. Machines send a heartbeat every 60 s. The address records themselves persist in the file-based resource.
 
+## Client behaviour of address records (implemented, fake relay only)
+
+- Body signed with the identity key, domain `machine/address-record/v1`; 1 to 8 addresses (IPv4/IPv6 literal or DNS name, no URL, user or zone), seq at least 1, record at most 2 KiB. Readers refuse: wrong uuid or signature, lower seq (rollback), same seq with other bytes, `issuedAt` more than 30 s ahead or over 30 days old.
+- Publisher (daemon, enrolled machine with relay.json): ticked by the inbox-loop timer, before each heartbeat. Publishes at start, when the address set changes, and every 7 days. Seq in `_secrets_/address-state.json`, written before signing; a failed PUT is retried with the same record. The first GET adopts the relay's seq only when that record verifies with this machine's own key; `If-Match` from the last etag, one retry after 412.
+- Addresses: `--advertise <host[:port]>` (repeatable) replaces everything; else the single bound `--peer-host`; else non-internal interface addresses (no 169.254/16, no fe80::/10), IPv4 first, 8 at most. Nothing to publish = loud warning, no publication. Loopback bind without `--advertise` = same.
+- Errors: `not_owner` once, no backoff, recovers by itself after `machine admin forget-relay-record <machine|uuid>` (DELETE with the admin token, y/N, also deletes the inbox). 429 (Retry-After) and 5xx back off 60 s doubling to 600 s; one warning per distinct message.
+- Readers (`machine run` without `--address`, `machine list`): record verified against the local registration, highest seq kept per peer in `peer-records.json`; addresses tried in order, 3 s each, every failure reported. `list` uses one `GET /api/machines`; relay trouble is a warning line, last known addresses stay shown. Offline per the relay is a warning, the addresses are still tried.
+- Not filtered (audit S-14): a registered peer may publish loopback, link-local or metadata addresses; the pinned handshake still fails against anything but that peer.
+
 ## Not in this version
 
 Distribution of registrations, revocation lists and policies through the relay (inbox routes, documents): see distribution.md. `machine admin register`, `machine peer import` and `machine policy install` still move those documents by file (decision 48).

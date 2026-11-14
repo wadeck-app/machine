@@ -52,6 +52,8 @@ export interface InboxLoopOptions {
   log: (line: string) => void;
   heartbeatMs?: number;
   timer?: InboxTimer;
+  /** Asked at the start of every round, before the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
+  publisher?: { tick(): Promise<void> };
   /** Tests: size of the set of installed ids. */
   handledCap?: number;
 }
@@ -369,7 +371,7 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
         notOwner = true;
         notice(
           'not-owner',
-          'inbox: this machine does not own its inbox on the relay yet, so documents addressed to it cannot be read. The relay binds an inbox to the first machine token that publishes this machine address record (signed address records are not built yet: see todos). The documents wait on the relay',
+          'inbox: this machine does not own its inbox on the relay yet, so documents addressed to it cannot be read. The relay binds an inbox to the first machine token that publishes the address record of this machine: look for an "address record" line above (not enrolled, no address to publish, or not_owner after a token change, with its fix). The documents wait on the relay',
         );
         return false;
       }
@@ -416,6 +418,14 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
   };
 
   const cycle = async (): Promise<void> => {
+    if (o.publisher !== undefined) {
+      try {
+        // Before the heartbeat: the first publication binds the inbox to this token, so the very first read already works.
+        await o.publisher.tick();
+      } catch (e) {
+        failed(`address record: unexpected error: ${(e as Error).message}`);
+      }
+    }
     let count: number | undefined;
     try {
       count = (await o.client.heartbeat(selfUuid)).inboxCount;

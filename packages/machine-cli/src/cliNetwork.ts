@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { SHELLS, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
+import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
+import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, resolvePeerAddresses } from './peerAddresses.js';
 import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { runDistribute } from './adminDistribute.js';
+import { runForgetRelayRecord } from './adminForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
@@ -12,7 +14,7 @@ import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { APPROVAL_MAX_AGE_SECONDS, classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
-import { RelayError } from './relayClient.js';
+import { createRelayClient, RelayError } from './relayClient.js';
 import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
 import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
@@ -47,14 +49,8 @@ function readObject(file: string, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** `host:port`, a name or an IPv4 address, or a bracketed IPv6 address such as `[::1]:47921`. */
-export function parseAddress(address: string): { host: string; port: number } | undefined {
-  const m = /^(?:\[([0-9a-fA-F:.]+)\]|([^:\s[\]]+)):(\d{1,5})$/.exec(address);
-  if (!m) return undefined;
-  const port = Number(m[3]);
-  const host = m[1] ?? m[2];
-  return host && port >= 1 && port <= 65535 ? { host, port } : undefined;
-}
+// The same rules as the host of a published address record (machine-core): one definition of what an address is.
+export { parseAddress };
 
 /**
  * The remote exit code, kept in 0..254 and never turned into success: 255 is reserved for machine-level failures
@@ -85,6 +81,7 @@ function promptTimeoutAdvice(e: PromptTimeoutError, command: string, ctx: Comman
     approve: 'Nothing was signed or sent to the relay',
     revoke: 'Nothing was signed or revoked',
     distribute: 'Nothing was signed or sent to the relay',
+    'forget-relay-record': 'Nothing was deleted',
     'sign-policy': 'Nothing was signed and no file was written',
     register: 'Nothing was signed and no file was written',
     login: 'Nothing was claimed or stored',
@@ -182,6 +179,18 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           io.stderr(r.formatted.err);
           return EXIT.failure;
         }
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
+    }
+    if (sub === 'forget-relay-record') {
+      if (first === undefined || second !== undefined) return fail('usage: machine admin forget-relay-record <machine|uuid>', EXIT.usage);
+      try {
+        const r = await runForgetRelayRecord(configDir, { reference: first, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        emit({ forgot: r.uuid, ...(r.name !== undefined ? { name: r.name } : {}) }, '');
         return EXIT.ok;
       } catch (e) {
         if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
@@ -287,7 +296,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         throw e;
       }
     }
-    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | distribute <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | distribute <machine> | forget-relay-record <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
   }
 
   if (command === 'peer') {
@@ -436,7 +445,7 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   const fail = ctx.fail;
   const ref = rest[0];
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-    return fail('usage: machine run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>', EXIT.peer);
+    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] -- <command...>', EXIT.peer);
   }
   const shell = args.shell ?? (process.platform === 'win32' ? 'cmd' : 'sh');
   if (!(SHELLS as readonly string[]).includes(shell)) return fail(`unknown shell "${shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
@@ -458,18 +467,34 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   if (resolved.uuid === self.uuid) return fail('that is this machine: run the command here directly', EXIT.peer);
   const peer = network.directory.find(resolved.uuid);
   if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.peer);
-  if (!args.address) {
-    return fail(`no address known for "${peer.name}": pass --address <host:port> (automatic address discovery arrives with the relay)`, EXIT.peer);
+  const connect = (host: string, port: number, handshakeTimeoutMs?: number) =>
+    connectToPeer({
+      identity: self.identity,
+      host,
+      port,
+      expectedPeerPublicKey: peer.identityPublicKey,
+      pairSecret: peer.pairSecret,
+      ...(handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs } : {}),
+    });
+  let session;
+  if (args.address) {
+    // Explicit override: the relay is not asked.
+    const where = parseAddress(args.address) as { host: string; port: number };
+    session = await connect(where.host, where.port);
+  } else {
+    const relayConfig = readRelayConfig(configDir);
+    if (relayConfig === undefined) {
+      return fail(`no address known for "${peer.name}": pass --address <host:port>, or join a relay (\`machine join <relay>\`) so that the address is learned from the signed address record of the peer`, EXIT.peer);
+    }
+    const found = await resolvePeerAddresses(configDir, { uuid: peer.peerId, name: peer.name, identityPublicKey: peer.identityPublicKey }, createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }), epochSeconds());
+    // What the relay says about presence is information (it can lag or lie): the addresses are tried anyway.
+    if (found.online === false) {
+      io.stderr(`[warn] the relay says "${peer.name}" is offline${typeof found.lastSeen === 'number' ? ` (last seen ${new Date(found.lastSeen * 1000).toISOString()})` : ''}: trying its published addresses anyway\n`);
+    }
+    const connected = await connectFirst(found.addresses, (address) => connect(address.host, address.port, CONNECT_TIMEOUT_MS));
+    for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}\n`);
+    session = connected.session;
   }
-  const where = parseAddress(args.address) as { host: string; port: number };
-
-  const session = await connectToPeer({
-    identity: self.identity,
-    host: where.host,
-    port: where.port,
-    expectedPeerPublicKey: peer.identityPublicKey,
-    pairSecret: peer.pairSecret,
-  });
   let answer;
   try {
     // The request is dated now, after the connection exists: a slow connection must not age it.

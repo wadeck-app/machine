@@ -53,6 +53,8 @@ export interface Parsed {
   peerPort?: string;
   apiPort?: string;
   peerHost?: string;
+  /** `--advertise <host[:port]>`, repeatable (machine daemon). */
+  advertise: string[];
   relay?: string;
   resume: boolean;
   noWait: boolean;

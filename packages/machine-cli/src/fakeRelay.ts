@@ -73,6 +73,10 @@ export interface FakeRelay {
    * binds the first token that wrote the address record, which this fake also does when a machine token PUTs a record.
    */
   setOwner: (uuid: string, token: string | undefined) => void;
+  /** Another machine token (scope machine): tests with two machines on one relay. Returns it. */
+  addMachineToken: () => string;
+  /** The clock of the relay in epoch seconds (presence: lastSeen and online). Default: the real clock. */
+  setClock: (now: () => number) => void;
   /** The documents waiting for `uuid`, oldest first. */
   inbox: (uuid: string) => FakeInboxDocument[];
   /** Ids of the candidacies still pending, oldest first. */
@@ -90,7 +94,14 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const adminScopes = options.adminScopes === undefined ? null : options.adminScopes;
   const adminToken = `adm_${randomBytes(12).toString('hex')}`;
   const forced: { prefix: string; status: number; body: unknown; headers: Record<string, string>; method: string | undefined }[] = [];
-  const records = new Map<string, { record: unknown; etag: number }>();
+  const records = new Map<string, { record: unknown; etag: number; text: string }>();
+  // Presence is in memory only (relay-api.md): the time of the last PUT or heartbeat of the owner.
+  const lastSeen = new Map<string, number>();
+  const machineTokens = new Set<string>([token]);
+  let clock: () => number = () => Math.floor(Date.now() / 1000);
+  const ONLINE_SECONDS = 120;
+  const MAX_RECORDS_PER_TOKEN = 50;
+  const MAX_RECORD_BYTES = 2048;
   const candidacies: FakeRelay['candidacies'] = new Map();
   const requests: FakeRelay['requests'] = [];
   const deviceLogins: FakeRelay['deviceLogins'] = new Map();
@@ -108,6 +119,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     return entry;
   };
 
+  const presence = (uuid: string) => {
+    const seen = lastSeen.get(uuid);
+    return { lastSeen: seen ?? null, online: seen !== undefined && clock() - seen < ONLINE_SECONDS };
+  };
   const send = (res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
     res.end(body === undefined ? undefined : JSON.stringify(body));
@@ -162,9 +177,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
 
     if (!path.startsWith('/api/machines')) return err(res, 404, 'not_found', 'no such route');
     const isAdminToken = authorization === `Bearer ${adminToken}`;
-    if (authorization !== `Bearer ${token}` && !isAdminToken) return err(res, 401, 'unauthorized', 'invalid token');
+    const presented = (authorization ?? '').replace(/^Bearer /, '');
+    if (!machineTokens.has(presented) && !isAdminToken) return err(res, 401, 'unauthorized', 'invalid token');
     // A machine token reaches only the machine routes, and never the admin ones.
-    const admin = isAdminToken ? adminScopes === null : scopes === null;
+    const admin = isAdminToken ? adminScopes === null : presented === token && scopes === null;
 
     if (method === 'POST' && path === '/api/machines/candidacies') {
       const id = randomBytes(16).toString('base64url');
@@ -200,7 +216,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       }
     }
     if (method === 'GET' && path === '/api/machines') {
-      return send(res, 200, { machines: [...records.entries()].map(([uuid, r]) => ({ uuid, record: r.record, lastSeen: 1, online: true })) });
+      return send(res, 200, { machines: [...records.entries()].map(([uuid, r]) => ({ uuid, record: r.record, ...presence(uuid) })) });
     }
     const bearer = (authorization ?? '').replace(/^Bearer /, '');
     const inboxRoute = /^\/api\/machines\/([^/]+)\/inbox(?:\/([^/]+))?$/.exec(path);
@@ -249,22 +265,40 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (method === 'DELETE' && !machine[2]) {
         if (!admin) return err(res, 403, 'scope_denied', 'deleting a machine needs a full-access token');
         records.delete(uuid);
+        lastSeen.delete(uuid);
         owners.delete(uuid);
         inboxes.delete(uuid);
         return send(res, 204);
       }
       // The count is that of the inbox the caller owns; a token that does not own the uuid sees 0.
-      if (method === 'POST' && machine[2]) return send(res, 200, { success: true, serverTime: 1, inbox: { count: owners.get(uuid) === bearer ? (inboxes.get(uuid)?.size ?? 0) : 0 } });
+      if (method === 'POST' && machine[2]) {
+        if (owners.get(uuid) === bearer) lastSeen.set(uuid, clock());
+        return send(res, 200, { success: true, serverTime: 1, inbox: { count: owners.get(uuid) === bearer ? (inboxes.get(uuid)?.size ?? 0) : 0 } });
+      }
       if (method === 'GET' && !machine[2]) {
         const r = records.get(uuid);
-        return r ? send(res, 200, { uuid, record: r.record, lastSeen: 1, online: true, etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
+        return r ? send(res, 200, { uuid, record: r.record, ...presence(uuid), etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
       }
       if (method === 'PUT' && !machine[2]) {
         const current = records.get(uuid);
+        // The first token to PUT a uuid owns it: later writes need the same token or full access.
+        const owner = owners.get(uuid);
+        if (owner !== undefined && owner !== bearer && !admin) return err(res, 403, 'not_owner', 'this token does not own that machine record');
+        const shape = body as { body?: { uuid?: unknown } } | undefined;
+        if (typeof body !== 'object' || body === null || Array.isArray(body) || Object.keys(body).sort().join() !== 'body,signature' || typeof shape?.body !== 'object' || shape.body === null) {
+          return err(res, 400, 'invalid_body', 'a record is { body, signature } and nothing else');
+        }
+        if (shape.body.uuid !== uuid) return err(res, 400, 'invalid_body', 'body.uuid must equal the uuid of the path');
+        if (Buffer.byteLength(raw) > MAX_RECORD_BYTES) return err(res, 400, 'invalid_body', 'a record is at most 2 KiB');
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && String(current?.etag) !== ifMatch) return err(res, 412, 'precondition_failed', 'etag mismatch', { currentEtag: String(current?.etag ?? '') });
-        const etag = (current?.etag ?? 0) + 1;
-        records.set(uuid, { record: body, etag });
+        if (current === undefined && !admin && [...owners.entries()].filter(([u, o]) => o === bearer && records.has(u)).length >= MAX_RECORDS_PER_TOKEN) {
+          return err(res, 429, 'too_many_machines', 'at most 50 machine records per token');
+        }
+        // The same bytes again only refresh presence.
+        const etag = current !== undefined && current.text === raw ? current.etag : (current?.etag ?? 0) + 1;
+        records.set(uuid, { record: body, etag, text: raw });
+        lastSeen.set(uuid, clock());
         // The first token that writes a record owns the uuid.
         if (!owners.has(uuid) && !isAdminToken) owners.set(uuid, bearer);
         return send(res, 200, { success: true, etag: String(etag) }, { ETag: String(etag) });
@@ -306,6 +340,14 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'rejected';
+    },
+    addMachineToken: () => {
+      const added = `tok_${randomBytes(12).toString('hex')}`;
+      machineTokens.add(added);
+      return added;
+    },
+    setClock: (now) => {
+      clock = now;
     },
     setOwner: (uuid, owner) => void (owner === undefined ? owners.delete(uuid) : owners.set(uuid, owner)),
     inbox: (uuid) => [...(inboxes.get(uuid)?.values() ?? [])].map(({ id, document, storedAt }) => ({ id, document, storedAt })),

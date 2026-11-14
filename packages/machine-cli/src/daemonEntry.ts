@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDaemon, type DaemonHandle } from '@wadeck-app/singleton-daemon-kit';
 import type { PeerListener } from '@wadeck-app/machine-transport';
+import { adminPinFile } from './admin.js';
+import { resolveAdvertised, type AdvertiseSpec, type InterfaceProvider } from './addressDiscovery.js';
+import { createAddressPublisher } from './addressPublisher.js';
 import { makeCommands } from './commands.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
@@ -29,6 +33,13 @@ export interface DaemonStart {
   peerHost?: string;
   /** Receives everything the daemon wants an admin to see (rejected connections, bookkeeping failures). */
   log?: (line: string) => void;
+  /**
+   * `--advertise`: where peers can reach this machine, REPLACING the interface discovery (NAT, a hostname, a VPN). Without a port the
+   * port of the peer listener is used. Only meaningful with a relay: without relay.json the daemon says it has no effect.
+   */
+  advertise?: AdvertiseSpec[];
+  /** Tests only: the network interfaces (default: os.networkInterfaces). */
+  interfaces?: InterfaceProvider;
   /** Tests only: the timer and the client of the inbox loop, which runs only when this machine joined a relay (relay.json). */
   inbox?: { timer?: InboxTimer; client?: RelayClient; heartbeatMs?: number };
 }
@@ -118,13 +129,35 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     // A machine that joined a relay sends its heartbeat and reads the documents of the admin; one that did not, never calls any relay.
     // A corrupt relay.json stops the start here, like every other corrupt file.
     const relayConfig = readRelayConfig(configDir);
+    if (relayConfig === undefined && (options.advertise?.length ?? 0) > 0) {
+      log('--advertise has no effect: this machine has not joined a relay (no relay.json), so no address record is published. Run `machine join <relay>`, or use `machine run <machine> --address <host:port>` between machines');
+    }
     if (relayConfig !== undefined) {
+      const client = options.inbox?.client ?? createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token });
+      const peerPort = listener.port;
+      // One timer: the inbox loop calls the publisher at the start of every heartbeat round.
+      const publisher = createAddressPublisher({
+        configDir,
+        self,
+        client,
+        now,
+        log: (line) => log(line),
+        addresses: () =>
+          resolveAdvertised({
+            advertise: options.advertise ?? [],
+            port: peerPort,
+            ...(options.peerHost !== undefined ? { peerHost: options.peerHost } : {}),
+            ...(options.interfaces ? { provider: options.interfaces } : {}),
+          }),
+        isEnrolled: () => existsSync(adminPinFile(configDir)),
+      });
       inbox = startInboxLoop({
         configDir,
         self,
-        client: options.inbox?.client ?? createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }),
+        client,
         audit,
         now,
+        publisher,
         log: (line) => log(line),
         ...(options.inbox?.timer ? { timer: options.inbox.timer } : {}),
         ...(options.inbox?.heartbeatMs !== undefined ? { heartbeatMs: options.inbox.heartbeatMs } : {}),

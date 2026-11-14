@@ -91,3 +91,21 @@ export {
   type VerifiedDocument,
   type VerifyDocumentContext,
 } from './document.js';
+export {
+  ADDRESS_RECORD_DOMAIN,
+  ADDRESS_RECORD_SKEW_SECONDS,
+  MAX_ADDRESSES,
+  MAX_ADDRESS_RECORD_AGE_SECONDS,
+  MAX_ADDRESS_RECORD_BYTES,
+  assertAddressRecordBody,
+  buildAddressRecord,
+  hostProblem,
+  parseAddress,
+  verifyAddressRecord,
+  type AddressEntry,
+  type AddressRecordBody,
+  type AddressRecordFailure,
+  type AddressRecordResult,
+  type LastSeenRecord,
+  type SignedAddressRecord,
+} from './addressRecord.js';

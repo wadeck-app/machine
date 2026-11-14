@@ -1,4 +1,6 @@
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
+import { parseAdvertise } from './addressDiscovery.js';
+import { addRelayView, relayLines } from './listPresence.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { runStartupCommand } from './cliStartup.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
@@ -18,13 +20,22 @@ Usage: machine <command> [options]
 Commands:
   init --name <name>                 create this machine's UUID and identity key
   status                             identity, enrollment state, policy, what was left out
-  list                               this machine and its registered peers
+  list                               this machine and its registered peers; with a relay also their last known
+                                     addresses and whether the relay says they are online (a relay problem is a
+                                     warning line, never an error)
   resolve <reference>                show which machine a reference means
   alias list | set <alias> <ref> | rm <alias>
-  run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>
-                                     run one allowed command on a peer
-  daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
-                                     run the daemon in the foreground (started by orch)
+  run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] -- <command...>
+                                     run one allowed command on a peer. Without --address the addresses come from
+                                     the relay (the signed address record of the peer, verified against its
+                                     registration), tried in order with 3 s each; --address overrides it and is the
+                                     only way without a relay
+  daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>] [--advertise <host[:port]>]...
+                                     run the daemon in the foreground (started by orch). With a relay (after join)
+                                     it publishes its signed address record: the non-loopback interface addresses
+                                     with the peer port, or ONLY the --advertise ones when given (repeatable, up
+                                     to 8: a NAT, a hostname, a VPN, an SSH tunnel; without a port the peer port is
+                                     used). With nothing to publish it says why and publishes nothing
   stop                               stop the running daemon
   join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup]
                                      --timeout (default 900 s) is the wait for the admin; it never outlasts the candidacy (15 min)
@@ -78,6 +89,12 @@ Administration (enrollment through the relay, or by files):
                                      here (by uuid). Safe to run again: same ids, nothing duplicated. Admin passphrase
   admin distribute --policy <signed.json>
                                      send a policy signed earlier (admin sign-policy --out) to its target machine
+  admin forget-relay-record <machine|uuid>
+                                     fix for \`not_owner\` on an address record or an inbox (after a relay token change):
+                                     the relay binds a machine's record and inbox to the first token that wrote it. This
+                                     deletes the record, the binding and the inbox of that machine on the relay (y/N,
+                                     needs the admin relay token, no passphrase). The machine's daemon then publishes
+                                     again by itself; what waited in its inbox is gone (admin distribute sends it again)
   admin init                         create the admin key on this machine (passphrase shown once)
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout); with the admin relay
                                      token it is also sent to its target machine through the relay
@@ -106,7 +123,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, advertise: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -138,6 +155,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--peer-port') out.peerPort = valueOf('--peer-port');
     else if (a === '--api-port') out.apiPort = valueOf('--api-port');
     else if (a === '--peer-host') out.peerHost = valueOf('--peer-host');
+    else if (a === '--advertise') out.advertise.push(valueOf('--advertise'));
     else if (a === '--relay') out.relay = valueOf('--relay');
     else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
@@ -182,6 +200,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     return fail(`"--" is only used by \`machine run\` (it introduces the command to run on the peer)`, EXIT.usage);
   }
 
+  if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
   if (args.autoStartup && command !== 'join') return fail('--auto-startup only applies to `machine join` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
 
   if (args.promptTimeout !== undefined) {
@@ -190,8 +209,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login'].includes(rest[0] ?? ''));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin distribute, admin register, admin login', EXIT.usage);
+    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? ''));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
   }
 
   try {
@@ -214,7 +233,15 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       };
       const peerPort = number(args.peerPort, '--peer-port');
       const apiPort = number(args.apiPort, '--api-port');
+      // Validated before anything starts: a typo must not cost a daemon that publishes the wrong addresses.
+      let advertise: ReturnType<typeof parseAdvertise>;
+      try {
+        advertise = parseAdvertise(args.advertise);
+      } catch (e) {
+        throw new UsageError((e as Error).message);
+      }
       const daemon = await startMachineDaemon(configDir, {
+        ...(advertise.length > 0 ? { advertise } : {}),
         version: appVersion(),
         ...(apiPort !== undefined ? { port: apiPort } : {}),
         ...(peerPort !== undefined ? { peerPort } : {}),
@@ -263,8 +290,11 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       case 'list': {
         const r = (await client.send('list')) as ListAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...r.peers.map((p) => `${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`)];
-        emit(r, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}`);
+        // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
+        const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000));
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...relayLines(p.relay)])];
+        if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
+        emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}`);
         return EXIT.ok;
       }
       case 'resolve': {
