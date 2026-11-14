@@ -1,6 +1,6 @@
 # Relay API for machine (resource `machines`)
 
-**Version:** v0.1 (2026-11-14). Contract between the `machine` CLI/app-module and poc-node (relay). Decisions 28-37 and 41.
+**Version:** v0.2 (2026-11-14, paths and errors aligned with the implemented relay). Contract between the `machine` CLI/app-module and poc-node (relay). Decisions 28-37 and 41.
 
 The relay is untrusted (threat model A-1): it stores and serves opaque signed documents, never decides trust, never sees a passphrase or a private key, never carries commands.
 
@@ -11,16 +11,20 @@ The relay is untrusted (threat model A-1): it stores and serves opaque signed do
 | A machine (daemon, CLI) | `machine` scope, Bearer | calls marked **M** |
 | The admin console (local app-module) | full access | calls marked **A** |
 
-JSON bodies, `Content-Type: application/json`. Errors: `{ "error": "<code>", "message": "<what happened and the fix>" }`. Unknown JSON fields: 400.
+The `machine` scope opens only: `POST` candidacy, `GET` own candidacy, `GET /api/machines`, `GET|PUT /api/machines/{uuid}`, `POST /api/machines/{uuid}/heartbeat`. Listing candidacies and deciding one need a full-access token (`full_access_required`, 403 otherwise).
+
+JSON bodies, `Content-Type: application/json`. Every route lives under `/api` (token gate, scope check and audit apply there). Unknown JSON fields: 400.
+
+Errors: `{ "success": false, "error": "<code>", "message": "<what happened and the fix>", "serverTime": <epoch seconds> }`. Codes: `invalid_body`, `invalid_json`, `invalid_uuid`, `invalid_if_match`, `identity_key_in_use` (409: a pending key re-posted by ANOTHER token; the same token replaces its entry), `too_many_candidacies` (429), `not_found` (404), `not_pending` (409), `not_owner` (403), `precondition_failed` (412, with `currentEtag`), `full_access_required` (403), `too_many_machines` (429, 1000 max), `store_unavailable` (503). A record `PUT` answers `{ "success": true, "etag" }` plus an `ETag` header; `GET /api/machines/{uuid}` adds `etag`.
 
 ## Candidacy (enrollment, decisions 35, 35a, 37)
 
 | Call | Scope | Body | Answer |
 |---|---|---|---|
-| `POST /machines/candidacies` | M | `{ name, hostname, identityPublicKey, random }` | `201 { id, createdAt, expiresAt }` |
-| `GET /machines/candidacies/{id}` | M (the creating token only) | - | `200 { status: "pending" }` or `{ status: "approved", approval }` or `{ status: "rejected" }`; `404` once expired |
-| `GET /machines/candidacies` | A (read-only view in the relay web UI too, decision 41) | - | `200 { candidacies: [ { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt } ] }` |
-| `PUT /machines/candidacies/{id}/decision` | A | `{ decision: "approve", approval }` or `{ decision: "reject" }` | `204`; `409` when not pending |
+| `POST /api/machines/candidacies` | M | `{ name, hostname, identityPublicKey, random }` | `201 { id, createdAt, expiresAt }` |
+| `GET /api/machines/candidacies/{id}` | M (the creating token only) | - | `200 { status: "pending" }` or `{ status: "approved", approval }` or `{ status: "rejected" }`; `404` once expired |
+| `GET /api/machines/candidacies` | A (read-only view in the relay web UI too, decision 41) | - | `200 { candidacies: [ { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt } ] }` |
+| `PUT /api/machines/candidacies/{id}/decision` | A | `{ decision: "approve", approval }` or `{ decision: "reject" }` | `204`; `409` when not pending |
 
 Field rules: `name` matches `^[a-z0-9][a-z0-9-]{0,31}$`; `hostname` printable ASCII, 1-64 characters (self-declared, informative); `identityPublicKey` unpadded base64url of 32 bytes; `random` unpadded base64url of 16 bytes; `id` is 128 random bits (base64url), chosen by the relay; `observedIp` is the peer address seen by the relay (server side, never client supplied).
 
@@ -36,10 +40,10 @@ The verification code (decision 35a) is computed by the CLI and by the admin pag
 
 | Call | Scope | Body | Answer |
 |---|---|---|---|
-| `PUT /machines/{uuid}` | M | signed address record (below) | `200 { etag }` |
-| `POST /machines/{uuid}/heartbeat` | M | empty | `204` |
-| `GET /machines` | M, A | - | `200 { machines: [ { uuid, record, lastSeen, online } ] }` |
-| `GET /machines/{uuid}` | M, A | - | `200 { uuid, record, lastSeen, online }` or `404` |
+| `PUT /api/machines/{uuid}` | M | signed address record (below) | `200 { etag }` |
+| `POST /api/machines/{uuid}/heartbeat` | M | empty | `204` |
+| `GET /api/machines` | M, A | - | `200 { machines: [ { uuid, record, lastSeen, online } ] }` |
+| `GET /api/machines/{uuid}` | M, A | - | `200 { uuid, record, lastSeen, online }` or `404` |
 
 Signed address record, at most 2 KiB, stored as is:
 
