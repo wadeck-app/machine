@@ -69,3 +69,9 @@ Distribution of registrations, revocation lists and policies through the relay i
 - A record stays bound to the token that first wrote it. After a token rotation, a full-access token must write it once; there is no delete or reassign endpoint yet.
 - Malformed ids or uuids (upper-case, trailing slash) are refused by the scope gate with `403`, not `400`: the client must send canonical lower-case uuids and no trailing slash.
 - A `machine` token is created in the relay console: Tokens, Add token, "Limited to scopes", machine. Not yet tested authenticated against the live relay.
+
+## Pairing claim (token for `machine join`, decision 28)
+
+`POST /api/pairings/claim` is PUBLIC (no Authorization, no cookie), JSON body `{ "code": "12345678" }` (spaces and hyphens accepted, 32 characters max). `200 { success: true, serverTime, token, label, scopes }`: `token` is shown once, `scopes` is `["machine"]` for a pairing opened with scope machine (`null` means full access: the client must refuse it). The pairing is opened in the console (Tokens, Add token, "Limited to scopes", machine). The claimed token can call `POST /api/machines/candidacies` at once.
+
+Errors (`{ success: false, error: "<human text>", serverTime }`; here `error` is text, not a code): 400 and 401 `Invalid or expired code.` (wrong, malformed, used or expired: same answer on purpose), 429 with `Retry-After` and `retryAfterSeconds`, 409 or 5xx `The code was valid but is now used up ...` (ask the admin for a new code). A code is valid 5 minutes and works once; 5 failed attempts per 10 minutes per IP lock that IP, and 5 wrong codes cancel the open code.
