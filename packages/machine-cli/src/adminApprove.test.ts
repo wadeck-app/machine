@@ -483,7 +483,7 @@ describe('machine admin revoke', () => {
     expect(trusted()).toEqual(['laptop']);
   });
 
-  it('end to end: shows what is revoked, asks, signs, installs; the machine leaves the directory and `run` refuses it; the limit is stated', async () => {
+  it('end to end: shows what is revoked, asks, signs, installs; the machine leaves the directory and `run` refuses it; the relay is told', async () => {
     const asked: string[] = [];
     let typed = 0;
     const r = await revoke(['laptop'], { ask: async (l) => (asked.push(l), 'y'), prompt: async () => (typed++, admin.passphrase) });
@@ -492,7 +492,9 @@ describe('machine admin revoke', () => {
     expect(asked).toHaveLength(1);
     expect(r.out).toContain(readMachine(cand).uuid);
     expect(r.out).toMatch(/serial\s+\d+/);
-    expect(r.out).toMatch(/KNOWN LIMIT.*THIS machine only/);
+    expect(r.out).not.toMatch(/KNOWN LIMIT/);
+    expect(r.out).toMatch(/no other peer to inform/);
+    expect(relay.requests.some((q) => q.method === 'DELETE' && q.path === `/api/machines/${readMachine(cand).uuid}`)).toBe(true);
     expect(trusted()).toEqual([]);
     const run = await cli(adminDir, ['run', 'laptop', '--address', '127.0.0.1:1', '--', 'echo']);
     expect(run.code).toBe(255);
@@ -544,8 +546,10 @@ describe('machine admin revoke', () => {
     expect(noKey.err).toMatch(/machine admin init/);
   });
 
-  it('HELP states the local-only limit', async () => {
+  it('HELP says that revoke informs the other peers and names distribute', async () => {
     const r = await cli(adminDir, ['--help']);
-    expect(r.out).toMatch(/KNOWN LIMIT: installed on\s+THIS machine only/);
+    expect(r.out).toMatch(/admin distribute <machine\|uuid>/);
+    expect(r.out).toMatch(/admin distribute --policy/);
+    expect(r.out).not.toMatch(/KNOWN LIMIT/);
   });
 });

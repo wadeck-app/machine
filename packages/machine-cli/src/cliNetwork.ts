@@ -4,6 +4,8 @@ import { connectToPeer } from '@wadeck-app/machine-transport';
 import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
+import { runDistribute } from './adminDistribute.js';
+import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
@@ -82,6 +84,7 @@ function promptTimeoutAdvice(e: PromptTimeoutError, command: string, ctx: Comman
   const done: Record<string, string> = {
     approve: 'Nothing was signed or sent to the relay',
     revoke: 'Nothing was signed or revoked',
+    distribute: 'Nothing was signed or sent to the relay',
     'sign-policy': 'Nothing was signed and no file was written',
     register: 'Nothing was signed and no file was written',
     login: 'Nothing was claimed or stored',
@@ -133,7 +136,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       if (first === undefined || second !== undefined) return fail('usage: machine admin sign-policy <draft.json> [--out <file>]', EXIT.usage);
       // Fail before the passphrase is typed, not after the key was unlocked.
       if (args.out && existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
-      const { signed } = await signPolicyFile(configDir, first, {
+      const { signed, privateKeyPkcs8 } = await signPolicyFile(configDir, first, {
         now,
         prompt,
         onSummary: (summary) => io.stderr(`${summary}\nSigning this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.\n`),
@@ -145,7 +148,46 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       } else {
         io.stdout(text);
       }
+      // The file is written first: a distribution problem never loses the signed policy.
+      const access = adminRelayAccess(configDir);
+      if (access === undefined) {
+        const how = args.out ? `machine admin distribute --policy ${args.out}` : 'save it with --out <file>, then run `machine admin distribute --policy <file>`';
+        io.stderr(`[warn] policy NOT distributed to the relay: this machine has no admin relay token. Run \`machine admin login <code>\`, then \`${how}\`; or install the file on the target with \`machine policy install\`\n`);
+        return EXIT.ok;
+      }
+      const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: epochSeconds });
+      const formatted = formatDistribution(report, 'the signed policy', args.out ? `machine admin distribute --policy ${args.out}` : 'machine admin distribute --policy <file>');
+      if (formatted.out) io.stderr(formatted.out);
+      if (formatted.failed) {
+        io.stderr(formatted.err);
+        return EXIT.failure;
+      }
       return EXIT.ok;
+    }
+    if (sub === 'distribute') {
+      if (second !== undefined || (first === undefined) === (args.policy === undefined)) {
+        return fail('usage: machine admin distribute <machine|uuid> | machine admin distribute --policy <signed-policy.json>', EXIT.usage);
+      }
+      try {
+        const r = await runDistribute(configDir, {
+          ...(first !== undefined ? { reference: first } : {}),
+          ...(args.policy !== undefined ? { policyFile: args.policy } : {}),
+          prompt,
+          say: args.json ? io.stderr : io.stdout,
+          now: epochSeconds,
+        });
+        io.stdout(args.json ? '' : r.formatted.out);
+        if (args.json) io.stdout(`${JSON.stringify({ what: r.what, ...r.report }, null, 2)}\n`);
+        if (r.formatted.failed) {
+          io.stderr(r.formatted.err);
+          return EXIT.failure;
+        }
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
     }
     if (sub === 'register') {
       if (first === undefined || second !== undefined) return fail('usage: machine admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]', EXIT.usage);
@@ -217,7 +259,12 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           return result.candidacies.some((c) => c.blockers.some((b) => b.startsWith('the relay sent a verification code'))) ? EXIT.failure : EXIT.ok;
         }
         if (result.kind === 'rejected') emit({ id: result.candidacy.id, decision: 'reject' }, '');
-        else emit({ id: result.candidacy.id, decision: 'approve', name: result.candidacy.name, uuid: result.registered.uuid, adminKeyId: result.adminKeyId, finalCode: result.finalCode }, '');
+        else {
+          emit({ id: result.candidacy.id, decision: 'approve', name: result.candidacy.name, uuid: result.registered.uuid, adminKeyId: result.adminKeyId, finalCode: result.finalCode, distribution: result.distribution.report ?? null }, '');
+          // The approval stands whatever happened to the distribution; a failure is loud and exits 1 so that a script notices.
+          if (result.distribution.formatted.err) io.stderr(result.distribution.formatted.err);
+          if (result.distribution.formatted.failed) return EXIT.failure;
+        }
         return EXIT.ok;
       } catch (e) {
         if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
@@ -230,15 +277,17 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       if (args.days !== undefined) return fail('--days does not apply to `machine admin revoke`: a revocation does not expire (it covers the registration serial it names)', EXIT.usage);
       try {
         const r = await runRevoke(configDir, { reference: first, prompt, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
-        emit({ revoked: r.uuid, name: r.name, serial: r.serial, scope: 'this machine only' }, '');
-        return EXIT.ok;
+        emit({ revoked: r.uuid, name: r.name, serial: r.serial, distribution: r.distribution?.report ?? null }, '');
+        if (r.distribution?.formatted.err) io.stderr(r.distribution.formatted.err);
+        // The revocation stands; a distribution failure is loud and exits 1.
+        return r.distribution?.formatted.failed ? EXIT.failure : EXIT.ok;
       } catch (e) {
         if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
         if (e instanceof NotInitializedError) return fail(e.message);
         throw e;
       }
     }
-    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | distribute <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
   }
 
   if (command === 'peer') {

@@ -5,7 +5,10 @@ import { makeCommands } from './commands.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { loadNetwork, type Network } from './network.js';
+import { startInboxLoop, type InboxLoop, type InboxTimer } from './inboxLoop.js';
 import { startPeerListener } from './peerService.js';
+import { createRelayClient, type RelayClient } from './relayClient.js';
+import { readRelayConfig } from './relayStore.js';
 import { removeDaemonPortFile, writeDaemonPortFile } from './daemonPortFile.js';
 import { FileAuditLog, FileUsageStore } from './stores.js';
 
@@ -26,6 +29,8 @@ export interface DaemonStart {
   peerHost?: string;
   /** Receives everything the daemon wants an admin to see (rejected connections, bookkeeping failures). */
   log?: (line: string) => void;
+  /** Tests only: the timer and the client of the inbox loop, which runs only when this machine joined a relay (relay.json). */
+  inbox?: { timer?: InboxTimer; client?: RelayClient; heartbeatMs?: number };
 }
 
 export interface RunningDaemon {
@@ -33,6 +38,8 @@ export interface RunningDaemon {
   peerPort: number;
   stop: () => Promise<void>;
   stopped: Promise<void>;
+  /** The loop that reads the documents the admin sends through the relay; absent when this machine has no relay.json. */
+  inbox: InboxLoop | undefined;
 }
 
 /**
@@ -54,12 +61,14 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   const now = () => Math.floor(Date.now() / 1000);
 
   let listener: PeerListener | undefined;
+  let inbox: InboxLoop | undefined;
   let markStopped: () => void = () => undefined;
   const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
   const stopped = new Promise<void>((resolve) => (markStopped = resolve));
   const handle: DaemonHandle = await createDaemon({
     hooks: {
       onShutdown: () => {
+        inbox?.stop();
         listener?.close();
         removeDaemonPortFile(configDir, process.pid);
         process.removeListener('exit', onProcessExit);
@@ -106,11 +115,26 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     );
     // Last step: the file means "everything is up". A failure here stops the daemon (below) instead of leaving it half alive.
     writeDaemonPortFile(configDir, { pid: process.pid, port: handle.port, peerPort: listener.port });
+    // A machine that joined a relay sends its heartbeat and reads the documents of the admin; one that did not, never calls any relay.
+    // A corrupt relay.json stops the start here, like every other corrupt file.
+    const relayConfig = readRelayConfig(configDir);
+    if (relayConfig !== undefined) {
+      inbox = startInboxLoop({
+        configDir,
+        self,
+        client: options.inbox?.client ?? createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }),
+        audit,
+        now,
+        log: (line) => log(line),
+        ...(options.inbox?.timer ? { timer: options.inbox.timer } : {}),
+        ...(options.inbox?.heartbeatMs !== undefined ? { heartbeatMs: options.inbox.heartbeatMs } : {}),
+      });
+    }
   } catch (e) {
     await handle.stop('error');
     throw e;
   }
   // Last resort for a process that ends without going through stop (uncaught error): never leave a file that names a dead pid.
   process.once('exit', onProcessExit);
-  return { port: handle.port, peerPort: listener.port, stop: () => Promise.resolve(handle.stop('command')), stopped };
+  return { port: handle.port, peerPort: listener.port, stop: () => Promise.resolve(handle.stop('command')), stopped, inbox };
 }

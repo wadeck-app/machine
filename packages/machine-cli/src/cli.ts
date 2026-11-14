@@ -65,13 +65,22 @@ Administration (enrollment through the relay, or by files):
                                      "approve this machine?" (y/N, terminal only, no way to skip it), type the admin
                                      passphrase, sign and send the approval, then print the FINAL code: the one
                                      comparison. On the new machine it must read exactly the same; if not, run
-                                     \`admin revoke\`. --reject refuses a candidacy (no passphrase)
+                                     \`admin revoke\`. Then the other peers are told about the new machine through the
+                                     relay (a failure is reported and exits 1, the approval stands; finish with
+                                     \`admin distribute\`). --reject refuses a candidacy (no passphrase)
   admin revoke <machine>             revoke a trusted machine (name, alias, uuid or prefix): shows it, asks y/N,
-                                     admin passphrase, installs the signed revocation. KNOWN LIMIT: installed on
-                                     THIS machine only; distributing it to the other peers is a separate contract
-                                     that does not exist yet, so they keep trusting that machine until then
+                                     admin passphrase, installs the signed revocation, then (with the admin relay
+                                     token) sends it to every other machine through the relay and removes the revoked
+                                     machine from the relay. Without the token only THIS machine is updated, and a
+                                     line says how to inform the others
+  admin distribute <machine|uuid>    send again what an approval or a revocation sends: the peer documents of a trusted
+                                     machine (to it and to each other peer), or the revocation of a machine revoked
+                                     here (by uuid). Safe to run again: same ids, nothing duplicated. Admin passphrase
+  admin distribute --policy <signed.json>
+                                     send a policy signed earlier (admin sign-policy --out) to its target machine
   admin init                         create the admin key on this machine (passphrase shown once)
-  admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout)
+  admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout); with the admin relay
+                                     token it is also sent to its target machine through the relay
   admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]
                                      sign a machine's registration; the bundle holds a secret
   admin pin <admin.json>             trust the admin key of another machine
@@ -83,7 +92,7 @@ Options:
   --json                 machine-readable output
   --relay <url>          relay for \`join\` and \`admin login\` (no default: required the first time, then the stored one is reused; https only, http on 127.0.0.1 for tests)
   --prompt-timeout <s>   limit for every question to a person (y/N, passphrase, final code): 1 to 3600 s, default 120; on expiry the
-                         question is cancelled, nothing is assumed and nothing is signed, pinned or revoked (join, admin approve|revoke|sign-policy|register|login)
+                         question is cancelled, nothing is assumed and nothing is signed, pinned or revoked (join, admin approve|revoke|sign-policy|distribute|register|login)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
@@ -121,6 +130,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
+    else if (a === '--policy') out.policy = valueOf('--policy');
     else if (a === '--address') out.address = valueOf('--address');
     else if (a === '--shell') out.shell = valueOf('--shell');
     else if (a === '--days') out.days = valueOf('--days');
@@ -180,8 +190,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'register', 'login'].includes(rest[0] ?? ''));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin register, admin login', EXIT.usage);
+    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login'].includes(rest[0] ?? ''));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin distribute, admin register, admin login', EXIT.usage);
   }
 
   try {

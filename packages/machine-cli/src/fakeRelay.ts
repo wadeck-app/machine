@@ -22,6 +22,16 @@ export interface FakeRelayOptions {
   deviceExpiresIn?: number;
   /** Scopes of the token delivered by an approved device login (default ["machine"]). */
   deviceScopes?: string[] | null;
+  /** Inbox limits of distribution.md (defaults: 256 documents per inbox, 64 MiB for all inboxes). */
+  inboxLimits?: { perInbox?: number; globalBytes?: number };
+  /** Documents per page of the inbox listing (default 32, as the contract says). */
+  inboxPageSize?: number;
+}
+
+export interface FakeInboxDocument {
+  id: string;
+  document: unknown;
+  storedAt: number;
 }
 
 export interface FakeDeviceLogin {
@@ -58,6 +68,13 @@ export interface FakeRelay {
   expire: (id: string) => void;
   /** Plant a pending candidacy as the relay would list it (tests of the admin side). */
   addCandidacy: (id: string, fields: Record<string, unknown>) => void;
+  /**
+   * Who owns the inbox (and the address record) of `uuid`: a token string, or undefined for no owner. Tests only: the real relay
+   * binds the first token that wrote the address record, which this fake also does when a machine token PUTs a record.
+   */
+  setOwner: (uuid: string, token: string | undefined) => void;
+  /** The documents waiting for `uuid`, oldest first. */
+  inbox: (uuid: string) => FakeInboxDocument[];
   /** Ids of the candidacies still pending, oldest first. */
   pendingIds: () => string[];
   close: () => Promise<void>;
@@ -77,6 +94,13 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const candidacies: FakeRelay['candidacies'] = new Map();
   const requests: FakeRelay['requests'] = [];
   const deviceLogins: FakeRelay['deviceLogins'] = new Map();
+  const owners = new Map<string, string>();
+  const inboxes = new Map<string, Map<string, FakeInboxDocument & { text: string }>>();
+  const perInbox = options.inboxLimits?.perInbox ?? 256;
+  const globalBytes = options.inboxLimits?.globalBytes ?? 64 * 1024 * 1024;
+  const pageSize = options.inboxPageSize ?? 32;
+  const inboxBytes = () => [...inboxes.values()].reduce((sum, box) => sum + [...box.values()].reduce((s, d) => s + d.text.length, 0), 0);
+  const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
   const deviceScopes = options.deviceScopes === undefined ? ['machine'] : options.deviceScopes;
   const pendingDevice = (): FakeDeviceLogin => {
     const entry = [...deviceLogins.values()].find((d) => d.status === 'pending');
@@ -178,11 +202,59 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     if (method === 'GET' && path === '/api/machines') {
       return send(res, 200, { machines: [...records.entries()].map(([uuid, r]) => ({ uuid, record: r.record, lastSeen: 1, online: true })) });
     }
+    const bearer = (authorization ?? '').replace(/^Bearer /, '');
+    const inboxRoute = /^\/api\/machines\/([^/]+)\/inbox(?:\/([^/]+))?$/.exec(path);
+    if (inboxRoute) {
+      const uuid = inboxRoute[1] as string;
+      const id = inboxRoute[2] === undefined ? undefined : decodeURIComponent(inboxRoute[2]);
+      if (uuid !== uuid.toLowerCase()) return send(res, 403, { success: false, error: 'forbidden', serverTime: 1 });
+      if (method === 'PUT' && id !== undefined) {
+        if (!admin) return err(res, 403, 'scope_denied', 'writing to an inbox needs a full-access token');
+        if (!ID_PATTERN.test(id)) return err(res, 400, 'invalid_id', 'id must be 22 characters of base64url');
+        const document = body as { body?: { to?: unknown; id?: unknown } } | undefined;
+        if (document?.body?.to !== uuid || document?.body?.id !== id) return err(res, 400, 'invalid_body', 'body.to and body.id must equal the path');
+        if (Buffer.byteLength(raw) > 32 * 1024) return err(res, 413, 'body_too_large', 'a request is at most 32 KiB');
+        if (Buffer.byteLength(raw) > 16 * 1024) return err(res, 400, 'invalid_body', 'a document is at most 16 KiB');
+        const box = inboxes.get(uuid) ?? new Map();
+        const known = box.get(id);
+        if (known !== undefined) return known.text === raw ? send(res, 204) : err(res, 409, 'id_conflict', 'another document is stored under this id');
+        if (box.size >= perInbox) return err(res, 429, 'too_many_documents', `the inbox of ${uuid} is full: that machine is not draining it`);
+        if (inboxBytes() + raw.length > globalBytes) return err(res, 429, 'relay_inbox_full', 'the relay inboxes are full');
+        box.set(id, { id, document: body, storedAt: Math.floor(Date.now() / 1000), text: raw });
+        inboxes.set(uuid, box);
+        return send(res, 204);
+      }
+      // Reading and deleting: the token that owns the uuid, or a full-access token. No oracle on unknown uuids: 403 for everyone else.
+      const mayRead = admin || (owners.get(uuid) !== undefined && owners.get(uuid) === bearer);
+      if (!mayRead) return err(res, 403, 'not_owner', 'this token does not own that inbox');
+      if (method === 'GET' && id === undefined) {
+        const all = [...(inboxes.get(uuid)?.values() ?? [])];
+        const after = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('after');
+        const cursorAt = after === null ? -1 : all.findIndex((d) => d.id === after);
+        if (after !== null && cursorAt === -1) return err(res, 400, 'invalid_cursor', 'unknown cursor');
+        const start = cursorAt + 1;
+        const page = all.slice(start, start + pageSize);
+        const more = start + pageSize < all.length;
+        return send(res, 200, { documents: page.map(({ id: docId, document, storedAt }) => ({ id: docId, document, storedAt })), more, ...(more ? { next: (page.at(-1) as FakeInboxDocument).id } : {}) });
+      }
+      if (method === 'DELETE' && id !== undefined) {
+        inboxes.get(uuid)?.delete(id);
+        return send(res, 204);
+      }
+    }
     const machine = /^\/api\/machines\/([^/]+)(\/heartbeat)?$/.exec(path);
     if (machine) {
       const uuid = machine[1] as string;
       if (uuid !== uuid.toLowerCase()) return send(res, 403, { success: false, error: 'forbidden', serverTime: 1 });
-      if (method === 'POST' && machine[2]) return send(res, 204);
+      if (method === 'DELETE' && !machine[2]) {
+        if (!admin) return err(res, 403, 'scope_denied', 'deleting a machine needs a full-access token');
+        records.delete(uuid);
+        owners.delete(uuid);
+        inboxes.delete(uuid);
+        return send(res, 204);
+      }
+      // The count is that of the inbox the caller owns; a token that does not own the uuid sees 0.
+      if (method === 'POST' && machine[2]) return send(res, 200, { success: true, serverTime: 1, inbox: { count: owners.get(uuid) === bearer ? (inboxes.get(uuid)?.size ?? 0) : 0 } });
       if (method === 'GET' && !machine[2]) {
         const r = records.get(uuid);
         return r ? send(res, 200, { uuid, record: r.record, lastSeen: 1, online: true, etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
@@ -193,6 +265,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         if (ifMatch !== undefined && String(current?.etag) !== ifMatch) return err(res, 412, 'precondition_failed', 'etag mismatch', { currentEtag: String(current?.etag ?? '') });
         const etag = (current?.etag ?? 0) + 1;
         records.set(uuid, { record: body, etag });
+        // The first token that writes a record owns the uuid.
+        if (!owners.has(uuid) && !isAdminToken) owners.set(uuid, bearer);
         return send(res, 200, { success: true, etag: String(etag) }, { ETag: String(etag) });
       }
     }
@@ -233,6 +307,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'rejected';
     },
+    setOwner: (uuid, owner) => void (owner === undefined ? owners.delete(uuid) : owners.set(uuid, owner)),
+    inbox: (uuid) => [...(inboxes.get(uuid)?.values() ?? [])].map(({ id, document, storedAt }) => ({ id, document, storedAt })),
     addCandidacy: (id, fields) => void candidacies.set(id, { status: 'pending', ...fields }),
     expire: (id) => void candidacies.delete(id),
     pendingIds: () => [...candidacies.entries()].filter(([, c]) => c.status === 'pending').map(([id]) => id),

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  DOCUMENT_SKEW_SECONDS,
   POLICY_DOMAIN,
   applyPolicy,
   applyRevocation,
@@ -132,7 +133,8 @@ export function importPeer(configDir: string, bundle: PeerBundle, options: { now
     throw new Error(`the bundle's pair secret is invalid (${(e as Error).message}): ask the admin for a new bundle`);
   }
   const pin = readAdminPin(configDir);
-  const verified = verifyRegistration(bundle.registration, { adminPublicKey: pin.adminPublicKey, now: options.now });
+  // The same clock tolerance as the documents that carry a registration (machine-core DOCUMENT_SKEW_SECONDS).
+  const verified = verifyRegistration(bundle.registration, { adminPublicKey: pin.adminPublicKey, now: options.now, skewSeconds: DOCUMENT_SKEW_SECONDS });
   if (!verified.ok) {
     throw new Error(`this machine does not trust that registration: it was not accepted by this network's admin key (${verified.reason}: ${verified.message})`);
   }
@@ -182,12 +184,11 @@ export function installPolicy(configDir: string, signed: SignedPolicy, options: 
   const state = readPolicyState(configDir);
   const applied = applyPolicy(state, signed, { adminPublicKey: pin.adminPublicKey, now: options.now, targetUuid: self.uuid });
   if (!applied.ok) throw new Error(`policy refused (${applied.reason}): ${applied.message}`);
+  // Order matters: highestSeen first (a version once started can never be applied again), then the policy, then the version.
+  const highestSeen = Math.max(state.highestSeen, applied.body.version);
+  writeFileAtomic(policyStateFile(configDir), `${JSON.stringify({ v: 1, version: state.version, highestSeen }, null, 2)}\n`, 0o644);
   writeFileAtomic(policyFile(configDir), `${JSON.stringify(signed, null, 2)}\n`, 0o644);
-  writeFileAtomic(
-    policyStateFile(configDir),
-    `${JSON.stringify({ v: 1, version: applied.body.version, highestSeen: Math.max(state.highestSeen, applied.body.version) }, null, 2)}\n`,
-    0o644,
-  );
+  writeFileAtomic(policyStateFile(configDir), `${JSON.stringify({ v: 1, version: applied.body.version, highestSeen }, null, 2)}\n`, 0o644);
   return applied.body;
 }
 
@@ -240,4 +241,26 @@ export function registeredSerial(configDir: string, uuid: string): number | unde
     if (body && body.uuid === uuid && (highest === undefined || body.serial > highest)) highest = body.serial;
   }
   return highest;
+}
+
+/**
+ * The registrations of the peers this machine trusts right now (admin-signed, current, unrevoked, newest serial per machine):
+ * what the admin distributes to the other peers. A registration that the directory left out is never handed on.
+ */
+export function trustedRegistrations(configDir: string, now: number): SignedRegistration[] {
+  const network = loadNetwork(configDir, now);
+  const stored = readPeers(configDir);
+  const trusted: SignedRegistration[] = [];
+  for (const machine of network.directory.machines()) {
+    const peer = network.directory.find(machine.uuid);
+    if (!peer) continue;
+    let best: SignedRegistration | undefined;
+    for (const p of stored) {
+      const body = (p.registration as { body?: RegistrationBody } | undefined)?.body;
+      if (!body || body.uuid !== machine.uuid || body.identityPublicKey !== peer.identityPublicKey) continue;
+      if (best === undefined || body.serial > best.body.serial) best = p.registration;
+    }
+    if (best) trusted.push(best);
+  }
+  return trusted;
 }

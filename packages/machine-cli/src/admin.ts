@@ -165,7 +165,7 @@ export interface SignOptions {
   onSummary?: (summary: string) => void;
 }
 
-export async function signPolicyFile(configDir: string, draftFile: string, options: SignOptions): Promise<{ signed: SignedPolicy; summary: string }> {
+export async function signPolicyFile(configDir: string, draftFile: string, options: SignOptions): Promise<{ signed: SignedPolicy; summary: string; privateKeyPkcs8: Uint8Array }> {
   const pin = readAdminPin(configDir);
   let draft: Record<string, unknown>;
   try {
@@ -186,7 +186,7 @@ export async function signPolicyFile(configDir: string, draftFile: string, optio
   const summary = summarizePolicy(body);
   options.onSummary?.(summary);
   const pair = await unlock(configDir, pin, options.prompt);
-  return { signed: signPolicy(body, pair.privateKeyPkcs8), summary };
+  return { signed: signPolicy(body, pair.privateKeyPkcs8), summary, privateKeyPkcs8: pair.privateKeyPkcs8 };
 }
 
 /** Decrypt the admin key after a passphrase prompt. The caller signs one document with it and drops it. */

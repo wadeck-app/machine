@@ -103,6 +103,13 @@ export interface MachineEntry {
   online: boolean;
 }
 
+/** One document of an inbox as the relay lists it. `document` is opaque here: the receiver verifies it (machine-core `verifyInboxDocument`). */
+export interface InboxEntry {
+  id: string;
+  document: unknown;
+  storedAt: number;
+}
+
 export type CandidacyDecision = { decision: 'approve'; approval: unknown } | { decision: 'reject' };
 
 /** The relay URL as the user typed it, validated: https, except plain http on loopback (tests, local relay). No trailing slash. */
@@ -122,6 +129,31 @@ export function normalizeRelayUrl(input: string): string {
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
 
+const MAX_INBOX_PAGE_BYTES = 1024 * 1024;
+
+/** Reads the body of an answer, giving up (loudly) as soon as it is larger than `max` bytes. */
+async function readLimited(res: Response, max: number, baseUrl: string): Promise<string> {
+  const tooLarge = () =>
+    new RelayError({ status: 0, message: `the relay ${baseUrl} sent an answer larger than ${max / (1024 * 1024)} MiB for one inbox page: it does not follow the contract (32 documents of at most 16 KiB), tell the relay owner. Nothing was read from it` });
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) throw tooLarge();
+  if (res.body === null) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
+    if (done) break;
+    total += (value as Uint8Array).length;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value as Uint8Array);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export interface RelayClient {
   readonly baseUrl: string;
   /** `access` is the kind of token the caller agrees to store: a machine token (default, `join`) or a full-access one (`admin login`). The other kind is refused and never returned. */
@@ -133,7 +165,16 @@ export interface RelayClient {
   postCandidacy(candidacy: CandidacyPost): Promise<CandidacyPosted>;
   getCandidacy(id: string): Promise<CandidacyStatus>;
   putRecord(uuid: string, record: SignedAddressRecord, etag?: string): Promise<{ etag: string }>;
-  heartbeat(uuid: string): Promise<void>;
+  /** `inboxCount` is the number of documents waiting for this machine, or undefined when the relay does not report it (not updated to distribution.md). */
+  heartbeat(uuid: string): Promise<{ inboxCount: number | undefined }>;
+  /** Admin (full access) only. The same bytes again are accepted; other bytes under the same id are `id_conflict`. */
+  putInboxDocument(uuid: string, document: { body: { id: string } }): Promise<void>;
+  /** Every document waiting for `uuid`, oldest first (the loop over `more` and `next` is done here), at most `max` of them when given. The owner of the uuid, or the admin. */
+  listInbox(uuid: string, max?: number): Promise<InboxEntry[]>;
+  /** Idempotent: an unknown id is not an error. */
+  deleteInboxDocument(uuid: string, id: string): Promise<void>;
+  /** Admin only: removes the address record, the owner binding and the inbox of `uuid`. A machine the relay does not know is not an error. */
+  deleteMachine(uuid: string): Promise<void>;
   getMachines(): Promise<MachineEntry[]>;
   getMachine(uuid: string): Promise<(MachineEntry & { etag?: string }) | undefined>;
   listCandidacies(): Promise<PendingCandidacy[]>;
@@ -164,6 +205,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     publicRoute?: boolean;
     /** Statuses returned as `undefined` instead of an error. */
     accept?: number[];
+    /** The call is about the inbox of this machine (and this document): errors name them and give the inbox advice. */
+    inbox?: { uuid: string; id?: string };
+    /** The answer is read at most this many bytes: a relay is untrusted and must not make this machine buffer an answer of any size. */
+    maxBytes?: number;
   }
 
   async function call(c: Call): Promise<{ status: number; body: Record<string, unknown>; headers: Headers } | undefined> {
@@ -189,7 +234,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
           : `cannot reach the relay ${baseUrl} (${(e as Error).message}): check your connection and the URL (--relay <url>), then try again`,
       });
     }
-    const text = await res.text().catch(() => '');
+    const text = c.maxBytes === undefined ? await res.text().catch(() => '') : await readLimited(res, c.maxBytes, baseUrl);
     let body: Record<string, unknown> = {};
     if (text.length > 0) {
       try {
@@ -220,6 +265,20 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
+    } else if (c.inbox && status === 409 && code === 'id_conflict') {
+      message = `the inbox of machine ${c.inbox.uuid} already holds a DIFFERENT document under the id ${c.inbox.id ?? '(unknown)'} (id_conflict)${detail}: the same document was built again with other bytes (a sealed secret is random). It is already on the relay; if the machine consumed it and you need it again, run \`machine admin distribute\``;
+    } else if (c.inbox && status === 429 && code === 'too_many_documents') {
+      message = `the inbox of machine ${c.inbox.uuid} is full${detail}: that machine is not draining it (its daemon is stopped, or it cannot read its inbox). Start the daemon there and check \`machine status\`; if the machine is gone run \`machine admin revoke <machine>\`, which also removes its inbox`;
+    } else if (c.inbox && status === 429 && code === 'relay_inbox_full') {
+      message = `the relay ${baseUrl} has no room left for inbox documents (relay_inbox_full)${detail}: this is the relay as a whole, not this machine; tell the relay owner, then run \`machine admin distribute <machine>\` again`;
+    } else if (c.inbox && status === 403 && code === 'not_owner') {
+      message = `this token does not own the inbox of machine ${c.inbox.uuid} (not_owner)${detail}: a machine owns its inbox once it has published its address record with its own token; after a token rotation the admin removes the old binding and the machine publishes again`;
+    } else if (c.inbox && status === 413) {
+      message = `the relay ${baseUrl} refused a document of this size (body_too_large)${detail}: a request is at most 32 KiB and a document at most 16 KiB; a policy this big must be split or reduced`;
+    } else if (c.inbox && status === 400 && (code === 'invalid_cursor' || code === 'invalid_id')) {
+      message = `the relay ${baseUrl} refused the inbox request (${code})${detail}: the relay and this machine disagree on the inbox format, tell the relay owner and update machine`;
+    } else if (c.inbox && status === 404) {
+      message = `the relay ${baseUrl} answered 404 for the inbox of machine ${c.inbox.uuid}${detail}: the relay may not be updated to the distribution contract (distribution.md), tell the relay owner`;
     } else if (status === 429) {
       const wait = retryAfterSeconds !== undefined ? `wait ${retryAfterSeconds} s and try again` : 'wait a little and try again';
       message = `the relay ${baseUrl} is rate limiting this request${detail}: ${wait}`;
@@ -227,7 +286,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       message = `the relay ${baseUrl} refused the stored token (invalid or revoked)${detail}: run \`machine join <code>\` again with a new code from the admin`;
     } else if (status === 403) {
       message =
-        code === 'full_access_required'
+        code === 'full_access_required' || code === 'scope_denied'
           ? `this call needs a full-access token, a machine token is not enough${detail}`
           : `the relay ${baseUrl} refused this request (403)${detail}: the token may lack the "machine" scope, or the request was malformed; run \`machine join <code>\` again if the token was rotated`;
     } else if (status === 404) {
@@ -344,7 +403,49 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     },
 
     async heartbeat(uuid) {
-      await call({ method: 'POST', path: `/api/machines/${uuidPath(uuid)}/heartbeat` });
+      const r = (await call({ method: 'POST', path: `/api/machines/${uuidPath(uuid)}/heartbeat` })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      const count = asObject(r.body.inbox).count;
+      return { inboxCount: typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : undefined };
+    },
+
+    async putInboxDocument(uuid, document) {
+      const id = (document as { body?: { id?: unknown } } | null)?.body?.id;
+      if (typeof id !== 'string' || id.length === 0) throw new Error('the document has no body.id: build it with machine-core buildDocument');
+      await call({ method: 'PUT', path: `/api/machines/${uuidPath(uuid)}/inbox/${idPath(id)}`, body: document, inbox: { uuid: uuid.toLowerCase(), id } });
+    },
+
+    async listInbox(uuid, max) {
+      const entries: InboxEntry[] = [];
+      const seen = new Set<string>();
+      let after: string | undefined;
+      // 256 documents per inbox, 32 per page: a relay that goes on much longer is not following the contract.
+      for (let page = 0; page < 64; page++) {
+        // The cursor parameter is named `after` here: the contract only says "next" (to confirm with the relay owner).
+        const query = after === undefined ? '' : `?after=${encodeURIComponent(after)}`;
+        const r = (await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}/inbox${query}`, inbox: { uuid: uuid.toLowerCase() }, maxBytes: MAX_INBOX_PAGE_BYTES })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+        const documents = r.body.documents;
+        if (!Array.isArray(documents)) throw malformed('the inbox list');
+        for (const d of documents) {
+          const entry = asObject(d);
+          if (typeof entry.id !== 'string' || !('document' in entry) || typeof entry.storedAt !== 'number') throw malformed('the inbox list');
+          entries.push({ id: entry.id, document: entry.document, storedAt: entry.storedAt });
+        }
+        if (max !== undefined && entries.length >= max) return entries.slice(0, max);
+        if (r.body.more !== true) return entries;
+        const next = r.body.next;
+        if (typeof next !== 'string' || next.length === 0 || seen.has(next)) throw malformed('the inbox list (it announces more documents without a new "next")');
+        seen.add(next);
+        after = next;
+      }
+      throw malformed('the inbox list (it never ends)');
+    },
+
+    async deleteInboxDocument(uuid, id) {
+      await call({ method: 'DELETE', path: `/api/machines/${uuidPath(uuid)}/inbox/${idPath(id)}`, inbox: { uuid: uuid.toLowerCase(), id } });
+    },
+
+    async deleteMachine(uuid) {
+      await call({ method: 'DELETE', path: `/api/machines/${uuidPath(uuid)}`, accept: [404], inbox: { uuid: uuid.toLowerCase() } });
     },
 
     async getMachines() {

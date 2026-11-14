@@ -60,6 +60,7 @@ export interface Parsed {
   autoStartup: boolean;
   timeout?: string;
   promptTimeout?: string;
+  policy?: string;
   yesFinalCode?: string;
 }
 

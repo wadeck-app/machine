@@ -68,3 +68,26 @@ export {
 } from './request.js';
 export { GENESIS_HASH, appendAudit, verifyAuditChain, type AuditVerification } from './audit.js';
 export { openSealed, sealTo } from './seal.js';
+// `verifyDocument` of document.ts is exported as `verifyInboxDocument`: `verifyDocument` above is the low-level signature check.
+export {
+  DOCUMENT_DOMAIN,
+  DOCUMENT_KINDS,
+  DOCUMENT_RETENTION_SECONDS,
+  DOCUMENT_SKEW_SECONDS,
+  MAX_DOCUMENT_BYTES,
+  buildDocument,
+  derivePairSecret,
+  documentId,
+  openPairSecret,
+  pairSecretDocumentContext,
+  verifyDocument as verifyInboxDocument,
+  type DocumentBody,
+  type DocumentFailure,
+  type DocumentInput,
+  type DocumentKind,
+  type DocumentResult,
+  type PeerPayload,
+  type SignedDocument,
+  type VerifiedDocument,
+  type VerifyDocumentContext,
+} from './document.js';

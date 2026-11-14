@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
-import { adminKeyFile, readAdminPin, type Prompt } from './admin.js';
+import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { sealBundle } from './approval.js';
+import { distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, registerMachine, type PeerBundle } from './network.js';
-import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
+import { viaAdminToken } from './adminRelay.js';
+import { createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
 
 // Admin side of the enrollment by candidacy (decisions 35, 35a, 37): list what machines asked to join, recompute the
@@ -193,27 +195,15 @@ export interface ApproveOptions {
 export type ApproveResult =
   | { kind: 'list'; candidacies: CandidacyView[] }
   | { kind: 'rejected'; candidacy: CandidacyView }
-  | { kind: 'approved'; candidacy: CandidacyView; finalCode: string; adminKeyId: string; registered: { uuid: string; name: string } };
-
-/** The token of relay-admin.json is refused: say how to replace it instead of the generic machine-token advice. */
-function adminRelayError(e: unknown): unknown {
-  if (!(e instanceof RelayError)) return e;
-  if (e.status === 401) {
-    return new Error(`the relay refused the admin token (invalid or revoked)${e.humanText ? `: ${e.humanText}` : ''}: open a new full-access pairing in the relay console and run \`machine admin login <code> --force\``);
-  }
-  if (e.code === 'full_access_required') {
-    return new Error('the token saved by `machine admin login` is not a full-access token, so it cannot list or decide candidacies: open a pairing WITHOUT "Limited to scopes" in the relay console and run `machine admin login <code> --force`');
-  }
-  return e;
-}
-
-async function viaAdminToken<T>(call: () => Promise<T>): Promise<T> {
-  try {
-    return await call();
-  } catch (e) {
-    throw adminRelayError(e);
-  }
-}
+  | {
+      kind: 'approved';
+      candidacy: CandidacyView;
+      finalCode: string;
+      adminKeyId: string;
+      registered: { uuid: string; name: string };
+      /** What was sent to the other peers (distribution.md). A failure never undoes the approval: `formatted.failed` makes the command exit 1. */
+      distribution: { report: DistributionReport | undefined; formatted: FormattedDistribution };
+    };
 
 function pick(views: CandidacyView[], id: string): CandidacyView {
   const exact = views.filter((v) => v.id === id);
@@ -333,5 +323,38 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
       `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`,
   );
-  return { kind: 'approved', candidacy: view, finalCode: code, adminKeyId: pin.adminKeyId, registered: { uuid: self.registration.body.uuid, name: self.registration.body.name } };
+
+  // Only after the decision went through: the other peers are told about the new machine (and it about them). A failure is reported
+  // loudly with the retry command and never undoes the approval.
+  const retry = `machine admin distribute ${uuid}`;
+  let report: DistributionReport | undefined;
+  let formatted: FormattedDistribution;
+  if (!adminSelfImported) {
+    formatted = {
+      out: '',
+      err: `[warn] the other peers were NOT told about "${printable(view.name)}": this machine has no identity (\`machine init\`), so the new machine is not in its peer list. They learn it only through the manual flow (\`machine admin register\`, then \`machine peer import\` on each machine)\n`,
+      failed: false,
+    };
+  } else {
+    try {
+      const unlocked = await unlockAdminKey(configDir, prompt);
+      report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });
+      formatted = formatDistribution(report, 'the approval', retry);
+    } catch (e) {
+      formatted = {
+        out: '',
+        err: `[error] the other peers could not be informed about "${printable(view.name)}": ${(e as Error).message}\n[warn] the approval stands: nothing was undone. Run \`${retry}\` to send what is missing; it is safe to run again\n`,
+        failed: true,
+      };
+    }
+  }
+  if (formatted.out) o.say(formatted.out);
+  return {
+    kind: 'approved',
+    candidacy: view,
+    finalCode: code,
+    adminKeyId: pin.adminKeyId,
+    registered: { uuid: self.registration.body.uuid, name: self.registration.body.name },
+    distribution: { report, formatted },
+  };
 }

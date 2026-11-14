@@ -76,7 +76,7 @@ Candidate behaviour (`machine join [<relay-host-or-url> | <code>]`, `machine joi
 | Call | Scope | Body | Answer |
 |---|---|---|---|
 | `PUT /api/machines/{uuid}` | M | signed address record (below) | `200 { etag }` |
-| `POST /api/machines/{uuid}/heartbeat` | M | empty | `204` |
+| `POST /api/machines/{uuid}/heartbeat` | M | empty | `200 { inbox: { count } }` (was `204`, see distribution.md) |
 | `GET /api/machines` | M, A | - | `200 { machines: [ { uuid, record, lastSeen, online } ] }` |
 | `GET /api/machines/{uuid}` | M, A | - | `200 { uuid, record, lastSeen, online }` or `404` |
 
@@ -95,7 +95,7 @@ Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid
 
 ## Not in this version
 
-Distribution of registrations, revocation lists and policies through the relay is a separate contract (it follows once the local flow is validated). Until then `machine admin register`, `machine peer import` and `machine policy install` move those documents by file (decision 48).
+Distribution of registrations, revocation lists and policies through the relay (inbox routes, documents): see distribution.md. `machine admin register`, `machine peer import` and `machine policy install` still move those documents by file (decision 48).
 
 ## Deployed limits (relay 2026.11.14-140, reported by poc-owner)
 
