@@ -1,0 +1,23 @@
+{
+  "name": "@wadeck-app/machine-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local daemon and command line of machine: identity, aliases, status, list. Thin front-end over machine-core, machine-transport and machine-exec.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --bail=1"
+  },
+  "dependencies": {
+    "@wadeck-app/machine-core": "*",
+    "@wadeck-app/machine-exec": "*",
+    "@wadeck-app/machine-transport": "*",
+    "@wadeck-app/shared-cli": "latest",
+    "@wadeck-app/singleton-daemon-kit": "latest"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

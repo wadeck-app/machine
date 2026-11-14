@@ -67,3 +67,13 @@ Contact the owner sessions with `SendMessage` (facts and requests only, they dec
 | Security | After WP5 and WP7: fresh-eyes threat-model review (`subprocess` skill) against `threat-model.md` v3.0 |
 | Acceptance | WP10 scenario on the two real Windows machines, both directions |
 | Spec | Each decision change updates `_index.md`, `threat-model.md`, `evidence.md` and the changelog in the same step |
+
+## 6. Progress (2026-11-14)
+
+| WP | State | Where |
+|---|---|---|
+| WP1 | Done | `packages/machine-core` (keys, registration, revocation, policy, codes, admin key file, machine references) |
+| WP2 | Done on Windows; Unix block written, not run | `packages/machine-exec` (cmd, PowerShell; scrubbed env, timeout, output cap) |
+| WP3 | Done except the real-process smoke | `packages/machine-cli` (identity under `_secrets_`, aliases, `init`, `status`, `list`, `resolve`, `alias`, `daemon`, exit codes 0/1/2/3, daemon port 47920); the bundled binary is verified in WP9 (esbuild is not a dependency yet) |
+| WP5 | Transport done, exec done, not yet joined | `packages/machine-transport` (pinned mutual TLS, pair proof, framing, limits); missing: signed requests (nonce, expiry, target), audit log, wiring of `resolvePeer` to registrations |
+| WP4, WP6 to WP10 | Not started | |
