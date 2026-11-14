@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeBase64urlStrict, generateSigningKeyPair, machineNameProblem, signBytes, verifyBytes, type SigningKeyPair } from '@wadeck-app/machine-core';
+import { NotInitializedError } from './errors.js';
 import { SECRETS_DIRNAME } from './paths.js';
 
 export interface MachineIdentity {
@@ -28,7 +29,7 @@ export function identityFile(configDir: string): string {
   return join(configDir, SECRETS_DIRNAME, 'identity.json');
 }
 
-export const NOT_INITIALIZED_MESSAGE = 'this machine has no identity yet: run `machine init --name <name>` first';
+
 
 /** Create this machine's UUID and identity key. Refuses to overwrite: a second identity would orphan every registration. */
 export function initMachine(configDir: string, name: string): MachineIdentity {
@@ -44,15 +45,21 @@ export function initMachine(configDir: string, name: string): MachineIdentity {
     privateKey: Buffer.from(identity.privateKeyPkcs8).toString('base64url'),
   };
   mkdirSync(join(configDir, SECRETS_DIRNAME), { recursive: true, mode: 0o700 });
+  // Write the whole file under a temporary name, then link it to its final name: the link fails when the identity exists
+  // (an existing identity is never replaced, no check-then-write race) and a crash never leaves a half-written identity.
+  const target = identityFile(configDir);
+  const temp = `${target}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   try {
-    // 'wx' fails when the file exists: no check-then-write race, and an existing identity is never replaced.
-    writeFileSync(identityFile(configDir), `${JSON.stringify(file, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    linkSync(temp, target);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
       const existing = readMachine(configDir);
-      throw new Error(`this machine is already initialized as "${existing.name}" (${existing.uuid}): its identity is kept; delete ${identityFile(configDir)} only to start over and enroll again`);
+      throw new Error(`this machine is already initialized as "${existing.name}" (${existing.uuid}): its identity is kept; delete ${target} only to start over and enroll again`);
     }
     throw e;
+  } finally {
+    unlinkSync(temp);
   }
   return { uuid: file.uuid, name, createdAt: file.createdAt, identity };
 }
@@ -63,7 +70,7 @@ export function readMachine(configDir: string): MachineIdentity {
   try {
     text = readFileSync(path, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(NOT_INITIALIZED_MESSAGE);
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new NotInitializedError();
     throw new Error(`cannot read ${path}: ${(e as Error).message}`);
   }
   // Reasons never include file content: the file holds the private key.

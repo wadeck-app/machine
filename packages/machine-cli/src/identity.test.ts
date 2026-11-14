@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateSigningKeyPair, signBytes, verifyBytes } from '@wadeck-app/machine-core';
@@ -64,5 +64,12 @@ describe('readMachine', () => {
     const file = join(dir, '_secrets_', 'identity.json');
     writeFileSync(file, readFileSync(file, 'utf8').replace(a.identity.publicKey, b.publicKey));
     expect(() => readMachine(dir)).toThrow(/does not match/);
+  });
+});
+
+describe('init leaves no temporary file behind', () => {
+  it('has exactly identity.json in _secrets_', () => {
+    initMachine(dir, 'desktop');
+    expect(readdirSync(join(dir, '_secrets_'))).toEqual(['identity.json']);
   });
 });

@@ -42,3 +42,25 @@ describe('the daemon answers the CLI commands over loopback HTTP', () => {
     }
   });
 });
+
+describe('alias safety', () => {
+  it('refuses an alias equal to the name of ANOTHER machine, which would silently redirect commands', async () => {
+    initMachine(dataDir, 'desktop');
+    const commands = makeCommands(dataDir, 'v', [{ uuid: '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345', name: 'laptop' }]);
+    const r = commands.aliasSet({ alias: 'laptop', ref: 'desktop' });
+    expect(r).toMatchObject({ ok: false, reason: 'conflict' });
+    expect((r as { message: string }).message).toMatch(/machine named "laptop".*shadow/);
+    // Pointing the alias at the machine that already has the name is harmless.
+    expect(commands.aliasSet({ alias: 'laptop', ref: 'laptop' })).toMatchObject({ ok: true });
+  });
+
+  it('does not read the version for commands that do not report it', () => {
+    initMachine(dataDir, 'desktop');
+    const commands = makeCommands(dataDir, () => {
+      throw new Error('version must not be read');
+    });
+    expect(() => commands.aliasList()).not.toThrow();
+    expect(() => commands.list()).not.toThrow();
+    expect(() => commands.status()).toThrow(/version must not be read/);
+  });
+});

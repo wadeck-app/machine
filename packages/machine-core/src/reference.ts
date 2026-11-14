@@ -73,3 +73,8 @@ export function machineNameProblem(name: string): string | undefined {
   if (HEX_PREFIX.test(name)) return 'a name must not be only hexadecimal digits and hyphens: it would look like a UUID prefix';
   return undefined;
 }
+
+/** A UUID of any version, either case, with hyphens. */
+export function isUuid(text: string): boolean {
+  return FULL_UUID.test(text.toLowerCase());
+}

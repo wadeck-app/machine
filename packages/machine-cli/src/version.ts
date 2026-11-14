@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Version of this package. Read from package.json next to the sources; when the CLI is bundled (WP9) the bundler must
@@ -11,6 +12,6 @@ export function appVersion(): string {
     if (typeof version !== 'string' || version.length === 0) throw new Error('no "version" field');
     return version;
   } catch (e) {
-    throw new Error(`cannot determine the machine version from ${file.pathname}: ${(e as Error).message}`);
+    throw new Error(`cannot determine the machine version from ${fileURLToPath(file)}: ${(e as Error).message}`);
   }
 }

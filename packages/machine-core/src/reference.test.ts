@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { machineNameProblem, resolveMachineRef, type MachineEntry } from './reference.js';
+import { isUuid, machineNameProblem, resolveMachineRef, type MachineEntry } from './reference.js';
 
 const DESKTOP = '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab';
 const LAPTOP = '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345';
@@ -93,5 +93,14 @@ describe('machineNameProblem', () => {
     ['caf\u00e9', /letters, digits/],
   ])('refuses %j', (name, message) => {
     expect(machineNameProblem(name)).toMatch(message);
+  });
+});
+
+describe('isUuid', () => {
+  it('accepts a UUID of any version, in either case, and nothing else', () => {
+    expect(isUuid('1b4e28ba-2fa1-4d3b-a3f4-0123456789ab')).toBe(true);
+    expect(isUuid('1B4E28BA-2FA1-1D3B-A3F4-0123456789AB')).toBe(true);
+    expect(isUuid('1b4e28ba2fa14d3ba3f40123456789ab')).toBe(false);
+    expect(isUuid('nope')).toBe(false);
   });
 });

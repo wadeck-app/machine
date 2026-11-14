@@ -81,7 +81,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
   const [command, ...rest] = args.positional;
   if (command === undefined) {
-    io.stderr(`${HELP}`.replace('machine - private', 'Usage: machine - private'));
+    io.stderr(`[fail] no command given
+
+${HELP}`);
     return EXIT.usage;
   }
 
@@ -90,6 +92,13 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     return code;
   };
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
+
+  // Commands that take no positional argument refuse one instead of silently ignoring a typo.
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, resolve: 1 };
+  const allowed = maxPositional[command];
+  if (allowed !== undefined && rest.length > allowed) {
+    return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
+  }
 
   try {
     const configDir = resolveConfigDir(args.configDir, env);
@@ -109,7 +118,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     }
 
     // Everything else goes through the daemon when it runs and through the same code in-process when it does not.
-    const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion()) });
+    const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
     const notInitialized = (r: { initialized?: boolean; message?: string }): r is NotInitialized => r.initialized === false;
 
     switch (command) {
@@ -137,6 +146,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       }
       case 'alias': {
         const [sub, a, b] = rest;
+        const arity: Record<string, number> = { list: 0, set: 2, rm: 1 };
+        const expected = sub === undefined ? undefined : arity[sub];
+        if (expected !== undefined && rest.length - 1 > expected) return fail(`unexpected argument "${rest[expected + 1]}" for \`machine alias ${sub}\``, EXIT.usage);
         if (sub === 'list') {
           const aliases = (await client.send('aliasList')) as Record<string, string>;
           emit(aliases, Object.keys(aliases).length ? `${Object.entries(aliases).map(([k, v]) => `${k} -> ${v}`).join('\n')}\n` : 'no alias\n');

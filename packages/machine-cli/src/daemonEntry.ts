@@ -1,6 +1,7 @@
 import { createDaemon, type DaemonHandle } from '@wadeck-app/singleton-daemon-kit';
 import { makeCommands } from './commands.js';
-import { NOT_INITIALIZED_MESSAGE, readMachine } from './identity.js';
+import { NotInitializedError } from './errors.js';
+import { readMachine } from './identity.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
 export const DEFAULT_DAEMON_PORT = 47920;
@@ -18,7 +19,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   try {
     readMachine(configDir);
   } catch (e) {
-    if ((e as Error).message === NOT_INITIALIZED_MESSAGE) throw new Error(`cannot start the daemon: ${NOT_INITIALIZED_MESSAGE}`);
+    if (e instanceof NotInitializedError) throw new Error(`cannot start the daemon: ${e.message}`);
     throw e;
   }
   let markStopped: () => void = () => undefined;

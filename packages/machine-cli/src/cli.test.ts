@@ -136,3 +136,24 @@ describe('machine usage', () => {
     expect(r.err).toMatch(/Usage/);
   });
 });
+
+describe('machine strictness', () => {
+  it.each([['status', 'foo'], ['list', 'bar'], ['init', 'desktop']])('refuses a stray argument for %s: %s', async (...args) => {
+    const r = await run(...args);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/unexpected argument/);
+  });
+
+  it('no command says so before showing the help', async () => {
+    const r = await run();
+    expect(r.err).toMatch(/^\[fail\] no command given/);
+    expect(r.err).not.toMatch(/Usage: machine - private/);
+  });
+
+  it('accepts an alias equal to the name of the machine it points to', async () => {
+    await run('init', '--name', 'desktop');
+    const r = await run('alias', 'set', 'desktop', 'desktop');
+    // Pointing a name at itself is harmless.
+    expect(r.code).toBe(0);
+  });
+});
