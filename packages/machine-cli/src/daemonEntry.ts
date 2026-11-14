@@ -6,6 +6,7 @@ import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { loadNetwork, type Network } from './network.js';
 import { startPeerListener } from './peerService.js';
+import { removeDaemonPortFile, writeDaemonPortFile } from './daemonPortFile.js';
 import { FileAuditLog, FileUsageStore } from './stores.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
@@ -54,11 +55,14 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
 
   let listener: PeerListener | undefined;
   let markStopped: () => void = () => undefined;
+  const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
   const stopped = new Promise<void>((resolve) => (markStopped = resolve));
   const handle: DaemonHandle = await createDaemon({
     hooks: {
       onShutdown: () => {
         listener?.close();
+        removeDaemonPortFile(configDir, process.pid);
+        process.removeListener('exit', onProcessExit);
         markStopped();
       },
     },
@@ -100,9 +104,13 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
       },
       { host: options.peerHost ?? DEFAULT_PEER_HOST, port: options.peerPort ?? DEFAULT_PEER_PORT },
     );
+    // Last step: the file means "everything is up". A failure here stops the daemon (below) instead of leaving it half alive.
+    writeDaemonPortFile(configDir, { pid: process.pid, port: handle.port, peerPort: listener.port });
   } catch (e) {
     await handle.stop('error');
     throw e;
   }
+  // Last resort for a process that ends without going through stop (uncaught error): never leave a file that names a dead pid.
+  process.once('exit', onProcessExit);
   return { port: handle.port, peerPort: listener.port, stop: () => Promise.resolve(handle.stop('command')), stopped };
 }

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
 import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
+import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
@@ -348,20 +349,24 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     } finally {
       process.removeListener('SIGINT', onSigint);
     }
-    // Nothing is started at login by join itself: only a suggestion (stderr with --json, so stdout stays one JSON document).
-    const startupHint = 'To start machine at login run: machine startup enable\n';
+    // Nothing is started at login unless --auto-startup was given: otherwise only a suggestion (stderr with --json, so stdout stays one JSON document).
+    const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
     if (result.status === 'posted') {
       emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n' + startupHint);
-      if (args.json) io.stderr(startupHint);
-      return EXIT.ok;
+    } else {
+      const e = result.enrolled;
+      const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : 'peers trusted: none (the admin included none)\n';
+      emit(
+        { ...e, relayUrl: result.posted.relayUrl },
+        '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n' + startupHint,
+      );
     }
-    const e = result.enrolled;
-    const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : 'peers trusted: none (the admin included none)\n';
-    emit(
-      { ...e, relayUrl: result.posted.relayUrl },
-      '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n' + startupHint,
-    );
-    if (args.json) io.stderr(startupHint);
+    if (args.json && startupHint) io.stderr(startupHint);
+    if (args.autoStartup) {
+      // A failure here never undoes the join: it is reported and the exit code says so.
+      const problem = await enableAfterJoin(ctx, say);
+      if (problem !== undefined) return fail(`joined the relay, but the startup job could not be enabled: ${problem}\nthe join is kept; fix the cause, then run \x60machine startup enable\x60`);
+    }
     return EXIT.ok;
   }
 

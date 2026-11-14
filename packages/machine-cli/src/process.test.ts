@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import net from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -119,6 +119,23 @@ describe('the bundled CLI as real processes', () => {
     expect(stop.code).toBe(0);
     expect(stop.stdout).toMatch(/stopped/);
     expect(await Promise.race([exited, new Promise((r) => setTimeout(() => r('still running'), 10_000))])).not.toBe('still running');
+  }, 120_000);
+
+  it('the daemon process keeps daemon.port.json (its pid and ports) while it runs, and stop removes it', async () => {
+    await provision(mkdtempSync(join(root, 'p-')), a, b, [{ shell: SHELL, command: 'echo x' }]);
+    const peerPort = await freePort();
+    const file = join(b, 'daemon.port.json');
+    expect(existsSync(file)).toBe(false);
+    await startDaemon(b, peerPort);
+    const info = JSON.parse(readFileSync(file, 'utf8')) as { pid: number; port: number; peerPort: number };
+    expect(info.pid).toBe(daemon?.pid);
+    expect(info.peerPort).toBe(peerPort);
+    expect(info.port).toBeGreaterThan(0);
+
+    const exited = new Promise<void>((resolve) => daemon?.on('exit', () => resolve()));
+    expect((await machine(b, ['stop'])).code).toBe(0);
+    await exited;
+    expect(existsSync(file)).toBe(false);
   }, 120_000);
 
   it('stop says so, and succeeds, when no daemon is running', async () => {

@@ -6,6 +6,7 @@ import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { classifyJoinArgument, deviceLabel, MIN_DEVICE_POLL_MS } from './join.js';
 import { candidacyFile, readCandidacy, readRelayConfig, relayFile } from './relayStore.js';
+import { makeOrchStub, type OrchStub } from './orchStub.js';
 import { buildApproval, cli, fakeTiming, makeAdmin, ok } from './testing.js';
 
 let root: string;
@@ -289,12 +290,60 @@ describe('machine join --resume and the candidacy uuid', () => {
 });
 
 describe('machine join and the startup at login', () => {
-  it('--auto-startup is refused at parse time (usage error), nothing sent', async () => {
-    const r = await cli(dir, ['join', '--relay', relay.url, '--auto-startup']);
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/--auto-startup is not available yet/);
-    expect(r.err).toMatch(/machine startup enable/);
-    expect(relay.requests).toHaveLength(0);
+  describe('--auto-startup (orch is a stub, never the real one)', () => {
+    let stub: OrchStub;
+    const source = { platform: 'linux' as const, execPath: '/usr/bin/node', scriptPath: '/opt/machine.cjs', native: false };
+    const auto = (extra: string[] = []) => {
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      return join_(['--no-wait', ...extra], { timing, startup: { orch: stub.orch, daemon: source, platform: 'linux' } });
+    };
+    beforeEach(() => {
+      stub = makeOrchStub();
+    });
+    afterEach(() => {
+      rmSync(stub.dir, { recursive: true, force: true });
+    });
+
+    it('runs startup enable once the join succeeded, and then no longer suggests it', async () => {
+      stub.script({ ensure: { stdout: 'added machine\n' } });
+      const r = await auto(['--auto-startup']);
+      expect(r.code, r.err).toBe(0);
+      expect(stub.calls()).toHaveLength(1);
+      expect(stub.calls()[0]?.slice(0, 3)).toEqual(['ensure', 'startup', 'machine']);
+      expect(r.out).toContain('[ok] startup job "machine" added');
+      expect(r.out).not.toContain('To start machine at login run');
+      expect(readRelayConfig(dir)).toBeDefined();
+    });
+
+    it('with --json stdout stays one JSON document and the startup text goes to stderr', async () => {
+      stub.script({ ensure: { stdout: 'unchanged machine\n' } });
+      const r = await auto(['--auto-startup', '--json']);
+      expect(r.code, r.err).toBe(0);
+      expect(() => JSON.parse(r.out)).not.toThrow();
+      expect(r.err).toContain('startup job "machine" unchanged');
+    });
+
+    it('a failing enable is reported loudly, makes join exit 1, and does not undo the join', async () => {
+      stub.script({ ensure: { code: 2 } });
+      const r = await auto(['--auto-startup']);
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/joined the relay, but the startup job could not be enabled: the orch daemon could not be started/);
+      expect(r.err).toMatch(/machine startup enable/);
+      expect(readRelayConfig(dir)).toBeDefined();
+      expect(readCandidacy(dir)).toBeDefined();
+    });
+
+    it('without the flag orch is never called', async () => {
+      const r = await auto();
+      expect(r.code, r.err).toBe(0);
+      expect(stub.calls()).toEqual([]);
+    });
+
+    it('is refused on any other command (usage error), nothing sent', async () => {
+      const r = await cli(dir, ['status', '--auto-startup']);
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/--auto-startup only applies to `machine join`/);
+    });
   });
 
   it('ends with the suggestion (stderr with --json) and starts nothing by itself', async () => {

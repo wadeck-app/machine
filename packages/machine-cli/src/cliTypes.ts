@@ -1,5 +1,6 @@
 import type { Prompt } from './admin.js';
 import type { PromptTimer } from './prompt.js';
+import type { DaemonSource, OrchCommand } from './startup.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
 export interface Timing {
@@ -21,6 +22,8 @@ export interface CliIo {
   timing?: Timing;
   /** Limit timer of the prompts; tests inject a fake one. */
   promptTimer?: PromptTimer;
+  /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
+  startup?: { orch?: OrchCommand; daemon?: DaemonSource; platform?: NodeJS.Platform };
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
   now?: () => Date;
 }
@@ -54,6 +57,7 @@ export interface Parsed {
   resume: boolean;
   noWait: boolean;
   reject: boolean;
+  autoStartup: boolean;
   timeout?: string;
   promptTimeout?: string;
   yesFinalCode?: string;

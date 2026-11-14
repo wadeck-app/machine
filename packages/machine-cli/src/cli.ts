@@ -1,5 +1,6 @@
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { runNetworkCommand } from './cliNetwork.js';
+import { runStartupCommand } from './cliStartup.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
@@ -25,7 +26,7 @@ Commands:
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
   stop                               stop the running daemon
-  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>]
+  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup]
                                      --timeout (default 900 s) is the wait for the admin; it never outlasts the candidacy (15 min)
                                      or the device code. An approval received but not confirmed is kept 15 minutes only:
                                      later it is discarded and nothing is pinned (ask the admin again: join --resume).
@@ -43,8 +44,13 @@ Commands:
                                      code needs --relay too); later runs reuse the one stored in relay.json.
                                      --relay <url> is the same as the relay argument (not both)
                                      join never starts anything at login by itself; it ends by suggesting
-                                     \`machine startup enable\`. --auto-startup is reserved: refused (usage error)
-                                     until that command exists
+                                     \`machine startup enable\`. --auto-startup runs it as the last step (a failure
+                                     there is reported and makes join exit 1; the join itself is not undone)
+  startup enable | disable | status  start the daemon at login through an orch startup job named "machine"
+                                     (needs orch: npm i -g @wadeck-app/orchestrator-cli). enable creates or refreshes
+                                     the job (run it again after moving machine); disable removes it; status shows
+                                     whether it exists, its command and whether it is up to date (exit 0 either way).
+                                     It never runs \`orch install\`: if orch does not start at login, run it yourself
   join --resume [--timeout <seconds>] [--yes-final-code <code>]
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
@@ -91,7 +97,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -109,9 +115,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--resume') out.resume = true;
     else if (a === '--no-wait') out.noWait = true;
     else if (a === '--reject') out.reject = true;
-    else if (a === '--auto-startup') {
-      throw new UsageError('--auto-startup is not available yet: `machine startup enable` does not exist, so nothing would be started at login. Run `machine join` without it');
-    }
+    else if (a === '--auto-startup') out.autoStartup = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
@@ -168,6 +172,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     return fail(`"--" is only used by \`machine run\` (it introduces the command to run on the peer)`, EXIT.usage);
   }
 
+  if (args.autoStartup && command !== 'join') return fail('--auto-startup only applies to `machine join` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
+
   if (args.promptTimeout !== undefined) {
     const seconds = Number(args.promptTimeout);
     if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_PROMPT_TIMEOUT_SECONDS) {
@@ -209,6 +215,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       await daemon.stopped;
       return EXIT.ok;
     }
+
+    if (command === 'startup') return await runStartupCommand(ctx);
 
     const handled = await runNetworkCommand(command, ctx);
     if (handled !== undefined) return handled;

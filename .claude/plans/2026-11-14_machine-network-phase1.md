@@ -32,7 +32,7 @@ Order is the build order. Each package ends with its tests green and the spec up
 | WP7 | Enrollment end to end: `machine join` (code shown in CLI), candidacy list and approval, signed registration returned, final code compared before pinning the admin key | Swapped key or swapped admin key detected | WP4, WP6 | Acceptance: no key, nonce or file copied by hand; only the 8-digit code typed and two short codes compared; works headless over SSH. |
 | WP8 | `app-module-machine`: DSL views for the 5 pages (decision 40), `dsl-lib-machine` passphrase and signing component, backend routes calling the daemon, distinct errors for "daemon down" and "token refused" | Component tests (RTL), route tests, real-server integration test; CSP: no inline code | WP4, WP7, `dsl-owner` and `app-core-owner` answers |
 | WP9 | Distribution and update: exe-in-npm for `win32-x64`, `darwin-arm64`, `linux-x64`, staged executable outside `node_modules` (38c), `machine cli update`/`rollback`/`register`, daemon exits after update so orch relaunches it (38b), `publish.yml` with `verify-install` and `verify-update` | Packed smoke on the 3 OS; update while running on Windows (EBUSY check) | WP3 |
-| WP10 | Orch startup job and acceptance on the two Windows machines; threat-model review by a fresh agent (`subprocess` skill) before release | Scenario `ls` and `ipconfig` both directions | all |
+| WP10 | (startup enable, disable, status, daemon port file, `npm run bundle` implemented; real-orch check and acceptance pending) Orch startup job and acceptance on the two Windows machines; threat-model review by a fresh agent (`subprocess` skill) before release | Scenario `ls` and `ipconfig` both directions | all |
 
 ## 3. Work for other CLIs and their owners
 
