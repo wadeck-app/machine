@@ -116,7 +116,7 @@ export function deviceLabel(machineName: string): string {
 
 /**
  * `machine join` argument: made only of digits (spaces and hyphens allowed, as in `1234 5678`) it is a pairing code,
- * anything else is a relay, either a URL or a bare host (`relay.example.test` means `https://relay.example.test`).
+ * anything else is a relay, either a URL or a bare host (`relay.example.com` means `https://relay.example.com`).
  */
 export type JoinArgument = { kind: 'code'; code: string } | { kind: 'relay'; relayUrl: string };
 export function classifyJoinArgument(argument: string): JoinArgument {
@@ -162,7 +162,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
 
   let intervalMs = Math.max(MIN_DEVICE_POLL_MS, Math.ceil(started.pollIntervalSeconds * 1000));
   const deadline = timing.nowMs() + started.expiresIn * 1000;
-  const restart = 'run `machine join` again for a new code';
+  const restart = 'run `machine join <relay-host-or-url>` again for a new code';
   // Slept before every poll, the first one included: never faster than the interval.
   let wait = intervalMs;
   for (;;) {
@@ -281,9 +281,8 @@ export interface FlowOptions {
   /** Pairing code. Absent: the relay token comes from a device login (or from the saved token with `resume`). */
   code?: string;
   resume: boolean;
-  /** Absent: the relay of the saved token (resume) or the default relay. */
+  /** Absent: the relay of the saved token (resume only). There is no default relay: a first join must name it. */
   relayUrl?: string;
-  defaultRelayUrl: string;
   force: boolean;
   wait: boolean;
   timeoutMs: number;
@@ -344,7 +343,7 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     resumed = true;
   } else {
     const common = {
-      relayUrl: o.relayUrl ?? o.defaultRelayUrl,
+      relayUrl: o.relayUrl ?? noRelay(),
       force: o.force,
       ...(o.client ? { client: o.client } : {}),
       ...(o.now ? { now: o.now } : {}),
@@ -437,4 +436,9 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
     self: { uuid: checked.selfBody.uuid, name: checked.selfBody.name },
     peers: checked.peerBodies.map((b) => ({ uuid: b.uuid, name: b.name })),
   };
+}
+
+/** There is no default relay: reaching this means the caller forgot to resolve it (the CLI reports it as a usage error). */
+function noRelay(): never {
+  throw new Error('no relay given: pass the relay to `machine join <relay-host-or-url>`');
 }

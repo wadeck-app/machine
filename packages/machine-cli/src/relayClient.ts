@@ -1,7 +1,6 @@
 // Client of the relay API (relay-api.md v0.2 + pairing claim). The relay is untrusted: this client only moves opaque
 // documents. The token is held in a closure and is never part of an error message, a log line or a returned value.
 
-export const DEFAULT_RELAY_URL = 'https://relay.example.test';
 const TIMEOUT_MS = 15_000;
 
 export interface RelayErrorInit {
@@ -112,11 +111,11 @@ export function normalizeRelayUrl(input: string): string {
   try {
     url = new URL(input);
   } catch {
-    throw new Error(`invalid relay URL "${input}": expected something like ${DEFAULT_RELAY_URL}`);
+    throw new Error(`invalid relay URL "${input}": expected something like https://relay.example.com`);
   }
   const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new Error(`relay URL "${input}" must use https (plain http is only accepted for 127.0.0.1 and localhost): use an https URL such as ${DEFAULT_RELAY_URL}`);
+    throw new Error(`relay URL "${input}" must use https (plain http is only accepted for 127.0.0.1 and localhost): use an https URL such as https://relay.example.com`);
   }
   if (url.username !== '' || url.password !== '') throw new Error('the relay URL must not contain credentials: the token is stored separately');
   if (url.search !== '' || url.hash !== '') throw new Error(`relay URL "${input}" must not contain a query or a fragment`);

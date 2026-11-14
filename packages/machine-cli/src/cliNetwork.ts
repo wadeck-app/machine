@@ -9,7 +9,8 @@ import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
-import { DEFAULT_RELAY_URL, RelayError } from './relayClient.js';
+import { RelayError } from './relayClient.js';
+import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
 import { promptHidden, promptLine } from './prompt.js';
 import { readAliases } from './state.js';
@@ -133,6 +134,9 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
     }
     if (sub === 'login') {
       if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force]', EXIT.usage);
+      // No default relay: given with --relay, or the one of the saved admin token. Checked before a code is asked for.
+      const adminRelay = args.relay ?? readRelayAdminConfig(configDir)?.relayUrl;
+      if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login <code> --relay <host-or-url>`, for example --relay https://relay.example.com', EXIT.usage);
       let code = first;
       if (code === undefined) {
         try {
@@ -144,7 +148,7 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       code = code.trim();
       if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
       try {
-        const r = await adminLogin(configDir, { code, relayUrl: args.relay ?? DEFAULT_RELAY_URL, force: args.force });
+        const r = await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force });
         if (!existsSync(adminKeyFile(configDir))) io.stderr('[warn] this machine has no admin key yet: run `machine admin init` before `machine admin approve`\n');
         emit({ relayUrl: r.relayUrl, label: r.label }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}; next: \`machine admin approve\` lists the pending candidacies\n`);
         return EXIT.ok;
@@ -260,6 +264,18 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
         }
       }
     }
+    // No default relay, never a silent one: named here, or the one stored by a previous join.
+    if (!args.resume) {
+      relayUrl ??= readRelayConfig(configDir)?.relayUrl;
+      if (relayUrl === undefined) {
+        return fail(
+          code !== undefined
+            ? 'a pairing code needs the relay: `machine join <code> --relay <host-or-url>`, for example --relay relay.example.com (the relay is named once, then stored)'
+            : 'machine join needs the relay: `machine join <host>`, for example `machine join relay.example.com` (the relay is named once, then stored)',
+          EXIT.usage,
+        );
+      }
+    }
     const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
 
@@ -276,7 +292,6 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
         ...(code !== undefined ? { code } : {}),
         resume: args.resume,
         ...(relayUrl !== undefined ? { relayUrl } : {}),
-        defaultRelayUrl: DEFAULT_RELAY_URL,
         force: args.force,
         wait: !args.noWait,
         timeoutMs: timeoutSeconds * 1000,

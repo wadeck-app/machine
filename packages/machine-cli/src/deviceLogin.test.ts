@@ -174,7 +174,7 @@ describe('machine join by device login', () => {
     const r = await join_([], { timing });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/expired/);
-    expect(r.err).toMatch(/run `machine join` again/);
+    expect(r.err).toMatch(/run `machine join <relay-host-or-url>` again/);
     expect(deviceRequests('poll')).toHaveLength(2);
     expect(existsSync(relayFile(dir))).toBe(false);
     noSecrets(r.out, r.err);
@@ -311,5 +311,55 @@ describe('machine join and the startup at login', () => {
     expect(j.code, j.err).toBe(0);
     expect(() => JSON.parse(j.out)).not.toThrow();
     expect(j.err).toContain('machine startup enable');
+  });
+});
+
+describe('no default relay', () => {
+  it('join without argument and without stored relay: usage error naming the fix, nothing sent', async () => {
+    const r = await cli(dir, ['join']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/machine join needs the relay: `machine join <host>`, for example `machine join relay.example.com`/);
+    expect(existsSync(relayFile(dir))).toBe(false);
+  });
+
+  it('a pairing code without relay (argument, --relay or stored): same kind of error, nothing sent', async () => {
+    const r = await cli(dir, ['join', '12345678']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/a pairing code needs the relay/);
+    expect(r.err).toContain('--relay');
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it('a pairing code uses the relay stored in relay.json when --relay is absent', async () => {
+    mkdirSync(join(dir, '_secrets_'), { recursive: true });
+    writeFileSync(relayFile(dir), JSON.stringify({ relayUrl: relay.url, token: 'old', label: 'old', claimedAt: 'x' }));
+    const r = await cli(dir, ['join', '12345678', '--force', '--no-wait']);
+    expect(r.code, r.err).toBe(0);
+    expect(readRelayConfig(dir)?.token).toBe(relay.token);
+    expect(readRelayConfig(dir)?.relayUrl).toBe(relay.url);
+  });
+
+  it('device login without argument reuses the stored relay (--force)', async () => {
+    mkdirSync(join(dir, '_secrets_'), { recursive: true });
+    writeFileSync(relayFile(dir), JSON.stringify({ relayUrl: relay.url, token: 'old', label: 'old', claimedAt: 'x' }));
+    const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+    const r = await cli(dir, ['join', '--force', '--no-wait'], forbidden('a prompt'), { ...headless, timing });
+    expect(r.code, r.err).toBe(0);
+    expect(readRelayConfig(dir)?.token).toBe(relay.token);
+  });
+
+  it('--resume reuses the stored relay without naming it', async () => {
+    await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    const r = await cli(dir, ['join', '--resume', '--no-wait']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`resuming on the relay ${relay.url}`);
+    expect(readRelayConfig(dir)?.relayUrl).toBe(relay.url);
+  });
+
+  it('admin login needs --relay (or a stored admin relay): usage error, no code asked', async () => {
+    const r = await cli(dir, ['admin', 'login', '87654321'], forbidden('a prompt'), headless);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/admin login needs the relay/);
+    expect(relay.requests).toHaveLength(0);
   });
 });

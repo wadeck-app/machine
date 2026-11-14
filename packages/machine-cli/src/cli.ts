@@ -30,12 +30,13 @@ Commands:
                                      login. It prints a code and a page; open the page (any browser), check that
                                      the address and label match this machine and type the code there. Nothing is
                                      typed here, no terminal is needed (SSH works). Ctrl-C or a lost session during
-                                     the device login stores nothing: run \`machine join\` again for a new code
+                                     the device login stores nothing: run \`machine join <relay>\` again for a new code
                                      (the device code is never printed nor saved).
                                      The argument: only digits (spaces and hyphens allowed, 1234 5678) = pairing
                                      code of the admin (fallback, claimed instead of a device login); anything
-                                     else = the relay, a URL or a bare host (relay.example.test means
-                                     https://relay.example.test). Default relay: https://relay.example.test.
+                                     else = the relay, a URL or a bare host (relay.example.com means
+                                     https://relay.example.com). There is no default relay: name it the first time (a pairing
+                                     code needs --relay too); later runs reuse the one stored in relay.json.
                                      --relay <url> is the same as the relay argument (not both)
                                      join never starts anything at login by itself; it ends by suggesting
                                      \`machine startup enable\`. --auto-startup is reserved: refused (usage error)
@@ -70,7 +71,7 @@ Administration (enrollment through the relay, or by files):
 
 Options:
   --json                 machine-readable output
-  --relay <url>          relay for \`join\` and \`admin login\` (default https://relay.example.test; https only, http on 127.0.0.1 for tests)
+  --relay <url>          relay for \`join\` and \`admin login\` (no default: required the first time, then the stored one is reused; https only, http on 127.0.0.1 for tests)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help

@@ -123,7 +123,7 @@ Every screen that guides enrollment shows a vertical timeline on the left (curre
 
 ## Client behaviour of the device login (`machine join`, fake relay only)
 
-- Argument: only digits (spaces, hyphens allowed) = pairing code (claim route); anything else = relay, URL or bare host (`https://` added); none = device login on `https://<relay-host>`. `--relay` is the same as the argument (both: usage error).
+- Argument: only digits (spaces, hyphens allowed) = pairing code (claim route); anything else = relay, URL or bare host (`https://` added). There is no default relay: it is named the first time (argument or `--relay`; a pairing code needs `--relay`), then reused from `relay.json`; none known = usage error (exit 2). `--relay` is the same as the argument (both: usage error). `admin login` likewise needs `--relay` or a stored admin relay.
 - Label asked = machine name restricted to letters, digits, space, `_ . -`, 1-64; the label stored is the one the poll returns.
 - Poll: first after one interval, never faster than 3 s. `slow_down` is read as a 429 with `error: slow_down` or as a status; the wait is `retryAfterSeconds` and stays. Any other 429 waits `Retry-After` (30 s if absent). Network errors and 5xx are warned and retried.
 - `denied`, `expired`, unknown code: exit 1, nothing stored, a spent `deviceCode` is never polled again. The client also stops 5 s after `expiresIn`.
