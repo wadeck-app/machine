@@ -1,0 +1,8 @@
+{
+  "appName": "machine",
+  "displayName": "machine",
+  "nodeScript": "@wadeck-app/machine-cli/machine.cjs",
+  "defaultConfigDir": "machine",
+  "cliFlags": [],
+  "silentFlags": ["--help", "-h"]
+}
