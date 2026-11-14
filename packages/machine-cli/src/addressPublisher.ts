@@ -84,6 +84,7 @@ export function createAddressPublisher(o: AddressPublisherOptions): AddressPubli
   let failures = 0;
   let blockedUntil = 0;
   let notOwner = false;
+  let notRegistered = false;
 
   const notice = (key: string, line: string): void => {
     if (noticed.has(key)) return;
@@ -188,11 +189,24 @@ export function createAddressPublisher(o: AddressPublisherOptions): AddressPubli
         notice('not-owner', `address record NOT published: ${safe(e.message)}`);
         return;
       }
+      if (e instanceof RelayError && e.status === 403 && e.code === 'not_registered') {
+        // Not approved yet (relay that binds a uuid at approval): a state, no backoff, so that the record is published in the very next round after the approval.
+        notRegistered = true;
+        failures = 0;
+        blockedUntil = 0;
+        notice('not-registered', `address record NOT published: ${safe(e.message)}`);
+        return;
+      }
       backoff(e instanceof RelayError ? e.message : `cannot publish the address record: ${(e as Error).message}`, e instanceof RelayError ? e.retryAfterSeconds : undefined);
       return;
     }
     failures = 0;
     blockedUntil = 0;
+    if (notRegistered) {
+      notRegistered = false;
+      noticed.delete('not-registered');
+      o.log('address record: this machine is approved on the relay now');
+    }
     if (notOwner) {
       notOwner = false;
       noticed.delete('not-owner');

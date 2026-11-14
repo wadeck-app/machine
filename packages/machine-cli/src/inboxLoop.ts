@@ -176,6 +176,7 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
   let first = true;
   let failures = 0;
   let notOwner = false;
+  let notRegistered = false;
   let lastSummary: { key: string; at: number } | undefined;
 
   const notice = (key: string, line: string): void => {
@@ -435,8 +436,22 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
       }
     }
     if (heartbeatError !== undefined) {
+      if (heartbeatError instanceof RelayError && heartbeatError.status === 403 && heartbeatError.code === 'not_registered') {
+        // Not approved yet (relay that binds a uuid at approval): a state, not an outage; nothing can be read, and the next round is on time.
+        notRegistered = true;
+        notice('not-registered', `inbox: ${safe(heartbeatError.message, 600)}`);
+        failures = 0;
+        return;
+      }
       failed(heartbeatError.message);
       return;
+    }
+    if (notRegistered) {
+      notRegistered = false;
+      noticed.delete('not-registered');
+      o.log('inbox: this machine is approved on the relay now');
+      // What waited for the approval is read at once.
+      first = true;
     }
     if (count === undefined) {
       notice('no-count', 'inbox: the relay does not report the inbox count in its heartbeat answer (relay not updated to distribution.md?): the inbox is read at every round instead');

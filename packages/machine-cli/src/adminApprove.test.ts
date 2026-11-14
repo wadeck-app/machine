@@ -553,3 +553,66 @@ describe('machine admin revoke', () => {
     expect(r.out).not.toMatch(/KNOWN LIMIT/);
   });
 });
+
+describe('machine admin approve: a uuid already bound to a token (pending relay change, poc-owner #12)', () => {
+  const SECOND = '22223333';
+  let firstId: string;
+  beforeEach(async () => {
+    await relay.close();
+    relay = await startFakeRelay({ bindOwnershipAtApproval: true, moreCodes: [SECOND] });
+    await login();
+    ({ id: firstId } = await candidatePosts());
+  });
+  /** The same machine joins again with another token (a new pairing): same uuid, new candidacy. */
+  async function secondTokenPosts(): Promise<string> {
+    await ok(cand, ['join', SECOND, '--relay', relay.url, '--no-wait', '--force']);
+    return relay.pendingIds().at(-1) as string;
+  }
+
+  it('the first approval of a uuid carries no warning: the question is the plain one', async () => {
+    const asked: string[] = [];
+    const r = await approve([firstId], { ask: async (l) => (asked.push(l), 'y') });
+    expect(r.code, r.err).toBe(0);
+    expect(asked[0]).not.toMatch(/already bound|replaces/);
+    expect(r.out).not.toMatch(/already bound/);
+  });
+
+  it('the list and the detail say that the uuid is bound, to which token label, and that approving replaces it', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const second = await secondTokenPosts();
+    const list = await approve();
+    expect(list.out).toMatch(/\[warn\] the uuid is already bound to the token labelled "machine-pairing": approving replaces that binding/);
+    const asked: string[] = [];
+    const r = await approve([second], { ask: async (l) => (asked.push(l), 'n') });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/uuid .*already bound to the token labelled "machine-pairing"/);
+    // The y/N question itself carries the warning: the person answering reads it where the decision is taken.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('already bound to the token labelled "machine-pairing"');
+    expect(asked[0]).toMatch(/approving replaces it/);
+    expect(asked[0]).toMatch(/\[y\/N\] $/);
+    // Refused: nothing signed, no second decision.
+    expect(decisions()).toHaveLength(1);
+  });
+
+  it('--json carries uuidBound and boundTokenLabel', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    await secondTokenPosts();
+    const r = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
+    const parsed = JSON.parse(r.out) as { uuidBound: boolean; boundTokenLabel?: string }[];
+    expect(parsed).toMatchObject([{ uuidBound: true, boundTokenLabel: 'machine-pairing' }]);
+  });
+
+  it('confirmed: the binding moves to the new token; text from the relay is shown as printable ASCII', async () => {
+    expect((await approve([firstId])).code).toBe(0);
+    const second = await secondTokenPosts();
+    // A tampered label: what the relay says is shown as printable ASCII.
+    (relay.candidacies.get(second) as Record<string, unknown>).boundTokenLabel = 'ev\u001b[31mil';
+    const asked: string[] = [];
+    const r = await approve([second], { ask: async (l) => (asked.push(l), 'y') });
+    expect(r.code, r.err).toBe(0);
+    expect(asked[0]).toContain('"ev?[31mil"');
+    expect(asked[0]).not.toContain('\u001b');
+    expect(decisions()).toHaveLength(2);
+  });
+});

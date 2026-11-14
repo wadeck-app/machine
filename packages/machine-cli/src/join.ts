@@ -439,7 +439,10 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
   const code = finalCode(info.identityPublicKey, checked.admin.adminPublicKey, state.random);
   // Throws when another admin key is already pinned: before the human is asked anything.
   const alreadyPinned = isAlreadyPinned(configDir, checked);
-  if (!alreadyPinned) {
+  if (alreadyPinned) {
+    // Never silent: the human sees why no code is compared (the first machine of a network created this admin key itself).
+    o.say(`The admin key ${checked.admin.adminKeyId} is already pinned on this machine (it created it, or pinned it earlier): there is no new key to confirm, so no code is compared.\n`);
+  } else {
     o.say(`The admin approved this machine. Final code, it must be exactly the one the admin sees (admin key ${checked.admin.adminKeyId}):\n\n  ${code}\n\n`);
     const keep = `The approval is kept in ${candidacyFile(configDir)}: run \`machine join --resume\` once you can answer`;
     if (o.yesFinalCode !== undefined) {

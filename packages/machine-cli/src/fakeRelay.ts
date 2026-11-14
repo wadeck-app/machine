@@ -26,6 +26,14 @@ export interface FakeRelayOptions {
   inboxLimits?: { perInbox?: number; globalBytes?: number };
   /** Documents per page of the inbox listing (default 32, as the contract says). */
   inboxPageSize?: number;
+  /** More pairing codes, each claimed once and giving its OWN machine token, labelled "<label>-2", "<label>-3", ... (two machines on one relay). */
+  moreCodes?: string[];
+  /**
+   * Pending relay change (relay-api.md, "Pending relay change (poc-owner #12)"): a machine token can write records, heartbeat and read its
+   * inbox only for a uuid bound at approval to the token that posted the candidacy. The uuid is required in a candidacy; an unbound uuid is
+   * 403 not_registered; the admin list carries `uuidBound` and `boundTokenLabel`; the first writer no longer binds anything.
+   */
+  bindOwnershipAtApproval?: boolean;
 }
 
 export interface FakeInboxDocument {
@@ -74,7 +82,7 @@ export interface FakeRelay {
    */
   setOwner: (uuid: string, token: string | undefined) => void;
   /** Another machine token (scope machine): tests with two machines on one relay. Returns it. */
-  addMachineToken: () => string;
+  addMachineToken: (label?: string) => string;
   /** The clock of the relay in epoch seconds (presence: lastSeen and online). Default: the real clock. */
   setClock: (now: () => number) => void;
   /** The documents waiting for `uuid`, oldest first. */
@@ -97,7 +105,13 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const records = new Map<string, { record: unknown; etag: number; text: string }>();
   // Presence is in memory only (relay-api.md): the time of the last PUT or heartbeat of the owner.
   const lastSeen = new Map<string, number>();
-  const machineTokens = new Set<string>([token]);
+  const baseLabel = options.label ?? 'machine-pairing';
+  // Token -> label, for every machine token of this relay.
+  const machineTokens = new Map<string, string>([[token, baseLabel]]);
+  const bind = options.bindOwnershipAtApproval === true;
+  const extraCodes = (options.moreCodes ?? []).map((c, i) => ({ code: c, used: false, token: `tok_${randomBytes(12).toString('hex')}`, label: `${baseLabel}-${i + 2}` }));
+  // The token that posted each candidacy: what an approval binds the uuid to (never served).
+  const postedBy = new Map<string, string>();
   let clock: () => number = () => Math.floor(Date.now() / 1000);
   const ONLINE_SECONDS = 120;
   const MAX_RECORDS_PER_TOKEN = 50;
@@ -119,6 +133,12 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     return entry;
   };
 
+  // The approval binds the uuid of the candidacy to the token that posted it, replacing any earlier binding.
+  const bindAtApproval = (id: string) => {
+    const entry = candidacies.get(id);
+    const poster = postedBy.get(id);
+    if (bind && entry !== undefined && typeof entry.uuid === 'string' && poster !== undefined) owners.set(entry.uuid, poster);
+  };
   const presence = (uuid: string) => {
     const seen = lastSeen.get(uuid);
     return { lastSeen: seen ?? null, online: seen !== undefined && clock() - seen < ONLINE_SECONDS };
@@ -151,6 +171,12 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         adminCodeUsed = true;
         return send(res, 200, { success: true, serverTime: 1, token: adminToken, label: 'admin-pairing', scopes: adminScopes });
       }
+      const extra = extraCodes.find((c) => c.code === given && !c.used);
+      if (extra !== undefined) {
+        extra.used = true;
+        machineTokens.set(extra.token, extra.label);
+        return send(res, 200, { success: true, serverTime: 1, token: extra.token, label: extra.label, scopes });
+      }
       if (codeUsed || given !== code) return send(res, 401, { success: false, error: 'Invalid or expired code.', serverTime: 1 });
       codeUsed = true;
       return send(res, 200, { success: true, serverTime: 1, token, label: options.label ?? 'machine-pairing', scopes });
@@ -181,10 +207,23 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     if (!machineTokens.has(presented) && !isAdminToken) return err(res, 401, 'unauthorized', 'invalid token');
     // A machine token reaches only the machine routes, and never the admin ones.
     const admin = isAdminToken ? adminScopes === null : presented === token && scopes === null;
+    // A uuid that was never bound by an approval: a machine token cannot use it at all.
+    const notRegistered = (uuid: string): boolean => {
+      if (!bind || admin || owners.get(uuid) !== undefined) return false;
+      err(res, 403, 'not_registered', 'this uuid was not approved for any token: post a candidacy and have the admin approve it');
+      return true;
+    };
 
     if (method === 'POST' && path === '/api/machines/candidacies') {
+      if (bind) {
+        const given = (body as { uuid?: unknown } | undefined)?.uuid;
+        if (typeof given !== 'string' || given !== given.toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(given)) {
+          return err(res, 400, 'invalid_body', 'uuid is required: a lower-case canonical v4 UUID');
+        }
+      }
       const id = randomBytes(16).toString('base64url');
       const createdAt = Math.floor(Date.now() / 1000);
+      postedBy.set(id, presented);
       candidacies.set(id, { status: 'pending', ...(body as object), createdAt, expiresAt: createdAt + 900 });
       return send(res, 201, { id, createdAt, expiresAt: createdAt + 900 });
     }
@@ -197,7 +236,9 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
             // Everything stored is served as is, so a test can plant extra or tampered fields (a `code`, another key, a `uuid`).
             const { status: _status, approval: _approval, ...fields } = c;
             const createdAt = Math.floor(Date.now() / 1000);
-            return { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...fields };
+            const bound = bind && typeof fields.uuid === 'string' ? owners.get(fields.uuid) : undefined;
+            const binding = bind ? { uuidBound: bound !== undefined, ...(bound !== undefined ? { boundTokenLabel: machineTokens.get(bound) ?? 'unknown' } : {}) } : {};
+            return { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...binding, ...fields };
           }),
       });
     }
@@ -211,7 +252,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         if (entry.status !== 'pending') return err(res, 409, 'not_pending', 'already decided');
         const b = body as { decision?: string; approval?: unknown };
         entry.status = b.decision === 'approve' ? 'approved' : 'rejected';
-        if (b.decision === 'approve') entry.approval = b.approval;
+        if (b.decision === 'approve') {
+          entry.approval = b.approval;
+          bindAtApproval(decodeURIComponent(cand[1] as string));
+        }
         return send(res, 204);
       }
     }
@@ -241,6 +285,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         return send(res, 204);
       }
       // Reading and deleting: the token that owns the uuid, or a full-access token. No oracle on unknown uuids: 403 for everyone else.
+      if (notRegistered(uuid)) return;
       const mayRead = admin || (owners.get(uuid) !== undefined && owners.get(uuid) === bearer);
       if (!mayRead) return err(res, 403, 'not_owner', 'this token does not own that inbox');
       if (method === 'GET' && id === undefined) {
@@ -272,6 +317,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       }
       // The count is that of the inbox the caller owns; a token that does not own the uuid sees 0.
       if (method === 'POST' && machine[2]) {
+        if (notRegistered(uuid)) return;
         if (owners.get(uuid) === bearer) lastSeen.set(uuid, clock());
         return send(res, 200, { success: true, serverTime: 1, inbox: { count: owners.get(uuid) === bearer ? (inboxes.get(uuid)?.size ?? 0) : 0 } });
       }
@@ -280,6 +326,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         return r ? send(res, 200, { uuid, record: r.record, ...presence(uuid), etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
       }
       if (method === 'PUT' && !machine[2]) {
+        if (notRegistered(uuid)) return;
         const current = records.get(uuid);
         // The first token to PUT a uuid owns it: later writes need the same token or full access.
         const owner = owners.get(uuid);
@@ -300,7 +347,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         records.set(uuid, { record: body, etag, text: raw });
         lastSeen.set(uuid, clock());
         // The first token that writes a record owns the uuid.
-        if (!owners.has(uuid) && !isAdminToken) owners.set(uuid, bearer);
+        if (!bind && !owners.has(uuid) && !isAdminToken) owners.set(uuid, bearer);
         return send(res, 200, { success: true, etag: String(etag) }, { ETag: String(etag) });
       }
     }
@@ -335,15 +382,16 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));
       const bindable = options.bind !== false && typeof approval === 'object' && approval !== null && !Array.isArray(approval) && !('random' in approval);
       entry.approval = bindable ? { ...(approval as object), random: entry.random } : approval;
+      bindAtApproval(id);
     },
     reject: (id) => {
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'rejected';
     },
-    addMachineToken: () => {
+    addMachineToken: (label) => {
       const added = `tok_${randomBytes(12).toString('hex')}`;
-      machineTokens.add(added);
+      machineTokens.set(added, label ?? `machine-token-${machineTokens.size + 1}`);
       return added;
     },
     setClock: (now) => {

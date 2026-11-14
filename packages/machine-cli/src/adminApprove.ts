@@ -5,7 +5,7 @@ import { sealBundle } from './approval.js';
 import { distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
-import { exportMachineInfo, importPeer, registerMachine, type PeerBundle } from './network.js';
+import { exportMachineInfo, importPeer, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
 import { viaAdminToken } from './adminRelay.js';
 import { createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
@@ -62,6 +62,10 @@ export interface CandidacyView {
   createdAt: number;
   expiresAt: number;
   uuid: string | undefined;
+  /** Relay that binds a uuid to a token at approval (relay-api.md, pending change): the uuid is already bound. Absent: the relay did not say. */
+  uuidBound: boolean | undefined;
+  /** The label of the token the uuid is bound to, as the relay says it (informative only). */
+  boundTokenLabel: string | undefined;
   /** Recomputed here from identityPublicKey and random, never taken from the relay. */
   code: string;
   /** Why this candidacy must not be approved (reject stays possible). */
@@ -134,9 +138,22 @@ export function reviewCandidacy(raw: unknown, nowSeconds: number): CandidacyView
   } else {
     uuid = o.uuid;
   }
+  let uuidBound: boolean | undefined;
+  if (o.uuidBound !== undefined) {
+    if (typeof o.uuidBound === 'boolean') uuidBound = o.uuidBound;
+    else blockers.push('the relay sent an invalid "uuidBound" (not true or false): it may be an incompatible version');
+  }
+  const boundTokenLabel = typeof o.boundTokenLabel === 'string' && o.boundTokenLabel.length > 0 ? o.boundTokenLabel : undefined;
   if (expiresAt !== 0 && nowSeconds >= expiresAt) blockers.push(`this candidacy expired at ${iso(expiresAt)}: the candidate must post a new one (\`machine join --resume\`)`);
 
-  return { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt, uuid, code, blockers };
+  return { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt, uuid, uuidBound, boundTokenLabel, code, blockers };
+}
+
+/** What approving a uuid that is already bound to a token does, to be read before answering (relay-api.md, pending relay change). */
+function bindingWarning(v: CandidacyView): string | undefined {
+  if (v.uuidBound !== true) return undefined;
+  const which = v.boundTokenLabel !== undefined ? `the token labelled "${printable(v.boundTokenLabel)}"` : 'another token (the relay did not say which)';
+  return `the uuid is already bound to ${which}`;
 }
 
 const iso = (epochSeconds: number): string => new Date(epochSeconds * 1000).toISOString();
@@ -150,18 +167,22 @@ function formatList(views: CandidacyView[], nowSeconds: number): string {
   const lines = [`${views.length} pending candidacy(ies); approve one with \`machine admin approve <id>\` (a unique prefix of the id is enough):`];
   for (const v of views) {
     lines.push('', `  ${printable(v.id)}  ${printable(v.name)}  host ${printable(v.hostname)}  from ${printable(v.observedIp)}  age ${age(nowSeconds, v.createdAt)}  code ${v.code}`);
+    const binding = bindingWarning(v);
+    if (binding !== undefined) lines.push(`    [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`);
     for (const b of v.blockers) lines.push(`    [warn] cannot be approved: ${b}`);
   }
   return `${lines.join('\n')}\n`;
 }
 
 function formatDetail(v: CandidacyView, nowSeconds: number): string {
+  const binding = bindingWarning(v);
   return [
     `Candidacy ${printable(v.id)}`,
     `  name       ${printable(v.name)}`,
     `  hostname   ${printable(v.hostname)} (declared by the machine, informative only)`,
     `  seen from  ${printable(v.observedIp)} (seen by the relay, informative only)`,
     `  uuid       ${v.uuid ?? '(missing)'}`,
+    ...(binding !== undefined ? [`  [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`] : []),
     `  created    ${iso(v.createdAt)} (${age(nowSeconds, v.createdAt)} ago), expires ${iso(v.expiresAt)}`,
     '',
     'Verification code, recomputed here from the key and random received (information only, nothing to compare now; the one comparison comes after signing):',
@@ -260,9 +281,27 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   }
   const uuid = view.uuid as string;
 
+  // The very first machine of a network is its admin machine: its own candidacy is approved here, and it is no peer of itself.
+  // A candidacy that takes the uuid of this machine with another key or name is not this machine (a squatter): refused before anything is asked or signed.
+  let adminInfo: MachineInfo | undefined;
+  try {
+    adminInfo = exportMachineInfo(configDir);
+  } catch (e) {
+    if (!(e instanceof NotInitializedError)) throw e;
+  }
+  const selfApproval = adminInfo !== undefined && adminInfo.uuid === uuid;
+  if (adminInfo !== undefined && selfApproval && (adminInfo.identityPublicKey !== view.identityPublicKey || adminInfo.name !== view.name)) {
+    throw new Error(
+      `refusing to approve ${printable(view.id)}: it claims the uuid of this machine (${uuid}) with another key or name than this machine has. Nothing was signed or sent (\`machine admin approve ${printable(view.id)} --reject\` rejects it)`,
+    );
+  }
+
+  const rebind = bindingWarning(view);
   let answer: string;
   try {
-    answer = await o.ask(`Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}? [y/N] `);
+    answer = await o.ask(
+      `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''} [y/N] `,
+    );
   } catch (e) {
     if (e instanceof PromptTimeoutError) throw e;
     throw new Error(
@@ -284,15 +323,15 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const peers: PeerBundle[] = [];
   let adminSelfImported = false;
   let adminUuid: string | null = null;
-  try {
-    const adminInfo = exportMachineInfo(configDir);
-    if (adminInfo.uuid === uuid) throw new Error('the candidate has the uuid of this machine');
-    peers.push(await registerMachine(configDir, adminInfo, { now: o.now, prompt, validForDays: o.days, pairSecret: self.pairSecret }));
-    adminUuid = adminInfo.uuid;
-    adminSelfImported = true;
-  } catch (e) {
-    if (!(e instanceof NotInitializedError)) throw e;
+  if (adminInfo === undefined) {
     o.say('[warn] this machine has no identity (`machine init`): the candidate is enrolled without this machine as a peer\n');
+  } else {
+    adminUuid = adminInfo.uuid;
+    // The candidate is this machine: no peer entry, no pair secret with itself, nothing to import.
+    if (!selfApproval) {
+      peers.push(await registerMachine(configDir, adminInfo, { now: o.now, prompt, validForDays: o.days, pairSecret: self.pairSecret }));
+      adminSelfImported = true;
+    }
   }
 
   // The relay is untrusted and reads everything it carries: the pair secrets are sealed to the identity key of the candidate
@@ -321,7 +360,9 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   o.say(
     `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
       `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
-      `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`,
+      (selfApproval
+        ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
+        : `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`),
   );
 
   // Only after the decision went through: the other peers are told about the new machine (and it about them). A failure is reported
@@ -329,7 +370,10 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const retry = `machine admin distribute ${uuid}`;
   let report: DistributionReport | undefined;
   let formatted: FormattedDistribution;
-  if (!adminSelfImported) {
+  if (selfApproval) {
+    // Nothing to send: the other machines learned this one when they were approved by it.
+    formatted = { out: '', err: '', failed: false };
+  } else if (!adminSelfImported) {
     formatted = {
       out: '',
       err: `[warn] the other peers were NOT told about "${printable(view.name)}": this machine has no identity (\`machine init\`), so the new machine is not in its peer list. They learn it only through the manual flow (\`machine admin register\`, then \`machine peer import\` on each machine)\n`,

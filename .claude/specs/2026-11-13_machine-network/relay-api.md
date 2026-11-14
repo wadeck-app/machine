@@ -151,3 +151,19 @@ Every screen that guides enrollment shows a vertical timeline on the left (curre
 - `deviceCode` and token are never printed; the `deviceCode` is never written to disk. An interrupted join stores nothing and starts over.
 - 404/405 on `start`: reported as "no device login, use a pairing code".
 - `join` never enables a startup job; it suggests `machine startup enable` (not implemented). `--auto-startup` is refused (exit 2) until it exists.
+
+## Pending relay change (poc-owner #12)
+
+DRAFT, not part of the contract until poc-owner confirms. The client and `fakeRelay.ts` (`bindOwnershipAtApproval`) already follow it.
+
+A machine token may write the address record, send heartbeats and read or delete the inbox only for a uuid bound at approval to the token that posted the candidacy. The first writer no longer binds anything (AR-8 pre-binding disappears).
+
+| Point | Behaviour |
+|---|---|
+| `POST` candidacy | `uuid` required (lower-case canonical v4), else 400 `invalid_body` |
+| Decision `approve` | binds the candidacy uuid to the posting token, replacing any earlier binding |
+| Unbound uuid, machine token | 403 `not_registered` on `PUT /api/machines/{uuid}`, heartbeat, inbox read and delete. Full-access token unaffected |
+| Bound to another token | 403 `not_owner`, as today |
+| `GET` candidacies (A) | each entry adds `uuidBound` (boolean) and, when true, `boundTokenLabel` |
+
+Client: `not_registered` says "this machine is not approved yet: run machine join and ask the admin to approve it". The daemon treats it as a state (no backoff) and publishes in the next round after approval. `machine admin approve` shows a warning in the list and detail, and in the y/N question, when `uuidBound` is true (names the label, says approving replaces the binding).

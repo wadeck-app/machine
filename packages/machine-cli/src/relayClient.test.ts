@@ -103,6 +103,19 @@ describe('error mapping (injected fetch)', () => {
 describe('address record errors (injected fetch)', () => {
   const record = { body: { v: 1 as const, uuid: UUID, addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: 1 }, signature: 's' };
 
+  it('not_registered (a uuid never approved, pending relay change poc-owner #12) says what to do, on a record write, a heartbeat and an inbox read', async () => {
+    const answer = () => json(403, { success: false, error: 'not_registered', message: 'uuid not approved' });
+    const client = clientWith(answer);
+    for (const call of [() => client.putRecord(UUID, record), () => client.heartbeat(UUID), () => client.listInbox(UUID), () => client.deleteInboxDocument(UUID, 'x'.repeat(22))]) {
+      const e = await failure(call());
+      expect(e.status).toBe(403);
+      expect(e.code).toBe('not_registered');
+      expect(e.message).toContain('this machine is not approved yet: run machine join and ask the admin to approve it');
+      expect(e.message).not.toMatch(/token may lack|scope/);
+      expect(e.message).not.toContain('SECRET-TOKEN');
+    }
+  });
+
   it('not_owner on a record write names the cause and the exact fix, not the generic scope advice', async () => {
     const e = await failure(clientWith(() => json(403, { success: false, error: 'not_owner', message: 'owned by another token' })).putRecord(UUID, record));
     expect(e.code).toBe('not_owner');

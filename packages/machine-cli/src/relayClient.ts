@@ -277,6 +277,9 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
+    } else if (status === 403 && code === 'not_registered') {
+      // The relay binds a uuid to a machine token only when the admin approves the candidacy (pending relay change, relay-api.md).
+      message = `the relay ${baseUrl} does not know this machine as approved (not_registered)${detail}: this machine is not approved yet: run machine join and ask the admin to approve it`;
     } else if (c.record && status === 403 && code === 'not_owner') {
       message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: the record is bound to another token than the one of this machine (the first token to write it owns it): either the token of this machine was replaced, or ANOTHER machine token claimed this uuid first, which also hijacks the inbox of this machine (the documents of the admin to it would be withheld). Tell the admin to run \`machine admin forget-relay-record <machine>\` (it removes the old record and its inbox on the relay); this daemon then publishes again by itself`;
     } else if (c.record && status === 429 && code === 'too_many_machines') {
