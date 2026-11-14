@@ -50,3 +50,19 @@ export {
 export { candidacyCode, finalCode, newCandidacyRandom } from './sas.js';
 export { MIN_ITERATIONS, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
 export { isUuid, machineNameProblem, resolveMachineRef, type MachineEntry, type Resolution } from './reference.js';
+export {
+  DEFAULT_REQUEST_LIFETIME_SECONDS,
+  MAX_REQUEST_LIFETIME_SECONDS,
+  REQUEST_DOMAIN,
+  REQUEST_SKEW_SECONDS,
+  ReplayCache,
+  newRequest,
+  signRequest,
+  verifyRequest,
+  type ReplayResult,
+  type RequestBody,
+  type RequestFailure,
+  type RequestResult,
+  type SignedRequest,
+  type VerifyRequestContext,
+} from './request.js';
