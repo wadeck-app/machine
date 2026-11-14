@@ -44,3 +44,11 @@ The Candidacies page shows a vertical timeline on the left (candidacy received, 
 3. dsl-lib components: timeline (generic, incubating), passphrase and signing, final code display.
 4. DSL views for the five pages; scaffold with `app-core-cli init`, copy the sibling test layout (including a real-server backend integration test).
 5. Publish with the same process as `app-module-queue`.
+
+## Facts from orch-owner (siblings, read in their repo, nothing run)
+
+- The registered component type is `<module id>:<Name>`; for orch it is `orchestrator:<Name>`, so ours is `machine:<Name>` as planned.
+- Entries are generated from `src/components/*.tsx` JSDoc tags (`@registryCategory`, `@registryTags`) by a script into a committed `src/generated/entries.tsx`; `app-core-cli package` bundles to `dist-module/dsl-lib/entries.mjs`. Components may call `fetch` themselves on an API base; the module backend (`ctx.registerRoute`) talks to the daemon with a bearer token file (`<configDir>/health_token` for orch).
+- Tests: two vitest projects, `ui` (jsdom, testing-library, tests next to sources) and `lib` (node, one global setup that packages the module once).
+- Publishing: neither `dsl-lib-orch` nor `app-module-orchestrator` is published on its own (`private: true`). CI runs check and package, then a script copies `dist-module` into the CLI package as `app-module/`; the daemon registers that folder with app-core at start. For machine this means the module ships INSIDE `@wadeck-app/machine-cli` (WP9), and the daemon registers it with app-core at start (to design with app-core-owner: how the daemon finds app-core).
+- Daemon auth from the module backend: a token file next to the config (to define for machine: a `health_token`-like file under `_secrets_`, read by the backend, required by the local daemon API for every route that is not read-only status).
