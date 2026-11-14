@@ -377,3 +377,26 @@ describe('machine cli register', () => {
     expect(r.err).toMatch(/app-core is not reachable/);
   });
 });
+
+describe('post-update records the update it follows (an older updater did not)', () => {
+  const postUpdateDeps = { startup: { status: async () => ({ exists: false }), enable: async () => ({ action: 'updated' }) }, daemon: { version: async () => undefined, quit: async () => undefined } };
+  const recordFile = () => join(dir, 'last-update.json');
+  const state = (status: string) => writeFileSync(join(dir, 'update-state.json'), JSON.stringify({ status, targetVersion: RELEASE, previousVersion: '2026.11.14-590-aaaaaaaa', timestamp: 5 }));
+
+  it('writes last-update.json from a success state for this version, and leaves update-state.json for the daemon', async () => {
+    state('success');
+    const r = await run(['cli', 'post-update'], { version: RELEASE, postUpdate: postUpdateDeps });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(recordFile(), 'utf8'))).toEqual({ previousVersion: '2026.11.14-590-aaaaaaaa', targetVersion: RELEASE, timestamp: 5 });
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(true);
+  });
+
+  it('writes nothing for a state that is not a success, or whose target is another version', async () => {
+    state('failed');
+    await run(['cli', 'post-update'], { version: RELEASE, postUpdate: postUpdateDeps });
+    expect(existsSync(recordFile())).toBe(false);
+    state('success');
+    await run(['cli', 'post-update'], { version: '2026.11.14-600-cccccccc', postUpdate: postUpdateDeps });
+    expect(existsSync(recordFile())).toBe(false);
+  });
+});

@@ -4,7 +4,8 @@ import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { UpdateManager } from '@wadeck-app/shared-cli/UpdateManager';
 import { PACKAGE_NAME } from './cliMeta.js';
 import { guardUpdates, UPDATE_STARTS_FILE } from './updateGuard.js';
-import { postUpdatePendingNotice, updateNotice, type UpdateStateLike } from './updateNotice.js';
+import { recordUpdateFromState } from './rollbackRecord.js';
+import { postUpdatePendingNotice, readUpdateStateReadOnly, updateNotice, type UpdateStateLike } from './updateNotice.js';
 import { createUpdateScheduler, type UpdateSpawner } from './updateScheduling.js';
 
 /** The daemon asks for an update check at start and then at this interval (the updater skips its own time gate for it). */
@@ -59,6 +60,13 @@ export function startUpdates(configDir: string, version: string, options: Daemon
     // Persisted by an updater whose post-update failed: it ran detached with stdio ignored, so nobody saw its output.
     const pending = postUpdatePendingNotice(configDir);
     if (pending) log(`ERROR ${pending.text}`);
+    // Before the state is consumed: an update done by an older updater left no last-update.json, and a rollback needs its versions.
+    try {
+      const recorded = recordUpdateFromState(configDir, readUpdateStateReadOnly(configDir));
+      if (recorded.reason !== undefined) log(`ERROR ${recorded.reason}`);
+    } catch (e) {
+      log(`ERROR cannot record the last update for \`machine cli rollback\`: ${(e as Error).message}`);
+    }
     const state = manager.readAndClearState();
     const notice = updateNotice(state);
     if (notice) log(`update state: ${notice.text}`);

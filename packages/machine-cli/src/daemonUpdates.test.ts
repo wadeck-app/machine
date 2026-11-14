@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon, type DaemonStart } from './daemonEntry.js';
+import { UpdateManager } from '@wadeck-app/shared-cli/UpdateManager';
 import { initMachine } from './identity.js';
+import { prepareRollback } from './rollbackRecord.js';
 
 // WP9.6: the daemon asks for an update check at start and every 30 minutes, guards against update loops, and answers POST /quit.
 
@@ -208,5 +210,54 @@ describe('a post-update that failed in a background run', () => {
     const f = fakes();
     await start(RELEASE, f);
     expect(f.logs.some((l) => l.startsWith('ERROR') && l.includes('orch refused the job') && l.includes('machine cli post-update'))).toBe(true);
+  });
+});
+
+describe('the record of the last update (rollback after the daemon consumed update-state.json)', () => {
+  const recordFile = () => join(dir, 'last-update.json');
+  const writeState = (status: string, over: Record<string, unknown> = {}) =>
+    writeFileSync(join(dir, 'update-state.json'), JSON.stringify({ status, targetVersion: RELEASE, previousVersion: OLDER, timestamp: 5, ...over }));
+  // Real readAndClearState (real file), fake spawner.
+  const realManager = (f: ReturnType<typeof fakes>) => {
+    const real = new UpdateManager('@wadeck-app/machine-cli', dir);
+    f.updates.manager = { scheduleBackgroundUpdate: () => undefined, readAndClearState: () => real.readAndClearState() as never };
+  };
+
+  it('a success state left by an older updater (no record) is recorded at the daemon start, then `cli rollback` works', async () => {
+    writeState('success');
+    const f = fakes();
+    realManager(f);
+    await start(RELEASE, f);
+    expect(existsSync(join(dir, 'update-state.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(recordFile(), 'utf8'))).toEqual({ previousVersion: OLDER, targetVersion: RELEASE, timestamp: 5 });
+    expect(prepareRollback(dir, RELEASE).restored).toBe(true);
+  });
+
+  it('keeps the record the updater wrote (same update, newer timestamp)', async () => {
+    writeState('success');
+    writeFileSync(recordFile(), JSON.stringify({ previousVersion: OLDER, targetVersion: RELEASE, timestamp: 8 }));
+    const f = fakes();
+    realManager(f);
+    await start(RELEASE, f);
+    expect((JSON.parse(readFileSync(recordFile(), 'utf8')) as { timestamp: number }).timestamp).toBe(8);
+  });
+
+  it('no record for a failed, rolled-back or applying state', async () => {
+    for (const status of ['failed', 'rolled-back', 'applying']) {
+      writeState(status);
+      const f = fakes();
+      realManager(f);
+      await start(RELEASE, f);
+      expect(existsSync(recordFile())).toBe(false);
+    }
+  });
+
+  it('a state with an invalid previousVersion is not recorded, and the daemon says so in its log', async () => {
+    writeState('success', { previousVersion: 'x; rm -rf /' });
+    const f = fakes();
+    realManager(f);
+    await start(RELEASE, f);
+    expect(existsSync(recordFile())).toBe(false);
+    expect(f.logs.join('\n')).toMatch(/last-update\.json.*previousVersion|previousVersion.*rollback/s);
   });
 });

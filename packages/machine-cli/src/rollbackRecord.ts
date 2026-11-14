@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { VersionValidation } from '@wadeck-app/shared-cli/VersionValidation';
 import { writeFileAtomic } from './fsutil.js';
+import type { UpdateStateLike } from './updateNotice.js';
 import { createUpdateRecords, LAST_UPDATE_FILE } from './updater/updateRecords.js';
 
 // `machine cli rollback` (shared-cli) reads previousVersion from update-state.json, but the daemon deletes that file at its start. The updater
@@ -42,6 +43,40 @@ export function prepareRollback(configDir: string, installedVersion: string): Pr
   }
   writeFileAtomic(stateFile, `${JSON.stringify({ status: 'success', previousVersion: last.previousVersion, currentVersion: last.previousVersion, targetVersion: last.targetVersion, timestamp: last.timestamp })}\n`, 0o600);
   return { restored: true, note: `update-state.json was already consumed (the daemon reads it at its start): rolling back v${last.targetVersion} to v${last.previousVersion} from ${recordFile}` };
+}
+
+export interface RecordOutcome {
+  action: 'written' | 'kept' | 'skipped';
+  /** Set when a success state could not be recorded (worth a log line); absent for states that are simply not a success. */
+  reason?: string;
+}
+
+/**
+ * Writes last-update.json from a terminal success state, to be called BEFORE the state is consumed. An update done by an older updater
+ * (which does not write the record) would otherwise leave nothing for `machine cli rollback` once the daemon cleared update-state.json.
+ * Idempotent; never replaces a record that is at least as recent; writes nothing unless the state is a success with valid versions.
+ */
+export function recordUpdateFromState(configDir: string, state: UpdateStateLike | null, onlyForVersion?: string): RecordOutcome {
+  if (state === null || state.status !== 'success') return { action: 'skipped' };
+  const target = state.targetVersion ?? state.newVersion;
+  if (onlyForVersion !== undefined && target !== onlyForVersion) return { action: 'skipped' };
+  const invalid = (what: string): RecordOutcome => ({
+    action: 'skipped',
+    reason: `the success state has ${what}, so no ${LAST_UPDATE_FILE} was written: \`machine cli rollback\` will need \`npm install -g ${PACKAGE}@<previous version>\``,
+  });
+  if (typeof target !== 'string' || !VersionValidation.VERSION_RE.test(target)) return invalid('no valid targetVersion');
+  if (typeof state.previousVersion !== 'string' || !VersionValidation.VERSION_RE.test(state.previousVersion)) return invalid(`no valid previousVersion (${JSON.stringify(state.previousVersion)})`);
+  if (typeof state.timestamp !== 'number') return invalid('no timestamp');
+  const records = createUpdateRecords(configDir);
+  let existing = null;
+  try {
+    existing = records.readLastUpdate();
+  } catch {
+    // An unusable record cannot serve a rollback anyway: replaced by this one.
+  }
+  if (existing !== null && existing.timestamp >= state.timestamp) return { action: 'kept' };
+  records.writeLastUpdate({ previousVersion: state.previousVersion, targetVersion: target, timestamp: state.timestamp });
+  return { action: 'written' };
 }
 
 /** After a successful rollback: the record describes an update that is no longer installed. */

@@ -15,7 +15,7 @@ import { enableStartup, OrchNotInstalledError, startupStatus, StartupError, type
 import { spawnPostUpdate } from './updater/spawnPostUpdate.js';
 import { UPDATER_BUNDLE_NAME } from './updateScheduling.js';
 import { writeFileAtomic } from './fsutil.js';
-import { forgetLastUpdate, prepareRollback } from './rollbackRecord.js';
+import { forgetLastUpdate, prepareRollback, recordUpdateFromState } from './rollbackRecord.js';
 import { noticeKey, NOTICE_SEEN_FILE, postUpdatePendingNotice, readUpdateStateReadOnly, updateNotice } from './updateNotice.js';
 import { POST_UPDATE_PENDING_FILE } from './updater/updateRecords.js';
 import { appVersion } from './version.js';
@@ -237,6 +237,13 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
         // post-update: the new install, after an update or a rollback.
         const lines: string[] = [];
         const result = await postUpdate({ newVersion: deps.version, ...(deps.postUpdate as Pick<PostUpdateDeps, 'startup' | 'daemon'>), say: (line) => lines.push(line) });
+        // The restart above makes the daemon consume update-state.json: an update by an older updater must leave its record first.
+        try {
+          const recorded = recordUpdateFromState(configDir, readUpdateStateReadOnly(configDir), deps.version);
+          if (recorded.reason !== undefined) io.stderr(`[warn] ${recorded.reason}\n`);
+        } catch (e) {
+          io.stderr(`[warn] cannot record the last update for \`machine cli rollback\`: ${(e as Error).message}\n`);
+        }
         // Done: the record of a post-update that failed in a background run is obsolete.
         rmSync(join(configDir, POST_UPDATE_PENDING_FILE), { force: true });
         emit({ ...result, newVersion: deps.version }, lines.join(''));

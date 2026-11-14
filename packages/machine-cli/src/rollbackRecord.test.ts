@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { UpdateManager } from '@wadeck-app/shared-cli/UpdateManager';
 import { VersionValidation } from '@wadeck-app/shared-cli/VersionValidation';
-import { forgetLastUpdate, prepareRollback } from './rollbackRecord.js';
+import { forgetLastUpdate, prepareRollback, recordUpdateFromState } from './rollbackRecord.js';
+import { readUpdateStateReadOnly } from './updateNotice.js';
 import { LAST_UPDATE_FILE } from './updater/updateRecords.js';
 
 // `machine cli rollback` needs update-state.json (shared-cli), but the daemon consumes that file at its start (readAndClearState deletes
@@ -71,5 +72,57 @@ describe('forgetLastUpdate', () => {
     forgetLastUpdate(dir);
     expect(existsSync(recordFile())).toBe(false);
     expect(() => forgetLastUpdate(dir)).not.toThrow();
+  });
+});
+
+// An update done by an OLDER updater (no last-update.json writing) leaves only update-state.json: the new code records it before it is consumed.
+describe('recordUpdateFromState', () => {
+  const success = (over: Record<string, unknown> = {}) => ({ status: 'success', targetVersion: TARGET, previousVersion: PREVIOUS, timestamp: 5, ...over });
+  const read = () => JSON.parse(readFileSync(recordFile(), 'utf8')) as Record<string, unknown>;
+
+  it('writes the record from a success state', () => {
+    expect(recordUpdateFromState(dir, success()).action).toBe('written');
+    expect(read()).toEqual({ previousVersion: PREVIOUS, targetVersion: TARGET, timestamp: 5 });
+  });
+
+  it('is idempotent and never replaces a newer (or equal) record with an older one', () => {
+    writeRecord({ timestamp: 9, previousVersion: '2026.11.14-580-dddddddd' });
+    expect(recordUpdateFromState(dir, success({ timestamp: 5 })).action).toBe('kept');
+    expect(read().timestamp).toBe(9);
+    expect(read().previousVersion).toBe('2026.11.14-580-dddddddd');
+    expect(recordUpdateFromState(dir, success({ timestamp: 9 })).action).toBe('kept');
+  });
+
+  it('replaces an older record', () => {
+    writeRecord({ timestamp: 1, targetVersion: '2026.11.14-500-cccccccc' });
+    expect(recordUpdateFromState(dir, success({ timestamp: 5 })).action).toBe('written');
+    expect(read().targetVersion).toBe(TARGET);
+  });
+
+  it('writes nothing for a state that is not a success', () => {
+    for (const status of ['failed', 'rolled-back', 'applying', 'update-available']) {
+      expect(recordUpdateFromState(dir, success({ status })).action).toBe('skipped');
+    }
+    expect(recordUpdateFromState(dir, null).action).toBe('skipped');
+    expect(existsSync(recordFile())).toBe(false);
+  });
+
+  it('writes nothing, and says why, for a success without a valid previousVersion or target', () => {
+    for (const over of [{ previousVersion: undefined }, { previousVersion: 'x; rm -rf /' }, { targetVersion: undefined }, { timestamp: undefined }]) {
+      const r = recordUpdateFromState(dir, success(over));
+      expect(r.action).toBe('skipped');
+      expect(r.reason).toBeDefined();
+    }
+    expect(existsSync(recordFile())).toBe(false);
+  });
+
+  it('an old-updater state consumed by the real readAndClearState leaves a record that makes the rollback work', () => {
+    writeState();
+    // What the daemon does: record from the state still on disk, then consume it.
+    expect(recordUpdateFromState(dir, readUpdateStateReadOnly(dir)).action).toBe('written');
+    expect(new UpdateManager('@wadeck-app/machine-cli', dir).readAndClearState()?.status).toBe('success');
+    expect(existsSync(stateFile())).toBe(false);
+    expect(prepareRollback(dir, TARGET).restored).toBe(true);
+    expect((JSON.parse(readFileSync(stateFile(), 'utf8')) as { previousVersion: string }).previousVersion).toBe(PREVIOUS);
   });
 });
