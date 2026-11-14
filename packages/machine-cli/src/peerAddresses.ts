@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isUuid, verifyAddressRecord, type AddressEntry, type LastSeenRecord } from '@wadeck-app/machine-core';
-import { writeFileAtomic } from './fsutil.js';
+import { destinationProblem, isUuid, verifyAddressRecord, type AddressEntry, type LastSeenRecord } from '@wadeck-app/machine-core';
+import { withFileLock, writeFileAtomic } from './fsutil.js';
 import { RelayError, type RelayClient } from './relayClient.js';
 
 // The addresses of the peers, learned from the relay (relay-api.md "Machines resource", threat T-33). The relay is untrusted: a record is used
@@ -57,13 +57,39 @@ export function readPeerRecords(configDir: string): Record<string, RememberedRec
   return out;
 }
 
-function remember(configDir: string, uuid: string, entry: RememberedRecord): void {
-  const all = readPeerRecords(configDir);
-  const known = all[uuid];
-  // Only a record that moves the state forward is written; the same record again changes nothing.
-  if (known !== undefined && known.seq === entry.seq) return;
-  all[uuid] = entry;
-  writeFileAtomic(peerRecordsFile(configDir), `${JSON.stringify({ v: 1, peers: all }, null, 2)}\n`, 0o644);
+function writeAll(configDir: string, all: Record<string, RememberedRecord>): void {
+  writeFileAtomic(peerRecordsFile(configDir), `${JSON.stringify({ v: 1, peers: all }, null, 2)}
+`, 0o644);
+}
+
+/**
+ * Remembers verified records, in ONE locked read-modify-write for the whole batch: what another command or the daemon wrote meanwhile is
+ * kept, and a record never replaces one with a higher or equal seq (nothing moves backwards).
+ */
+export function commitRecords(configDir: string, entries: Record<string, RememberedRecord>): void {
+  if (Object.keys(entries).length === 0) return;
+  withFileLock(peerRecordsFile(configDir), () => {
+    const all = readPeerRecords(configDir);
+    let changed = false;
+    for (const [uuid, entry] of Object.entries(entries)) {
+      const known = all[uuid];
+      if (known !== undefined && known.seq >= entry.seq) continue;
+      all[uuid] = entry;
+      changed = true;
+    }
+    if (changed) writeAll(configDir, all);
+  });
+}
+
+/** Forgets what was remembered of ONE peer (see `machine peer forget-record`). True when there was something. */
+export function forgetPeerRecord(configDir: string, uuid: string): boolean {
+  return withFileLock(peerRecordsFile(configDir), () => {
+    const all = readPeerRecords(configDir);
+    if (!(uuid in all)) return false;
+    delete all[uuid];
+    writeAll(configDir, all);
+    return true;
+  });
 }
 
 const lastSeenOf = (known: RememberedRecord | undefined): LastSeenRecord | undefined => (known === undefined ? undefined : { seq: known.seq, signature: known.signature });
@@ -72,23 +98,46 @@ export const describeAddress = (a: AddressEntry): string => (a.host.includes(':'
 
 const BYPASS = 'pass --address <host:port> to connect without the relay';
 
-type Verified = { ok: true; addresses: AddressEntry[]; seq: number; issuedAt: number } | { ok: false; reason: string; message: string };
-
-/** Verifies one record of the relay against the registration of the peer, and remembers it when it is accepted. */
-function accept(configDir: string, peer: PeerRef, record: unknown, now: number, known: RememberedRecord | undefined): Verified {
-  const checked = verifyAddressRecord(record, { uuid: peer.uuid, identityPublicKey: peer.identityPublicKey }, now, lastSeenOf(known));
-  if (!checked.ok) return { ok: false, reason: checked.reason, message: checked.message };
-  remember(configDir, peer.uuid, { seq: checked.body.seq, signature: checked.signature, addresses: checked.body.addresses, issuedAt: checked.body.issuedAt, seenAt: now });
-  return { ok: true, addresses: checked.body.addresses, seq: checked.body.seq, issuedAt: checked.body.issuedAt };
+/** `allowLocal`: tests only, for peers on loopback. */
+export interface UseOptions {
+  allowLocal?: boolean;
 }
 
-function refusalMessage(configDir: string, peer: PeerRef, reason: string, message: string): string {
-  const rollback = reason === 'rollback' || reason === 'same-seq' ? ` If "${peer.name}" was reinstalled and its counter went back, delete ${peerRecordsFile(configDir)} (every peer is then learned again from the relay).` : '';
+type Verified = { ok: true; addresses: AddressEntry[]; refused: string[]; seq: number; issuedAt: number; entry: RememberedRecord } | { ok: false; reason: string; message: string };
+
+/** Splits the addresses of a record into the ones this machine may connect to and the refused ones with the reason (loopback, unspecified, link-local). */
+function usable(addresses: AddressEntry[], options: UseOptions): { addresses: AddressEntry[]; refused: string[] } {
+  if (options.allowLocal === true) return { addresses, refused: [] };
+  const kept: AddressEntry[] = [];
+  const refused: string[] = [];
+  for (const address of addresses) {
+    const problem = destinationProblem(address.host);
+    if (problem === undefined) kept.push(address);
+    else refused.push(`${describeAddress(address)} refused: ${problem}`);
+  }
+  return { addresses: kept, refused };
+}
+
+/** Verifies one record of the relay against the registration of the peer. The caller remembers an accepted one (`commitRecords`). */
+function accept(configDir: string, peer: PeerRef, record: unknown, now: number, known: RememberedRecord | undefined, options: UseOptions): Verified {
+  const checked = verifyAddressRecord(record, { uuid: peer.uuid, identityPublicKey: peer.identityPublicKey }, now, lastSeenOf(known));
+  if (!checked.ok) return { ok: false, reason: checked.reason, message: checked.message };
+  const entry: RememberedRecord = { seq: checked.body.seq, signature: checked.signature, addresses: checked.body.addresses, issuedAt: checked.body.issuedAt, seenAt: now };
+  return { ok: true, ...usable(checked.body.addresses, options), seq: checked.body.seq, issuedAt: checked.body.issuedAt, entry };
+}
+
+function refusalMessage(peer: PeerRef, reason: string, message: string): string {
+  const rollback =
+    reason === 'rollback' || reason === 'same-seq'
+      ? ` If "${peer.name}" was really reinstalled and lost its counter, and you confirmed it out of band (phone, in person, ssh), run \`machine peer forget-record ${peer.name}\` to forget what was seen of that peer only; otherwise the relay is replaying an old record.`
+      : '';
   return `the relay gave an address for "${peer.name}" that is refused: ${message}.${rollback} Nothing was connected; ${BYPASS}`;
 }
 
 export interface ResolvedPeer {
   addresses: AddressEntry[];
+  /** One line per address of the record that must not be used, with the reason. */
+  refused: string[];
   seq: number;
   issuedAt: number;
   /** What the relay says (informational: the relay can lie or lag). Undefined when it did not say. */
@@ -97,7 +146,7 @@ export interface ResolvedPeer {
 }
 
 /** The addresses of ONE peer from the relay, verified. Throws a `PeerAddressError` whose message says what happened and what to do. */
-export async function resolvePeerAddresses(configDir: string, peer: PeerRef, client: RelayClient, now: number): Promise<ResolvedPeer> {
+export async function resolvePeerAddresses(configDir: string, peer: PeerRef, client: RelayClient, now: number, options: UseOptions = {}): Promise<ResolvedPeer> {
   const known = readPeerRecords(configDir)[peer.uuid];
   let entry;
   try {
@@ -111,10 +160,15 @@ export async function resolvePeerAddresses(configDir: string, peer: PeerRef, cli
       `the relay has no address record for "${peer.name}" (${peer.uuid}): its daemon has not published one. Check that \`machine daemon\` runs on that machine with a relay (\`machine status\` there, and its daemon log), or ${BYPASS}`,
     );
   }
-  const verified = accept(configDir, peer, entry.record, now, known);
-  if (!verified.ok) throw new PeerAddressError(refusalMessage(configDir, peer, verified.reason, verified.message));
+  const verified = accept(configDir, peer, entry.record, now, known, options);
+  if (!verified.ok) throw new PeerAddressError(refusalMessage(peer, verified.reason, verified.message));
+  commitRecords(configDir, { [peer.uuid]: verified.entry });
+  if (verified.addresses.length === 0) {
+    throw new PeerAddressError(`the record of "${peer.name}" is valid but all ${verified.refused.length} addresses it publishes are refused: ${verified.refused.join('; ')}. A peer is never reached through a local or metadata address; ${BYPASS}`);
+  }
   return {
     addresses: verified.addresses,
+    refused: verified.refused,
     seq: verified.seq,
     issuedAt: verified.issuedAt,
     online: typeof entry.online === 'boolean' ? entry.online : undefined,
@@ -139,17 +193,19 @@ export interface PeerPresence {
  * What `machine list` shows for every peer with ONE request. A peer whose record is missing or refused gets a `problem`; the others are
  * unaffected. An unreachable relay throws the `RelayError` (the caller prints one warning line and still lists the peers).
  */
-export async function lookupPeerPresence(configDir: string, peers: PeerRef[], client: RelayClient, now: number): Promise<PeerPresence[]> {
+export async function lookupPeerPresence(configDir: string, peers: PeerRef[], client: RelayClient, now: number, options: UseOptions = {}): Promise<PeerPresence[]> {
   const entries = await client.getMachines();
   const byUuid = new Map(entries.filter((e) => typeof e?.uuid === 'string').map((e) => [e.uuid.toLowerCase(), e]));
   const remembered = readPeerRecords(configDir);
-  return peers.map((peer): PeerPresence => {
+  const toCommit: Record<string, RememberedRecord> = {};
+  const rows = peers.map((peer): PeerPresence => {
     const known = remembered[peer.uuid];
     const lastKnown = (problem: string): PeerPresence => (known === undefined ? { uuid: peer.uuid, name: peer.name, addresses: [], source: 'none', problem } : { uuid: peer.uuid, name: peer.name, addresses: known.addresses, source: 'last-known', seq: known.seq, problem });
     const entry = byUuid.get(peer.uuid);
     if (entry === undefined) return lastKnown('no address record on the relay: its daemon has not published one');
-    const verified = accept(configDir, peer, entry.record, now, known);
+    const verified = accept(configDir, peer, entry.record, now, known, options);
     if (!verified.ok) return lastKnown(`address record refused: ${verified.message}`);
+    toCommit[peer.uuid] = verified.entry;
     return {
       uuid: peer.uuid,
       name: peer.name,
@@ -158,8 +214,12 @@ export async function lookupPeerPresence(configDir: string, peers: PeerRef[], cl
       seq: verified.seq,
       ...(typeof entry.online === 'boolean' ? { online: entry.online } : {}),
       ...(typeof entry.lastSeen === 'number' || entry.lastSeen === null ? { lastSeen: entry.lastSeen } : {}),
+      ...(verified.refused.length > 0 ? { problem: `${verified.refused.length} address(es) refused: ${verified.refused.join('; ')}` } : {}),
     };
   });
+  // One locked write for the whole list.
+  commitRecords(configDir, toCommit);
+  return rows;
 }
 
 /** Per-address limit of `machine run`: connecting, the TLS handshake and the pair secret proof. */

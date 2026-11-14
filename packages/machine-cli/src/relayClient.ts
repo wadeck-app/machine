@@ -130,11 +130,19 @@ export function normalizeRelayUrl(input: string): string {
 }
 
 const MAX_INBOX_PAGE_BYTES = 1024 * 1024;
+/** Default cap of an answer: every call has one, a relay is untrusted and must not make this machine buffer an answer of any size. */
+const MAX_ANSWER_BYTES = 64 * 1024;
+/** One address record (2 KiB) with its envelope. */
+const MAX_MACHINE_ANSWER_BYTES = 4 * 1024;
+/** 1000 machines of 2 KiB with their presence. */
+const MAX_MACHINES_ANSWER_BYTES = 3 * 1024 * 1024;
+
+const formatLimit = (bytes: number): string => (bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} MiB` : `${bytes / 1024} KiB`);
 
 /** Reads the body of an answer, giving up (loudly) as soon as it is larger than `max` bytes. */
-async function readLimited(res: Response, max: number, baseUrl: string): Promise<string> {
+async function readLimited(res: Response, max: number, baseUrl: string, what: string): Promise<string> {
   const tooLarge = () =>
-    new RelayError({ status: 0, message: `the relay ${baseUrl} sent an answer larger than ${max / (1024 * 1024)} MiB for one inbox page: it does not follow the contract (32 documents of at most 16 KiB), tell the relay owner. Nothing was read from it` });
+    new RelayError({ status: 0, message: `the relay ${baseUrl} sent an answer larger than ${formatLimit(max)} for ${what}: it does not follow the contract, tell the relay owner. Reading stopped, nothing from it was used` });
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) throw tooLarge();
   if (res.body === null) return '';
@@ -211,6 +219,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     record?: { uuid: string };
     /** The answer is read at most this many bytes: a relay is untrusted and must not make this machine buffer an answer of any size. */
     maxBytes?: number;
+    /** Names the call in the error of an oversized answer. */
+    what?: string;
   }
 
   async function call(c: Call): Promise<{ status: number; body: Record<string, unknown>; headers: Headers } | undefined> {
@@ -236,7 +246,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
           : `cannot reach the relay ${baseUrl} (${(e as Error).message}): check your connection and the URL (--relay <url>), then try again`,
       });
     }
-    const text = c.maxBytes === undefined ? await res.text().catch(() => '') : await readLimited(res, c.maxBytes, baseUrl);
+    const text = await readLimited(res, c.maxBytes ?? MAX_ANSWER_BYTES, baseUrl, c.what ?? `${c.method} ${c.path.split('?')[0]}`);
     let body: Record<string, unknown> = {};
     if (text.length > 0) {
       try {
@@ -268,7 +278,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
     } else if (c.record && status === 403 && code === 'not_owner') {
-      message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: the record is bound to another token than the one of this machine (the first token to write it owns it; the token was probably replaced). Tell the admin to run \`machine admin forget-relay-record <machine>\` (it removes the old record and its inbox on the relay); this daemon then publishes again by itself`;
+      message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: the record is bound to another token than the one of this machine (the first token to write it owns it): either the token of this machine was replaced, or ANOTHER machine token claimed this uuid first, which also hijacks the inbox of this machine (the documents of the admin to it would be withheld). Tell the admin to run \`machine admin forget-relay-record <machine>\` (it removes the old record and its inbox on the relay); this daemon then publishes again by itself`;
     } else if (c.record && status === 429 && code === 'too_many_machines') {
       message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (too_many_machines)${detail}: this token already holds too many machine records (50 at most per token, 1000 on the relay); tell the relay owner`;
     } else if (c.record && status === 400) {
@@ -430,7 +440,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       for (let page = 0; page < 64; page++) {
         // The cursor parameter is named `after` here: the contract only says "next" (to confirm with the relay owner).
         const query = after === undefined ? '' : `?after=${encodeURIComponent(after)}`;
-        const r = (await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}/inbox${query}`, inbox: { uuid: uuid.toLowerCase() }, maxBytes: MAX_INBOX_PAGE_BYTES })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+        const r = (await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}/inbox${query}`, inbox: { uuid: uuid.toLowerCase() }, maxBytes: MAX_INBOX_PAGE_BYTES, what: 'one inbox page (32 documents of at most 16 KiB)' })) as NonNullable<Awaited<ReturnType<typeof call>>>;
         const documents = r.body.documents;
         if (!Array.isArray(documents)) throw malformed('the inbox list');
         for (const d of documents) {
@@ -457,13 +467,13 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     },
 
     async getMachines() {
-      const r = (await call({ method: 'GET', path: '/api/machines' })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      const r = (await call({ method: 'GET', path: '/api/machines', maxBytes: MAX_MACHINES_ANSWER_BYTES, what: 'the machine list (1000 records of 2 KiB at most)' })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       if (!Array.isArray(r.body.machines)) throw malformed('the machine list');
       return r.body.machines as MachineEntry[];
     },
 
     async getMachine(uuid) {
-      const r = await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}`, accept: [404] });
+      const r = await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}`, accept: [404], maxBytes: MAX_MACHINE_ANSWER_BYTES, what: 'one machine record (2 KiB at most)' });
       if (r === undefined) return undefined;
       return r.body as unknown as MachineEntry & { etag?: string };
     },

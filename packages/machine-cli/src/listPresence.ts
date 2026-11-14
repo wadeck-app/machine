@@ -1,7 +1,7 @@
 import type { AddressEntry } from '@wadeck-app/machine-core';
 import type { ListAnswer } from './commands.js';
 import { loadNetwork } from './network.js';
-import { PeerAddressError, describeAddress, lookupPeerPresence, readPeerRecords, type PeerPresence, type PeerRef } from './peerAddresses.js';
+import { PeerAddressError, describeAddress, lookupPeerPresence, readPeerRecords, type PeerPresence, type PeerRef, type UseOptions } from './peerAddresses.js';
 import { RelayError, createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 
@@ -35,7 +35,7 @@ const info = (p: PeerPresence): PeerRelayInfo => ({
 });
 
 /** Adds the relay view to the answer of the daemon. Never throws: every problem becomes `relayWarning` or a `problem` on one peer. */
-export async function addRelayView(configDir: string, answer: ListAnswer, now: number, injected?: RelayClient): Promise<ListWithRelay> {
+export async function addRelayView(configDir: string, answer: ListAnswer, now: number, injected?: RelayClient, options: UseOptions = {}): Promise<ListWithRelay> {
   if (answer.peers.length === 0) return answer;
   let client: RelayClient;
   try {
@@ -54,7 +54,7 @@ export async function addRelayView(configDir: string, answer: ListAnswer, now: n
   let rows: PeerPresence[];
   let relayWarning: string | undefined;
   try {
-    rows = await lookupPeerPresence(configDir, refs, client, now);
+    rows = await lookupPeerPresence(configDir, refs, client, now, options);
   } catch (e) {
     if (!(e instanceof RelayError) && !(e instanceof PeerAddressError)) throw e;
     relayWarning = `the relay could not be asked, the addresses shown are the last known ones: ${e.message}`;

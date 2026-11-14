@@ -52,7 +52,7 @@ export interface InboxLoopOptions {
   log: (line: string) => void;
   heartbeatMs?: number;
   timer?: InboxTimer;
-  /** Asked at the start of every round, before the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
+  /** Asked in every round, right AFTER the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
   publisher?: { tick(): Promise<void> };
   /** Tests: size of the set of installed ids. */
   handledCap?: number;
@@ -418,19 +418,24 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
   };
 
   const cycle = async (): Promise<void> => {
+    // The heartbeat goes FIRST: a slow or failing relay on the address record must never delay presence.
+    let count: number | undefined;
+    let heartbeatError: Error | undefined;
+    try {
+      count = (await o.client.heartbeat(selfUuid)).inboxCount;
+    } catch (e) {
+      heartbeatError = e as Error;
+    }
     if (o.publisher !== undefined) {
       try {
-        // Before the heartbeat: the first publication binds the inbox to this token, so the very first read already works.
+        // The first publication binds the inbox to this token: the read below, in the same round, already works.
         await o.publisher.tick();
       } catch (e) {
         failed(`address record: unexpected error: ${(e as Error).message}`);
       }
     }
-    let count: number | undefined;
-    try {
-      count = (await o.client.heartbeat(selfUuid)).inboxCount;
-    } catch (e) {
-      failed((e as Error).message);
+    if (heartbeatError !== undefined) {
+      failed(heartbeatError.message);
       return;
     }
     if (count === undefined) {

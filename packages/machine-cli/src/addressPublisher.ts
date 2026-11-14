@@ -117,11 +117,13 @@ export function createAddressPublisher(o: AddressPublisherOptions): AddressPubli
 
   const recordFor = (key: string, addresses: AddressEntry[]): SignedAddressRecord => {
     if (pending !== undefined && pending.key === key && pending.record.body.seq > relaySeq) return pending.record;
-    const seq = Math.max(readSeq(o.configDir), relaySeq) + 1;
+    // Above the clock too: a lost state starts above anything this machine ever published (a seq never exceeds the time of its
+    // publication, publications being far rarer than one per second), so peers, which keep the highest seq they saw, accept the new record.
+    const seq = Math.max(readSeq(o.configDir), relaySeq, o.now()) + 1;
     if (!Number.isSafeInteger(seq)) throw new Error('the address record counter is out of range: delete address-state.json and contact the relay owner');
-    // Written BEFORE signing: a seq that was written is never used again, whatever happens next.
-    writeFileAtomic(addressStateFile(o.configDir), `${JSON.stringify({ v: 1, seq })}\n`, 0o600);
+    // Built (and size checked) first: a record that cannot be built burns no seq. The seq is written BEFORE the PUT, so it is never used twice.
     const record = buildAddressRecord({ uuid, addresses, seq, issuedAt: o.now() }, o.self.identity.privateKeyPkcs8);
+    writeFileAtomic(addressStateFile(o.configDir), `${JSON.stringify({ v: 1, seq })}\n`, 0o600);
     pending = { key, record };
     return record;
   };
@@ -163,6 +165,10 @@ export function createAddressPublisher(o: AddressPublisherOptions): AddressPubli
       return;
     }
     const wanted = o.addresses();
+    if (wanted.warning !== undefined && !noticed.has(`warning:${wanted.warning}`)) {
+      noticed.add(`warning:${wanted.warning}`);
+      o.log(`address record: WARNING: ${safe(wanted.warning)}`);
+    }
     if (wanted.addresses.length === 0) {
       const problem = wanted.problem ?? 'there is no address to publish';
       if (warned.add(`none:${problem}`)) o.log(`address record NOT published: ${safe(problem)}. The record already on the relay, if any, is left as it is`);

@@ -47,7 +47,8 @@ async function startLaptop(advertise: Array<{ host: string; port?: number }>): P
   return daemon;
 }
 
-const runHello = () => cli(a, ['run', 'laptop', '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop']);
+// The peers of these tests live on loopback, which a record may not point to: tests say so explicitly (there is no such option on the command line).
+const runHello = () => cli(a, ['run', 'laptop', '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop'], undefined, { allowLoopbackPeers: true });
 const getsOfLaptop = () => relay.requests.filter((r) => r.method === 'GET' && r.path === `/api/machines/${readMachine(b).uuid}`);
 
 describe('machine run without --address', () => {
@@ -59,7 +60,7 @@ describe('machine run without --address', () => {
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe('hello from laptop');
     // The highest seq seen is remembered.
-    expect(readPeerRecords(a)[readMachine(b).uuid]?.seq).toBe(1);
+    expect(readPeerRecords(a)[readMachine(b).uuid]?.seq).toBeGreaterThan(1_000_000_000);
   });
 
   it('tries the addresses in order: a dead first address is reported and the second wins', async () => {
@@ -165,11 +166,34 @@ describe('machine run without --address', () => {
   });
 });
 
+describe('a record may not aim machine run at this machine or at the metadata service', () => {
+  it('a record that only points to loopback is refused with the reason, nothing is connected', async () => {
+    await startLaptop([{ host: '127.0.0.1' }]);
+    joinRelay(a, relay.addMachineToken());
+    // No test hook: this is what a user gets.
+    const r = await cli(a, ['run', 'laptop', '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop']);
+    expect(r.code).toBe(255);
+    expect(r.err).toMatch(/all 1 addresses/);
+    expect(r.err).toMatch(/127.0.0.1.*loopback/);
+    expect(r.err).toContain('--address');
+    expect(r.out).toBe('');
+  });
+
+  it('a refused address is a warning and the next usable one is tried', async () => {
+    const daemon = await startLaptop([{ host: '169.254.169.254', port: 80 }, { host: '127.0.0.1' }]);
+    joinRelay(a, relay.addMachineToken());
+    const r = await cli(a, ['run', 'laptop', '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop'], undefined, { allowLoopbackPeers: false });
+    expect(r.code).toBe(255);
+    expect(r.err).toMatch(/169.254.169.254:80.*link-local/);
+    void daemon;
+  });
+});
+
 describe('machine list with a relay', () => {
   it('shows each peer with its last known addresses and what the relay says about presence', async () => {
     const daemon = await startLaptop([{ host: '127.0.0.1' }]);
     joinRelay(a, relay.addMachineToken());
-    const r = await cli(a, ['list']);
+    const r = await cli(a, ['list'], undefined, { allowLoopbackPeers: true });
     expect(r.code).toBe(0);
     expect(r.out).toContain('laptop');
     expect(r.out).toContain(`127.0.0.1:${daemon.peerPort}`);
@@ -180,9 +204,9 @@ describe('machine list with a relay', () => {
   it('--json carries the addresses, the online flag and the seq', async () => {
     const daemon = await startLaptop([{ host: '127.0.0.1' }]);
     joinRelay(a, relay.addMachineToken());
-    const r = await cli(a, ['list', '--json']);
+    const r = await cli(a, ['list', '--json'], undefined, { allowLoopbackPeers: true });
     const parsed = JSON.parse(r.out) as { peers: Array<{ name: string; relay?: { addresses: Array<{ host: string; port: number }>; online: boolean; seq: number; source: string } }> };
-    expect(parsed.peers[0]?.relay).toMatchObject({ addresses: [{ host: '127.0.0.1', port: daemon.peerPort }], online: true, seq: 1, source: 'relay' });
+    expect(parsed.peers[0]?.relay).toMatchObject({ addresses: [{ host: '127.0.0.1', port: daemon.peerPort }], online: true, seq: expect.any(Number), source: 'relay' });
   });
 
   it('shows offline when the relay says so', async () => {
@@ -190,7 +214,7 @@ describe('machine list with a relay', () => {
     joinRelay(a, relay.addMachineToken());
     const base = Math.floor(Date.now() / 1000);
     relay.setClock(() => base + 600);
-    const r = await cli(a, ['list']);
+    const r = await cli(a, ['list'], undefined, { allowLoopbackPeers: true });
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/offline/);
   });
@@ -198,9 +222,9 @@ describe('machine list with a relay', () => {
   it('an unreachable relay is ONE visible warning line, the list is still printed and the exit code is 0; last known addresses stay visible', async () => {
     await startLaptop([{ host: '127.0.0.1' }]);
     joinRelay(a, relay.addMachineToken());
-    await cli(a, ['list']);
+    await cli(a, ['list'], undefined, { allowLoopbackPeers: true });
     await relay.close();
-    const r = await cli(a, ['list']);
+    const r = await cli(a, ['list'], undefined, { allowLoopbackPeers: true });
     expect(r.code).toBe(0);
     expect(r.out).toContain('laptop');
     expect(r.err.trim().split('\n')).toHaveLength(1);

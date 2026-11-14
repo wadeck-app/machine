@@ -17,7 +17,8 @@ export const MAX_ADDRESS_RECORD_AGE_SECONDS = 30 * 86_400;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DNS_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
-const ALL_DIGITS = /^[0-9]+$/;
+// WHATWG URL "ends in a number": such a last label is read as a (possibly hexadecimal or octal) IPv4 number by URL parsers and resolvers.
+const NUMERIC_LABEL = /^(0[xX][0-9a-fA-F]*|[0-9]+)$/;
 
 export interface AddressEntry {
   host: string;
@@ -48,9 +49,71 @@ export function hostProblem(host: string): string | undefined {
   if (host.length > 253) return invalid;
   const labels = host.split('.');
   if (!labels.every((label) => DNS_LABEL.test(label))) return invalid;
-  // "1.2.3" or "256.1.1.1" are malformed addresses, not names: a name does not end with a number.
-  if (ALL_DIGITS.test(labels[labels.length - 1] as string)) return invalid;
+  // "1.2.3", "256.1.1.1", "0x7f.1" or "0x7f000001" are (mis)read as IPv4 numbers by many parsers: a name does not end with a number.
+  if (NUMERIC_LABEL.test(labels[labels.length - 1] as string)) return invalid;
   return undefined;
+}
+
+/** The 4 (IPv4) or 16 (IPv6) bytes of an IP literal, whatever its spelling; undefined for anything else. IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) forms give the 4 bytes of the embedded address. */
+function ipBytes(host: string): number[] | undefined {
+  if (isIPv4(host)) return host.split('.').map(Number);
+  if (!isIPv6(host) || host.includes('%')) return undefined;
+  let text = host.toLowerCase();
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number) as [number, number, number, number];
+    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail, extra] = text.split('::');
+  if (extra !== undefined) return undefined;
+  const groups = (part: string | undefined): number[] => (part === undefined || part === '' ? [] : part.split(':').map((g) => Number.parseInt(g, 16)));
+  const first = groups(head);
+  const last = groups(tail);
+  const fill = tail === undefined ? 0 : 8 - first.length - last.length;
+  const all = tail === undefined ? first : [...first, ...Array.from({ length: fill }, () => 0), ...last];
+  if (all.length !== 8 || all.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff)) return undefined;
+  const bytes = all.flatMap((g) => [g >> 8, g & 0xff]);
+  const zeros = (from: number, to: number) => bytes.slice(from, to).every((b) => b === 0);
+  const mapped = zeros(0, 10) && bytes[10] === 0xff && bytes[11] === 0xff;
+  // ::a.b.c.d (deprecated IPv4-compatible) is read as the embedded address too, except :: and ::1 themselves.
+  const compatible = zeros(0, 12) && !(zeros(12, 15) && (bytes[15] === 0 || bytes[15] === 1));
+  return mapped || compatible ? bytes.slice(12) : bytes;
+}
+
+export type HostClass = 'loopback' | 'unspecified' | 'link-local' | 'other';
+
+/** Where a host points, whatever its spelling (case, expanded IPv6, IPv4-mapped IPv6). Names are only classified when they are "localhost". */
+export function hostClass(host: string): HostClass {
+  const name = host.toLowerCase().replace(/\.$/, '');
+  if (name === 'localhost' || name.endsWith('.localhost')) return 'loopback';
+  const bytes = ipBytes(host);
+  if (bytes === undefined) return 'other';
+  if (bytes.length === 4) {
+    if (bytes[0] === 127) return 'loopback';
+    if (bytes[0] === 0) return 'unspecified';
+    if (bytes[0] === 169 && bytes[1] === 254) return 'link-local';
+    return 'other';
+  }
+  if (bytes.slice(0, 15).every((b) => b === 0)) return bytes[15] === 0 ? 'unspecified' : bytes[15] === 1 ? 'loopback' : 'other';
+  if (bytes[0] === 0xfe && ((bytes[1] as number) & 0xc0) === 0x80) return 'link-local';
+  return 'other';
+}
+
+const REASONS: Record<Exclude<HostClass, 'other'>, string> = {
+  loopback: 'a loopback address (it would make this machine connect to itself)',
+  unspecified: 'an unspecified address (0.0.0.0 or ::)',
+  'link-local': 'a link-local address (169.254/16, fe80::/10: it includes the cloud metadata service 169.254.169.254)',
+};
+
+/** Why a machine must not connect to a host found in a record that ANOTHER machine published, or undefined. */
+export function destinationProblem(host: string): string | undefined {
+  const c = hostClass(host);
+  return c === 'other' ? undefined : `${host} is ${REASONS[c]}`;
+}
+
+/** Why a host cannot be advertised by this machine for itself. Loopback and link-local stay possible (an SSH tunnel, a redirect), 0.0.0.0 and :: never mean a place. */
+export function advertisedProblem(host: string): string | undefined {
+  return hostClass(host) === 'unspecified' ? `${host} is ${REASONS.unspecified}: it is not a place where anybody can connect` : undefined;
 }
 
 /** `host:port`, a name or an IPv4 address, or a bracketed IPv6 address such as `[::1]:47921`. Undefined when it is anything else. */

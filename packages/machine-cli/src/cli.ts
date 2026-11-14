@@ -103,6 +103,8 @@ Administration (enrollment through the relay, or by files):
   admin pin <admin.json>             trust the admin key of another machine
   peer info [--out <file>]           this machine's public identity, to give to the admin
   peer import <bundle.json>          trust a peer from an admin-signed bundle
+  peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
+                                     out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy signed by the admin for this machine
 
 Options:
@@ -209,7 +211,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? ''));
+    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record'));
     if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
   }
 
@@ -291,7 +293,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         const r = (await client.send('list')) as ListAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
-        const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000));
+        const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000), undefined, { allowLocal: io.allowLoopbackPeers === true });
         const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...relayLines(p.relay)])];
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
         emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}`);

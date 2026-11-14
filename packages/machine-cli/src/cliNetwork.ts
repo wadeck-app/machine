@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
-import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, resolvePeerAddresses } from './peerAddresses.js';
+import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, PeerAddressError, resolvePeerAddresses } from './peerAddresses.js';
 import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { runDistribute } from './adminDistribute.js';
 import { runForgetRelayRecord } from './adminForget.js';
+import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
@@ -322,7 +323,19 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       emit({ imported: bundle.registration.body.uuid }, `[ok] this machine now trusts "${bundle.registration.body.name}" (${bundle.registration.body.uuid})\n`);
       return EXIT.ok;
     }
-    return fail('usage: machine peer info [--out <file>] | import <bundle.json>', EXIT.usage);
+    if (sub === 'forget-record') {
+      if (first === undefined || second !== undefined) return fail('usage: machine peer forget-record <peer>', EXIT.usage);
+      try {
+        const r = await runForgetPeerRecord(configDir, { reference: first, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        emit({ forgot: r.uuid, ...(r.name !== undefined ? { name: r.name } : {}), hadRecord: r.hadRecord }, '');
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof NotInitializedError || e instanceof PeerAddressError) return fail(e.message);
+        throw e;
+      }
+    }
+    return fail('usage: machine peer info [--out <file>] | import <bundle.json> | forget-record <peer>', EXIT.usage);
   }
 
   if (command === 'policy') {
@@ -486,7 +499,8 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     if (relayConfig === undefined) {
       return fail(`no address known for "${peer.name}": pass --address <host:port>, or join a relay (\`machine join <relay>\`) so that the address is learned from the signed address record of the peer`, EXIT.peer);
     }
-    const found = await resolvePeerAddresses(configDir, { uuid: peer.peerId, name: peer.name, identityPublicKey: peer.identityPublicKey }, createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }), epochSeconds());
+    const found = await resolvePeerAddresses(configDir, { uuid: peer.peerId, name: peer.name, identityPublicKey: peer.identityPublicKey }, createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }), epochSeconds(), { allowLocal: io.allowLoopbackPeers === true });
+    for (const line of found.refused) io.stderr(`[warn] ${line}\n`);
     // What the relay says about presence is information (it can lag or lie): the addresses are tried anyway.
     if (found.online === false) {
       io.stderr(`[warn] the relay says "${peer.name}" is offline${typeof found.lastSeen === 'number' ? ` (last seen ${new Date(found.lastSeen * 1000).toISOString()})` : ''}: trying its published addresses anyway\n`);

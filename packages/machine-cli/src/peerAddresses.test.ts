@@ -6,7 +6,7 @@ import { buildAddressRecord, generateSigningKeyPair, type AddressEntry, type Sig
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
-import { PeerAddressError, connectFirst, describeAddress, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
+import { PeerAddressError, commitRecords, forgetPeerRecord, connectFirst, describeAddress, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { provision } from './testing.js';
 
@@ -98,7 +98,11 @@ describe('resolvePeerAddresses', () => {
     expect(e.message).toMatch(/seq 4/);
     expect(e.message).toMatch(/seq 5/);
     expect(e.message).toContain('--address');
-    expect(e.message).toContain(peerRecordsFile(a));
+    // The way out is per peer and after a check outside the relay; deleting the whole file is never advised.
+    expect(e.message).toContain('machine peer forget-record laptop');
+    expect(e.message).toMatch(/out of band|outside the relay/);
+    expect(e.message).not.toMatch(/[Dd]elete/);
+    expect(e.message).not.toContain('peer-records.json');
     expect(readPeerRecords(a)[laptop().uuid]?.seq).toBe(5);
   });
 
@@ -249,5 +253,94 @@ describe('state file shape', () => {
     expect(Object.keys(raw.peers)).toEqual([laptop().uuid]);
     writeFileSync(peerRecordsFile(a), JSON.stringify({ v: 1, peers: { [laptop().uuid]: { seq: 'x' } } }));
     expect(() => readPeerRecords(a)).toThrow(/peer-records\.json is corrupt or invalid/);
+  });
+});
+
+describe('destination rules for the addresses of a record (a peer, or a relay lying, must not aim this machine at itself or at the metadata service)', () => {
+  const MIXED: AddressEntry[] = [
+    { host: '127.0.0.1', port: 47921 },
+    { host: '169.254.169.254', port: 80 },
+    { host: '::ffff:127.0.0.1', port: 47921 },
+    { host: '0.0.0.0', port: 47921 },
+    { host: 'fe80::1', port: 47921 },
+    { host: '192.168.1.20', port: 47921 },
+  ];
+
+  it('keeps the usable addresses and names every refused one with its reason', async () => {
+    await publish(record(1, MIXED));
+    const r = await resolve();
+    expect(r.addresses).toEqual([{ host: '192.168.1.20', port: 47921 }]);
+    expect(r.refused).toHaveLength(5);
+    expect(r.refused.join('\n')).toMatch(/127\.0\.0\.1:47921.*loopback/);
+    expect(r.refused.join('\n')).toMatch(/169\.254\.169\.254:80.*link-local/);
+    expect(r.refused.join('\n')).toMatch(/::ffff:127\.0\.0\.1.*loopback/);
+    expect(r.refused.join('\n')).toMatch(/0\.0\.0\.0.*unspecified/);
+    expect(r.refused.join('\n')).toMatch(/fe80::1.*link-local/);
+  });
+
+  it('says so, with every reason and the way around, when ALL addresses are refused', async () => {
+    await publish(record(1, MIXED.slice(0, 2)));
+    const e = await refused();
+    expect(e.message).toMatch(/all 2 addresses/);
+    expect(e.message).toMatch(/loopback/);
+    expect(e.message).toMatch(/link-local/);
+    expect(e.message).toContain('--address');
+  });
+
+  it('the record itself is still accepted and remembered (only the use of the address is refused)', async () => {
+    await publish(record(4, MIXED.slice(0, 1)));
+    await refused();
+    expect(readPeerRecords(a)[laptop().uuid]?.seq).toBe(4);
+  });
+
+  it('tests can allow local addresses (never reachable from the command line)', async () => {
+    await publish(record(1, MIXED.slice(0, 1)));
+    const r = await resolvePeerAddresses(a, peerOf(), publisher, now, { allowLocal: true });
+    expect(r.addresses).toEqual([{ host: '127.0.0.1', port: 47921 }]);
+    expect(r.refused).toEqual([]);
+  });
+
+  it('machine list shows only the usable addresses and a problem line for the others', async () => {
+    await publish(record(1, MIXED));
+    const [row] = await lookupPeerPresence(a, [peerOf()], publisher, now);
+    expect(row?.addresses).toEqual([{ host: '192.168.1.20', port: 47921 }]);
+    expect(row?.problem).toMatch(/5 address\(es\) refused/);
+  });
+});
+
+describe('commitRecords and forgetPeerRecord', () => {
+  const entry = (seq: number) => ({ seq, signature: `sig${seq}`, addresses: A1, issuedAt: now, seenAt: now });
+  const X = '11111111-2222-4333-8444-555555555555';
+  const Y = '66666666-7777-4888-8999-000000000000';
+
+  it('merges into what is on disk: the peer of another writer is kept, a lower seq never replaces a higher one', () => {
+    commitRecords(a, { [X]: entry(5) });
+    commitRecords(a, { [Y]: entry(2), [X]: entry(3) });
+    const all = readPeerRecords(a);
+    expect(all[X]?.seq).toBe(5);
+    expect(all[Y]?.seq).toBe(2);
+  });
+
+  it('writes once for the whole batch and leaves no lock file', async () => {
+    commitRecords(a, { [X]: entry(1), [Y]: entry(1) });
+    const { readdirSync } = await import('node:fs');
+    expect(readdirSync(a).filter((f) => f.includes('.lock') || f.endsWith('.tmp'))).toEqual([]);
+    expect(Object.keys(readPeerRecords(a)).sort()).toEqual([X, Y].sort());
+  });
+
+  it('forgetPeerRecord removes one peer only and says whether there was one', () => {
+    commitRecords(a, { [X]: entry(5), [Y]: entry(2) });
+    expect(forgetPeerRecord(a, X)).toBe(true);
+    expect(forgetPeerRecord(a, X)).toBe(false);
+    expect(Object.keys(readPeerRecords(a))).toEqual([Y]);
+  });
+
+  it('after a forget, the next record of that peer is accepted whatever its seq', async () => {
+    await publish(record(5));
+    await resolve();
+    await admin.putRecord(laptop().uuid, record(2, A2));
+    await refused();
+    forgetPeerRecord(a, laptop().uuid);
+    expect((await resolve()).seq).toBe(2);
   });
 });

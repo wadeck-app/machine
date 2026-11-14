@@ -84,7 +84,7 @@ describe('the daemon publishes its signed address record', () => {
       { host: '127.0.0.1', port: daemon.peerPort },
       { host: 'laptop.example.com', port: 50000 },
     ]);
-    expect(logs.join('\n')).toMatch(/address record published \(seq 1\)/);
+    expect(logs.join('\n')).toMatch(/address record published \(seq \d{10}\)/);
   });
 
   it('the machine then owns its inbox: the very first round reads it without not_owner', async () => {
@@ -116,13 +116,14 @@ describe('the daemon publishes its signed address record', () => {
     await daemon.inbox?.ready;
     expect(timer.pending()).toBe(1);
     expect(timer.delays).toEqual([60_000]);
+    const first = (await createRelayClient({ baseUrl: relay.url, token: relay.token }).getMachine(uuidOf('laptop')))?.record.body.seq as number;
     const heartbeatsBefore = relay.requests.filter((r) => r.path.endsWith('/heartbeat')).length;
     address = '192.168.1.99';
     timer.fire();
     await daemon.inbox?.runOnce();
     const entry = await createRelayClient({ baseUrl: relay.url, token: relay.token }).getMachine(uuidOf('laptop'));
     expect(entry?.record.body.addresses).toEqual([{ host: '192.168.1.99', port: daemon.peerPort }]);
-    expect(entry?.record.body.seq).toBe(2);
+    expect(entry?.record.body.seq).toBe(first + 1);
     expect(relay.requests.filter((r) => r.path.endsWith('/heartbeat')).length).toBeGreaterThan(heartbeatsBefore);
     expect(timer.pending()).toBeLessThanOrEqual(1);
   });
@@ -149,7 +150,7 @@ describe('the daemon publishes its signed address record', () => {
 });
 
 describe('the inbox loop calls the publisher from its own round', () => {
-  it('the publisher is ticked before the heartbeat of every round, and a throwing publisher does not stop the heartbeat', async () => {
+  it('the heartbeat goes out BEFORE the publisher tick of every round (a slow relay cannot delay it), and a throwing publisher does not stop the round', async () => {
     const order: string[] = [];
     const client = createRelayClient({
       baseUrl: relay.url,
@@ -180,8 +181,9 @@ describe('the inbox loop calls the publisher from its own round', () => {
     timer.fire();
     await loop.runOnce();
     loop.stop();
-    expect(order.slice(0, 2)).toEqual(['tick', 'heartbeat']);
+    expect(order.slice(0, 2)).toEqual(['heartbeat', 'tick']);
     expect(order.filter((o) => o === 'heartbeat').length).toBeGreaterThanOrEqual(2);
+    expect(order.filter((o) => o === 'tick').length).toBe(order.filter((o) => o === 'heartbeat').length);
     expect(logs.join('\n')).toMatch(/boom/);
   });
 });

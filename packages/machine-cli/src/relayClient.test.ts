@@ -109,6 +109,9 @@ describe('address record errors (injected fetch)', () => {
     expect(e.message).toContain(UUID);
     expect(e.message).toMatch(/another token|first token/);
     expect(e.message).toContain('machine admin forget-relay-record');
+    // Another machine token may have taken the uuid first: the documents of this machine (its inbox) may be suppressed too.
+    expect(e.message).toMatch(/inbox/);
+    expect(e.message).toMatch(/another machine|first/);
     expect(e.message).not.toMatch(/lack the "machine" scope/);
     expect(e.message).not.toContain('SECRET-TOKEN');
   });
@@ -432,5 +435,71 @@ describe('inbox: sizes and bounds', () => {
     const listed = await client.listInbox(TO, 3);
     expect(listed).toHaveLength(3);
     expect(calls).toBe(2);
+  });
+});
+
+describe('every answer of the relay is bounded (an untrusted relay cannot make the daemon buffer without limit)', () => {
+  const UUID2 = '00000000-0000-4000-8000-000000000000';
+
+  /** A body that never ends: counts the bytes the client actually pulled. */
+  function endless(status = 200) {
+    const state = { pulled: 0 };
+    const chunk = new Uint8Array(16 * 1024).fill(0x20);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        state.pulled += chunk.length;
+        controller.enqueue(chunk);
+      },
+    });
+    return { state, response: () => new Response(stream, { status, headers: { 'Content-Type': 'application/json' } }) };
+  }
+
+  const cases: Array<[string, number, (c: ReturnType<typeof createRelayClient>) => Promise<unknown>]> = [
+    ['getMachine', 4 * 1024, (c) => c.getMachine(UUID2)],
+    ['getMachines', 3 * 1024 * 1024, (c) => c.getMachines()],
+    ['listCandidacies', 64 * 1024, (c) => c.listCandidacies()],
+    ['getCandidacy', 64 * 1024, (c) => c.getCandidacy('abc')],
+    ['heartbeat', 64 * 1024, (c) => c.heartbeat(UUID2)],
+    ['putRecord', 64 * 1024, (c) => c.putRecord(UUID2, { body: { v: 1, uuid: UUID2, addresses: [], seq: 1, issuedAt: 1 }, signature: 's' })],
+    ['claimPairing', 64 * 1024, (c) => c.claimPairing('1234')],
+    ['deviceLoginPoll', 64 * 1024, (c) => c.deviceLoginPoll('D'.repeat(43))],
+    ['deviceLoginStart', 64 * 1024, (c) => c.deviceLoginStart('laptop')],
+    ['postCandidacy', 64 * 1024, (c) => c.postCandidacy({ name: 'a', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: UUID2 })],
+    ['decideCandidacy', 64 * 1024, (c) => c.decideCandidacy('abc', { decision: 'reject' })],
+    ['deleteMachine', 64 * 1024, (c) => c.deleteMachine(UUID2)],
+    ['deleteInboxDocument', 64 * 1024, (c) => c.deleteInboxDocument(UUID2, 'x'.repeat(22))],
+  ];
+
+  it.each(cases)('%s stops reading at its limit and fails loudly, without the token', async (_name, limit, call) => {
+    const body = endless();
+    const c = createRelayClient({ baseUrl: 'https://relay.example', token: 'SECRET-TOKEN', fetch: (async () => body.response()) as typeof fetch });
+    const e = await failure(call(c));
+    expect(e.status).toBe(0);
+    expect(e.message).toContain('https://relay.example');
+    expect(e.message).toMatch(/larger than/);
+    expect(e.message).not.toContain('SECRET-TOKEN');
+    // Bounded work: not much more than the limit was pulled (one chunk of slack for the stream's own read-ahead).
+    expect(body.state.pulled).toBeLessThanOrEqual(limit + 64 * 1024);
+  });
+
+  it('an endless ERROR answer is bounded too', async () => {
+    const body = endless(500);
+    const c = createRelayClient({ baseUrl: 'https://relay.example', token: 'SECRET-TOKEN', fetch: (async () => body.response()) as typeof fetch });
+    const e = await failure(c.getMachine(UUID2));
+    expect(e.message).toMatch(/larger than/);
+  });
+
+  it('the limits are named in the message', async () => {
+    const one = endless();
+    const e1 = await failure(createRelayClient({ baseUrl: 'https://relay.example', fetch: (async () => one.response()) as typeof fetch }).getMachine(UUID2));
+    expect(e1.message).toMatch(/4 KiB/);
+    const two = endless();
+    const e2 = await failure(createRelayClient({ baseUrl: 'https://relay.example', fetch: (async () => two.response()) as typeof fetch }).getMachines());
+    expect(e2.message).toMatch(/3 MiB/);
+  });
+
+  it('a declared content-length above the limit is refused before reading', async () => {
+    const c = createRelayClient({ baseUrl: 'https://relay.example', fetch: (async () => new Response('{}', { status: 200, headers: { 'content-length': String(10 * 1024 * 1024) } })) as typeof fetch });
+    expect((await failure(c.getMachines())).message).toMatch(/3 MiB/);
   });
 });

@@ -3,7 +3,10 @@ import {
   ADDRESS_RECORD_DOMAIN,
   MAX_ADDRESSES,
   MAX_ADDRESS_RECORD_BYTES,
+  advertisedProblem,
   buildAddressRecord,
+  destinationProblem,
+  hostClass,
   hostProblem,
   parseAddress,
   verifyAddressRecord,
@@ -263,5 +266,46 @@ describe('parseAddress and hostProblem', () => {
     expect(hostProblem('')).toMatch(/empty/);
     expect(hostProblem('a b')).toMatch(/valid DNS name/);
     expect(hostProblem('fe80::1%eth0')).toMatch(/zone/);
+  });
+});
+
+describe('numeric-looking hosts (WHATWG "ends in a number")', () => {
+  it.each(['0x7f000001', '0x7f.0x1', '1.2.3.0x4', '0x', '0X7F.1', '1.2.3.04', '2130706433', 'a.0x10', 'host.123'])('refuses %j', (host) => {
+    expect(hostProblem(host)).toMatch(/number|valid DNS name/);
+  });
+
+  it.each(['host1', 'a.b2', '0xabc.example', 'x0x1', '1a.example', '1.2.3.4'])('keeps accepting %j', (host) => {
+    expect(hostProblem(host)).toBeUndefined();
+  });
+});
+
+describe('destinationProblem (where a record of a peer may send this machine)', () => {
+  it.each([
+    '127.0.0.1', '127.1.2.3', '::1', '0:0:0:0:0:0:0:1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::127.0.0.1',
+    '0.0.0.0', '::', '0:0::0', '::ffff:0.0.0.0', '0.1.2.3',
+    '169.254.169.254', '169.254.0.1', '::ffff:169.254.169.254', '::ffff:a9fe:a9fe', 'fe80::1', 'FE80::1', 'febf::1:2', 'fe80:0:0:0:1:2:3:4',
+    'localhost', 'LOCALHOST', 'localhost.', 'foo.localhost',
+  ])('refuses %j with a reason', (host) => {
+    const problem = destinationProblem(host);
+    expect(problem, host).toMatch(/loopback|unspecified|link-local/);
+  });
+
+  it.each(['192.168.1.5', '10.0.0.1', '2001:db8::1', '::ffff:192.168.1.5', 'desktop.lan', 'fe00::1', '128.0.0.1', '169.253.0.1', 'fec0::1', 'localhost.example.com', 'mylocalhost'])('accepts %j', (host) => {
+    expect(destinationProblem(host)).toBeUndefined();
+  });
+
+  it('classifies without being fooled by case or spelling', () => {
+    expect(hostClass('::FFFF:7F00:0001')).toBe('loopback');
+    expect(hostClass('0000:0000:0000:0000:0000:0000:0000:0000')).toBe('unspecified');
+    expect(hostClass('192.168.1.1')).toBe('other');
+    expect(hostClass('Desktop.LAN')).toBe('other');
+  });
+
+  it('advertisedProblem refuses only the unspecified addresses (a tunnel or a loopback redirect is the user choice)', () => {
+    expect(advertisedProblem('0.0.0.0')).toMatch(/unspecified/);
+    expect(advertisedProblem('::')).toMatch(/unspecified/);
+    expect(advertisedProblem('::ffff:0.0.0.0')).toMatch(/unspecified/);
+    expect(advertisedProblem('127.0.0.1')).toBeUndefined();
+    expect(advertisedProblem('203.0.113.9')).toBeUndefined();
   });
 });

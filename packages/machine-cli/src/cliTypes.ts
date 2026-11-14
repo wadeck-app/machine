@@ -24,6 +24,8 @@ export interface CliIo {
   promptTimer?: PromptTimer;
   /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
   startup?: { orch?: OrchCommand; daemon?: DaemonSource; platform?: NodeJS.Platform };
+  /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
+  allowLoopbackPeers?: boolean;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
   now?: () => Date;
 }
