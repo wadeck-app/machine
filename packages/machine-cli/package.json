@@ -12,10 +12,12 @@
     "bundle": "node scripts/bundle.mjs"
   },
   "dependencies": {
+    "@wadeck-app/app-core-sdk": "latest",
     "@wadeck-app/machine-core": "*",
     "@wadeck-app/machine-exec": "*",
     "@wadeck-app/machine-transport": "*",
     "@wadeck-app/shared-cli": "latest",
+    "@wadeck-app/shared-updater": "latest",
     "@wadeck-app/singleton-daemon-kit": "latest"
   },
   "engines": {
