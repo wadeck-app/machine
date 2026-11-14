@@ -17,6 +17,8 @@ export interface FakeRelayOptions {
   label?: string;
   /** User code returned by the device login start (default BCDF-GH23). */
   deviceUserCode?: string;
+  /** expiresIn announced by the device login start (default 300; tests set a huge value to check the client cap). */
+  deviceExpiresIn?: number;
   /** Scopes of the token delivered by an approved device login (default ["machine"]). */
   deviceScopes?: string[] | null;
 }
@@ -45,8 +47,11 @@ export interface FakeRelay {
   deviceExpire: () => void;
   /** Next answer forced on a path prefix (one shot), optionally only for one HTTP method. */
   force: (pathPrefix: string, status: number, body: unknown, headers?: Record<string, string>, method?: string) => void;
-  /** Admin side, tests only: the decision the admin console would send with a full-access token. */
-  approve: (id: string, approval: unknown) => void;
+  /**
+   * Admin side, tests only: the decision the admin console would send with a full-access token. Like the real admin, it
+   * adds the `random` of the candidacy to the approval unless the approval already has one or `bind: false` is given.
+   */
+  approve: (id: string, approval: unknown, options?: { bind?: boolean }) => void;
   reject: (id: string) => void;
   /** The relay forgot the candidacy (15 minutes passed, or a restart): the candidate gets a 404. */
   expire: (id: string) => void;
@@ -118,7 +123,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const deviceCode = randomBytes(32).toString('base64url');
       const userCode = options.deviceUserCode ?? 'BCDF-GH23';
       deviceLogins.set(deviceCode, { userCode, label, status: 'pending' });
-      return send(res, 201, { success: true, serverTime: 1, deviceCode, userCode, expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: `https://relay.example/device?code=${userCode}` });
+      return send(res, 201, { success: true, serverTime: 1, deviceCode, userCode, expiresIn: options.deviceExpiresIn ?? 300, pollIntervalSeconds: 3, verificationUrl: `https://relay.example/device?code=${userCode}` });
     }
     if (method === 'POST' && path === '/api/device-login/poll') {
       const entry = deviceLogins.get(String((body as { deviceCode?: unknown } | undefined)?.deviceCode ?? ''));
@@ -213,11 +218,12 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     deviceDeny: () => void (pendingDevice().status = 'denied'),
     deviceExpire: () => void (pendingDevice().status = 'expired'),
     force: (prefix, status, body, headers = {}, method) => void forced.push({ prefix, status, body, headers, method }),
-    approve: (id, approval) => {
+    approve: (id, approval, options = {}) => {
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'approved';
-      entry.approval = approval;
+      const bindable = options.bind !== false && typeof approval === 'object' && approval !== null && !Array.isArray(approval) && !('random' in approval);
+      entry.approval = bindable ? { ...(approval as object), random: entry.random } : approval;
     },
     reject: (id) => {
       const entry = candidacies.get(id);

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, type Prompt } from './admin.js';
+import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, registerMachine, type PeerBundle } from './network.js';
 import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
@@ -249,6 +250,12 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   }
 
   const view = pick(views, o.id);
+  // The questions can take minutes: a candidacy that expired meanwhile is not signed for (the relay would refuse the decision anyway).
+  const stillPending = (when: string): void => {
+    if (view.expiresAt !== 0 && o.now() >= view.expiresAt) {
+      throw new Error(`the candidacy ${printable(view.id)} expired at ${iso(view.expiresAt)}, ${when}: nothing was signed or sent. Ask the candidate to run \`machine join --resume\` and approve the new candidacy`);
+    }
+  };
   o.say(formatDetail(view, o.now()));
 
   if (o.reject) {
@@ -265,12 +272,14 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   let answer: string;
   try {
     answer = await o.ask(`Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}? [y/N] `);
-  } catch {
+  } catch (e) {
+    if (e instanceof PromptTimeoutError) throw e;
     throw new Error(
       `no terminal to confirm "${printable(view.name)}": approving always needs a person at a terminal and there is no option to skip the question. Run \`machine admin approve ${printable(view.id)}\` in a terminal window`,
     );
   }
   if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error('not approved: the machine was not confirmed. Nothing was signed or sent');
+  stillPending('while the question was open');
 
   // One passphrase typed, used for both registrations of this command, then dropped with the process.
   let typed: string | undefined;
@@ -293,9 +302,12 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     o.say('[warn] this machine has no identity (`machine init`): the candidate is enrolled without this machine as a peer\n');
   }
 
-  const approval = { v: 1, self, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, peers };
+  // `random` binds the approval to this candidacy (unsigned: the relay can set it, so it only catches old or mixed-up approvals).
+  const approval = { v: 1, self, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, peers, random: view.random };
   const size = Buffer.byteLength(JSON.stringify(approval));
   if (size > MAX_APPROVAL_BYTES) throw new Error(`the approval is ${size} bytes, the relay accepts ${MAX_APPROVAL_BYTES}: nothing was sent`);
+
+  stillPending('while the passphrase was typed');
 
   // Trust the candidate here BEFORE telling the relay: when the decision fails, the extra entry is harmless (a key a human
   // verified), while the opposite order could leave an enrolled machine that this one does not know.

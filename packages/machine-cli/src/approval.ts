@@ -13,6 +13,8 @@ export interface Approval {
   admin: { v: 1; adminPublicKey: string; adminKeyId: string };
   /** The peers the admin chose to include, each as the bundle `machine peer import` takes. */
   peers: PeerBundle[];
+  /** The `random` of the candidacy this approval answers. UNSIGNED (the relay can set it): it only catches an old or mixed-up approval, the final code stays the security check. */
+  random: string;
 }
 
 export interface CheckedApproval {
@@ -22,7 +24,7 @@ export interface CheckedApproval {
   peerBodies: RegistrationBody[];
 }
 
-const KEYS = ['v', 'self', 'admin', 'peers'];
+const KEYS = ['v', 'self', 'admin', 'peers', 'random'];
 const asObject = (value: unknown): Record<string, unknown> | undefined => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
 function bundleShape(value: unknown, where: string): PeerBundle {
@@ -41,9 +43,16 @@ function bundleShape(value: unknown, where: string): PeerBundle {
  * equal to this machine, signed by the key the approval carries, in its validity window) and each peer registration.
  * This proves the approval is consistent, NOT that the admin key is the right one: only the final code does (T-05).
  */
-export function checkApproval(raw: unknown, self: MachineInfo, now: number): CheckedApproval {
+export function checkApproval(raw: unknown, self: MachineInfo, now: number, candidacyRandom: string): CheckedApproval {
   const o = asObject(raw);
   if (!o) throw new Error('the approval is not a JSON object');
+  // First of all: an approval that answers another candidacy (an old one replayed, or mixed up by the relay) is not examined further.
+  if (typeof o.random !== 'string') {
+    throw new Error('the approval carries no "random" binding it to this candidacy: it comes from an older admin version or from a replay. Ask the admin to approve again after `machine join --resume`');
+  }
+  if (o.random !== candidacyRandom) {
+    throw new Error('the approval answers another candidacy (its random differs from the one of this machine): it is a replay of an old approval or the relay mixed candidacies up. Nothing was trusted; ask the admin to approve again after `machine join --resume`');
+  }
   for (const key of Object.keys(o)) {
     if (!KEYS.includes(key)) throw new Error(`the approval has an unknown field "${key}": it may come from an incompatible version`);
   }
@@ -67,7 +76,7 @@ export function checkApproval(raw: unknown, self: MachineInfo, now: number): Che
     if (r.body.uuid === self.uuid) throw new Error(`peer #${i + 1} of the approval is this machine itself: ask the admin to rebuild the approval`);
     return r.body;
   });
-  return { approval: { v: 1, self: selfBundle, admin: o.admin as Approval['admin'], peers }, admin, selfBody: body, peerBodies };
+  return { approval: { v: 1, self: selfBundle, admin: o.admin as Approval['admin'], peers, random: o.random }, admin, selfBody: body, peerBodies };
 }
 
 /** The pin conflicts with another admin key already pinned here: checked before the human is asked anything. */

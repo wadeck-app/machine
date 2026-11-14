@@ -8,11 +8,11 @@ import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
-import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
+import { APPROVAL_MAX_AGE_SECONDS, classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { RelayError } from './relayClient.js';
-import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
+import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
-import { promptHidden, promptLine } from './prompt.js';
+import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
 import { readAliases } from './state.js';
 import { runOnPeer } from './peerService.js';
 
@@ -71,10 +71,41 @@ function writeOutput(ctx: CommandContext, file: string, content: string, mode: n
   return undefined;
 }
 
+/** What the person must know after a prompt expired: what was NOT done and how to run it again. */
+function promptTimeoutAdvice(e: PromptTimeoutError, command: string, ctx: CommandContext): string {
+  const [sub] = ctx.rest;
+  const slower = `(\`--prompt-timeout <seconds>\`, 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, allows a slower answer)`;
+  if (command === 'join') {
+    return `${e.message}. The admin key was NOT pinned and nothing was imported. The approval is kept for ${APPROVAL_MAX_AGE_SECONDS / 60} minutes in ${candidacyFile(ctx.configDir)}: run \`machine join --resume\` and answer in time ${slower}`;
+  }
+  const done: Record<string, string> = {
+    approve: 'Nothing was signed or sent to the relay',
+    revoke: 'Nothing was signed or revoked',
+    'sign-policy': 'Nothing was signed and no file was written',
+    register: 'Nothing was signed and no file was written',
+    login: 'Nothing was claimed or stored',
+  };
+  return `${e.message}. ${done[sub ?? ''] ?? 'Nothing was done'}. Run \`machine ${[command, ...ctx.rest].join(' ')}\` again and answer in time ${slower}`;
+}
+
 export async function runNetworkCommand(command: string, ctx: CommandContext): Promise<number | undefined> {
+  try {
+    return await runNetworkCommandBody(command, ctx);
+  } catch (e) {
+    if (e instanceof PromptTimeoutError) throw new Error(promptTimeoutAdvice(e, command, ctx));
+    throw e;
+  }
+}
+
+async function runNetworkCommandBody(command: string, ctx: CommandContext): Promise<number | undefined> {
   const { args, rest, io, configDir, env, fail, emit } = ctx;
+  // The clock is injectable: the age of an approval and the expiry of a candidacy are checked against it.
+  const epochSeconds = () => Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
   const now = epochSeconds();
-  const prompt = io.prompt ?? promptHidden;
+  // Every wait for a person has a limit (--prompt-timeout, validated by the CLI before this point). Never an implicit answer.
+  const limits: PromptLimits = { timeoutSeconds: args.promptTimeout === undefined ? DEFAULT_PROMPT_TIMEOUT_SECONDS : Number(args.promptTimeout), ...(io.promptTimer ? { timer: io.promptTimer } : {}) };
+  const prompt = io.prompt ? withPromptTimeout(io.prompt, limits) : (label: string) => promptHidden(label, undefined, limits);
+  const askLine = io.ask ? withPromptTimeout(io.ask, limits) : (label: string) => promptLine(label, undefined, limits);
 
   if (command === 'admin') {
     const [sub, first, second] = rest;
@@ -141,7 +172,8 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       if (code === undefined) {
         try {
           code = await prompt('Full-access pairing code from the relay console: ');
-        } catch {
+        } catch (e) {
+          if (e instanceof PromptTimeoutError) throw e;
           return fail('no pairing code given and no terminal to ask for it: pass it as `machine admin login <code>` (relay console: Tokens, Add token, WITHOUT "Limited to scopes")', EXIT.usage);
         }
       }
@@ -173,7 +205,7 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
           days,
           reject: args.reject,
           prompt,
-          ask: io.ask ?? promptLine,
+          ask: askLine,
           // With --json stdout carries the final JSON only: the human text goes to stderr.
           say: args.json ? io.stderr : io.stdout,
           now: epochSeconds,
@@ -196,7 +228,7 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       // A revocation has no validity period: refused rather than silently ignored.
       if (args.days !== undefined) return fail('--days does not apply to `machine admin revoke`: a revocation does not expire (it covers the registration serial it names)', EXIT.usage);
       try {
-        const r = await runRevoke(configDir, { reference: first, prompt, ask: io.ask ?? promptLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        const r = await runRevoke(configDir, { reference: first, prompt, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
         emit({ revoked: r.uuid, name: r.name, serial: r.serial, scope: 'this machine only' }, '');
         return EXIT.ok;
       } catch (e) {
@@ -296,8 +328,9 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
         wait: !args.noWait,
         timeoutMs: timeoutSeconds * 1000,
         ...(args.yesFinalCode !== undefined ? { yesFinalCode: args.yesFinalCode } : {}),
-        ask: io.ask ?? promptLine,
+        ask: askLine,
         timing,
+        ...(io.now ? { now: io.now } : {}),
         say,
         // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
         onPosted: (p) => {

@@ -93,6 +93,8 @@ export interface CandidacyState {
   uuid?: string;
   /** The approval as received from the relay, kept so that a refused or interrupted enrollment can be run again. */
   approval?: unknown;
+  /** Epoch seconds at which the approval was received. Absent with an approval: written by an older version, treated as too old. */
+  approvalReceivedAt?: number;
 }
 
 export const candidacyFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay-candidacy.json');
@@ -131,6 +133,7 @@ export function readCandidacy(configDir: string): CandidacyState | undefined {
     expiresAt: o.expiresAt as number,
     ...(typeof o.uuid === 'string' ? { uuid: o.uuid } : {}),
     ...(o.approval !== undefined ? { approval: o.approval } : {}),
+    ...(typeof o.approvalReceivedAt === 'number' ? { approvalReceivedAt: o.approvalReceivedAt } : {}),
   };
 }
 

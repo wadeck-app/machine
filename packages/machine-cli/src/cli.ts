@@ -4,6 +4,7 @@ import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from '
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
 import { initMachine } from './identity.js';
+import { MAX_PROMPT_TIMEOUT_SECONDS } from './prompt.js';
 import { resolveConfigDir } from './paths.js';
 import { appVersion } from './version.js';
 
@@ -24,7 +25,10 @@ Commands:
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
   stop                               stop the running daemon
-  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>]
+  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>]
+                                     --timeout (default 900 s) is the wait for the admin; it never outlasts the candidacy (15 min)
+                                     or the device code. An approval received but not confirmed is kept 15 minutes only:
+                                     later it is discarded and nothing is pinned (ask the admin again: join --resume).
                                      get a relay token, post this machine's candidacy (with its uuid), wait for the
                                      admin's approval, then show the final code and enroll. Without a code: device
                                      login. It prints a code and a page; open the page (any browser), check that
@@ -72,6 +76,8 @@ Administration (enrollment through the relay, or by files):
 Options:
   --json                 machine-readable output
   --relay <url>          relay for \`join\` and \`admin login\` (no default: required the first time, then the stored one is reused; https only, http on 127.0.0.1 for tests)
+  --prompt-timeout <s>   limit for every question to a person (y/N, passphrase, final code): 1 to 3600 s, default 120; on expiry the
+                         question is cancelled, nothing is assumed and nothing is signed, pinned or revoked (join, admin approve|revoke|sign-policy|register|login)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
@@ -107,6 +113,7 @@ function parse(argv: string[]): Parsed {
       throw new UsageError('--auto-startup is not available yet: `machine startup enable` does not exist, so nothing would be started at login. Run `machine join` without it');
     }
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
+    else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
@@ -159,6 +166,16 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
   if (args.passthrough.length > 0 && command !== 'run') {
     return fail(`"--" is only used by \`machine run\` (it introduces the command to run on the peer)`, EXIT.usage);
+  }
+
+  if (args.promptTimeout !== undefined) {
+    const seconds = Number(args.promptTimeout);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_PROMPT_TIMEOUT_SECONDS) {
+      return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
+    }
+    // Refused rather than silently ignored: a command that never prompts has nothing to limit.
+    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'register', 'login'].includes(rest[0] ?? ''));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin register, admin login', EXIT.usage);
   }
 
   try {

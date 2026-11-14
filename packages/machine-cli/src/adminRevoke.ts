@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { keyId, resolveMachineRef, signRevocation } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
+import { PromptTimeoutError } from './prompt.js';
 import { installRevocation, loadNetwork, registeredSerial } from './network.js';
 import { readAliases } from './state.js';
 
@@ -56,7 +57,8 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
   let answer: string;
   try {
     answer = await o.ask(`Revoke "${peer.name}" (${peer.peerId})? [y/N] `);
-  } catch {
+  } catch (e) {
+    if (e instanceof PromptTimeoutError) throw e;
     throw new Error(`no terminal to confirm the revocation of "${peer.name}": run \`machine admin revoke ${o.reference}\` in a terminal window. Nothing was signed`);
   }
   if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error('not revoked: the revocation was not confirmed. Nothing was signed');

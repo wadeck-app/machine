@@ -3,10 +3,18 @@ import { candidacyCode, finalCode, newCandidacyRandom } from '@wadeck-app/machin
 import { applyApproval, checkApproval, isAlreadyPinned } from './approval.js';
 import type { Timing } from './cliTypes.js';
 import { exportMachineInfo, type MachineInfo } from './network.js';
+import { PromptTimeoutError } from './prompt.js';
 import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
 import { deleteCandidacy, readCandidacy, readRelayConfig, relayFile, writeCandidacy, writeRelayConfig, candidacyFile, type CandidacyState } from './relayStore.js';
 
 export const DEFAULT_TIMEOUT_SECONDS = 15 * 60;
+// An approval received but not yet confirmed (final code) is kept this long: a later re-run discards it and pins nothing,
+// so a stale approval, or one replayed by the relay, cannot be completed days afterwards.
+export const APPROVAL_MAX_AGE_SECONDS = 15 * 60;
+// Whatever the relay announces, a device code is never waited for longer than this (the relay's own value is 5 minutes).
+export const MAX_DEVICE_LOGIN_SECONDS = 15 * 60;
+// Margin after the candidacy expiry announced by the relay before the client stops waiting by itself.
+const CANDIDACY_EXPIRY_GRACE_MS = 5_000;
 const DEFAULT_POLL_MS = 3_000;
 // Used when the relay rate limits without saying for how long.
 const DEFAULT_RETRY_MS = 30_000;
@@ -161,7 +169,8 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   );
 
   let intervalMs = Math.max(MIN_DEVICE_POLL_MS, Math.ceil(started.pollIntervalSeconds * 1000));
-  const deadline = timing.nowMs() + started.expiresIn * 1000;
+  const lifetimeSeconds = Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS);
+  const deadline = timing.nowMs() + lifetimeSeconds * 1000;
   const restart = 'run `machine join <relay-host-or-url>` again for a new code';
   // Slept before every poll, the first one included: never faster than the interval.
   let wait = intervalMs;
@@ -172,7 +181,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
       throw new Error(`interrupted: nothing was stored and the code ${printable(userCode)} is dropped (a device login cannot be resumed): ${restart}`);
     }
     if (timing.nowMs() >= deadline + DEVICE_EXPIRY_GRACE_MS) {
-      throw new Error(`the code ${printable(userCode)} expired before it was approved (it lives ${Math.round(started.expiresIn / 60)} min) and nothing was stored: ${restart}`);
+      throw new Error(`the code ${printable(userCode)} expired before it was approved (it lives ${Math.round(lifetimeSeconds / 60)} min) and nothing was stored: ${restart}`);
     }
     try {
       const polled = await publicClient.deviceLoginPoll(deviceCode);
@@ -364,13 +373,19 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
   const stopped = (why: string) =>
     new Error(`${why}: the token is saved and the candidacy ${state.id} stays valid until ${iso(state.expiresAt)}. Run \`machine join --resume\` to keep waiting (verification code ${candidacyCode(state.identityPublicKey, state.random)})`);
 
+  const clock = o.now ?? (() => new Date());
   for (let attempt = 0; state.approval === undefined; attempt++) {
-    o.say(`Waiting for the admin to approve (up to ${Math.round(o.timeoutMs / 60_000)} min, Ctrl-C to stop; \`machine join --resume\` continues later)...\n`);
-    const outcome = await waitForDecision(client, state.id, { timing: o.timing, timeoutMs: o.timeoutMs, ...(o.timing.signal ? { signal: o.timing.signal } : {}), warn: (t) => o.say(`${t}\n`) });
+    // The wait never outlasts the candidacy: a relay that forgets to answer 404 does not keep this client waiting.
+    const untilExpiry = Math.max(0, state.expiresAt * 1000 - clock().getTime()) + CANDIDACY_EXPIRY_GRACE_MS;
+    const cappedByExpiry = untilExpiry < o.timeoutMs;
+    const timeoutMs = Math.min(o.timeoutMs, untilExpiry);
+    o.say(`Waiting for the admin to approve (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later)...\n`);
+    let outcome = await waitForDecision(client, state.id, { timing: o.timing, timeoutMs, ...(o.timing.signal ? { signal: o.timing.signal } : {}), warn: (t) => o.say(`${t}\n`) });
+    if (outcome.kind === 'timeout' && cappedByExpiry) outcome = { kind: 'expired' };
     if (outcome.kind === 'approved') {
       // Kept before anything is verified or asked: the relay drops an approved entry after 5 minutes.
       // An approved answer without approval is kept as null: refused by the check, never polled again.
-      state = { ...state, approval: outcome.approval ?? null };
+      state = { ...state, approval: outcome.approval ?? null, approvalReceivedAt: Math.floor(clock().getTime() / 1000) };
       writeCandidacy(configDir, state);
     } else if (outcome.kind === 'rejected') {
       deleteCandidacy(configDir);
@@ -397,9 +412,21 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
 
 async function enroll(configDir: string, state: CandidacyState, info: MachineInfo, o: FlowOptions): Promise<Enrolled> {
   const now = Math.floor((o.now?.() ?? new Date()).getTime() / 1000);
+  // A stored approval is only good for a short time after it was received (an old file without the date is as old as it gets).
+  const tooOld = (at: number): string | undefined => {
+    const received = state.approvalReceivedAt;
+    if (received !== undefined && at - received <= APPROVAL_MAX_AGE_SECONDS) return undefined;
+    const age = received === undefined ? 'its date of receipt is unknown' : `it was received ${Math.round((at - received) / 60)} min ago, the limit is ${APPROVAL_MAX_AGE_SECONDS / 60} min`;
+    return `the approval is too old (${age}): ask the admin to approve again: run \`machine join --resume\`. It was discarded and nothing was pinned or imported`;
+  };
+  const stale = tooOld(now);
+  if (stale !== undefined) {
+    deleteCandidacy(configDir);
+    throw new Error(stale);
+  }
   let checked;
   try {
-    checked = checkApproval(state.approval, info, now);
+    checked = checkApproval(state.approval, info, now, state.random);
   } catch (e) {
     // An approval that does not verify is useless: dropped, so that --resume posts a fresh candidacy.
     deleteCandidacy(configDir);
@@ -420,14 +447,22 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
       let answer: string;
       try {
         answer = await o.ask(`Is this the code shown to the admin? Pin the admin key ${checked.admin.adminKeyId}? [y/N] `);
-      } catch {
+      } catch (e) {
+        if (e instanceof PromptTimeoutError) throw e;
         throw new Error(`no terminal to confirm the final code ${code}: the admin key was NOT pinned. Compare it with the admin, then run \`machine join --resume --yes-final-code ${code}\`. ${keep}`);
       }
       if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error(`final code not confirmed: the admin key was NOT pinned. ${keep}`);
     }
   }
 
-  applyApproval(configDir, checked, now);
+  // The questions can take long (--prompt-timeout up to an hour): the age is checked again at the moment of the pin.
+  const later = Math.floor((o.now?.() ?? new Date()).getTime() / 1000);
+  const staleNow = tooOld(later);
+  if (staleNow !== undefined) {
+    deleteCandidacy(configDir);
+    throw new Error(staleNow);
+  }
+  applyApproval(configDir, checked, later);
   deleteCandidacy(configDir);
   return {
     adminKeyId: checked.admin.adminKeyId,

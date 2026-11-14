@@ -4,6 +4,7 @@ import { runCli, type CliIo } from './cli.js';
 import { adminInit } from './admin.js';
 import type { Timing } from './cliTypes.js';
 import { readMachine } from './identity.js';
+import type { PromptTimer } from './prompt.js';
 import { exportMachineInfo, registerMachine, type MachineInfo } from './network.js';
 
 // Test helpers (not shipped logic): drive the CLI in-process, and provision two machines that trust each other.
@@ -97,6 +98,30 @@ export function fakeTiming(onSleep: (ms: number, count: number) => void = () => 
       sleeps.push(ms);
       t += ms;
       onSleep(ms, sleeps.length);
+    },
+  };
+}
+
+/** A prompt timer that never waits: the test fires it by hand and reads the delay that was asked for. */
+export function fakePromptTimer(): { timer: PromptTimer; pending: () => number; delays: number[]; fire: () => void } {
+  const pending = new Map<number, () => void>();
+  const delays: number[] = [];
+  let next = 0;
+  return {
+    timer: {
+      set: (fn, ms) => {
+        delays.push(ms);
+        pending.set(++next, fn);
+        return next;
+      },
+      clear: (handle) => void pending.delete(handle as number),
+    },
+    pending: () => pending.size,
+    delays,
+    fire: () => {
+      const all = [...pending.values()];
+      pending.clear();
+      for (const fn of all) fn();
     },
   };
 }

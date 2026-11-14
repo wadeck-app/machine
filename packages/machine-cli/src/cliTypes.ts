@@ -1,4 +1,5 @@
 import type { Prompt } from './admin.js';
+import type { PromptTimer } from './prompt.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
 export interface Timing {
@@ -18,6 +19,10 @@ export interface CliIo {
   ask?: (label: string) => Promise<string>;
   /** Defaults to the real clock and Ctrl-C; tests inject a fake one. */
   timing?: Timing;
+  /** Limit timer of the prompts; tests inject a fake one. */
+  promptTimer?: PromptTimer;
+  /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
+  now?: () => Date;
 }
 
 /**
@@ -50,6 +55,7 @@ export interface Parsed {
   noWait: boolean;
   reject: boolean;
   timeout?: string;
+  promptTimeout?: string;
   yesFinalCode?: string;
 }
 

@@ -44,7 +44,8 @@ The verification code (decision 35a) is computed by the CLI and by the admin pag
 { "v": 1,
   "self":  { "registration": { "body": { }, "signature": "..." }, "pairSecret": "<base64url 32 bytes>" },
   "admin": { "v": 1, "adminPublicKey": "<base64url>", "adminKeyId": "<32 hex>" },
-  "peers": [ { "registration": { }, "pairSecret": "..." } ] }
+  "peers": [ { "registration": { }, "pairSecret": "..." } ],
+  "random": "<random of the candidacy this approval answers>" }
 ```
 
 | Field | Content | Candidate check |
@@ -52,6 +53,9 @@ The verification code (decision 35a) is computed by the CLI and by the admin pag
 | `self` | `PeerBundle` (network.ts) registering THIS machine | signed by `admin`, in its validity window; uuid, name and identity key equal to this machine. Not stored (nothing consumes it yet) |
 | `admin` | the admin's `admin.json` | pinned with the `machine admin pin` logic (`pinAdminDocument`), only after the final code is confirmed; a different key already pinned is refused |
 | `peers` | `PeerBundle`s the admin chose to include (may be empty) | each verified against `admin`, then `importPeer` |
+| `random` | the `random` of the candidacy, written by `machine admin approve` | checked FIRST, before anything else: missing or different from the candidate's own random = refused as a replay or mix-up of candidacies (the candidacy file is dropped, nothing pinned). UNSIGNED (the relay can set it): it only catches an old or mixed-up approval, it is not a security check; the final code stays the one |
+
+**Time limits (every wait for a human is bounded, so a stale prompt, approval or replayed document cannot be completed later):** every question to a person (y/N, passphrase, final code, pairing code) is cancelled after 120 s by default (`--prompt-timeout <s>`, 1 to 3600; never an implicit answer; nothing signed, pinned or revoked; a late value is dropped). The wait for the admin is `--timeout` (default 900 s) and never outlasts the candidacy (`expiresAt` + 5 s, the relay answers 404). A device code is waited for at most `min(expiresIn, 900 s)` + 5 s. An approval received but not confirmed is kept 15 minutes in `relay-candidacy.json` (`approvalReceivedAt`): older, or without a date, it is discarded with `ask the admin to approve again: run machine join --resume`, the candidacy is dropped (the next one has a new random) and nothing is pinned; the age is checked again at the moment of the pin. `machine admin approve` refuses to sign for a candidacy that expired while it was asking.
 
 Unknown fields are refused. Everything is verified before anything is pinned or stored; one failure refuses the whole approval.
 
