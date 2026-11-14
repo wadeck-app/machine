@@ -49,3 +49,4 @@ export {
 } from './policy.js';
 export { candidacyCode, finalCode, newCandidacyRandom } from './sas.js';
 export { MIN_ITERATIONS, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
+export { machineNameProblem, resolveMachineRef, type MachineEntry, type Resolution } from './reference.js';
