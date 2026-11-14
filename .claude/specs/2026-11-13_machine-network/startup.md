@@ -16,6 +16,6 @@
 
 - `machine startup enable`: checks that `orch` exists (spawn error -> "orch is not installed: npm i -g @wadeck-app/orchestrator-cli"), then `orch ensure startup machine --command "<quoted exe> daemon" --restart-on-exit --timeout 0 --restart-if-changed --liveness-strategy portFile --liveness-port-file <configDir>/daemon.port.json --json`. If orch's own login entry is missing it prints `run: orch install` and does not run it.
 - `machine startup disable`: `orch remove machine --if-exists`.
-- `machine join` calls `startup enable` at its end; the updater calls it after each update (WP9). Exit codes of orch are mapped to actionable messages, never silent.
+- `machine join` never enables the startup job by itself: at its end it prints the suggestion `machine startup enable`; with `--auto-startup` it runs `startup enable` as its last step (user decision 2026-11-14). The updater calls `startup enable` after each update only when the job already exists (WP9); the updater calls it after each update (WP9). Exit codes of orch are mapped to actionable messages, never silent.
 - The daemon writes the port file (JSON with its `pid`) only while it runs and removes it at exit; a stale file would make orch skip the start.
 - Until `orch ensure` ships: emulate with `orch show <id> --json` (exit 3 = absent), then `add` or `edit`, behind one function.
