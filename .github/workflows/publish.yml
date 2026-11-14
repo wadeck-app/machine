@@ -1,8 +1,10 @@
 name: Publish @wadeck-app/machine-cli
 
-# Manual only: a push never publishes (the siblings publish on every push to main; refused for this repo).
-# TODO(user): decide whether a tag push should also publish. The version comes from compute-version, not from a tag.
+# Like the siblings: every push to main publishes an edge build; a manual dispatch can set a stable version.
+# The version comes from compute-version, not from a tag.
 on:
+    push:
+        branches: [main]
     workflow_dispatch:
         inputs:
             version:
