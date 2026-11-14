@@ -100,3 +100,12 @@ Distribution of registrations, revocation lists and policies through the relay i
 `POST /api/pairings/claim` is PUBLIC (no Authorization, no cookie), JSON body `{ "code": "12345678" }` (spaces and hyphens accepted, 32 characters max). `200 { success: true, serverTime, token, label, scopes }`: `token` is shown once, `scopes` is `["machine"]` for a pairing opened with scope machine (`null` means full access: the client must refuse it). The pairing is opened in the console (Tokens, Add token, "Limited to scopes", machine). The claimed token can call `POST /api/machines/candidacies` at once.
 
 Errors (`{ success: false, error: "<human text>", serverTime }`; here `error` is text, not a code): 400 and 401 `Invalid or expired code.` (wrong, malformed, used or expired: same answer on purpose), 429 with `Retry-After` and `retryAfterSeconds`, 409 or 5xx `The code was valid but is now used up ...` (ask the admin for a new code). A code is valid 5 minutes and works once; 5 failed attempts per 10 minutes per IP lock that IP, and 5 wrong codes cancel the open code.
+
+## Device login (relay token without a pairing code, decision D18)
+
+Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<code>", message, serverTime }`, 429 with `Retry-After` and `retryAfterSeconds`. Status: designed and tested by poc-owner, deployment pending (client not wired yet).
+
+- `POST /api/device-login/start` body `{ "label": "laptop-1" }` (1-64 characters: letters, digits, space, `_ . -`) -> `201 { deviceCode (43 characters, secret, kept in the CLI), userCode "BCDF-GH23", expiresIn: 300, pollIntervalSeconds: 3, verificationUrl }`. Limits: 5 starts per 10 minutes per address, 3 pending per address, 20 in total (`too_many_requests`).
+- `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a " (2)" suffix).
+- Console (full access only): the Tokens page lists waiting requests (user code, label, observed address, age). The approver TYPES the user code shown by the CLI; 5 wrong codes deny the request. The token is scope `machine` only. An approved token not collected within 5 minutes is revoked.
+- The pairing claim stays as the fallback.
