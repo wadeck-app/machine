@@ -21,7 +21,7 @@ Errors: `{ "success": false, "error": "<code>", "message": "<what happened and t
 
 | Call | Scope | Body | Answer |
 |---|---|---|---|
-| `POST /api/machines/candidacies` | M | `{ name, hostname, identityPublicKey, random }` | `201 { id, createdAt, expiresAt }` |
+| `POST /api/machines/candidacies` | M | `{ name, hostname, identityPublicKey, random, uuid? }` | `201 { id, createdAt, expiresAt }` |
 | `GET /api/machines/candidacies/{id}` | M (the creating token only) | - | `200 { status: "pending" }` or `{ status: "approved", approval }` or `{ status: "rejected" }`; `404` once expired |
 | `GET /api/machines/candidacies` | A (read-only view in the relay web UI too, decision 41) | - | `200 { candidacies: [ { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt } ] }` |
 | `PUT /api/machines/candidacies/{id}/decision` | A | `{ decision: "approve", approval }` or `{ decision: "reject" }` | `204`; `409` when not pending |
@@ -108,10 +108,15 @@ Errors (`{ success: false, error: "<human text>", serverTime }`; here `error` is
 Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<code>", message, serverTime }`, 429 with `Retry-After` and `retryAfterSeconds`. Status: designed and tested by poc-owner, deployment pending (client not wired yet).
 
 - `POST /api/device-login/start` body `{ "label": "laptop-1" }` (1-64 characters: letters, digits, space, `_ . -`) -> `201 { deviceCode (43 characters, secret, kept in the CLI), userCode "BCDF-GH23", expiresIn: 300, pollIntervalSeconds: 3, verificationUrl }`. Limits: 5 starts per 10 minutes per address, 3 pending per address, 20 in total (`too_many_requests`).
-- `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a " (2)" suffix).
+- `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (the relay answers `slow_down` below 2.5 s) (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a "-2" suffix (for example "laptop-2")).
 - Console (full access only): the Tokens page lists waiting requests (user code, label, observed address, age). The approver TYPES the user code shown by the CLI; 5 wrong codes deny the request. The token is scope `machine` only. An approved token not collected within 5 minutes is revoked.
 - The pairing claim stays as the fallback.
 
 ## Enrollment screens (UX requirement, user 2026-11-14)
 
 Every screen that guides enrollment shows a vertical timeline on the left (current step highlighted) and, beside each step, an "i" tooltip saying what the step is for and which threat it addresses. Two places: the relay console approval of the device login (relay access only: request received, origin check on address and label, typed code, token delivered; owner poc-owner) and the admin signing page of `app-module-machine` (candidacy review, passphrase and signature, final code comparison, distribution; WP8). The relay stays a dumb registry: it never shows trust decisions.
+
+## Updates from poc-owner (commit 76b2b5c, deployment pending)
+
+- Candidacy `uuid`: `POST /api/machines/candidacies` accepts an optional lower-case canonical `uuid` (any other format: 400 `invalid_body` naming the format); it is stored and returned by `GET /api/machines/candidacies` when present, omitted otherwise. Re-posting the same identity key replaces it. The client always sends it; `machine admin approve` refuses a candidacy that has none.
+- Device login: the console list does NOT show the user code (the approver reads it on the machine's screen); polls faster than 2.5 s get `429 slow_down`; a label conflict gets the suffix "-2" (for example "laptop-2"); PATCH on token scopes also exists on the relay (console).
