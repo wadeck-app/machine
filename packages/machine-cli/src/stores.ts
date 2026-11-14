@@ -5,7 +5,8 @@ import { writeFileAtomic } from './fsutil.js';
 
 /** Call counters of policy entries (decision 44), kept across restarts: a restart must never reset a limit. */
 export class FileUsageStore {
-  private readonly counts: Record<string, number> = {};
+  // A Map: the correctness of a counter must not depend on what its key looks like (no prototype keys).
+  private readonly counts = new Map<string, number>();
 
   constructor(private readonly file: string) {
     if (!existsSync(file)) return;
@@ -16,20 +17,24 @@ export class FileUsageStore {
     } catch {
       throw corrupt('not valid JSON');
     }
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw corrupt('unexpected shape');
     if (raw.v !== 1 || typeof raw.counts !== 'object' || raw.counts === null || Array.isArray(raw.counts)) throw corrupt('unexpected shape');
     for (const [key, value] of Object.entries(raw.counts)) {
       if (!Number.isSafeInteger(value) || (value as number) < 0) throw corrupt(`counter ${JSON.stringify(key)} is not a count`);
-      this.counts[key] = value as number;
+      this.counts.set(key, value as number);
     }
   }
 
   count(key: string): number {
-    return Object.prototype.hasOwnProperty.call(this.counts, key) ? (this.counts[key] as number) : 0;
+    return this.counts.get(key) ?? 0;
   }
 
   record(key: string): void {
-    this.counts[key] = this.count(key) + 1;
-    writeFileAtomic(this.file, `${JSON.stringify({ v: 1, counts: this.counts }, null, 2)}\n`, 0o600);
+    this.counts.set(key, this.count(key) + 1);
+    // JSON.stringify of an object literal with a "__proto__" key would drop it: write the entries as pairs of an array.
+    const counts: Record<string, number> = Object.create(null) as Record<string, number>;
+    for (const [k, v] of this.counts) Object.defineProperty(counts, k, { value: v, enumerable: true, writable: true, configurable: true });
+    writeFileAtomic(this.file, `${JSON.stringify({ v: 1, counts }, null, 2)}\n`, 0o600);
   }
 }
 

@@ -73,3 +73,11 @@ describe('init leaves no temporary file behind', () => {
     expect(readdirSync(join(dir, '_secrets_'))).toEqual(['identity.json']);
   });
 });
+
+describe('JSON that is not an object', () => {
+  it.each(['null', '5', '"x"', '[]'])('is reported as corrupt, naming the file: %s', (content) => {
+    initMachine(dir, 'desktop');
+    writeFileSync(join(dir, '_secrets_', 'identity.json'), content);
+    expect(() => readMachine(dir)).toThrow(/identity\.json.*(corrupt|invalid)/);
+  });
+});

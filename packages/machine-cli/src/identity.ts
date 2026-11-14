@@ -82,6 +82,7 @@ export function readMachine(configDir: string): MachineIdentity {
   } catch {
     throw corrupt('not valid JSON');
   }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw corrupt('not an identity file');
   if (raw.v !== 1) throw corrupt('unknown version');
   if (typeof raw.uuid !== 'string' || !UUID_V4.test(raw.uuid)) throw corrupt('uuid is missing or malformed');
   if (typeof raw.name !== 'string' || machineNameProblem(raw.name)) throw corrupt('name is missing or invalid');

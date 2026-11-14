@@ -76,3 +76,23 @@ describe('buildDirectory', () => {
     expect(dir.problems[0]).toMatch(/a.*pair secret/);
   });
 });
+
+describe('buildDirectory (review hardening)', () => {
+  it('reports a null or malformed registration entry and still loads the others', () => {
+    const good = registered('9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345', 'good');
+    const dir = buildDirectory([{ registration: null as never, pairSecret: randomBytes(32) }, { registration: 5 as never, pairSecret: randomBytes(32) }, good.entry], ctx);
+    expect(dir.lookup(good.identity.publicKey)).toBeDefined();
+    expect(dir.problems).toHaveLength(2);
+  });
+
+  it('keeps only the highest serial for a uuid registered twice, and says the other was superseded', () => {
+    const uuid = '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345';
+    const older = registered(uuid, 'laptop', { serial: 1 });
+    const newer = registered(uuid, 'laptop', { serial: 2 });
+    const dir = buildDirectory([older.entry, newer.entry], ctx);
+    expect(dir.lookup(newer.identity.publicKey)).toBeDefined();
+    expect(dir.lookup(older.identity.publicKey)).toBeUndefined();
+    expect(dir.machines()).toHaveLength(1);
+    expect(dir.problems.join('\n')).toMatch(/laptop.*superseded/);
+  });
+});

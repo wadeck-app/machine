@@ -67,3 +67,19 @@ describe('FileAuditLog', () => {
     expect(log.lastHash()).not.toBe(before);
   });
 });
+
+describe('stores (review hardening)', () => {
+  it('names the usage file when it holds null instead of a raw TypeError', () => {
+    const file = join(dir, 'usage.json');
+    writeFileSync(file, 'null');
+    expect(() => new FileUsageStore(file)).toThrow(/usage\.json.*(corrupt|invalid)/);
+  });
+
+  it('keeps a counter whose key looks like a prototype property', () => {
+    const file = join(dir, 'usage.json');
+    const a = new FileUsageStore(file);
+    a.record('__proto__');
+    a.record('__proto__');
+    expect(new FileUsageStore(file).count('__proto__')).toBe(2);
+  });
+});

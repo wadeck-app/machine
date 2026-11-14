@@ -30,6 +30,7 @@ function readState(configDir: string): StateFile {
   } catch {
     throw corrupt('not valid JSON');
   }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw corrupt('unexpected shape');
   if (raw.v !== 1 || typeof raw.aliases !== 'object' || raw.aliases === null || Array.isArray(raw.aliases)) throw corrupt('unexpected shape');
   for (const [alias, uuid] of Object.entries(raw.aliases)) {
     if (machineNameProblem(alias) || typeof uuid !== 'string' || !isUuid(uuid)) throw corrupt(`alias ${JSON.stringify(alias)} is invalid`);

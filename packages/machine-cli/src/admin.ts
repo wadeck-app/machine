@@ -52,6 +52,9 @@ export function readAdminPin(configDir: string): AdminPin {
   } catch {
     throw new Error(`${file} is corrupt or invalid (not valid JSON): restore it from another machine`);
   }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${file} is corrupt or invalid (not an admin pin file): restore it from another machine`);
+  }
   if (raw.v !== 1 || typeof raw.adminPublicKey !== 'string' || typeof raw.adminKeyId !== 'string' || keyId(raw.adminPublicKey) !== raw.adminKeyId) {
     throw new Error(`${file} is corrupt or invalid (unexpected content): restore it from another machine`);
   }

@@ -62,7 +62,7 @@ interface World {
   now: { value: number };
 }
 
-async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRun?: boolean; maxConcurrent?: number; noPolicy?: boolean } = {}): Promise<World> {
+async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRun?: boolean; maxConcurrent?: number; noPolicy?: boolean; onProblem?: (m: string) => void; maxRefusalsPerSession?: number } = {}): Promise<World> {
   const admin = generateSigningKeyPair();
   const a = generateSigningKeyPair();
   const b = generateSigningKeyPair();
@@ -110,6 +110,8 @@ async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRu
       return over.run ? over.run(o) : okResult();
     },
     ...(over.maxConcurrent !== undefined ? { maxConcurrent: over.maxConcurrent } : {}),
+    ...(over.onProblem ? { onProblem: over.onProblem } : {}),
+    ...(over.maxRefusalsPerSession !== undefined ? { maxRefusalsPerSession: over.maxRefusalsPerSession } : {}),
   };
   const listener = await startPeerListener(deps, { host: '127.0.0.1', port: 0 });
   closers.push(() => listener.close());
@@ -276,5 +278,75 @@ describe('peer service', () => {
     await expect(w.connect(randomBytes(32))).rejects.toThrow(/pair secret/);
     expect(w.audit.events()).toEqual([]);
     expect(w.runs).toHaveLength(0);
+  });
+});
+
+describe('peer service resilience', () => {
+  it('survives a store that throws: answers internal-error, runs nothing, keeps serving', async () => {
+    const w = await world();
+    let fail = true;
+    const original = w.usage.record.bind(w.usage);
+    w.usage.record = (key: string) => {
+      if (fail) {
+        fail = false;
+        throw new Error('disk full');
+      }
+      original(key);
+    };
+    const session = await w.connect();
+    closers.push(() => session.close());
+    expect(await ask(w, 'echo hello', SHELL, session)).toMatchObject({ type: 'refused', reason: 'internal-error' });
+    expect(w.runs).toHaveLength(0);
+    expect(await ask(w, 'echo hello', SHELL, session)).toMatchObject({ type: 'result' });
+  });
+
+  it('does not run a command it cannot audit (no audit, no execution)', async () => {
+    const w = await world();
+    const original = w.audit.write.bind(w.audit);
+    w.audit.write = (entry) => {
+      if (entry.event === 'accepted') throw new Error('audit disk unavailable');
+      original(entry);
+    };
+    const answer = await ask(w, 'echo hello');
+    expect(answer).toMatchObject({ type: 'refused', reason: 'audit-unavailable' });
+    expect(w.runs).toHaveLength(0);
+    expect([...w.usage.counts.values()]).toEqual([]);
+  });
+
+  it('still returns the result of a command that ran when the completion audit fails, and reports the problem', async () => {
+    const problems: string[] = [];
+    const w = await world({ onProblem: (m) => problems.push(m) });
+    const original = w.audit.write.bind(w.audit);
+    w.audit.write = (entry) => {
+      if (entry.event === 'completed') throw new Error('audit disk unavailable');
+      original(entry);
+    };
+    expect(await ask(w, 'echo hello')).toMatchObject({ type: 'result', exitCode: 0 });
+    expect(problems.join('\n')).toMatch(/completion.*audit disk unavailable/);
+  });
+
+  it('refuses a request issued before this daemon started, so a restart cannot be used to replay it', async () => {
+    const w = await world();
+    const session = await w.connect();
+    closers.push(() => session.close());
+    const signed = signRequest(newRequest({ source: A, target: B, shell: SHELL as 'cmd', command: 'echo hello', now: w.now.value - 5 }), w.a.privateKeyPkcs8);
+    session.send({ type: 'run', request: signed });
+    expect(await session.next()).toMatchObject({ type: 'refused', reason: 'predates-start' });
+    expect(w.runs).toHaveLength(0);
+  });
+
+  it('closes a session that keeps getting refused, and audits it', async () => {
+    const w = await world({ maxRefusalsPerSession: 2 });
+    const session = await w.connect();
+    closers.push(() => session.close());
+    for (let i = 0; i < 3; i++) expect(await ask(w, `echo nope ${i}`, SHELL, session)).toMatchObject({ type: 'refused', reason: 'not-listed' });
+    await expect(session.next()).rejects.toThrow();
+    expect(w.audit.events()).toContain('session-closed');
+  });
+
+  it('gives up waiting for an answer after the client deadline, with an actionable message', async () => {
+    const hanging = { peerPublicKey: 'k', peerId: 'p', send: () => undefined, next: () => new Promise<unknown>(() => undefined), close: () => undefined };
+    const w = await world();
+    await expect(runOnPeer(hanging, { identity: w.a, source: A, target: B, shell: SHELL as 'cmd', command: 'echo hello', now: w.now.value, timeoutMs: 50 })).rejects.toThrow(/no answer.*50 ms.*peer/s);
   });
 });

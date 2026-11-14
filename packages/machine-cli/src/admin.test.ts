@@ -136,3 +136,10 @@ describe('adminInit and the pin (review hardening)', () => {
     await expect(signPolicyFile(dir, policyDraft(), { now: NOW, prompt: async () => passphrase })).rejects.toThrow(/admin\.key\.json.*(corrupt|invalid)/);
   });
 });
+
+describe('JSON that is not an object', () => {
+  it.each(['null', '5', '"x"', '[]'])('is reported as corrupt, naming the file: %s', (content) => {
+    writeFileSync(join(dir, 'admin.json'), content);
+    expect(() => readAdminPin(dir)).toThrow(/admin\.json.*(corrupt|invalid)/);
+  });
+});
