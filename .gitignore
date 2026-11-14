@@ -1,0 +1,19 @@
+node_modules/
+dist/
+dist-module/
+.app-core-dev/
+coverage/
+*.log
+*.tsbuildinfo
+
+# Secrets never live in the repo (runtime secrets are in <configDir>/_secrets_/)
+_secrets_/
+.env.local
+*.pem
+*.key
+
+# Local agent working files
+.claude/session/
+.claude/scratch/
+.claude/logs/
+.claude/w-guardrails/

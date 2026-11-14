@@ -1,0 +1,202 @@
+# Threat Model -- Machine Network
+
+**Version:** 3.0 (2026-11-14: the relay is a registry only and peers connect directly, decisions 33-34; hard rule 1 is replaced, T-33 to T-35 added)
+**Date:** 2026-11-14
+**Methodology:** STRIDE, format aligned on the sibling models (flow docker-sandbox: Assets/Actors tables + register with Status and Decision #; flow-cli: accepted risks `AR-n` with a re-evaluation trigger; orch: hard rules)
+**Scope of this version:** phase 1 (decision 12): machine identity, enrollment, secure channel through the relay, remote command execution under a human-administered allowlist. Phase 2 (wrappers for task, flow, queue, orch, project) is parked; section 9 lists what must be re-evaluated before it ships.
+
+Sources are tagged `[V]` when I re-read the quoted line myself, `[agent]` when it comes from a sub-agent report not re-verified. Inferences are marked "(inference)". See section 11.
+
+## 1. System and data flow
+
+```
+ caller (human or agent, same OS user)
+        | loopback API + health_token            TB-1
+        v
+ +----------------+  HTTPS REST (auth, `machines`)  +-----------------+  HTTPS REST   +----------------+
+ | machine daemon | ==============================> |  relay (poc-node) | <============ | machine daemon |
+ |  (caller)      |  TB-2: registry only, UNTRUSTED  |  never carries    |  TB-2         |  (target)      |
+ +----------------+                                  |  commands         |               +----------------+
+        |                                            +-----------------+                  ^   | TB-4
+        |   direct TCP connection to the published address (TB-3)                         |   v
+        +---------------- mutual handshake, E2E-encrypted, signed requests ---------------+  allowlisted
+                                                                                              shell command
+ admin page (app-module-machine, app-core origin)  --signed policy (TB-5)-->  target daemon
+```
+
+| Boundary | Between | Control (summary) |
+|---|---|---|
+| TB-1 | Local caller and the local daemon | Loopback only, bearer `health_token` (same as siblings). NOT proof of a human (P-5) |
+| TB-2 | Daemon and relay | Outbound HTTPS only (authentication, REST resource `machines`); the relay is untrusted, never carries commands, and is never believed about identities: a registration counts only with the admin signature |
+| TB-3 | Peer and peer | A direct connection to a listening peer port (decision 34); mutual authentication before anything else, allowlist of enrolled UUIDs, session keys, request signing. This is the machine's only network-reachable surface |
+| TB-4 | Daemon and the executed command | Exact-match allowlist, scrubbed env, timeout and output cap, never elevated |
+| TB-5 | Admin page and daemon | Policy changes accepted only with a valid admin signature |
+
+## 2. Assumptions
+
+| # | Assumption | Basis |
+|---|---|---|
+| A-1 | The relay (poc-node, shared hosting, one process) is hostile or breached at any time | decision 5; poc-node: "no roles by design", a stolen token "grants everything" [V `docs/THREAT_MODEL.md:57`] |
+| A-2 | Any process running as the same OS user on a machine can read daemon tokens and edit user files, including an agent session | [V] `health_token` files are readable by this agent session; [V] queue: "the file system is the trust boundary" |
+| A-3 | Such a process already has the user's rights on THAT machine; the policy protects a machine against REMOTE peers and against agents widening the remote surface, not against malware already running as the user | P-5 scope; decision 19 |
+| A-4 | Enrollment of a machine is a human act on both sides | decision 6; open question #4 |
+| A-5 | Machine clocks may be skewed; expiry and replay logic must not trust a peer's clock alone | (inference) |
+| A-6 | On Windows, file modes are not enforced; the user profile ACL is the boundary | [V] queue threat model line 43; flow AR-8 [agent] |
+| A-7 | The user's own app-core modules are trusted; a malicious module already has the user's OS rights | decision 19 |
+
+### Sibling assumptions that machine breaks
+
+| Sibling | Assumption | Source | Consequence for machine |
+|---|---|---|---|
+| singleton-daemon-kit | "Attacker is a local process running as the same user"; "Remote network attack surface: none (binds to 127.0.0.1)"; no audit log; no rate limiting; `health_token` plaintext | [V] `.claude/threat-model.md:3-4,48-50` | The machine daemon is the first component with a remote surface built on this kit: the peer listener must be a SEPARATE server and port, never the kit's loopback server (T-17, T-34); audit and rate limits become mandatory (T-07, T-08) |
+| orch | `/api/exec`, secrets, job create/update/import are "accepted" only because any local process already runs commands as the user (T-02, T-05); bind 127.0.0.1 only, never expose quit/restart | [V] `.claude/threat-model.md:7,26,39-41` | A remote peer is a different principal: those routes must never be reachable through machine (phase 2 gate). The only orch controls are the 127.0.0.1 binding, the `jobId` regex, a best-effort CORS allowlist and no daemon quit/restart over HTTP; its dashboard spec's cookie flow never existed and was corrected on 2026-11-13 (orch-owner), so no cookie or token control may be cited |
+| queue | `push` by a local process is "no more privileged than any other local process"; relay events are a "trust transfer"; revisit only with authentication provided to every caller | [V] `.claude/threat-model.md:43,69,89` | Peer events are a weaker trust level (T-09) |
+| flow | AR-1/AR-2: "the attacker and the victim are the same person", re-evaluate "if the CLI is ever exposed via a server endpoint"; daemon loopback only; A4: remote workers need "a new and complete threat model", the WS channel being "loopback-only, no TLS, no auth" | [V] `flow-cli/threat-model.md:4,31-33`; [V] `audits/threat-model-ws-auth.md:36-39` | Forwarding to flow voids AR-1/AR-2 and triggers A4: phase 2 needs its own revision |
+| flow worker availability | Inbound registration makes "the daemon port network-reachable"; requires out-of-band secret and encrypted transport; the wire carries no command, script or path (T-13), fail closed on cleartext (T-12) | [V] line 77; T-12/T-13 [agent] | Closest precedent for machine: reuse the "no free command on the wire" and "fail closed on cleartext" rules |
+| task | `task serve`: plain HTTP on a trusted LAN, one shared bearer token, no per-request signature, no per-token project scope; standalone threat model exists since 2026-11-14 (`task/docs/threat-model-task-serve.md`, T14 = loopback forwarder, the token is the only protection) [V]; no fail-closed mode for cleartext, the client only warns in `strategy check` | [V] `plugins/remote/remotePlugin.ts:66` and `plain-http/plainHttpPlugin.ts:104` ("trusted LAN only"); task-owner | Forwarding to `task serve` adds a plain-HTTP loopback hop (T-10); siblings disagree on cleartext (task warns, flow-wa fails closed): machine chooses fail closed |
+| project | P-2: "Every machine and every registered project is trusted; no gating of project-supplied hooks or subscribers" [V `guiding-principles.md:12`], written about the user's own tools and repos; no network actor and no authentication is modelled (project-owner). Cross-project hooks accepted (T-02), origin "recorded when available"; the `Origin` record has no machine field [V `project-sdk/src/origin.ts`] | project threat model, project-owner | A remote peer is not covered by P-2 (it would be a new decision for the project's user): treat it as a hostile caller. Phase 2 needs the origin to name the remote machine |
+| app-core | Modules are trusted, no sandbox; no auth on `/api/modules/register` or `/update` (T-03); module bundles run in the shell origin with full DOM access (T-04) | [V] `threat-model.md:35,58` | Admin page in app-core inherits T-03 and T-04 (T-13, T-14), accepted by decision 19 |
+
+## 3. Assets
+
+| Asset | Sensitivity | Where |
+|---|---|---|
+| Ability to run commands on a machine | Critical | target daemon |
+| Admin signing key (encrypted) and passphrase | Critical | admin key file; passphrase in the human's head |
+| Machine identity private key | Critical | `<configDir>/_secrets_` |
+| Policy: allowlists, per-peer lists, grants, limits | High | signed policy file on each machine |
+| Peer registry (UUIDs, public keys, aliases, PSKs) | High | machine config |
+| Audit log | High | hash-chained file on each machine |
+| Command output in transit | High | peer channel (E2E) |
+| Relay credentials | Medium | machine config |
+| Traffic metadata (who, when, sizes) | Low | visible to the relay |
+| Work laptop and its corporate data | High | the laptop |
+
+## 4. Actors
+
+| Actor | Motivation | Capability | In scope |
+|---|---|---|---|
+| Internet attacker | Reach machines | Can connect to the public relay URL, pre-authentication | Yes |
+| Compromised relay or relay host operator | Pivot, spy, deny | Full control of relay data, sockets and restarts | Yes (assumption A-1); host operator attacks on the hosting are out of scope as in poc-node |
+| Stolen or lost machine | Pivot to the network | Holds an identity key, peer registry, audit log | Yes |
+| Compromised enrolled peer | Execute on others | Valid identity and PSK | Yes |
+| Prompt-injected or confused local agent | Follow injected instructions | Same OS user: reads tokens, edits files, can drive a browser | Yes (policy and admin) |
+| Malware running as the user | Anything | The user's full OS rights | Out of scope beyond what A-3 states |
+| Malicious app-core module | Capture passphrase | Shell-origin DOM access | Accepted (AR-2) |
+| Malicious or buggy sibling release | Deploy hostile code | Auto-update path (orch updates every 30 min [agent]) | Partly (T-23) |
+
+## 5. STRIDE analysis
+
+**Spoofing.** A peer or the relay impersonating a machine (T-01); a stolen relay token (T-30); a rogue machine enrolled (T-05); a local agent acting as the human administrator (T-11); a trojan admin page (T-14); a signed request redirected to another target (T-29).
+**Tampering.** Frame modification and replay on the direct channel (T-02, T-04, T-35); address poisoning (T-33); policy tampering or rollback (T-16); command-string bypass of the exact match (T-15); counters reset locally (T-12).
+**Repudiation.** No trace of remote commands: a known gap of the daemon kit (T-07); audit log truncation by a same-user process (T-27).
+**Information disclosure.** Metadata seen by the relay (T-25); key theft (T-22); passphrase capture (T-13); environment leaking into commands (T-18); output exfiltration through allowed commands (T-28).
+**Denial of service.** Pre-authentication flood on the relay routes and the peer listener (T-08, T-34); relay outage or dropped connection (T-20); pending-request spam (T-21); command resource exhaustion (T-19); administrator lockout (T-24); clock skew (T-26).
+**Elevation of privilege.** Compromised peer (T-03); scope escalation on the relay (T-31, T-32); local agent widening policy (T-11); confused deputy through the local token (T-17); self-update channel (T-23); phase 2 forwarding (T-09, T-10).
+
+## 6. Threat register
+
+Status: `Planned` = design decided, not implemented; `Open` = design pending; `Accepted` = see section 7; `By design` = removed by a decision.
+
+| ID | STRIDE | Threat | Mitigation | Status | Decision / question |
+|---|---|---|---|---|---|
+| T-01 | S | A peer or the relay impersonates a machine (stolen or copied identity key, forged handshake) | Mutual authentication with a per-machine identity key (UUID bound to its public key), registrations signed by the admin key, mandatory per-pair PSK (decision 22); unknown peers rejected and logged | Planned | 4, 6, 10; Q#7 |
+| T-02 | T, I | A network attacker between two peers (or a hostile relay that lies about addresses, see T-33) reads, modifies, injects or drops frames | Peers talk directly; authenticated encryption with ephemeral session keys (forward secrecy); drops surface as explicit errors, never silent. The relay carries no frames | Planned | 5, 33 |
+| T-03 | E | A compromised enrolled peer runs commands on targets | Deny by default; strict exact allowlist (shell + full command line, no wildcard, no regex); per-peer list replaces the default; call and duration limits | Planned | 6, 13, 14, 15, 20 |
+| T-04 | T | Replay of captured frames or signed requests on the direct channel | Per-session counters and nonces, request expiry, requests bound to the target UUID; a new session per connection | Open (protocol design) | Q#7 |
+| T-05 | S | A rogue machine is enrolled (social engineering, man-in-the-middle through the relay during pairing) | A machine is trusted only if it holds a registration signed with the admin key (decision 21, reported); the relay never adds trust; peers verify the signature against the pinned admin public key. Enrollment by candidacy (decision 35): the verification code is derived from the candidate's public key so a key swapped by the relay shows a different code, and a final code derived from both public keys is compared by the human before the candidate pins the admin public key (35a). The IP and computer name shown to the human are informative, not proof. The relay's web interface may display candidacies read-only (decision 41); it can show false data, so the human compares the codes on the local signing page, never on the relay page. Remaining: bootstrap of the very first machine (it creates the admin key), code length | Planned (details open) | 21, 35, 35a, Q#13 |
+| T-06 | I, E | A stolen machine keeps access to the network | Revocation is an admin-signed, versioned list distributed to peers with catch-up on reconnect; expiry of registrations; automatic expiry of a peer unseen for N days | Planned (details open) | 21, Q#10 |
+| T-07 | R | No trace of remote commands (daemon kit: "No audit log of commands" [V]) | Hash-chained audit log on the target and the caller: peer UUID, shell, exact command, exit code, duration, request id; no output stored | Planned | 20 |
+| T-08 | D | Pre-authentication flood on (a) the relay's REST routes (shared Node process and login limiter with the webhook listeners [V poc-node]) and (b) the daemon's peer listener (T-34) | (a) The `machines` routes sit behind the token gate (a `machine`-scoped token obtained through the pairing PIN, decision 28), with per-token and per-IP limits; the shared process, memory and login limiter stay shared. With no message traffic the relay budget issue of the earlier design (500 connections, 200 unauthenticated) mostly disappears. (b) see T-34 | Open | 28, 33 |
+| T-09 | E | (phase 2) Peer events pushed into queue reach `cli` subscribers and agent-wake; wildcard subscribers fire | Push only under `machine.<peer>.`; treat as untrusted; per-peer capability | Open, parked | 12, D-A2 |
+| T-10 | E | (phase 2) A forwarded `task serve` port is plain HTTP on loopback: the bearer token is the only protection | Loopback only, random port, token never logged, per-peer capability | Open, parked | 12 |
+| T-11 | S, E | A local agent or process of the same OS user widens the allowlist or grants itself rights (it reads tokens and edits files) | Policy is a signed document; the daemon applies a change only with a valid admin signature; the admin key is passphrase-protected and unlocked in the browser for a bounded window, never held by the daemon | Planned | 16, 18; P-5 |
+| T-12 | T | Call counters and expiries stored locally are reset by a same-user process | Limits bind remote peers; a same-user process already has the user's rights; consumption recorded in the audit log | Accepted (AR-5) | 15 |
+| T-13 | I | The passphrase is captured in the shared app-core origin (all modules run in one origin with full DOM access [V]) | Key and passphrase only in the admin page's memory; short unlock window; KDF cost; the app-core CSP stops any script of the origin from sending what it reads (passphrase, signed payloads) to another site, but another module's script of the same origin can still read the DOM and call app-core; `machine status` warns loudly and the admin page shows a blocking notice when app-core runs with `APP_CORE_CSP=off` (to implement in WP8; the daemon does not serve the page) | Accepted (AR-2) | 19 |
+| T-14 | S | A local process registers or swaps `app-module-machine` through app-core's unauthenticated registration (app-core T-03 [V]) to serve a fake admin page | The daemon still needs a valid signature; a captured passphrase plus the readable encrypted key file would be enough to administer (inference) | Accepted (AR-2) | 19 |
+| T-15 | T, E | The executed string differs from the approved entry: normalization, case, trailing characters, lookalike Unicode, quoting of the shell invocation on Windows (cmd and PowerShell parse differently; spawning `.bat`/`.cmd` has had injection bugs, general knowledge to verify) | Byte-for-byte match on (shell name, command line), no normalization; refuse control and non-ASCII characters; the approved string is passed as ONE argument to a named shell without re-quoting; entries shown escaped in the admin page; conformance tests for `cmd`, `ps`, `bash` | Open (needs tests) | 13, 17 |
+| T-16 | T | The policy file is replaced by an older valid signed version (rollback) or edited | Signature covers the target UUID, a monotonic version and the base version it was edited from; the daemon applies a change only if its base equals the current version (compare-and-set, decision 27) and refuses lower versions; stored version in the audit log | Planned | 16, 18 |
+| T-17 | E | Confused deputy: a remote request inherits local rights through the loopback API; `health_token` is one shared credential with no caller identity ([V] kit gaps) | The peer channel and the local API are separate code paths; a peer request is authorized only by the policy, never by the local token; the daemon's only non-loopback listener is the peer listener, a separate server and port that never serves the local API (hard rule 1) | Planned | P-1, 34 |
+| T-18 | I | Environment variables and secrets leak into executed commands | Scrubbed environment (explicit allow-list, as flow's daemon-forked workers); no secret in logs | Planned | 20 |
+| T-19 | D | Commands exhaust resources (endless output, long run, fork storms) | Timeout, output cap, per-peer concurrency cap; non-interactive only | Planned | 20 |
+| T-20 | D | (a) Relay outage: addresses and registrations cannot be fetched; (b) a peer is unreachable or the connection drops mid-command, so a command may or may not have run | (a) Cached signed registrations and last known addresses are used; with none, an explicit error naming the relay; (b) explicit error to the caller, never a silent retry of a command that may have run; the relay is no longer on the path of a running command, so its restarts (each deploy) do not cut it | Planned | 33, 34 |
+| T-21 | D | Spam of pending requests fills the admin UI or disk | Per-peer cap and rate limit on pending requests; oldest dropped with a counter | Planned | 16 |
+| T-22 | I | Theft of the identity private key (file readable by same-user processes; Windows ACL not enforced) | File mode 0600 or user ACL; an OS key store as a later upgrade; limited blast radius: peers still apply their own exact allowlists and PSKs | Planned, residual | 4 |
+| T-23 | E | The self-update channel is replaced or poisoned: remote code execution on every machine (siblings update through npm, orch every 30 minutes [agent]; flow T-05 "auto-updater runs elevated" Open [agent]) | Decision 38: same updater as the siblings (spawned with an argv array by `shared-updater`, strict CalVer check, install verified, rollback on failure, never elevated). It has NO signature or provenance check [V: none found in `shared-updater/src` nor in the task publish workflow], so a poisoned registry or stolen publish token reaches every machine within the 30-minute auto-update interval. Accepted for now (AR-9); mitigations to decide later: publish with npm provenance, a release signature pinned in the daemon, `autoUpdate: false` for the work laptop | Accepted (AR-9), mitigation open | 38, 38a |
+| T-24 | D | Administrator lockout: lost passphrase or all peers revoked | A documented local recovery procedure that needs physical access and re-enrollment | Open | Q#4 |
+| T-25 | I | The relay sees metadata: which machines register, look up whom, when, and their public addresses; each peer learns the other's public address | Accepted; the relay never sees message sizes or content; the address is published only to holders of a `machine` token | Accepted (AR-4) | 5, 33 |
+| T-26 | T, D | Clock skew breaks expiry and replay windows | Counters, not clocks, for replay; clocks only for grant expiry on the target, using the target's own clock; explicit error when a peer clock differs by more than a threshold | Planned | A-5 |
+| T-27 | R | A same-user process truncates or edits the local audit log | Hash chain detects edits; periodic copy of the chain head to peers; residual: deletion before the copy | Planned, residual | 20 |
+| T-28 | I | An allowed command exposes data (for example `ls` or `type` on sensitive folders); output crosses the network | Inherent to what the human allows; entries are explicit and per peer; output only over the E2E channel; nothing stored | Accepted (AR-6) | 13 |
+| T-29 | S, T | A signed request is replayed to another target or reused after its expiry | Request signature binds source UUID, target UUID, request id, nonce, expiry | Planned | 20 |
+| T-30 | S, D | A stolen relay token with the `machine` scope lets an attacker call the `machines` routes, flood them, observe metadata and try to overwrite a published address (T-33) | The relay token is transport authorization only: a connection without an admin-signed registration and the pair secret never completes a handshake (decisions 21, 22); per-token and per-IP limits; tokens are revocable and labelled per device; pairing code valid 5 minutes, single use, 5 failures per 10 minutes per IP [V poc-node threat model] | Planned | 28 |
+| T-31 | E | Scope escalation: a scoped token calls poc-node's control plane (create or revoke tokens, webhook configs, key-value) because today every token holder has equal power | Control-plane endpoints (tokens, pairings, key-value) require an unscoped full-access token or the console session (decisions 31-32); a scope check at the WebSocket auth step refuses a token that lacks the route's scope, loudly and counted by the attempt limiter | Open (poc-node change) | 29, 30, Q#11 |
+| T-32 | E, R | poc-node details that weaken scopes: paths in `AUTH_BYPASS_PATHS` (`/api/restart`, `/api/diagnostics/*`, `/webhook/*`, `/api/login`, `/api/pairings/claim`, `/relay-ws`) are not covered by a gate-level scope; a downgrade of poc-node silently turns every scoped token into full access (old code ignores the field); pairings live in memory, so every restart (each deploy) invalidates pending codes | Scope also checked on `/relay-ws`; the downgrade effect documented as a known risk; an explicit error when a claimed code is gone after a restart | Open | 30 |
+| T-33 | S, D | Address poisoning: the relay, or a thief of a `machine` token, publishes a false address for a machine so that peers connect to an attacker or to nothing | Each machine signs its published address record with its identity key and a counter; peers verify the signature and the counter before connecting; the connection then needs the full mutual handshake, so an attacker's endpoint cannot be accepted as the target, and the worst case is a failed call with an explicit error. Residual: the attacker's endpoint learns the caller's IP and handshake first message | Planned | 33, 34 |
+| T-34 | D, E | Exposed peer listener (decision 34): reachable by any scanner on the network or the Internet once a port is open or redirected; a flaw in the pre-authentication parser or a flood reaches the daemon directly | Pre-authentication code limited to the first handshake message: fixed maximum size, no allocation proportional to input, short timeout, a cap on concurrent unauthenticated connections and a per-address rate limit; an unauthenticated peer gets no response that reveals the service (closed silently, then counted and logged); the listener never serves the loopback API; the port is configured explicitly and the daemon prints the exposed address at startup (never opened by default on a public interface without an explicit setting) | Open (protocol design, conformance tests) | 34 |
+| T-35 | T, E | An attacker on the path downgrades or relays a handshake (man-in-the-middle between two peers) | Noise handshake with the pair secret (PSK) and both static keys verified against admin-signed registrations; no unauthenticated mode; version mismatch is an error, never a fallback to a weaker mode | Planned | 22, 34 |
+
+## 7. Accepted risks
+
+| ID | Risk | Rationale | Re-evaluate when |
+|---|---|---|---|
+| AR-1 | A same-user process on a machine has the user's rights there | It already has them; P-5 scope | Never accepted for policy changes (T-11) |
+| AR-2 | Another app-core module, or a trojan module registered without authentication, captures the passphrase (T-13, T-14) | A malicious module already has the OS rights of the user (decision 19) | A module from an untrusted source is installed, or app-core adds authentication |
+| AR-3 | While a broad right is granted, a compromised peer has that much control | Phase 1 has NO allow-all and no wildcard (decision 13) | Any wildcard, regex or allow-all capability is proposed |
+| AR-4 | The relay sees metadata | Cannot be hidden without padding or mixing | Traffic analysis becomes a stated concern |
+| AR-5 | Local counters can be reset by a same-user process | Same as AR-1 | Counters are used to protect against a local actor |
+| AR-6 | An allowed command can disclose what it can read | The human chooses each entry | Entries are generated by something other than the human |
+| AR-8 | A stolen `machine` token has full rights inside the machine scope on the relay (list presence, drop other machines' connections, flood) and a stolen `queue` token the same for webhooks, history and listeners, including rewriting webhook signing secrets (poc-node `THREAT_MODEL.md:65`, stays open for `queue`); it never reads end-to-end encrypted traffic nor talks to a machine | The user chose "a scope gives read, write and admin on that scope" (decision 31) | Finer levels inside a scope are wanted, or a scope is shared by tokens of different trust |
+| AR-7 | The encrypted admin key file is readable by same-user processes; a weak passphrase can be guessed offline. Because the admin console distributes the pair secrets (decision 22), a stolen admin key lets an attacker register a rogue machine that every peer accepts: the admin key is the root of trust and its compromise compromises the network | The user chose passphrase protection (decision 18), the simpler key model (decision 22) and a copy of the admin key on every machine (decision 23), including the work laptop whose employer policy on such a file is unknown | Any incident; a hardware authenticator becomes available (D-G option B); or the pairing ceremony is added (D-B option 2, compatible with the protocol). Mitigations kept: long passphrase, costly KDF, short unlock window, signed revocation |
+| AR-9 | The update channel is the siblings' one: npm registry plus publish token, no signature or provenance, automatic every 30 minutes by default. A compromised publish token or registry installs hostile code on every machine, and the daemon then runs it as the user and can open its own policy | The user asked for the same update pattern as queue, task, flow and orch (decision 38) | Before the first release if the work laptop is enrolled; npm provenance or a signature check becomes available; any incident |
+
+## 8. Hard rules (must not change without revisiting this model)
+
+1. The machine daemon opens exactly two listeners: the loopback API (TB-1) and one peer listener (TB-3, decision 34), on separate servers and ports. The peer listener answers nothing before a valid first handshake message, parses nothing else pre-authentication, and is never reached by the local API. (Replaces the earlier rule "no listening port other than loopback", voided by decisions 33-34.)
+2. The local loopback API and the peer channel are separate code paths; a local token never authorizes a peer request.
+3. A peer request is executed only if it matches an allowlist entry byte for byte, for that peer, within its limits; no wildcard, no regex, no free command on the wire.
+4. A change that widens rights (policy, registrations, pair secrets) is applied only with a valid admin signature whose base version equals the current one (compare-and-set, decision 27). Only restricting actions (cut one pair, lockdown, decision 25) need no admin signature, and they are logged.
+5. The relay is never trusted: nothing it sends is acted on unless authenticated end to end; every failure is reported, never swallowed.
+6. A non-encrypted or unauthenticated connection is refused (fail closed), not warned.
+7. The daemon runs as the user, is never elevated, and never exposes quit or restart over the network.
+8. No secret, token, passphrase or key material in logs, errors or the audit log.
+9. Executed commands run with a scrubbed environment, a timeout, an output cap, without interaction.
+10. An `Open` threat must not ship inside a feature that depends on it (flow's rule for T-05..T-08 [agent]).
+
+## 9. Phase 2 gate (before any forwarder to a sibling ships)
+
+A new revision of this model is required (flow A4: "a new and complete threat model must be produced" [V]). At least:
+
+| Sibling | Must be settled first |
+|---|---|
+| orch | No forwarding of `/api/exec`, secrets, import, job create/update, `/api/open`; route allowlist; orch-owner's review of its scope ("no tunneling") |
+| queue | Origin of peer events (prefix `machine.<peer>.`), wildcard subscribers, `cli` subscribers with command templates, agent-wake prompt injection (queue threat model "Prompt injection" [agent]) |
+| flow | AR-1/AR-2 void; peer-controlled `flowRef`, `--cwd`, `--output`, `--inputs` into `script:` bodies (F-01); WS port exposure (A4); plugins in the daemon (T-02, T-02-load). If machine plays the missing relay process: the relay dials in, the daemon never sends commands, paths or scripts (D#19, T-13), source token differs from worker token, frames under 1 MiB, no cleartext off loopback, `run_end` passed through; unspecified in flow: how the relay gets the launch token of the worker it launches, and authentication of the nudge to remote workers (F-02) |
+| task | Cleartext loopback hop to `task serve` (T-10); shared token without scope; single writer (R6) |
+| project | P-2 "all machines trusted"; remote origin of cross-project actions; machine-qualified references |
+| app-core | Exists today [V `packages/server/src/requestGuard.ts`]: Host allowlist on every request (DNS rebinding) and Origin / Sec-Fetch-Site refusal on state-changing `/api/` calls from other sites. Not covered (app-core-owner): requests with neither header (curl, local processes), same-origin code (every other module), state changes sent by GET; no CSRF token. A strict Content-Security-Policy now exists on every HTML page [V `packages/server/src/csp.ts`, commit `ce7716b`]: `default-src 'none'`, scripts, styles, images, fonts and `connect-src` limited to the app-core origin, `frame-ancestors 'none'`, no inline code, no eval; modes `APP_CORE_CSP=enforce` (default), `report-only`, `off`. The admin APIs must not depend on these guards: every policy change carries its own signature |
+
+## 10. Open security questions
+
+- Q: How does the enrollment ceremony protect against a man-in-the-middle through the relay, and how is a lost or stolen machine revoked when peers are offline? -> Open Questions #4, T-05, T-06
+- Q: Which replay and reconnect design avoids re-executing a command after a dropped direct connection? -> T-04, T-20
+- Q: Which pre-authentication limits and tests keep the peer listener safe when exposed? -> T-34
+- Q: What is the recovery path when the admin passphrase is lost? -> T-24
+- Q: How are `machine` updates authenticated, given siblings rely on npm only? -> T-23
+- Q: Which conformance tests prove the exact-match launch on Windows `cmd` and PowerShell? -> T-15
+
+## 11. Sources
+
+| Tag | File | Use |
+|---|---|---|
+| kit | `singleton-daemon-kit/.claude/threat-model.md` | [V] lines 3-4, 48-50 |
+| orch | `orchestrator/.claude/threat-model.md` | [V] lines 7, 26, 39-41 |
+| queue | `queue/.claude/threat-model.md` | [V] lines 43, 69, 89; webhook spec `specs/2026-10-11_github-webhook-dispatch/threat-model.md` [agent] |
+| flow | `agent-fleet/.claude/specs/2026-08-10_flow-cli/threat-model.md` | [V] lines 4, 31-33 |
+| flow-ws | `agent-fleet/.claude/specs/2026-08-10_flow-cli/audits/threat-model-ws-auth.md` | [V] A4, lines 36-39 |
+| flow worker availability | `agent-fleet/.claude/specs/2026-09-11_worker-availability-cli/threat-model.md` | [V] line 77; T-12, T-13 [agent] |
+| flow other | `agent-fleet/.claude/threat-model.md`, `specs/2026-10-25_docker-sandbox-worker/`, `specs/2026-08-16_09-48_plugin-system/`, `specs/2026-08-18_21-01_cli-distribution/` | [agent] |
+| task | `task/CLAUDE.md` (`task serve` security paragraph), `task/.claude/specs/2026-10-11_plugin-extension-system/threat-model.md` | [agent] |
+| project | `project/.claude/specs/2026-10-23_projects/threat-model.md` | [agent] |
+| app-core | `app-core/.claude/specs/2026-10-10_modular-plugin-platform/threat-model.md`, `out-of-scope.md` | [V] T-03, T-04; iframe embedding rejected (Decision #69) [agent] |
+| poc-node | `poc-node/docs/THREAT_MODEL.md`, `.claude/plans/2026-10-14_security-hardening-backlog.md` | [V] lines 21-22, 57-58, 65; limits [agent] |
