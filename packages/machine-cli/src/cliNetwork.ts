@@ -4,7 +4,10 @@ import { connectToPeer } from '@wadeck-app/machine-transport';
 import { adminInit, pinAdminKey, signPolicyFile } from './admin.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
+import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
+import { joinRelay } from './join.js';
+import { DEFAULT_RELAY_URL, RelayError } from './relayClient.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
 import { promptHidden } from './prompt.js';
 import { readAliases } from './state.js';
@@ -160,6 +163,37 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
     if (sub !== 'install' || first === undefined || second !== undefined) return fail('usage: machine policy install <signed-policy.json>', EXIT.usage);
     const body = installPolicy(configDir, readObject(first, 'policy') as never, { now });
     emit({ version: body.version }, `[ok] policy version ${body.version} installed (${body.defaults.length} default entries, ${Object.keys(body.peers).length} peer-specific lists)\n`);
+    return EXIT.ok;
+  }
+
+  if (command === 'join') {
+    // Fail before a one-shot code is asked for or spent.
+    readMachine(configDir);
+    let code = rest[0];
+    if (code === undefined) {
+      try {
+        code = await prompt('Pairing code from the admin: ');
+      } catch {
+        return fail('no pairing code given and no terminal to ask for it: pass it as `machine join <code>` (the admin opens it in the relay console: Tokens, Add token, "Limited to scopes", machine)', EXIT.usage);
+      }
+    }
+    code = code.trim();
+    if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
+    let result;
+    try {
+      result = await joinRelay(configDir, { code, relayUrl: args.relay ?? DEFAULT_RELAY_URL, force: args.force });
+    } catch (e) {
+      if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+      throw e;
+    }
+    // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
+    emit(
+      result,
+      `[ok] joined the relay ${result.relayUrl} as "${result.name}" (token "${result.label}" saved)\n` +
+        `Candidacy ${result.candidacyId} posted, valid until ${new Date(result.expiresAt * 1000).toISOString()}.\n` +
+        `Verification code, the admin must see exactly this one before approving:\n\n  ${result.verificationCode}\n\n` +
+        'next: ask the admin to approve this machine in the admin console and to compare the code above\n',
+    );
     return EXIT.ok;
   }
 

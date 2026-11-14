@@ -32,6 +32,7 @@ export interface Parsed {
   peerPort?: string;
   apiPort?: string;
   peerHost?: string;
+  relay?: string;
 }
 
 export class UsageError extends Error {}

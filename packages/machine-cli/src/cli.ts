@@ -24,6 +24,9 @@ Commands:
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
   stop                               stop the running daemon
+  join [<code>] [--relay <url>] [--force]
+                                     join the relay with a pairing code from the admin (asked at the prompt when
+                                     omitted); posts this machine's candidacy and prints the code to compare
 
 Administration (manual enrollment, until the relay does it):
   admin init                         create the admin key on this machine (passphrase shown once)
@@ -37,6 +40,7 @@ Administration (manual enrollment, until the relay does it):
 
 Options:
   --json                 machine-readable output
+  --relay <url>          relay for \`join\` (default https://relay.example.test; https only, http on 127.0.0.1 for tests)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
@@ -44,7 +48,7 @@ Options:
 A reference is a machine name, a local alias, a UUID or a unique UUID prefix of 4+ hex characters.
 Everything after "--" in \`run\` is the command, sent exactly as written.
 
-Exit codes: 0 ok, 1 failure, 2 usage error, 3 unknown or ambiguous machine reference.
+Exit codes: 0 ok, 1 failure (relay failures included, reason on stderr), 2 usage error, 3 unknown or ambiguous machine reference.
 \`run\` returns the exit code of the remote command; its own failures (refused by the peer, unknown machine,
 no connection) are 255 with the reason on stderr.
 `;
@@ -74,6 +78,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--peer-port') out.peerPort = valueOf('--peer-port');
     else if (a === '--api-port') out.apiPort = valueOf('--api-port');
     else if (a === '--peer-host') out.peerHost = valueOf('--peer-host');
+    else if (a === '--relay') out.relay = valueOf('--relay');
     else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
       throw new UsageError('a passphrase is never accepted as an argument (it would stay in your shell history and in the process list): it is typed at the prompt');
@@ -108,7 +113,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
