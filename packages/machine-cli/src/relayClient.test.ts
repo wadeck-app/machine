@@ -112,7 +112,7 @@ describe('against the fake relay', () => {
     const claimed = await createRelayClient({ baseUrl: relay.url }).claimPairing('1234-5678');
     expect(claimed).toEqual({ token: relay.token, label: 'machine-pairing', scopes: ['machine'] });
     const client = createRelayClient({ baseUrl: relay.url, token: claimed.token });
-    const posted = await client.postCandidacy({ name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r' });
+    const posted = await client.postCandidacy({ name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: '11111111-2222-4333-8444-555555555555' });
     expect(await client.getCandidacy(posted.id)).toEqual({ status: 'pending' });
     const e = await failure(createRelayClient({ baseUrl: relay.url }).claimPairing('12345678'));
     expect(e.status).toBe(401);
@@ -127,7 +127,7 @@ describe('against the fake relay', () => {
   it('admin calls work with a full-access token and approval is visible to the candidate', async () => {
     relay = await startFakeRelay({ scopes: null });
     const admin = createRelayClient({ baseUrl: relay.url, token: relay.token });
-    const posted = await admin.postCandidacy({ name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r' });
+    const posted = await admin.postCandidacy({ name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: '11111111-2222-4333-8444-555555555555' });
     expect((await admin.listCandidacies()).map((c) => c.id)).toEqual([posted.id]);
     await admin.decideCandidacy(posted.id, { decision: 'approve', approval: { a: 1 } });
     expect(await admin.getCandidacy(posted.id)).toEqual({ status: 'approved', approval: { a: 1 } });
@@ -146,5 +146,61 @@ describe('against the fake relay', () => {
     expect((await client.getMachine(upper))?.uuid).toBe(upper.toLowerCase());
     expect((await client.getMachines()).map((m) => m.uuid)).toEqual([upper.toLowerCase()]);
     expect(relay.requests.some((r) => /[A-F]{8}/.test(r.path))).toBe(false);
+  });
+});
+
+describe('device login', () => {
+  const started = { success: true, deviceCode: 'D'.repeat(43), userCode: 'BCDF-GH23', expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: 'https://relay.example/device' };
+
+  it('start and poll send no Authorization header, even when the client holds a token', async () => {
+    const seen: (string | undefined)[] = [];
+    const client = createRelayClient({
+      baseUrl: 'https://relay.example',
+      token: 'SECRET-TOKEN',
+      fetch: (async (_url: string, init: RequestInit) => {
+        seen.push((init.headers as Record<string, string>).Authorization);
+        return json(init.body === JSON.stringify({ label: 'laptop' }) ? 201 : 200, init.body === JSON.stringify({ label: 'laptop' }) ? started : { status: 'pending' });
+      }) as unknown as typeof fetch,
+    });
+    expect((await client.deviceLoginStart('laptop')).userCode).toBe('BCDF-GH23');
+    expect(await client.deviceLoginPoll('D'.repeat(43))).toEqual({ status: 'pending' });
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
+  it('poll: pending, denied, expired and slow_down (429 with a code, or a status)', async () => {
+    for (const status of ['pending', 'denied', 'expired'] as const) {
+      expect(await clientWith(() => json(200, { status })).deviceLoginPoll('x')).toEqual({ status });
+    }
+    const slow429 = clientWith(() => json(429, { success: false, error: 'slow_down', message: 'too fast', retryAfterSeconds: 6 }, { 'Retry-After': '6' }));
+    expect(await slow429.deviceLoginPoll('x')).toEqual({ status: 'slow_down', retryAfterSeconds: 6 });
+    expect(await clientWith(() => json(200, { status: 'slow_down', retryAfterSeconds: 4 })).deviceLoginPoll('x')).toEqual({ status: 'slow_down', retryAfterSeconds: 4 });
+  });
+
+  it('poll: another 429 stays an error with its Retry-After', async () => {
+    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_attempts', message: 'later' }, { 'Retry-After': '40' })).deviceLoginPoll('x'));
+    expect(e.status).toBe(429);
+    expect(e.retryAfterSeconds).toBe(40);
+  });
+
+  it.each([[null], [['machine', 'extra']], [[]], [['other']]])('poll: refuses an approved token with scopes %j and never shows it', async (scopes) => {
+    const e = await failure(clientWith(() => json(200, { status: 'approved', token: 'SECRET-DELIVERED', label: 'laptop', scopes })).deviceLoginPoll('DEVICE-SECRET'));
+    expect(e.message).toMatch(/NOT saved/);
+    expect(e.message).not.toContain('SECRET-DELIVERED');
+    expect(e.message).not.toContain('DEVICE-SECRET');
+  });
+
+  it('poll: accepts exactly ["machine"] and returns the label of the relay', async () => {
+    const r = await clientWith(() => json(200, { status: 'approved', token: 'T', label: 'laptop-2', scopes: ['machine'] })).deviceLoginPoll('x');
+    expect(r).toEqual({ status: 'approved', token: 'T', label: 'laptop-2', scopes: ['machine'] });
+  });
+
+  it('a relay without the routes (404): says to use a pairing code', async () => {
+    const e = await failure(clientWith(() => json(404, { success: false, error: 'not_found', message: 'no such route' })).deviceLoginStart('laptop'));
+    expect(e.message).toMatch(/does not offer device login/);
+    expect(e.message).toMatch(/machine join <code>/);
+  });
+
+  it('a malformed start answer is refused', async () => {
+    expect((await failure(clientWith(() => json(201, { success: true })).deviceLoginStart('laptop'))).message).toMatch(/unexpected answer/);
   });
 });

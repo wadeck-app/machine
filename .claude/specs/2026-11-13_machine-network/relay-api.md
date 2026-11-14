@@ -57,9 +57,9 @@ Unknown fields are refused. Everything is verified before anything is pinned or 
 
 Verification proves consistency, NOT that `admin` is the real admin: a relay can replace the whole approval with one signed by its own key (T-05). Only the final code (decision 35a) catches this: `finalCode(candidate key, admin.adminPublicKey, random)`, shown by the candidate and by the admin console, compared by a human before the pin. The candidate prints it alone on a line, then asks y/N (terminal) or compares it with `--yes-final-code` (headless). It never pins silently.
 
-Candidate behaviour (`machine join [<code>]`, `machine join --resume`): polls `GET /api/machines/candidacies/{id}` every 3 s, honours `Retry-After` on 429, retries network errors and 5xx with a warning, ends on approved, rejected, 404 (expired), `--timeout` (default 900 s) or Ctrl-C. Token and pending candidacy (`_secrets_/relay-candidacy.json`, mode 0600, holds the approval once received) are kept on timeout and Ctrl-C; `--resume` continues, and posts a fresh candidacy (new random, same name and key) when the old one is gone. `--no-wait` posts and returns.
+Candidate behaviour (`machine join [<relay-host-or-url> | <code>]`, `machine join --resume`): polls `GET /api/machines/candidacies/{id}` every 3 s, honours `Retry-After` on 429, retries network errors and 5xx with a warning, ends on approved, rejected, 404 (expired), `--timeout` (default 900 s) or Ctrl-C. Token and pending candidacy (`_secrets_/relay-candidacy.json`, mode 0600, holds the approval once received) are kept on timeout and Ctrl-C; `--resume` continues, and posts a fresh candidacy (new random, same name and key) when the old one is gone. `--no-wait` posts and returns.
 
-**Open (blocks the admin side, needs poc-owner):** the candidacy carries no `uuid`, but the admin must sign a registration for the candidate's uuid, and the candidate refuses any other. Proposal: add `uuid` (lower-case v4) to the candidacy body. It is NOT sent yet because the deployed relay refuses unknown fields (400).
+**Candidacy uuid:** the CLI always sends `uuid` (canonical lower-case, from the identity), because the admin signs the registration for it. The relay side is committed by poc-owner (76b2b5c) but not deployed: the currently deployed relay refuses the unknown field (400), so `join` fails there until the deployment. `--resume` posts a new candidacy when the saved one has no uuid.
 
 **Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a pairing opened WITHOUT "Limited to scopes" (`scopes: null`); the client refuses a scoped one. The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
 
@@ -105,7 +105,7 @@ Errors (`{ success: false, error: "<human text>", serverTime }`; here `error` is
 
 ## Device login (relay token without a pairing code, decision D18)
 
-Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<code>", message, serverTime }`, 429 with `Retry-After` and `retryAfterSeconds`. Status: designed and tested by poc-owner, deployment pending (client not wired yet).
+Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<code>", message, serverTime }`, 429 with `Retry-After` and `retryAfterSeconds`. Status: designed and tested by poc-owner, deployment pending. Client wired in `machine join`, tested against the fake relay only (never the real relay).
 
 - `POST /api/device-login/start` body `{ "label": "laptop-1" }` (1-64 characters: letters, digits, space, `_ . -`) -> `201 { deviceCode (43 characters, secret, kept in the CLI), userCode "BCDF-GH23", expiresIn: 300, pollIntervalSeconds: 3, verificationUrl }`. Limits: 5 starts per 10 minutes per address, 3 pending per address, 20 in total (`too_many_requests`).
 - `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (the relay answers `slow_down` below 2.5 s) (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a "-2" suffix (for example "laptop-2")).
@@ -120,3 +120,14 @@ Every screen that guides enrollment shows a vertical timeline on the left (curre
 
 - Candidacy `uuid`: `POST /api/machines/candidacies` accepts an optional lower-case canonical `uuid` (any other format: 400 `invalid_body` naming the format); it is stored and returned by `GET /api/machines/candidacies` when present, omitted otherwise. Re-posting the same identity key replaces it. The client always sends it; `machine admin approve` refuses a candidacy that has none.
 - Device login: the console list does NOT show the user code (the approver reads it on the machine's screen); polls faster than 2.5 s get `429 slow_down`; a label conflict gets the suffix "-2" (for example "laptop-2"); PATCH on token scopes also exists on the relay (console).
+
+## Client behaviour of the device login (`machine join`, fake relay only)
+
+- Argument: only digits (spaces, hyphens allowed) = pairing code (claim route); anything else = relay, URL or bare host (`https://` added); none = device login on `https://<relay-host>`. `--relay` is the same as the argument (both: usage error).
+- Label asked = machine name restricted to letters, digits, space, `_ . -`, 1-64; the label stored is the one the poll returns.
+- Poll: first after one interval, never faster than 3 s. `slow_down` is read as a 429 with `error: slow_down` or as a status; the wait is `retryAfterSeconds` and stays. Any other 429 waits `Retry-After` (30 s if absent). Network errors and 5xx are warned and retried.
+- `denied`, `expired`, unknown code: exit 1, nothing stored, a spent `deviceCode` is never polled again. The client also stops 5 s after `expiresIn`.
+- `approved` is accepted only with `scopes` exactly `["machine"]`; otherwise nothing is stored and the message says to revoke the token in the console.
+- `deviceCode` and token are never printed; the `deviceCode` is never written to disk. An interrupted join stores nothing and starts over.
+- 404/405 on `start`: reported as "no device login, use a pairing code".
+- `join` never enables a startup job; it suggests `machine startup enable` (not implemented). `--auto-startup` is refused (exit 2) until it exists.

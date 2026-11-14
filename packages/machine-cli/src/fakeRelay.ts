@@ -15,6 +15,18 @@ export interface FakeRelayOptions {
   adminScopes?: string[] | null;
   token?: string;
   label?: string;
+  /** User code returned by the device login start (default BCDF-GH23). */
+  deviceUserCode?: string;
+  /** Scopes of the token delivered by an approved device login (default ["machine"]). */
+  deviceScopes?: string[] | null;
+}
+
+export interface FakeDeviceLogin {
+  userCode: string;
+  label: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  /** Label delivered on approval (the relay may add a suffix). */
+  deliveredLabel?: string;
 }
 
 export interface FakeRelay {
@@ -25,6 +37,12 @@ export interface FakeRelay {
   /** Every request received: method, path and the Authorization header. */
   requests: { method: string; path: string; authorization: string | undefined; body: unknown }[];
   candidacies: Map<string, Record<string, unknown> & { status: string }>;
+  /** Device logins by deviceCode (a secret in real life: tests read it here to check that it is never printed). */
+  deviceLogins: Map<string, FakeDeviceLogin>;
+  /** The console approves the oldest pending device login; `label` is what the relay delivers (it may carry a "-2" suffix). */
+  deviceApprove: (options?: { label?: string }) => void;
+  deviceDeny: () => void;
+  deviceExpire: () => void;
   /** Next answer forced on a path prefix (one shot), optionally only for one HTTP method. */
   force: (pathPrefix: string, status: number, body: unknown, headers?: Record<string, string>, method?: string) => void;
   /** Admin side, tests only: the decision the admin console would send with a full-access token. */
@@ -52,6 +70,13 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const records = new Map<string, { record: unknown; etag: number }>();
   const candidacies: FakeRelay['candidacies'] = new Map();
   const requests: FakeRelay['requests'] = [];
+  const deviceLogins: FakeRelay['deviceLogins'] = new Map();
+  const deviceScopes = options.deviceScopes === undefined ? ['machine'] : options.deviceScopes;
+  const pendingDevice = (): FakeDeviceLogin => {
+    const entry = [...deviceLogins.values()].find((d) => d.status === 'pending');
+    if (!entry) throw new Error('fake relay: no pending device login');
+    return entry;
+  };
 
   const send = (res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
@@ -84,6 +109,25 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (codeUsed || given !== code) return send(res, 401, { success: false, error: 'Invalid or expired code.', serverTime: 1 });
       codeUsed = true;
       return send(res, 200, { success: true, serverTime: 1, token, label: options.label ?? 'machine-pairing', scopes });
+    }
+
+    // Device login: public routes, the Authorization header is ignored.
+    if (method === 'POST' && path === '/api/device-login/start') {
+      const label = (body as { label?: unknown } | undefined)?.label;
+      if (typeof label !== 'string' || !/^[A-Za-z0-9 _.-]{1,64}$/.test(label)) return err(res, 400, 'invalid_body', 'label: 1-64 characters, letters, digits, space, _ . -');
+      const deviceCode = randomBytes(32).toString('base64url');
+      const userCode = options.deviceUserCode ?? 'BCDF-GH23';
+      deviceLogins.set(deviceCode, { userCode, label, status: 'pending' });
+      return send(res, 201, { success: true, serverTime: 1, deviceCode, userCode, expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: `https://relay.example/device?code=${userCode}` });
+    }
+    if (method === 'POST' && path === '/api/device-login/poll') {
+      const entry = deviceLogins.get(String((body as { deviceCode?: unknown } | undefined)?.deviceCode ?? ''));
+      // Unknown, spent or expired: the same answer.
+      if (!entry || entry.status === 'expired') return send(res, 200, { success: true, serverTime: 1, status: 'expired' });
+      if (entry.status === 'pending' || entry.status === 'denied') return send(res, 200, { success: true, serverTime: 1, status: entry.status });
+      // Approved: delivered once, the next poll says expired.
+      entry.status = 'expired';
+      return send(res, 200, { success: true, serverTime: 1, status: 'approved', token, label: entry.deliveredLabel ?? entry.label, scopes: deviceScopes });
     }
 
     if (!path.startsWith('/api/machines')) return err(res, 404, 'not_found', 'no such route');
@@ -160,6 +204,14 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     adminToken,
     requests,
     candidacies,
+    deviceLogins,
+    deviceApprove: (o = {}) => {
+      const entry = pendingDevice();
+      entry.status = 'approved';
+      entry.deliveredLabel = o.label ?? entry.label;
+    },
+    deviceDeny: () => void (pendingDevice().status = 'denied'),
+    deviceExpire: () => void (pendingDevice().status = 'expired'),
     force: (prefix, status, body, headers = {}, method) => void forced.push({ prefix, status, body, headers, method }),
     approve: (id, approval) => {
       const entry = candidacies.get(id);

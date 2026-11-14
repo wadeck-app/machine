@@ -89,6 +89,8 @@ export interface CandidacyState {
   identityPublicKey: string;
   createdAt: number;
   expiresAt: number;
+  /** The uuid sent with the candidacy. Absent in a file written by an older version: `--resume` then posts a new candidacy that carries it. */
+  uuid?: string;
   /** The approval as received from the relay, kept so that a refused or interrupted enrollment can be run again. */
   approval?: unknown;
 }
@@ -127,6 +129,7 @@ export function readCandidacy(configDir: string): CandidacyState | undefined {
     identityPublicKey: o.identityPublicKey as string,
     createdAt: o.createdAt as number,
     expiresAt: o.expiresAt as number,
+    ...(typeof o.uuid === 'string' ? { uuid: o.uuid } : {}),
     ...(o.approval !== undefined ? { approval: o.approval } : {}),
   };
 }

@@ -34,11 +34,14 @@ const noToken = (...texts: string[]) => {
   for (const t of [relay.token, relay.adminToken]) expect(texts.join('\n')).not.toContain(t);
 };
 
-/** The candidate joins without waiting; the relay (as it will soon) knows its uuid. */
+/** The candidate joins without waiting; the join itself sends its uuid (a candidacy without it is built by deleting the field). */
 async function candidatePosts(withUuid = true): Promise<{ id: string; code: string }> {
   const joined = await ok(cand, ['join', '12345678', '--relay', relay.url, '--no-wait']);
   const id = [...relay.candidacies.keys()].at(-1) as string;
-  if (withUuid) (relay.candidacies.get(id) as Record<string, unknown>).uuid = readMachine(cand).uuid;
+  // The relay stored the uuid the join sent.
+  expect((relay.candidacies.get(id) as Record<string, unknown>).uuid).toBe(readMachine(cand).uuid);
+  // An old entry: posted before the join sent the uuid.
+  if (!withUuid) delete (relay.candidacies.get(id) as Record<string, unknown>).uuid;
   return { id, code: lastCodeLine(joined.out) };
 }
 
@@ -208,11 +211,11 @@ describe('machine admin approve: listing', () => {
     expect(parsed[0]?.blockers).toEqual([]);
   });
 
-  it('a candidacy without uuid is listed with a warning (the relay must be updated)', async () => {
+  it('a candidacy without uuid is listed with a warning (old entry)', async () => {
     await candidatePosts(false);
     const r = await approve();
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/\[warn\] cannot be approved: .*no uuid yet/);
+    expect(r.out).toMatch(/\[warn\] cannot be approved: .*carries no uuid.*machine join --resume/);
   });
 
   it('a relay code that differs from the code of the key and random it sent: listed with the real code, exit 1', async () => {
@@ -359,8 +362,8 @@ describe('machine admin approve: deciding', () => {
     delete (relay.candidacies.get(id) as Record<string, unknown>).uuid;
     const r = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/no uuid yet/);
-    expect(r.err).toMatch(/relay must be updated/);
+    expect(r.err).toMatch(/carries no uuid/);
+    expect(r.err).toMatch(/machine join --resume/);
     expect(decisions()).toHaveLength(0);
     // Rejecting stays possible.
     expect((await approve([id, '--reject'])).code).toBe(0);

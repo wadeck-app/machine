@@ -8,7 +8,7 @@ import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
-import { DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
+import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { DEFAULT_RELAY_URL, RelayError } from './relayClient.js';
 import { exportMachineInfo, importPeer, installPolicy, loadNetwork, registerMachine, type MachineInfo, type PeerBundle } from './network.js';
 import { promptHidden, promptLine } from './prompt.js';
@@ -241,21 +241,24 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
   if (command === 'join') {
     // Fail before a one-shot code is asked for or spent.
     readMachine(configDir);
-    let code = rest[0];
+    let code: string | undefined;
+    let relayUrl = args.relay;
     if (args.resume) {
-      if (code !== undefined) return fail('--resume continues with the saved token and takes no pairing code', EXIT.usage);
-      if (args.force) return fail('--resume and --force cannot be combined: --force replaces the token with a new pairing code', EXIT.usage);
+      if (rest[0] !== undefined) return fail('--resume continues with the saved token and takes no pairing code or relay argument (use --relay to check which relay it belongs to)', EXIT.usage);
+      if (args.force) return fail('--resume and --force cannot be combined: --force replaces the token with a new device login or pairing code', EXIT.usage);
     } else {
       if (args.yesFinalCode !== undefined && args.noWait) return fail('--yes-final-code needs the wait: it cannot be combined with --no-wait', EXIT.usage);
-      if (code === undefined) {
-        try {
-          code = await prompt('Pairing code from the admin: ');
-        } catch {
-          return fail('no pairing code given and no terminal to ask for it: pass it as `machine join <code>` (the admin opens it in the relay console: Tokens, Add token, "Limited to scopes", machine), or `machine join --resume` if this machine already has a token', EXIT.usage);
+      // A positional made of digits is a pairing code, anything else is the relay (URL or bare host). Nothing: device login on the default relay.
+      if (rest[0] !== undefined) {
+        const given = classifyJoinArgument(rest[0]);
+        if (given.kind === 'code') {
+          code = given.code;
+          if (code.length > 32) return fail('the pairing code is longer than 32 characters: copy it again from the relay console', EXIT.usage);
+        } else {
+          if (args.relay !== undefined) return fail(`the relay is given twice ("${rest[0]}" and --relay ${args.relay}): give it once`, EXIT.usage);
+          relayUrl = given.relayUrl;
         }
       }
-      code = code.trim();
-      if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
     }
     const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
@@ -272,7 +275,7 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       result = await runJoin(configDir, {
         ...(code !== undefined ? { code } : {}),
         resume: args.resume,
-        ...(args.relay !== undefined ? { relayUrl: args.relay } : {}),
+        ...(relayUrl !== undefined ? { relayUrl } : {}),
         defaultRelayUrl: DEFAULT_RELAY_URL,
         force: args.force,
         wait: !args.noWait,
@@ -297,16 +300,20 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
     } finally {
       process.removeListener('SIGINT', onSigint);
     }
+    // Nothing is started at login by join itself: only a suggestion (stderr with --json, so stdout stays one JSON document).
+    const startupHint = 'To start machine at login run: machine startup enable\n';
     if (result.status === 'posted') {
-      emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n');
+      emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n' + startupHint);
+      if (args.json) io.stderr(startupHint);
       return EXIT.ok;
     }
     const e = result.enrolled;
     const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : 'peers trusted: none (the admin included none)\n';
     emit(
       { ...e, relayUrl: result.posted.relayUrl },
-      '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n',
+      '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n' + startupHint,
     );
+    if (args.json) io.stderr(startupHint);
     return EXIT.ok;
   }
 

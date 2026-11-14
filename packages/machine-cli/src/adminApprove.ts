@@ -124,7 +124,7 @@ export function reviewCandidacy(raw: unknown, nowSeconds: number): CandidacyView
 
   let uuid: string | undefined;
   if (o.uuid === undefined) {
-    blockers.push('the relay candidacy carries no uuid yet: the relay must be updated to include it (relay-api.md, Approval section, open point), this machine cannot sign a registration without inventing one');
+    blockers.push('the candidacy carries no uuid (posted by an older `machine join`, or the relay dropped it): this machine cannot sign a registration without inventing one. Reject it, and ask the candidate to run `machine join --resume` on the machine, which posts a new candidacy with its uuid');
   } else if (typeof o.uuid !== 'string' || !isUuid(o.uuid) || o.uuid !== o.uuid.toLowerCase()) {
     blockers.push('the uuid sent by the relay is not a lower-case UUID');
   } else {

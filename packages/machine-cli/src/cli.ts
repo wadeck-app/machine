@@ -24,13 +24,25 @@ Commands:
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
   stop                               stop the running daemon
-  join [<code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>]
-                                     join the relay with a pairing code from the admin (asked at the prompt when
-                                     omitted), post this machine's candidacy, print the code to compare, wait for
-                                     the admin's approval, then show the final code and enroll
+  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>]
+                                     get a relay token, post this machine's candidacy (with its uuid), wait for the
+                                     admin's approval, then show the final code and enroll. Without a code: device
+                                     login. It prints a code and a page; open the page (any browser), check that
+                                     the address and label match this machine and type the code there. Nothing is
+                                     typed here, no terminal is needed (SSH works). Ctrl-C or a lost session during
+                                     the device login stores nothing: run \`machine join\` again for a new code
+                                     (the device code is never printed nor saved).
+                                     The argument: only digits (spaces and hyphens allowed, 1234 5678) = pairing
+                                     code of the admin (fallback, claimed instead of a device login); anything
+                                     else = the relay, a URL or a bare host (relay.example.test means
+                                     https://relay.example.test). Default relay: https://relay.example.test.
+                                     --relay <url> is the same as the relay argument (not both)
+                                     join never starts anything at login by itself; it ends by suggesting
+                                     \`machine startup enable\`. --auto-startup is reserved: refused (usage error)
+                                     until that command exists
   join --resume [--timeout <seconds>] [--yes-final-code <code>]
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
-                                     candidacy when the previous one expired)
+                                     candidacy when the previous one expired or was posted without uuid)
 
 Administration (enrollment through the relay, or by files):
   admin login [<code>] [--relay <url>] [--force]
@@ -90,6 +102,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--resume') out.resume = true;
     else if (a === '--no-wait') out.noWait = true;
     else if (a === '--reject') out.reject = true;
+    else if (a === '--auto-startup') {
+      throw new UsageError('--auto-startup is not available yet: `machine startup enable` does not exist, so nothing would be started at login. Run `machine join` without it');
+    }
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
     else if (a === '--name') out.name = valueOf('--name');

@@ -53,7 +53,27 @@ export interface CandidacyPost {
   hostname: string;
   identityPublicKey: string;
   random: string;
+  /** Canonical lower-case v4 UUID of this machine: the admin signs the registration for it (relay-api.md, Candidacy). */
+  uuid: string;
 }
+
+/** Answer of `POST /api/device-login/start`. `deviceCode` is a secret: kept in memory, never printed or stored. */
+export interface DeviceLoginStarted {
+  deviceCode: string;
+  userCode: string;
+  expiresIn: number;
+  pollIntervalSeconds: number;
+  verificationUrl: string;
+}
+
+export type DeviceLoginPoll =
+  | { status: 'pending' }
+  | { status: 'denied' }
+  | { status: 'expired' }
+  /** The relay asks for fewer polls: wait `retryAfterSeconds` (absent: the caller picks a longer interval). */
+  | { status: 'slow_down'; retryAfterSeconds?: number }
+  /** Delivered once. `scopes` is always exactly ["machine"]: anything else is refused by the client. */
+  | { status: 'approved'; token: string; label: string; scopes: string[] };
 
 export interface CandidacyPosted {
   id: string;
@@ -63,9 +83,9 @@ export interface CandidacyPosted {
 
 export type CandidacyStatus = { status: 'pending' } | { status: 'approved'; approval: unknown } | { status: 'rejected' };
 
-export interface PendingCandidacy extends CandidacyPost {
+export interface PendingCandidacy extends Omit<CandidacyPost, 'uuid'> {
   id: string;
-  /** Not carried by the deployed relay yet (relay-api.md, Approval section): `machine admin approve` refuses a candidacy without it. */
+  /** Absent for an entry posted by an older `machine join`: `machine admin approve` refuses it. */
   uuid?: string;
   observedIp: string;
   createdAt: number;
@@ -107,6 +127,10 @@ export interface RelayClient {
   readonly baseUrl: string;
   /** `access` is the kind of token the caller agrees to store: a machine token (default, `join`) or a full-access one (`admin login`). The other kind is refused and never returned. */
   claimPairing(code: string, access?: 'machine' | 'full'): Promise<ClaimAnswer>;
+  /** Public route (no Authorization header): asks the relay for a code the user approves in the console. */
+  deviceLoginStart(label: string): Promise<DeviceLoginStarted>;
+  /** Public route (no Authorization header). The deviceCode is sent in the body only, never put in an error. */
+  deviceLoginPoll(deviceCode: string): Promise<DeviceLoginPoll>;
   postCandidacy(candidacy: CandidacyPost): Promise<CandidacyPosted>;
   getCandidacy(id: string): Promise<CandidacyStatus>;
   putRecord(uuid: string, record: SignedAddressRecord, etag?: string): Promise<{ etag: string }>;
@@ -137,6 +161,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     pairing?: boolean;
     /** The pairing is for `machine admin login` (full access): the advice in errors differs. */
     forAdmin?: boolean;
+    /** Public route (device login): never sends the Authorization header, even when the client holds a token. */
+    publicRoute?: boolean;
     /** Statuses returned as `undefined` instead of an error. */
     accept?: number[];
   }
@@ -144,7 +170,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   async function call(c: Call): Promise<{ status: number; body: Record<string, unknown>; headers: Headers } | undefined> {
     const url = `${baseUrl}${c.path}`;
     const headers: Record<string, string> = { Accept: 'application/json', ...(c.headers ?? {}) };
-    if (token !== undefined && !c.pairing) headers.Authorization = `Bearer ${token}`;
+    if (token !== undefined && !c.pairing && !c.publicRoute) headers.Authorization = `Bearer ${token}`;
     if (c.body !== undefined) headers['Content-Type'] = 'application/json';
     let res: Response;
     try {
@@ -251,6 +277,48 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         });
       }
       return { token: claimed, label: typeof label === 'string' ? label : '', scopes: scopes.filter((s): s is string => typeof s === 'string') };
+    },
+
+    async deviceLoginStart(label) {
+      let r;
+      try {
+        r = (await call({ method: 'POST', path: '/api/device-login/start', body: { label }, publicRoute: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      } catch (e) {
+        if (e instanceof RelayError && (e.status === 404 || e.status === 405)) {
+          throw new RelayError({ status: e.status, message: `the relay ${baseUrl} does not offer device login (it may not be updated yet): ask the admin for a pairing code (relay console: Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\`` });
+        }
+        throw e;
+      }
+      const { deviceCode, userCode, expiresIn, pollIntervalSeconds, verificationUrl } = r.body;
+      if (typeof deviceCode !== 'string' || deviceCode.length === 0 || typeof userCode !== 'string' || userCode.length === 0) throw malformed('the device login start');
+      if (typeof expiresIn !== 'number' || !(expiresIn > 0) || typeof pollIntervalSeconds !== 'number' || !(pollIntervalSeconds > 0) || typeof verificationUrl !== 'string') throw malformed('the device login start');
+      return { deviceCode, userCode, expiresIn, pollIntervalSeconds, verificationUrl };
+    },
+
+    async deviceLoginPoll(deviceCode) {
+      let r;
+      try {
+        r = (await call({ method: 'POST', path: '/api/device-login/poll', body: { deviceCode }, publicRoute: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      } catch (e) {
+        // `slow_down` is an answer to obey, not a failure.
+        if (e instanceof RelayError && e.status === 429 && e.code === 'slow_down') return { status: 'slow_down', ...(e.retryAfterSeconds !== undefined ? { retryAfterSeconds: e.retryAfterSeconds } : {}) };
+        throw e;
+      }
+      const { status, token: delivered, label, scopes } = r.body;
+      if (status === 'pending' || status === 'denied' || status === 'expired') return { status };
+      if (status === 'slow_down') return { status, ...(typeof r.body.retryAfterSeconds === 'number' ? { retryAfterSeconds: r.body.retryAfterSeconds } : {}) };
+      if (status === 'approved') {
+        if (typeof delivered !== 'string' || delivered.length === 0 || typeof label !== 'string' || label.length === 0) throw malformed('the device login poll');
+        // Same rule as the pairing claim: a machine never stores anything but a machine-scoped token. The token is dropped here.
+        if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== 'machine') {
+          throw new RelayError({
+            status: r.status,
+            message: `the device login gave ${scopes === null ? 'a full-access token' : `a token whose scopes are ${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'} instead of exactly ["machine"]`}: a machine must never store it, and the token was NOT saved. Revoke it in the relay console (Tokens), tell the relay owner, then run \`machine join\` again`,
+          });
+        }
+        return { status, token: delivered, label, scopes: ['machine'] };
+      }
+      throw malformed('the device login poll');
     },
 
     async postCandidacy(candidacy) {

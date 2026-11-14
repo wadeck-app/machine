@@ -37,7 +37,8 @@ describe('machine join', () => {
 
     const posted = [...relay.candidacies.values()][0] as Record<string, string>;
     const me = readMachine(dir);
-    expect(posted).toMatchObject({ name: 'laptop', identityPublicKey: me.identity.publicKey });
+    expect(posted).toMatchObject({ name: 'laptop', identityPublicKey: me.identity.publicKey, uuid: me.uuid });
+    expect(posted.uuid).toBe(posted.uuid?.toLowerCase());
     expect(posted.hostname).toMatch(/^[\x20-\x7e]{1,64}$/);
     const code = candidacyCode(me.identity.publicKey, posted.random as string);
     expect(r.out.split('\n')).toContain(`  ${code}`);
@@ -125,23 +126,6 @@ describe('machine join', () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain(relayFile(dir));
     expect(relay.requests).toHaveLength(0);
-  });
-
-  it('asks for the code at the prompt when omitted', async () => {
-    relay = await startFakeRelay();
-    await ok(dir, ['init', '--name', 'laptop']);
-    const r = await ok(dir, ['join', '--relay', relay.url, '--no-wait'], async () => '1234 5678');
-    expect(r.out).toMatch(/Verification code/);
-  });
-
-  it('without a code and without a terminal: usage error naming the fix', async () => {
-    relay = await startFakeRelay();
-    await ok(dir, ['init', '--name', 'laptop']);
-    const r = await cli(dir, ['join', '--relay', relay.url], async () => {
-      throw new Error('no tty');
-    });
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/machine join <code>/);
   });
 
   it('refuses a non-https relay and an extra argument', async () => {
