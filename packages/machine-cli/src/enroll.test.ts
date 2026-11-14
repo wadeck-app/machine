@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { sealTo } from '@wadeck-app/machine-core';
+import { connectToPeer, listenForPeers } from '@wadeck-app/machine-transport';
+import { pairSecretContext } from './approval.js';
 import { finalCode } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { adminPinFile, pinAdminKey, readAdminPin } from './admin.js';
@@ -8,6 +12,7 @@ import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { exportMachineInfo, loadNetwork } from './network.js';
 import { candidacyFile, readCandidacy, readRelayConfig } from './relayStore.js';
+import { draftSecrets } from './approvalDraft.js';
 import { buildApproval, cli, fakeTiming, makeAdmin, ok, type TestAdmin } from './testing.js';
 
 let root: string;
@@ -297,6 +302,175 @@ describe('machine join: approvals that must be refused', () => {
     const approval = (await approvalFor()) as Record<string, unknown>;
     approval.extra = 1;
     await refused(approval, /unknown field "extra"/);
+  });
+});
+
+describe('machine join: the pair secrets are sealed to this machine', () => {
+  const peersOf = (dir: string) => (JSON.parse(readFileSync(join(dir, '_secrets_', 'peers.json'), 'utf8')) as { peers: { pairSecret: string }[] }).peers;
+  const refused = async (approval: unknown, pattern: RegExp) => {
+    const r = await runJoinCli([], { timing: approveOnFirstSleep(approval), ask: yes });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(pattern);
+    expect(r.err).toMatch(/Nothing was pinned/);
+    expect(existsSync(adminPinFile(cand))).toBe(false);
+    expect(loadNetwork(cand, Math.floor(Date.now() / 1000)).directory.machines()).toHaveLength(0);
+    return r;
+  };
+
+  it('the secrets the candidate stores are the ones the admin sealed, and the approval holds them only sealed', async () => {
+    const approval = await approvalFor({ peerDirs: [peerDir] });
+    const r = await runJoinCli([], { timing: approveOnFirstSleep(approval), ask: yes });
+    expect(r.code, r.err).toBe(0);
+    const secrets = draftSecrets(approval);
+    expect(secrets.peers).toHaveLength(1);
+    expect(peersOf(cand).map((p) => p.pairSecret)).toEqual(secrets.peers);
+    expect(JSON.stringify(approval)).not.toContain(secrets.peers[0] as string);
+    expect(JSON.stringify(approval)).not.toContain(secrets.self);
+    expect(JSON.stringify(approval)).not.toContain('"pairSecret"');
+  });
+
+  it('an old approval with a pair secret in clear text is refused with the instruction to update the admin', async () => {
+    const approval = (await approvalFor()) as { self: { registration: unknown } };
+    approval.self = { registration: approval.self.registration, pairSecret: 'A'.repeat(43) } as never;
+    await refused(approval, /pair secret in clear text.*update machine on the admin machine/s);
+  });
+
+  it('a pair secret sealed to another machine is refused', async () => {
+    const other = readMachine(peerDir).identity.publicKey;
+    await refused(await approvalFor({ sealRecipientKey: other }), /cannot open the sealed pair secret of the approval "self" entry/);
+  });
+
+  it('a pair secret sealed for another candidacy (another random) is refused', async () => {
+    await refused(await approvalFor({ sealRandom: 'AAAAAAAAAAAAAAAAAAAAAA' }), /cannot open the sealed pair secret of the approval "self" entry/);
+  });
+
+  it('a sealed secret moved to another slot (self into peers) is refused', async () => {
+    const approval = (await approvalFor({ peerDirs: [peerDir] })) as { self: { sealedPairSecret: string }; peers: { sealedPairSecret: string }[] };
+    // The draft is completed when the relay stores it: complete it, then move the value.
+    const moved = { ...approval, peers: approval.peers.map((p) => ({ ...p })) };
+    const r = await runJoinCli([], {
+      timing: fakeTiming((_ms, n) => {
+        if (n !== 1) return;
+        const id = relay.pendingIds()[0] as string;
+        relay.approve(id, approval);
+        const stored = relay.candidacies.get(id)?.approval as { self: { sealedPairSecret: string }; peers: { sealedPairSecret: string }[] };
+        (stored.peers[0] as { sealedPairSecret: string }).sealedPairSecret = stored.self.sealedPairSecret;
+      }),
+      ask: yes,
+    });
+    expect(moved.peers).toHaveLength(1);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/cannot open the sealed pair secret of the approval peer #1/);
+    expect(existsSync(adminPinFile(cand))).toBe(false);
+  });
+
+  it('a sealed secret swapped between two peer entries is refused', async () => {
+    const peer2 = join(root, 'peer2');
+    mkdirSync(peer2);
+    await ok(peer2, ['init', '--name', 'server']);
+    const approval = await approvalFor({ peerDirs: [peerDir, peer2] });
+    const r = await runJoinCli([], {
+      timing: fakeTiming((_ms, n) => {
+        if (n !== 1) return;
+        const id = relay.pendingIds()[0] as string;
+        relay.approve(id, approval);
+        const stored = relay.candidacies.get(id)?.approval as { peers: { sealedPairSecret: string }[] };
+        const [a, b] = stored.peers as [{ sealedPairSecret: string }, { sealedPairSecret: string }];
+        [a.sealedPairSecret, b.sealedPairSecret] = [b.sealedPairSecret, a.sealedPairSecret];
+      }),
+      ask: yes,
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/cannot open the sealed pair secret of the approval peer #1/);
+    expect(existsSync(adminPinFile(cand))).toBe(false);
+    expect(loadNetwork(cand, Math.floor(Date.now() / 1000)).directory.machines()).toHaveLength(0);
+  });
+
+  it('an adminUuid changed by the relay to another valid uuid makes opening fail', async () => {
+    const approval = (await approvalFor()) as { adminUuid: string | null };
+    approval.adminUuid = readMachine(peerDir).uuid;
+    await refused(approval, /cannot open the sealed pair secret of the approval "self" entry/);
+  });
+
+  it('an admin machine without identity (adminUuid null, context "none") enrolls end to end', async () => {
+    const approval = await approvalFor({ peerDirs: [peerDir] });
+    expect((approval as { adminUuid: unknown }).adminUuid).toBeNull();
+    const r = await runJoinCli([], { timing: approveOnFirstSleep(approval), ask: yes });
+    expect(r.code, r.err).toBe(0);
+    expect(peersOf(cand).map((p) => p.pairSecret)).toEqual(draftSecrets(approval).peers);
+  });
+
+  it('a secret forged by the relay (sealed to the candidate with the right context) is accepted by join but fails the pair proof against the real peer', async () => {
+    const approval = await approvalFor({ peerDirs: [peerDir] });
+    const forged = randomBytes(32);
+    const r = await runJoinCli([], {
+      timing: fakeTiming((_ms, n) => {
+        if (n !== 1) return;
+        const id = relay.pendingIds()[0] as string;
+        relay.approve(id, approval);
+        // The relay knows the candidate public key and every part of the context: it can seal a secret of its own.
+        const stored = relay.candidacies.get(id) as unknown as { random: string; approval: { peers: { sealedPairSecret: string }[] } };
+        const slot = `peer:${readMachine(peerDir).uuid}`;
+        const context = pairSecretContext({ adminUuid: null, candidateUuid: readMachine(cand).uuid, random: stored.random, slot });
+        (stored.approval.peers[0] as { sealedPairSecret: string }).sealedPairSecret = sealTo(readMachine(cand).identity.publicKey, forged, context);
+      }),
+      ask: yes,
+    });
+    // Sealing authenticates nothing about the sender: the candidate enrolls with the forged secret.
+    expect(r.code, r.err).toBe(0);
+    const stored = peersOf(cand)[0] as { pairSecret: string };
+    expect(stored.pairSecret).toBe(forged.toString('base64url'));
+
+    // The real peer holds the secret the admin made: the first connection fails the pair proof.
+    const realSecret = Buffer.from(draftSecrets(approval).peers[0] as string, 'base64url');
+    const peerIdentity = readMachine(peerDir).identity;
+    const candidateIdentity = readMachine(cand).identity;
+    const rejections: string[] = [];
+    const sessions: { close(): void }[] = [];
+    const listener = await listenForPeers({
+      identity: peerIdentity,
+      host: '127.0.0.1',
+      port: 0,
+      resolvePeer: (key) => (key === candidateIdentity.publicKey ? { peerId: 'laptop', pairSecret: realSecret } : undefined),
+      onSession: (session) => sessions.push(session),
+      onRejected: (reason) => rejections.push(reason),
+    });
+    try {
+      const connect = (pairSecret: Buffer) =>
+        connectToPeer({ identity: candidateIdentity, host: '127.0.0.1', port: listener.port, expectedPeerPublicKey: peerIdentity.publicKey, pairSecret });
+      await expect(connect(Buffer.from(stored.pairSecret, 'base64url'))).rejects.toThrow(/pair secret/);
+      expect(rejections.some((m) => /pair secret/.test(m))).toBe(true);
+      // Positive control: with the real secret the same connection works.
+      sessions.push(await connect(realSecret));
+    } finally {
+      for (const session of sessions) session.close();
+      listener.close();
+    }
+  });
+
+  it('a sealed secret that opens to the wrong size is refused', async () => {
+    await refused(await approvalFor({ sealPlaintext: new Uint8Array(5) }), /pair secret.*32 bytes/s);
+  });
+
+  it('a secret that is not text is refused', async () => {
+    const approval = (await approvalFor()) as { self: { sealedPairSecret: unknown } };
+    approval.self.sealedPairSecret = 5;
+    await refused(approval, /sealedPairSecret/);
+  });
+
+  it('an approval without the adminUuid field is refused', async () => {
+    const approval = (await approvalFor()) as Record<string, unknown>;
+    delete approval.adminUuid;
+    await refused(approval, /adminUuid/);
+  });
+
+  it('error messages never contain a sealed or opened secret', async () => {
+    const approval = await approvalFor({ sealRandom: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    const r = await runJoinCli([], { timing: approveOnFirstSleep(approval), ask: yes });
+    expect(r.code).toBe(1);
+    const secrets = draftSecrets(approval);
+    expect(r.err).not.toContain(secrets.self);
+    expect(r.err).not.toContain((approval as { self: { sealedPairSecret: string } }).self.sealedPairSecret);
   });
 });
 

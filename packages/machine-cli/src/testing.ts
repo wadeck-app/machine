@@ -5,7 +5,11 @@ import { adminInit } from './admin.js';
 import type { Timing } from './cliTypes.js';
 import { readMachine } from './identity.js';
 import type { PromptTimer } from './prompt.js';
+import { pairSecretContext, sealBundle, type SealedBundle } from './approval.js';
+import { PLACEHOLDER, registerDraft } from './approvalDraft.js';
+import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, registerMachine, type MachineInfo } from './network.js';
+import { sealTo } from '@wadeck-app/machine-core';
 
 // Test helpers (not shipped logic): drive the CLI in-process, and provision two machines that trust each other.
 
@@ -74,15 +78,50 @@ export function makeAdmin(dir: string): TestAdmin {
  * The approval an admin console would send for the machine initialized in `candidateDir`, built with the existing admin
  * functions (registerMachine): its own registration, the admin pin document and the registrations of `peerDirs`.
  * `selfInfo` registers another machine than the candidate (mix-up tests).
+ * The pair secrets are sealed like `machine admin approve` does, but only when the fake relay stores the approval (the
+ * candidacy random is not known before): see approvalDraft.ts. `sealRecipientKey`, `sealRandom` and `sealPlaintext` seal
+ * wrongly on purpose (refusal tests).
  */
-export async function buildApproval(admin: TestAdmin, candidateDir: string, options: { peerDirs?: string[]; selfInfo?: MachineInfo } = {}): Promise<Record<string, unknown>> {
+export async function buildApproval(
+  admin: TestAdmin,
+  candidateDir: string,
+  options: { peerDirs?: string[]; selfInfo?: MachineInfo; sealRecipientKey?: string; sealRandom?: string; sealPlaintext?: Uint8Array } = {},
+): Promise<Record<string, unknown>> {
   const prompt = async () => admin.passphrase;
   const now = () => Math.floor(Date.now() / 1000);
   const register = (info: MachineInfo) => registerMachine(admin.dir, info, { now, prompt, validForDays: 30 });
   const self = await register(options.selfInfo ?? exportMachineInfo(candidateDir));
-  const peers = [];
+  const peers: Awaited<ReturnType<typeof register>>[] = [];
   for (const dir of options.peerDirs ?? []) peers.push(await register(exportMachineInfo(dir)));
-  return { v: 1, self, admin: { v: 1, adminPublicKey: admin.adminPublicKey, adminKeyId: admin.adminKeyId }, peers };
+  let adminUuid: string | null = null;
+  try {
+    adminUuid = exportMachineInfo(admin.dir).uuid;
+  } catch (e) {
+    if (!(e instanceof NotInitializedError)) throw e;
+  }
+  const candidate = exportMachineInfo(candidateDir);
+  const placeholder = (b: { registration: SealedBundle['registration'] }): SealedBundle => ({ registration: b.registration, sealedPairSecret: PLACEHOLDER });
+  const placeholders = { self: placeholder(self), peers: peers.map(placeholder) };
+  const approval = { v: 1, self: placeholders.self, admin: { v: 1, adminPublicKey: admin.adminPublicKey, adminKeyId: admin.adminKeyId }, adminUuid, peers: placeholders.peers };
+  registerDraft(approval, {
+    secrets: { self: self.pairSecret, peers: peers.map((p) => p.pairSecret) },
+    complete: (random) => {
+      const sealRandom = options.sealRandom ?? random;
+      const key = options.sealRecipientKey ?? candidate.identityPublicKey;
+      const seal = (bundle: typeof self, slot: string): SealedBundle => {
+        const parts = { adminUuid, candidateUuid: candidate.uuid, random: sealRandom, slot };
+        if (options.sealPlaintext === undefined) return sealBundle(bundle, key, parts);
+        return { registration: bundle.registration, sealedPairSecret: sealTo(key, options.sealPlaintext, pairSecretContext(parts)) };
+      };
+      const fill = (target: SealedBundle, bundle: typeof self, slot: string): void => {
+        if (target.sealedPairSecret === PLACEHOLDER) target.sealedPairSecret = seal(bundle, slot).sealedPairSecret;
+      };
+      // Fill the entries this draft created: a test may have replaced approval.self or approval.peers since.
+      fill(placeholders.self, self, 'self');
+      placeholders.peers.forEach((p, i) => fill(p, peers[i] as typeof self, `peer:${(peers[i] as typeof self).registration.body.uuid}`));
+    },
+  });
+  return approval;
 }
 
 /** A clock that never waits: sleeping advances it, so a 15 minute wait costs nothing. `onSleep` is the admin's move. */

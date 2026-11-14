@@ -2,6 +2,7 @@ import { hostname as osHostname } from 'node:os';
 import { candidacyCode, finalCode, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { applyApproval, checkApproval, isAlreadyPinned } from './approval.js';
 import type { Timing } from './cliTypes.js';
+import { readMachine } from './identity.js';
 import { exportMachineInfo, type MachineInfo } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
 import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
@@ -424,9 +425,11 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
     deleteCandidacy(configDir);
     throw new Error(stale);
   }
+  // Read before the check: a damaged identity file is its own error, not a reason to drop the approval.
+  const identityPrivateKey = readMachine(configDir).identity.privateKeyPkcs8;
   let checked;
   try {
-    checked = checkApproval(state.approval, info, now, state.random);
+    checked = checkApproval(state.approval, info, now, state.random, identityPrivateKey);
   } catch (e) {
     // An approval that does not verify is useless: dropped, so that --resume posts a fresh candidacy.
     deleteCandidacy(configDir);

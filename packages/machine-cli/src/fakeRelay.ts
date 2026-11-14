@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { completeDraft } from './approvalDraft.js';
 
 // Test helper (not shipped logic): a fake relay implementing the routes of relay-api.md v0.2 that the client uses,
 // on a real local HTTP server. It enforces what the real one does that matters to the client: scopes, canonical
@@ -222,6 +223,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
       entry.status = 'approved';
+      // An approval built by buildApproval is sealed now that the random it answers is known.
+      completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));
       const bindable = options.bind !== false && typeof approval === 'object' && approval !== null && !Array.isArray(approval) && !('random' in approval);
       entry.approval = bindable ? { ...(approval as object), random: entry.random } : approval;
     },

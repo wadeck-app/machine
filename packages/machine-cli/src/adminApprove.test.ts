@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidacyCode, finalCode, newCandidacyRandom } from '@wadeck-app/machine-core';
+import { candidacyCode, finalCode, newCandidacyRandom, openSealed } from '@wadeck-app/machine-core';
+import { pairSecretContext } from './approval.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readAdminPin } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
@@ -279,6 +280,33 @@ describe('machine admin approve: deciding', () => {
     const adminPeer = loadNetwork(adminDir, Math.floor(Date.now() / 1000)).directory.machines();
     expect(adminPeer.map((m) => m.name)).toEqual(['laptop']);
     noToken(joined.out, joined.err);
+  });
+
+  it('the pair secrets travel sealed to the identity key of the candidate, bound to admin, candidate, candidacy random and slot', async () => {
+    const r = await approve([id]);
+    expect(r.code, r.err).toBe(0);
+    const approval = decisions()[0]?.body as unknown as { approval: { adminUuid: string; random: string; self: Record<string, unknown>; peers: Record<string, unknown>[] } };
+    const sent = approval.approval;
+    const adminUuid = readMachine(adminDir).uuid;
+    const candidateUuid = readMachine(cand).uuid;
+    const adminKeyOfCandidate = (JSON.parse(readFileSync(join(adminDir, '_secrets_', 'peers.json'), 'utf8')) as { peers: { pairSecret: string }[] }).peers[0] as { pairSecret: string };
+
+    // Nothing in clear in what the relay receives.
+    expect(JSON.stringify(sent)).not.toContain(adminKeyOfCandidate.pairSecret);
+    expect(sent.self).not.toHaveProperty('pairSecret');
+    expect(sent.peers[0]).not.toHaveProperty('pairSecret');
+    expect(sent.adminUuid).toBe(adminUuid);
+    expect(sent.random).toBe(relay.candidacies.get(id)?.random);
+
+    const key = readMachine(cand).identity.privateKeyPkcs8;
+    const context = (slot: string) => pairSecretContext({ adminUuid, candidateUuid, random: sent.random, slot });
+    const open = (sealed: unknown, slot: string) => Buffer.from(openSealed(key, sealed as string, context(slot))).toString('base64url');
+    expect(open(sent.self.sealedPairSecret, 'self')).toBe(adminKeyOfCandidate.pairSecret);
+    expect(open(sent.peers[0]?.sealedPairSecret, `peer:${adminUuid}`)).toBe(adminKeyOfCandidate.pairSecret);
+    // Another slot, another random, another admin or another key cannot open it.
+    expect(() => open(sent.self.sealedPairSecret, `peer:${adminUuid}`)).toThrow(/cannot open/);
+    expect(() => openSealed(key, sent.self.sealedPairSecret as string, pairSecretContext({ adminUuid, candidateUuid, random: 'AAAAAAAAAAAAAAAAAAAAAA', slot: 'self' }))).toThrow(/cannot open/);
+    expect(() => openSealed(readMachine(adminDir).identity.privateKeyPkcs8, sent.self.sealedPairSecret as string, context('self'))).toThrow(/cannot open/);
   });
 
   it('an answer other than y: nothing signed, no passphrase asked, nothing sent', async () => {

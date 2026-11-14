@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, type Prompt } from './admin.js';
+import { sealBundle } from './approval.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, registerMachine, type PeerBundle } from './network.js';
@@ -292,18 +293,26 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   // are not given to a third machine.
   const peers: PeerBundle[] = [];
   let adminSelfImported = false;
+  let adminUuid: string | null = null;
   try {
     const adminInfo = exportMachineInfo(configDir);
     if (adminInfo.uuid === uuid) throw new Error('the candidate has the uuid of this machine');
     peers.push(await registerMachine(configDir, adminInfo, { now: o.now, prompt, validForDays: o.days, pairSecret: self.pairSecret }));
+    adminUuid = adminInfo.uuid;
     adminSelfImported = true;
   } catch (e) {
     if (!(e instanceof NotInitializedError)) throw e;
     o.say('[warn] this machine has no identity (`machine init`): the candidate is enrolled without this machine as a peer\n');
   }
 
+  // The relay is untrusted and reads everything it carries: the pair secrets are sealed to the identity key of the candidate
+  // (decision 22), bound to this admin machine, the candidate, the candidacy random and the entry they sit in.
+  const parts = (slot: string) => ({ adminUuid, candidateUuid: uuid, random: view.random, slot });
+  const sealedSelf = sealBundle(self, view.identityPublicKey, parts('self'));
+  const sealedPeers = peers.map((p) => sealBundle(p, view.identityPublicKey, parts(`peer:${p.registration.body.uuid}`)));
+
   // `random` binds the approval to this candidacy (unsigned: the relay can set it, so it only catches old or mixed-up approvals).
-  const approval = { v: 1, self, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, peers, random: view.random };
+  const approval = { v: 1, self: sealedSelf, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, adminUuid, peers: sealedPeers, random: view.random };
   const size = Buffer.byteLength(JSON.stringify(approval));
   if (size > MAX_APPROVAL_BYTES) throw new Error(`the approval is ${size} bytes, the relay accepts ${MAX_APPROVAL_BYTES}: nothing was sent`);
 

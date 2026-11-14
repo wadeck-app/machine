@@ -28,7 +28,7 @@ Errors: `{ "success": false, "error": "<code>", "message": "<what happened and t
 
 Field rules: `name` matches `^[a-z0-9][a-z0-9-]{0,31}$`; `hostname` printable ASCII, 1-64 characters (self-declared, informative); `identityPublicKey` unpadded base64url of 32 bytes; `random` unpadded base64url of 16 bytes; `id` is 128 random bits (base64url), chosen by the relay; `observedIp` is the peer address seen by the relay (server side, never client supplied).
 
-`approval` is an opaque JSON object for the relay, at most 16 KiB; its format is in the Approval section. It holds pair secrets in clear, so the relay can read them: to review against T-05 (a peer also needs the pinned key to use them).
+`approval` is an opaque JSON object for the relay, at most 16 KiB; its format is in the Approval section. Its pair secrets are sealed to the candidate identity key, so the relay cannot read them (T-36).
 
 Limits: a candidate re-posting the same `identityPublicKey` while pending replaces its entry (same `id`, expiry restarted). At most 4 pending per token and 32 in total; beyond that `429`.
 
@@ -42,18 +42,22 @@ The verification code (decision 35a) is computed by the CLI and by the admin pag
 
 ```json
 { "v": 1,
-  "self":  { "registration": { "body": { }, "signature": "..." }, "pairSecret": "<base64url 32 bytes>" },
+  "self":  { "registration": { "body": { }, "signature": "..." }, "sealedPairSecret": "<base64url, sealTo(candidate identity key)>" },
   "admin": { "v": 1, "adminPublicKey": "<base64url>", "adminKeyId": "<32 hex>" },
-  "peers": [ { "registration": { }, "pairSecret": "..." } ],
+  "adminUuid": "<uuid of the admin machine, or null when it has no identity>",
+  "peers": [ { "registration": { }, "sealedPairSecret": "..." } ],
   "random": "<random of the candidacy this approval answers>" }
 ```
 
 | Field | Content | Candidate check |
 |---|---|---|
-| `self` | `PeerBundle` (network.ts) registering THIS machine | signed by `admin`, in its validity window; uuid, name and identity key equal to this machine. Not stored (nothing consumes it yet) |
+| `self` | registration of THIS machine plus its sealed pair secret (opened, it is the `PeerBundle` of network.ts) | signed by `admin`, in its validity window; uuid, name and identity key equal to this machine. Not stored (nothing consumes it yet) |
 | `admin` | the admin's `admin.json` | pinned with the `machine admin pin` logic (`pinAdminDocument`), only after the final code is confirmed; a different key already pinned is refused |
-| `peers` | `PeerBundle`s the admin chose to include (may be empty) | each verified against `admin`, then `importPeer` |
+| `adminUuid` | uuid of the machine that holds the pair secrets; part of the seal context | lower-case UUID or `null`; a relay that changes it only makes opening fail |
+| `peers` | sealed bundles the admin chose to include (may be empty) | each verified against `admin`, then `importPeer` |
 | `random` | the `random` of the candidacy, written by `machine admin approve` | checked FIRST, before anything else: missing or different from the candidate's own random = refused as a replay or mix-up of candidacies (the candidacy file is dropped, nothing pinned). UNSIGNED (the relay can set it): it only catches an old or mixed-up approval, it is not a security check; the final code stays the one |
+
+**Sealing (decision 22, T-36):** each `sealedPairSecret` is `sealTo(candidate identity public key, pair secret, context)` from machine-core `seal.ts` (Ed25519 key converted to X25519, ephemeral X25519, HKDF-SHA256, AES-256-GCM; wire format and checks in the source). Context: `pair-secret:<adminUuid or none>:<candidate uuid>:<candidacy random>:<slot>`, slot `self` or `peer:<uuid of the peer>`, so a sealed value cannot be reused for another admin, candidate, candidacy or entry. The candidate opens with its identity private key AFTER every registration is verified, then checks 32 bytes and imports through the existing validators. An entry with a clear `pairSecret` (older admin) is refused loudly: the candidacy is dropped and the message tells the admin to update machine. The local `PeerBundle` file of the manual flow (decision 48) is unchanged and still carries the secret in clear (it never goes through the relay).
 
 **Time limits (every wait for a human is bounded, so a stale prompt, approval or replayed document cannot be completed later):** every question to a person (y/N, passphrase, final code, pairing code) is cancelled after 120 s by default (`--prompt-timeout <s>`, 1 to 3600; never an implicit answer; nothing signed, pinned or revoked; a late value is dropped). The wait for the admin is `--timeout` (default 900 s) and never outlasts the candidacy (`expiresAt` + 5 s, the relay answers 404). A device code is waited for at most `min(expiresIn, 900 s)` + 5 s. An approval received but not confirmed is kept 15 minutes in `relay-candidacy.json` (`approvalReceivedAt`): older, or without a date, it is discarded with `ask the admin to approve again: run machine join --resume`, the candidacy is dropped (the next one has a new random) and nothing is pinned; the age is checked again at the moment of the pin. `machine admin approve` refuses to sign for a candidacy that expired while it was asking.
 

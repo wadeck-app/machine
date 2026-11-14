@@ -67,3 +67,4 @@ export {
   type VerifyRequestContext,
 } from './request.js';
 export { GENESIS_HASH, appendAudit, verifyAuditChain, type AuditVerification } from './audit.js';
+export { openSealed, sealTo } from './seal.js';
