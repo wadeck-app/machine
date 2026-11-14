@@ -1,0 +1,171 @@
+import { randomBytes } from 'node:crypto';
+import net from 'node:net';
+import { generateSigningKeyPair, type SigningKeyPair } from '@wadeck-app/machine-core';
+import { afterEach, describe, expect, it } from 'vitest';
+import { connectToPeer, listenForPeers, type PeerListener, type PeerSession } from './channel.js';
+
+const closers: Array<() => void> = [];
+afterEach(() => {
+  while (closers.length > 0) closers.pop()?.();
+});
+
+interface Harness {
+  server: SigningKeyPair;
+  client: SigningKeyPair;
+  secret: Buffer;
+  listener: PeerListener;
+  sessions: PeerSession[];
+  rejections: string[];
+}
+
+async function start(
+  options: {
+    serverSecret?: Buffer;
+    knownClient?: boolean;
+    maxPending?: number;
+    handshakeTimeoutMs?: number;
+    maxFrameBytes?: number;
+  } = {},
+): Promise<Harness> {
+  const server = generateSigningKeyPair();
+  const client = generateSigningKeyPair();
+  const secret = randomBytes(32);
+  const sessions: PeerSession[] = [];
+  const rejections: string[] = [];
+  const listener = await listenForPeers({
+    identity: server,
+    host: '127.0.0.1',
+    port: 0,
+    resolvePeer: (publicKey) => (options.knownClient === false || publicKey !== client.publicKey ? undefined : { peerId: 'client-1', pairSecret: options.serverSecret ?? secret }),
+    onSession: (session) => {
+      sessions.push(session);
+      closers.push(() => session.close());
+    },
+    onRejected: (reason) => rejections.push(reason),
+    ...(options.maxPending !== undefined ? { maxPending: options.maxPending } : {}),
+    ...(options.handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs: options.handshakeTimeoutMs } : {}),
+    ...(options.maxFrameBytes !== undefined ? { maxFrameBytes: options.maxFrameBytes } : {}),
+  });
+  closers.push(() => listener.close());
+  return { server, client, secret, listener, sessions, rejections };
+}
+
+function connect(h: Harness, overrides: { expectedPeerPublicKey?: string; pairSecret?: Buffer; maxFrameBytes?: number } = {}): Promise<PeerSession> {
+  return connectToPeer({
+    identity: h.client,
+    host: '127.0.0.1',
+    port: h.listener.port,
+    expectedPeerPublicKey: overrides.expectedPeerPublicKey ?? h.server.publicKey,
+    pairSecret: overrides.pairSecret ?? h.secret,
+    ...(overrides.maxFrameBytes !== undefined ? { maxFrameBytes: overrides.maxFrameBytes } : {}),
+  });
+}
+
+async function until(condition: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${label}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+describe('peer channel', () => {
+  it('connects, identifies both ends by key and exchanges messages both ways', async () => {
+    const h = await start();
+    const client = await connect(h);
+    closers.push(() => client.close());
+    await until(() => h.sessions.length === 1, 'server session');
+    const serverSide = h.sessions[0] as PeerSession;
+    expect(client.peerPublicKey).toBe(h.server.publicKey);
+    expect(serverSide.peerPublicKey).toBe(h.client.publicKey);
+    expect(serverSide.peerId).toBe('client-1');
+    client.send({ kind: 'ping', n: 1 });
+    expect(await serverSide.next()).toEqual({ kind: 'ping', n: 1 });
+    serverSide.send({ kind: 'pong' });
+    expect(await client.next()).toEqual({ kind: 'pong' });
+  });
+
+  it('refuses a server whose key is not the pinned one, naming both keys', async () => {
+    const h = await start();
+    const other = generateSigningKeyPair();
+    await expect(connect(h, { expectedPeerPublicKey: other.publicKey })).rejects.toThrow(/pinned/);
+    expect(h.sessions).toHaveLength(0);
+  });
+
+  it('refuses a client whose key is not registered, and tells the server why', async () => {
+    const h = await start({ knownClient: false });
+    await expect(connect(h)).rejects.toThrow(/closed|rejected/);
+    await until(() => h.rejections.length === 1, 'rejection report');
+    expect(h.rejections[0]).toMatch(/not registered/);
+    expect(h.sessions).toHaveLength(0);
+  });
+
+  it('refuses a peer that does not know the pair secret', async () => {
+    const h = await start({ serverSecret: randomBytes(32) });
+    await expect(connect(h)).rejects.toThrow(/pair secret/);
+    await until(() => h.rejections.length === 1, 'rejection report');
+    expect(h.rejections[0]).toMatch(/pair secret/);
+    expect(h.sessions).toHaveLength(0);
+  });
+
+  it('closes the session when a frame exceeds the size limit', async () => {
+    const h = await start({ maxFrameBytes: 1024 });
+    const client = await connect(h, { maxFrameBytes: 1024 * 1024 });
+    closers.push(() => client.close());
+    await until(() => h.sessions.length === 1, 'server session');
+    const serverSide = h.sessions[0] as PeerSession;
+    client.send({ blob: 'x'.repeat(4096) });
+    await expect(serverSide.next()).rejects.toThrow(/frame limit/);
+  });
+
+  it('refuses to send a frame above its own limit', async () => {
+    const h = await start();
+    const client = await connect(h, { maxFrameBytes: 256 });
+    closers.push(() => client.close());
+    expect(() => client.send({ blob: 'x'.repeat(1000) })).toThrow(/frame limit/);
+  });
+
+  it('drops connections beyond the pre-authentication cap', async () => {
+    const h = await start({ maxPending: 2, handshakeTimeoutMs: 30_000 });
+    const idle: net.Socket[] = [];
+    for (let i = 0; i < 2; i++) {
+      const s = net.connect(h.listener.port, '127.0.0.1');
+      s.on('error', () => undefined);
+      idle.push(s);
+      closers.push(() => s.destroy());
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    const third = net.connect(h.listener.port, '127.0.0.1');
+    third.on('error', () => undefined);
+    closers.push(() => third.destroy());
+    const closed = await new Promise<boolean>((resolve) => {
+      third.on('close', () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    expect(closed).toBe(true);
+    await until(() => h.rejections.some((r) => /too many/.test(r)), 'cap report');
+  });
+
+  it('drops a connection that does not finish authenticating in time', async () => {
+    const h = await start({ handshakeTimeoutMs: 200 });
+    const idle = net.connect(h.listener.port, '127.0.0.1');
+    idle.on('error', () => undefined);
+    closers.push(() => idle.destroy());
+    const closed = await new Promise<boolean>((resolve) => {
+      idle.on('close', () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    expect(closed).toBe(true);
+    await until(() => h.rejections.some((r) => /timed out/.test(r)), 'timeout report');
+  });
+
+  it('frees a pre-authentication slot once the connection is gone', async () => {
+    const h = await start({ maxPending: 1, handshakeTimeoutMs: 200 });
+    const first = net.connect(h.listener.port, '127.0.0.1');
+    first.on('error', () => undefined);
+    await new Promise((r) => first.on('close', r));
+    const client = await connect(h);
+    closers.push(() => client.close());
+    await until(() => h.sessions.length === 1, 'server session after slot freed');
+  });
+});

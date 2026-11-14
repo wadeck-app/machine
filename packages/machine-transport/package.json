@@ -1,0 +1,19 @@
+{
+  "name": "@wadeck-app/machine-transport",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Peer channel of machine: mutual TLS 1.3 with pinned Ed25519 identity keys and a pair-secret proof bound to the TLS session. Knows nothing about policy or registrations.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --bail=1"
+  },
+  "dependencies": {
+    "@wadeck-app/machine-core": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
