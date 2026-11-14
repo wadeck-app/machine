@@ -172,29 +172,29 @@ describe('the staged launcher form, with a fake installed platform package', () 
   });
 
   it('status builds the expected command from the installed package without copying anything', async () => {
-    stub.script({ show: { code: 3 } });
+    stub.script({ list: { stdout: '[]' }, show: { code: 3 } });
     const r = await startupStatus(ctxWith(installed('1.0.0')));
     expect(r).toMatchObject({ exists: false, expected: launcherCommand('1.0.0'), expectedForm: 'launcher' });
     expect(existsSync(join(configDir, 'bin'))).toBe(false);
   });
 
   it('status: the registered launcher command equal to the expected one is up to date and says which form', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ command: launcherCommand('1.0.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: launcherCommand('1.0.0') }) } });
     expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: true, registeredForm: 'launcher', expectedForm: 'launcher' });
   });
 
   it('status: a launcher of an older stamp is outdated (a new platform package is installed)', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ command: launcherCommand('0.9.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: launcherCommand('0.9.0') }) } });
     expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: false, registeredForm: 'launcher' });
   });
 
   it('status: the development form registered while a launcher is available is outdated, both forms are reported', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ command: devCommand() }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: devCommand() }) } });
     expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: false, registeredForm: 'development', expectedForm: 'launcher' });
   });
 
   it('status without a platform package expects the development form and says why', async () => {
-    stub.script({ show: { code: 3 } });
+    stub.script({ list: { stdout: '[]' }, show: { code: 3 } });
     const r = await startupStatus(ctxWith(notFound));
     expect(r.expectedForm).toBe('development');
     expect(r.formNote).toMatch(/development form/);
@@ -213,11 +213,11 @@ describe('the staged launcher form, with a fake installed platform package', () 
   });
 
   it('CLI status says which form is registered and whether it is current', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ command: launcherCommand('1.0.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: launcherCommand('1.0.0') }) } });
     const ok = await cli(configDir, ['startup', 'status'], undefined, { startup: ctxWith(installed('1.0.0')) });
     expect(ok.out).toMatch(/registered form: staged launcher/);
     expect(ok.out).toMatch(/up to date/);
-    stub.script({ show: { stdout: JSON.stringify({ command: devCommand() }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: devCommand() }) } });
     const old = await cli(configDir, ['startup', 'status'], undefined, { startup: ctxWith(installed('1.0.0')) });
     expect(old.out).toMatch(/registered form: development/);
     expect(old.out).toMatch(/expected form: staged launcher/);

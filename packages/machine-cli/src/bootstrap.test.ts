@@ -149,7 +149,7 @@ describe('relay with ownership bound at approval', () => {
       expect(after.code).toBe(before.code);
       expect(after.out).toBe(before.out);
       // Neither the approval nor the join touched the startup job: the only orch calls are the two status reads.
-      expect(stub.calls().map((c) => c[0])).toEqual(['show', 'show']);
+      expect(stub.calls().map((c) => c[0])).toEqual(['show', 'list', 'show', 'list']);
     });
 
     it('a machine cannot run on itself: it is not in its own peer list', async () => {

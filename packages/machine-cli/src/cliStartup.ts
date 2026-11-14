@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+import { daemonPortFile } from './daemonPortFile.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { disableStartup, enableStartup, startupStatus, StartupError, type DaemonForm, type EnableResult, type StartupContext } from './startup.js';
 
@@ -69,6 +71,12 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
       const wrapper = s.wrapper === undefined ? '' : `wrapper script: ${s.wrapper}\n`;
       const forms = `registered form: ${FORM_TEXT[s.registeredForm ?? 'unknown']}\nexpected form: ${FORM_TEXT[s.expectedForm]}\n${wrapper}${note}`;
       emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${forms}${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n`);
+    }
+    // Loud but not an error: stderr in both modes, so --json stays one document on stdout (it also lists the conflicts).
+    for (const c of s.conflicts) {
+      io.stderr(
+        `[warning] the orch job "${c.id}" (command: ${c.command}) uses the same port file as "${s.id}" (${daemonPortFile(resolve(ctx.configDir))}): two orch jobs supervise one daemon and will fight over it. Remove the extra one with \`orch remove ${c.id}\`\n`,
+      );
     }
     return EXIT.ok;
   } catch (e) {

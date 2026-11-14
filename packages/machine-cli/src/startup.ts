@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, join, resolve, win32 } from 'node:path';
 import { ConfigDir } from '@wadeck-app/shared-cli/ConfigDir';
@@ -81,6 +82,11 @@ export function quoteArg(value: string, platform: NodeJS.Platform): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+/** First 12 hex digits of the sha256 of the wrapper script: the argument that ties the job command to the script content. */
+export function wrapperHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 12);
+}
+
 /** The shell string orch will run: the staged launcher form or the `"<node>" "<bundle>" daemon` development form. */
 export function daemonCommand(source: DaemonSource, configDir?: string): string {
   const q = (v: string) => quoteArg(v, source.platform);
@@ -102,7 +108,8 @@ export function daemonCommand(source: DaemonSource, configDir?: string): string 
     }
     if (bundleOverride !== undefined && source.platform === 'win32') {
       // The wrapper script carries the override and the configuration folder; the job command only names the script.
-      if (wrapper !== undefined) return `${q(wrapper.wscript)} //B //Nologo ${q(wrapper.vbs)}`;
+      // The script ignores its argument: the content hash changes the command when only the script changes (a moved bundle), so `orch --restart-if-changed` restarts the daemon.
+      if (wrapper !== undefined) return `${q(wrapper.wscript)} //B //Nologo ${q(wrapper.vbs)} ${wrapperHash(wrapper.content)}`;
       throw new StartupError(
         `the launcher cannot find the bundle ${bundleOverride} from its staged folder: it only looks under <folder of node>\\node_modules\\${LAUNCHER_BUNDLE_SPEC}, and the Windows job cannot carry LAUNCHER_BUNDLE_OVERRIDE through orch.cmd. Make the global modules of machine live next to node.exe (npm prefix = the folder of node.exe), run \`npm i -g @wadeck-app/machine-cli\` again, then \`machine startup enable\``,
       );
@@ -134,7 +141,7 @@ export function launcherBundleOverride(opts: { bundle: string; spec: string; nod
 /** Which form a stored command is, from its first program: the staged launcher, node, or something else (not guessed). */
 export function registeredForm(command: string): DaemonForm | 'unknown' {
   const rest = command.replace(/^LAUNCHER_BUNDLE_OVERRIDE='(?:[^']|'\\'')*'\s+/, '');
-  if (/^"[^"]*[\\/]wscript\.exe"\s+\/\/B\s+\/\/Nologo\s+"[^"]*[\\/]machine-daemon\.vbs"$/i.test(rest)) return 'launcher-wrapper';
+  if (/^"[^"]*[\\/]wscript\.exe"\s+\/\/B\s+\/\/Nologo\s+"[^"]*[\\/]machine-daemon\.vbs"(?:\s+[0-9a-f]{12})?$/i.test(rest)) return 'launcher-wrapper';
   const program = /^"([^"]*)"/.exec(rest)?.[1] ?? /^'((?:[^']|'\\'')*)'/.exec(rest)?.[1];
   if (program === undefined) return 'unknown';
   const name = (program.split(/[\\/]/).pop() ?? '').toLowerCase();
@@ -371,6 +378,32 @@ export async function enableStartup(ctx: StartupContext): Promise<EnableResult> 
   return { action, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }) };
 }
 
+/**
+ * Whether a stored job is the one `enable` writes: a command of a form machine registers (strictly: the daemon subcommand, optionally
+ * --config-dir) AND the liveness port file of this configuration folder. A job with the same id failing either test is not ours.
+ * orch has no owner field and `ensure` compares only the flags passed, so no marker is added: a job that matches both is the same daemon anyway.
+ */
+export function isMachineJob(job: { command: string; portFile?: string }, ctx: StartupContext): boolean {
+  const form = registeredForm(job.command);
+  if (form === 'unknown') return false;
+  if (form !== 'launcher-wrapper' && !/\sdaemon(?:\s+--config-dir\s+(?:"[^"]*"|'(?:[^']|'\\'')*'))?$/.test(job.command)) return false;
+  return job.portFile !== undefined && samePath(job.portFile, daemonPortFile(resolve(ctx.configDir)), ctx);
+}
+
+function samePath(a: string, b: string, ctx: StartupContext): boolean {
+  const norm = (p: string) => ((ctx.platform ?? process.platform) === 'win32' ? p.toLowerCase() : p).replace(/\\/g, '/');
+  return norm(a) === norm(b);
+}
+
+/** The liveness port file of a job as orch answers it (`liveness.portFile`), at the top of the answer or under `job`. */
+function findPortFile(json: unknown): string | undefined {
+  if (typeof json !== 'object' || json === null) return undefined;
+  const nested = (json as { job?: unknown }).job;
+  const holder = typeof nested === 'object' && nested !== null ? nested : json;
+  const portFile = (holder as { liveness?: { portFile?: unknown } | null }).liveness?.portFile;
+  return typeof portFile === 'string' ? portFile : undefined;
+}
+
 export interface DisableResult {
   outcome: 'removed' | 'absent';
   id: string;
@@ -378,6 +411,20 @@ export interface DisableResult {
 
 export async function disableStartup(ctx: StartupContext): Promise<DisableResult> {
   const id = ctx.id ?? STARTUP_JOB_ID;
+  const showArgs = ['show', id, '--json'];
+  const shown = await runOrch(ctx, showArgs);
+  // Exit 3 of orch show: no such job, nothing to remove.
+  if (shown.code === 3) return { outcome: 'absent', id };
+  if (shown.code !== 0) throw orchFailure(shown, showArgs, 'machine startup disable');
+  const command = findCommand(shown.stdout);
+  if (command === undefined) {
+    throw new StartupError(`orch show answered with no command field, so the job "${id}" cannot be checked before removal. Its output was: ${shown.stdout.trim() || '(empty)'}`);
+  }
+  if (!isMachineJob({ command, portFile: findPortFile(parseJson(shown.stdout)) }, ctx)) {
+    throw new StartupError(
+      `the orch job "${id}" was not created by machine (its command is: ${command}; machine's job runs its daemon with the liveness port file ${daemonPortFile(resolve(ctx.configDir))}), so it was NOT removed. If it is yours, remove it with \`orch remove ${id}\`; otherwise leave it`,
+    );
+  }
   const args = ['remove', id, '--if-exists'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup disable');
@@ -399,6 +446,28 @@ export interface StatusResult {
   registeredForm?: DaemonForm | 'unknown';
   /** Wrapper form only: whether the staged script is the one `enable` would write now. */
   wrapper?: 'current' | 'missing' | 'different';
+  /** Other orch jobs whose liveness port file is this daemon's: two supervisors on one daemon fight over it. */
+  conflicts: { id: string; command: string }[];
+}
+
+/** Every orch job other than `id` with the same liveness port file as this configuration folder. */
+async function portFileConflicts(ctx: StartupContext, id: string): Promise<{ id: string; command: string }[]> {
+  const args = ['list', '--json'];
+  const result = await runOrch(ctx, args);
+  if (result.code !== 0) throw orchFailure(result, args, 'machine startup status');
+  const json = parseJson(result.stdout);
+  const jobs = Array.isArray(json) ? json : (json as { jobs?: unknown } | undefined)?.jobs;
+  if (!Array.isArray(jobs)) {
+    throw new StartupError(`orch list did not answer a list of jobs, so duplicate jobs on the port file cannot be checked. Its output was: ${result.stdout.trim() || '(empty)'}`);
+  }
+  const portFile = daemonPortFile(resolve(ctx.configDir));
+  const found: { id: string; command: string }[] = [];
+  for (const job of jobs as { id?: unknown; command?: unknown }[]) {
+    if (typeof job !== 'object' || job === null || typeof job.id !== 'string' || job.id === id) continue;
+    const other = findPortFile(job);
+    if (other !== undefined && samePath(other, portFile, ctx)) found.push({ id: job.id, command: typeof job.command === 'string' ? job.command : '(no command)' });
+  }
+  return found;
 }
 
 export async function startupStatus(ctx: StartupContext): Promise<StatusResult> {
@@ -409,7 +478,7 @@ export async function startupStatus(ctx: StartupContext): Promise<StatusResult> 
   const args = ['show', id, '--json'];
   const result = await runOrch(ctx, args);
   // Exit 3 of orch show: no such job.
-  if (result.code === 3) return { exists: false, ...base };
+  if (result.code === 3) return { exists: false, ...base, conflicts: await portFileConflicts(ctx, id) };
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup status');
   const command = findCommand(result.stdout);
   if (command === undefined) throw new StartupError(`orch show answered with no command field, so the job cannot be compared. Its output was: ${result.stdout.trim() || '(empty)'}`);
@@ -422,17 +491,20 @@ export async function startupStatus(ctx: StartupContext): Promise<StatusResult> 
     }
   }
   const upToDate = command === expected && (wrapper === undefined || wrapper === 'current');
-  return { exists: true, ...base, command, upToDate, registeredForm: registeredForm(command), ...(wrapper === undefined ? {} : { wrapper }) };
+  return { exists: true, ...base, conflicts: await portFileConflicts(ctx, id), command, upToDate, registeredForm: registeredForm(command), ...(wrapper === undefined ? {} : { wrapper }) };
 }
 
 /** The `command` string at the top of the answer or inside a `job` object. */
-function findCommand(stdout: string): string | undefined {
-  let json: unknown;
+function parseJson(stdout: string): unknown {
   try {
-    json = JSON.parse(stdout);
+    return JSON.parse(stdout);
   } catch {
     return undefined;
   }
+}
+
+function findCommand(stdout: string): string | undefined {
+  const json = parseJson(stdout);
   if (typeof json !== 'object' || json === null) return undefined;
   const top = (json as { command?: unknown }).command;
   if (typeof top === 'string') return top;

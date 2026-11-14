@@ -27,6 +27,8 @@ const expectedPortFile = () => join(configDir, 'daemon.port.json');
 const currentCommand = () => `${UNIX_COMMAND} --config-dir '${configDir}'`;
 const ensureArgs = (command: string) => ['ensure', 'startup', 'machine', '--command', command, '--restart-on-exit', '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', expectedPortFile(), '--json'];
 const missingOrch = () => ({ file: join(root, 'no-such-orch') });
+/** What `orch show --json` answers for a job that `machine startup enable` registered. */
+const ownedJob = (id = 'machine', command = currentCommand()) => JSON.stringify({ id, command, liveness: { strategy: 'portFile', portFile: expectedPortFile() } });
 
 describe('quoteArg', () => {
   it('uses double quotes on Windows and single quotes with the quote escape elsewhere', () => {
@@ -126,7 +128,7 @@ describe('enableStartup', () => {
   });
 
   it('library-only options: another job id, and no restart-on-exit (used by a safety check against the real orch, no CLI flag)', async () => {
-    stub.script({ ensure: { stdout: 'added zz-other\n' }, remove: { stdout: 'removed zz-other\n' }, show: { code: 3 } });
+    stub.script({ ensure: { stdout: 'added zz-other\n' }, remove: { stdout: 'removed zz-other\n' }, show: { stdout: ownedJob('zz-other') }, list: { stdout: '[]' } });
     const r = await enableStartup({ ...ctx(), id: 'zz-other', restartOnExit: false });
     expect(r.id).toBe('zz-other');
     const expected = ensureArgs(currentCommand());
@@ -134,7 +136,7 @@ describe('enableStartup', () => {
     expected.splice(expected.indexOf('--restart-on-exit'), 1);
     await disableStartup({ ...ctx(), id: 'zz-other' });
     expect((await startupStatus({ ...ctx(), id: 'zz-other' })).id).toBe('zz-other');
-    expect(stub.calls()).toEqual([expected, ['remove', 'zz-other', '--if-exists'], ['show', 'zz-other', '--json']]);
+    expect(stub.calls()).toEqual([expected, ['show', 'zz-other', '--json'], ['remove', 'zz-other', '--if-exists'], ['show', 'zz-other', '--json'], ['list', '--json']]);
   });
 
   it.each([
@@ -192,18 +194,51 @@ describe('disableStartup', () => {
     ['removed machine\n', 'removed'],
     ['absent machine\n', 'absent'],
     ['{"result":"absent","id":"machine"}', 'absent'],
-  ])('reports %j as %s', async (stdout, outcome) => {
-    stub.script({ remove: { stdout } });
+  ])('reports %j as %s (the job is shown first, then removed)', async (stdout, outcome) => {
+    stub.script({ show: { stdout: ownedJob() }, remove: { stdout } });
     expect(await disableStartup(ctx())).toEqual({ outcome, id: 'machine' });
-    expect(stub.calls()).toEqual([['remove', 'machine', '--if-exists']]);
+    expect(stub.calls()).toEqual([['show', 'machine', '--json'], ['remove', 'machine', '--if-exists']]);
+  });
+
+  it('no such job (orch show exit 3): absent, nothing removed', async () => {
+    stub.script({ show: { code: 3 } });
+    expect(await disableStartup(ctx())).toEqual({ outcome: 'absent', id: 'machine' });
+    expect(stub.calls()).toEqual([['show', 'machine', '--json']]);
   });
 
   it('maps the failures like enable does (not installed, exit 2, exit 1)', async () => {
     await expect(disableStartup({ ...ctx(), orch: missingOrch() })).rejects.toThrow(/orch is not installed/);
-    stub.script({ remove: { code: 2 } });
+    stub.script({ show: { stdout: ownedJob() }, remove: { code: 2 } });
     await expect(disableStartup(ctx())).rejects.toThrow(/run `orch status`/);
-    stub.script({ remove: { code: 1, stderr: 'nope' } });
+    stub.script({ show: { stdout: ownedJob() }, remove: { code: 1, stderr: 'nope' } });
     await expect(disableStartup(ctx())).rejects.toThrow(/nope/);
+    stub.script({ show: { code: 1, stderr: 'broken' } });
+    await expect(disableStartup(ctx())).rejects.toThrow(/broken/);
+  });
+
+  it('a job with this id that machine did not create is NOT removed: the message names the job, the cause and the manual fix', async () => {
+    stub.script({ show: { stdout: JSON.stringify({ id: 'machine', command: 'node C:\\other\\thing.js', liveness: { strategy: 'portFile', portFile: 'C:\\other\\x.json' } }) }, remove: { stdout: 'removed machine\n' } });
+    const e = (await disableStartup(ctx()).catch((x: unknown) => x)) as Error;
+    expect(e).toBeInstanceOf(StartupError);
+    expect(e.message).toMatch(/not created by machine/);
+    expect(e.message).toContain('node C:\\other\\thing.js');
+    expect(e.message).toMatch(/orch remove machine/);
+    expect(stub.calls().map((c) => c[0])).toEqual(['show']);
+  });
+
+  it('a machine-looking command but another port file is foreign too; so is a missing liveness', async () => {
+    for (const liveness of [{ strategy: 'portFile', portFile: join(root, 'elsewhere', 'daemon.port.json') }, undefined]) {
+      stub.script({ show: { stdout: JSON.stringify({ id: 'machine', command: currentCommand(), liveness }) }, remove: { stdout: 'removed machine\n' } });
+      await expect(disableStartup(ctx())).rejects.toThrow(/not created by machine/);
+    }
+  });
+
+  it('an older machine job (wscript wrapper with a hash, or without) and the development form are owned', async () => {
+    const wrapper = '"C:\\Windows\\System32\\wscript.exe" //B //Nologo "C:\\c\\bin\\1\\machine-daemon.vbs" 0123456789ab';
+    stub.script({ show: { stdout: ownedJob('machine', wrapper) }, remove: { stdout: 'removed machine\n' } });
+    expect((await disableStartup(ctx())).outcome).toBe('removed');
+    stub.script({ show: { stdout: ownedJob('machine', "'/usr/bin/node' '/x/machine.cjs' daemon") }, remove: { stdout: 'removed machine\n' } });
+    expect((await disableStartup(ctx())).outcome).toBe('removed');
   });
 });
 
@@ -211,19 +246,19 @@ describe('startupStatus', () => {
   const ctx = () => ({ configDir, orch: stub.orch, daemon: UNIX_BUNDLE, platform: 'linux' as const });
 
   it('exit 3 of orch show: the job does not exist', async () => {
-    stub.script({ show: { code: 3, stderr: 'no such job' } });
+    stub.script({ show: { code: 3, stderr: 'no such job' }, list: { stdout: '[]' } });
     const r = await startupStatus(ctx());
-    expect(r).toMatchObject({ exists: false, expected: currentCommand() });
-    expect(stub.calls()).toEqual([['show', 'machine', '--json']]);
+    expect(r).toMatchObject({ exists: false, expected: currentCommand(), conflicts: [] });
+    expect(stub.calls()).toEqual([['show', 'machine', '--json'], ['list', '--json']]);
   });
 
   it('same command as enable would write now: up to date', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ id: 'machine', command: currentCommand() }) } });
-    expect(await startupStatus(ctx())).toMatchObject({ exists: true, command: currentCommand(), upToDate: true });
+    stub.script({ show: { stdout: JSON.stringify({ id: 'machine', command: currentCommand() }) }, list: { stdout: '[]' } });
+    expect(await startupStatus(ctx())).toMatchObject({ exists: true, command: currentCommand(), upToDate: true, conflicts: [] });
   });
 
   it('another command (moved bundle): outdated, and the command is still shown', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ job: { id: 'machine', command: "'/old/node' '/old/machine.cjs' daemon" } }) } });
+    stub.script({ show: { stdout: JSON.stringify({ job: { id: 'machine', command: "'/old/node' '/old/machine.cjs' daemon" } }) }, list: { stdout: '[]' } });
     expect(await startupStatus(ctx())).toMatchObject({ exists: true, command: "'/old/node' '/old/machine.cjs' daemon", upToDate: false });
   });
 
@@ -233,6 +268,30 @@ describe('startupStatus', () => {
     stub.script({ show: { code: 1, stderr: 'broken' } });
     await expect(startupStatus(ctx())).rejects.toThrow(/broken/);
     await expect(startupStatus({ ...ctx(), orch: missingOrch() })).rejects.toThrow(/orch is not installed/);
+  });
+
+  const listOf = (jobs: unknown[]) => ({ stdout: JSON.stringify(jobs) });
+  const portJob = (id: string, portFile: string | undefined, command = 'node other.js') => ({ id, command, ...(portFile === undefined ? {} : { liveness: { strategy: 'portFile', portFile } }) });
+
+  it('a second orch job on the same daemon.port.json is reported as a conflict (id and command), ours and unrelated jobs are not', async () => {
+    stub.script({
+      show: { stdout: ownedJob() },
+      list: listOf([portJob('machine', expectedPortFile(), currentCommand()), portJob('copy', expectedPortFile(), 'machine daemon'), portJob('unrelated', join(root, 'x', 'daemon.port.json')), portJob('nolive', undefined)]),
+    });
+    const r = await startupStatus(ctx());
+    expect(r.conflicts).toEqual([{ id: 'copy', command: 'machine daemon' }]);
+  });
+
+  it('the conflict is reported even when the machine job itself is absent, and the list may be wrapped in {jobs:[...]}', async () => {
+    stub.script({ show: { code: 3 }, list: { stdout: JSON.stringify({ jobs: [portJob('rogue', expectedPortFile())] }) } });
+    expect((await startupStatus(ctx())).conflicts).toEqual([{ id: 'rogue', command: 'node other.js' }]);
+  });
+
+  it('a list that cannot be read, or an orch list failure, fails loudly (no silent "no conflict")', async () => {
+    stub.script({ show: { stdout: ownedJob() }, list: { stdout: 'not json' } });
+    await expect(startupStatus(ctx())).rejects.toThrow(/orch list.*not json/s);
+    stub.script({ show: { stdout: ownedJob() }, list: { code: 1, stderr: 'broken list' } });
+    await expect(startupStatus(ctx())).rejects.toThrow(/broken list/);
   });
 });
 
@@ -262,18 +321,34 @@ describe('machine startup (CLI)', () => {
   });
 
   it('disable prints removed or absent', async () => {
-    stub.script({ remove: { stdout: 'absent machine\n' } });
+    stub.script({ show: { code: 3 } });
     const r = await run(['startup', 'disable']);
     expect(r.code).toBe(0);
     expect(r.out).toContain('absent');
   });
 
+  it('disable of a foreign job: exit 1, stderr says why and how to remove it by hand', async () => {
+    stub.script({ show: { stdout: JSON.stringify({ id: 'machine', command: 'node mine.js' }) } });
+    const r = await run(['startup', 'disable']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not created by machine.*orch remove machine/s);
+  });
+
+  it('status warns loudly on stderr (and lists the conflicts in --json) when a second job uses the same port file', async () => {
+    stub.script({ show: { stdout: ownedJob() }, list: { stdout: JSON.stringify([{ id: 'copy', command: 'machine daemon', liveness: { strategy: 'portFile', portFile: expectedPortFile() } }]) } });
+    const r = await run(['startup', 'status']);
+    expect(r.code).toBe(0);
+    expect(r.err).toMatch(/[warning].*"copy".*daemon.port.json.*orch remove copy/s);
+    const j = await run(['startup', 'status', '--json']);
+    expect(JSON.parse(j.out).conflicts).toEqual([{ id: 'copy', command: 'machine daemon' }]);
+  });
+
   it('status exits 0 whether the job exists or not, and tells what to do when outdated', async () => {
-    stub.script({ show: { code: 3 } });
+    stub.script({ show: { code: 3 }, list: { stdout: '[]' } });
     const absent = await run(['startup', 'status']);
     expect(absent.code).toBe(0);
     expect(absent.out).toMatch(/absent.*machine startup enable/);
-    stub.script({ show: { stdout: '{"command":"old"}' } });
+    stub.script({ show: { stdout: '{"command":"old"}' }, list: { stdout: '[]' } });
     const outdated = await run(['startup', 'status']);
     expect(outdated.code).toBe(0);
     expect(outdated.out).toContain('command: old');

@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cli } from './testing.js';
 import { makeOrchStub, type OrchStub } from './orchStub.js';
 import { platformPackageName, stageWrapper, wrapperScript, wrapperState } from './platformBinary.js';
+import { createHash } from 'node:crypto';
 import { daemonCommand, enableStartup, registeredForm, startupStatus, StartupError, type DaemonSource, type StartupContext } from './startup.js';
+
+// The job command ends with the first 12 hex digits of the sha256 of the script content (an argument the script ignores).
+const hashOf = (content: string) => createHash('sha256').update(content).digest('hex').slice(0, 12);
 
 // The Windows wrapper form of the orch job (spec: packaging.md section 6, 9.2a): a generated machine-daemon.vbs sets
 // LAUNCHER_BUNDLE_OVERRIDE and runs the staged launcher, because orch.cmd cannot carry an environment variable.
@@ -77,10 +81,16 @@ describe('daemonCommand: the wrapper job form on Windows', () => {
   const wrapper = { wscript: WSCRIPT, vbs: 'C:\\my cfg\\bin\\1.0.0\\machine-daemon.vbs', content: 'X' };
   const source: DaemonSource = { platform: 'win32', execPath: 'C:\\node.exe', scriptPath: 'C:\\nm\\machine.cjs', launcher: { exe: 'C:\\my cfg\\bin\\1.0.0\\machine.exe', bundleOverride: 'C:\\nm\\machine.cjs', wrapper } };
 
-  it('is wscript.exe //B //Nologo "<vbs>" with absolute paths; the configuration folder is inside the script, not in the command', () => {
-    const expected = `"${WSCRIPT}" //B //Nologo "C:\\my cfg\\bin\\1.0.0\\machine-daemon.vbs"`;
+  it('is wscript.exe //B //Nologo "<vbs>" <content hash> with absolute paths; the configuration folder is inside the script, not in the command', () => {
+    const expected = `"${WSCRIPT}" //B //Nologo "C:\\my cfg\\bin\\1.0.0\\machine-daemon.vbs" ${hashOf('X')}`;
     expect(daemonCommand(source)).toBe(expected);
     expect(daemonCommand(source, 'D:\\other')).toBe(expected);
+  });
+
+  it('a different script content gives a different command (so orch --restart-if-changed restarts the daemon when the bundle moves)', () => {
+    const other = { ...source, launcher: { ...source.launcher!, wrapper: { ...wrapper, content: 'Y' } } };
+    expect(daemonCommand(other)).not.toBe(daemonCommand(source));
+    expect(daemonCommand(other)).toMatch(/machine-daemon\.vbs" [0-9a-f]{12}$/);
   });
 
   it('a percent or double quote in the script path is refused (cmd.exe), naming the fix', () => {
@@ -95,7 +105,9 @@ describe('daemonCommand: the wrapper job form on Windows', () => {
 
 describe('registeredForm: wrapper', () => {
   it('recognises wscript running machine-daemon.vbs, and nothing else run by wscript', () => {
+    expect(registeredForm(`"${WSCRIPT}" //B //Nologo "C:\\c\\bin\\1\\machine-daemon.vbs" 0123456789ab`)).toBe('launcher-wrapper');
     expect(registeredForm(`"${WSCRIPT}" //B //Nologo "C:\\c\\bin\\1\\machine-daemon.vbs"`)).toBe('launcher-wrapper');
+    expect(registeredForm(`"${WSCRIPT}" //B //Nologo "C:\\c\\bin\\1\\machine-daemon.vbs" rm -rf`)).toBe('unknown');
     expect(registeredForm(`"${WSCRIPT}" //B //Nologo "C:\\other.vbs"`)).toBe('unknown');
   });
 });
@@ -163,8 +175,8 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
   });
   const dirOf = (stamp: string) => join(configDir, 'bin', stamp);
   const vbsOf = (stamp: string) => join(dirOf(stamp), 'machine-daemon.vbs');
-  const commandOf = (stamp: string) => `"${WSCRIPT}" //B //Nologo "${vbsOf(stamp)}"`;
-  const contentOf = (stamp: string) => wrapperScript({ exe: join(dirOf(stamp), 'machine.exe'), bundle: BUNDLE, configDir });
+  const contentOf = (stamp: string, bundle = BUNDLE) => wrapperScript({ exe: join(dirOf(stamp), 'machine.exe'), bundle, configDir });
+  const commandOf = (stamp: string, bundle = BUNDLE) => `"${WSCRIPT}" //B //Nologo "${vbsOf(stamp)}" ${hashOf(contentOf(stamp, bundle))}`;
   const ensureArgs = (command: string) => ['ensure', 'startup', 'machine', '--command', command, '--restart-on-exit', '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', join(configDir, 'daemon.port.json'), '--json'];
 
   it('enable stages machine-daemon.vbs next to the launcher and registers wscript on it', async () => {
@@ -191,6 +203,17 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
     expect(r.pruned).toEqual({ removed: ['0.9.0'], skipped: [] });
   });
 
+  it('a moved bundle changes the job command (same script path), so orch updates the job and restarts the daemon', async () => {
+    stub.script({ ensure: { stdout: 'added machine\n' } });
+    await enableStartup(ctxWith(installed()));
+    stub.script({ ensure: { stdout: 'updated machine\n' } });
+    const moved = 'C:\\elsewhere\\machine.cjs';
+    const r = await enableStartup(ctxWith(installed(), { bundlePath: moved }));
+    expect(r.command).toBe(commandOf('1.0.0', moved));
+    expect(r.command).not.toBe(commandOf('1.0.0'));
+    expect(r.command.startsWith(`"${WSCRIPT}" //B //Nologo "${vbsOf('1.0.0')}" `)).toBe(true);
+  });
+
   it('a bundle the launcher finds by itself keeps the plain launcher form: no script', async () => {
     const nodeDir = join(root, 'nodehome');
     mkdirSync(join(nodeDir, 'node_modules', '@wadeck-app', 'machine-cli'), { recursive: true });
@@ -214,21 +237,21 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
   });
 
   it('status expects the wrapper command without writing anything; current script and command: up to date, form reported', async () => {
-    stub.script({ show: { code: 3 } });
+    stub.script({ list: { stdout: '[]' }, show: { code: 3 } });
     const absent = await startupStatus(ctxWith(installed()));
     expect(absent).toMatchObject({ exists: false, expected: commandOf('1.0.0'), expectedForm: 'launcher-wrapper' });
     expect(existsSync(join(configDir, 'bin'))).toBe(false);
 
     stub.script({ ensure: { stdout: 'added machine\n' } });
     await enableStartup(ctxWith(installed()));
-    stub.script({ show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
     expect(await startupStatus(ctxWith(installed()))).toMatchObject({ upToDate: true, registeredForm: 'launcher-wrapper', expectedForm: 'launcher-wrapper', wrapper: 'current' });
   });
 
   it('status: the same command but a script that differs (bundle moved) or is missing is outdated', async () => {
     stub.script({ ensure: { stdout: 'added machine\n' } });
     await enableStartup(ctxWith(installed()));
-    stub.script({ show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
     writeFileSync(vbsOf('1.0.0'), 'edited');
     expect(await startupStatus(ctxWith(installed()))).toMatchObject({ upToDate: false, wrapper: 'different' });
     rmSync(vbsOf('1.0.0'));
@@ -236,7 +259,7 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
   });
 
   it('status: a plain launcher or development job registered while the wrapper is expected is outdated and says both forms', async () => {
-    stub.script({ show: { stdout: JSON.stringify({ command: `"${join(dirOf('1.0.0'), 'machine.exe')}" daemon` }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: `"${join(dirOf('1.0.0'), 'machine.exe')}" daemon` }) } });
     expect(await startupStatus(ctxWith(installed()))).toMatchObject({ upToDate: false, registeredForm: 'launcher', expectedForm: 'launcher-wrapper' });
   });
 
@@ -246,7 +269,7 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
     expect(en.code, en.err).toBe(0);
     expect(en.out).toMatch(/form: staged launcher through a wscript wrapper/);
     expect(en.out).toContain('Node >= 22');
-    stub.script({ show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
     const st = await cli(configDir, ['startup', 'status'], undefined, { startup: ctxWith(installed()) });
     expect(st.out).toMatch(/registered form: staged launcher through a wscript wrapper/);
     expect(st.out).toMatch(/up to date/);
