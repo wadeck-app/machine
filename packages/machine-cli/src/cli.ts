@@ -161,7 +161,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
           `version: ${r.version}`,
           `config: ${r.configDir}`,
           r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
-          ...r.problems.map((p) => `[warn] ${p}`),
+          ...(r.problems ?? []).map((p) => `[warn] ${p}`),
         ];
         emit(r, `${lines.join('\n')}\n`);
         return EXIT.ok;

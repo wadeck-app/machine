@@ -78,7 +78,7 @@ describe('two machines through the command line', () => {
     expect(r.out.trim()).toBe('hello from laptop');
   });
 
-  it('refuses a command the policy does not list, exits 4 and says why', async () => {
+  it('refuses a command the policy does not list, exits 255 and says why', async () => {
     const { address } = await setUp([{ shell: SHELL, command: 'echo allowed' }]);
     const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'something', 'else']);
     expect(r.code).toBe(255);
@@ -87,7 +87,7 @@ describe('two machines through the command line', () => {
   });
 
   it('propagates the exit code of the remote command', async () => {
-    const command = process.platform === 'win32' ? 'exit 7' : 'exit 7';
+    const command = 'exit 7';
     const { address } = await setUp([{ shell: SHELL, command }]);
     const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'exit', '7']);
     expect(r.code).toBe(7);

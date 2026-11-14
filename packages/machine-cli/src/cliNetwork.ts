@@ -29,11 +29,33 @@ function readJson(file: string, what: string): unknown {
   }
 }
 
-function parseAddress(address: string): { host: string; port: number } | undefined {
-  const m = /^([^:\s]+):(\d{1,5})$/.exec(address);
+/** An input file must hold a JSON object: anything else is reported by file name, never as a raw TypeError. */
+function readObject(file: string, what: string): Record<string, unknown> {
+  const value = readJson(file, what);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${what} ${file} must contain a JSON object: check that you passed the right file`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/** `host:port`, a name or an IPv4 address, or a bracketed IPv6 address such as `[::1]:47921`. */
+export function parseAddress(address: string): { host: string; port: number } | undefined {
+  const m = /^(?:\[([0-9a-fA-F:.]+)\]|([^:\s[\]]+)):(\d{1,5})$/.exec(address);
   if (!m) return undefined;
-  const port = Number(m[2]);
-  return port >= 1 && port <= 65535 ? { host: m[1] as string, port } : undefined;
+  const port = Number(m[3]);
+  const host = m[1] ?? m[2];
+  return host && port >= 1 && port <= 65535 ? { host, port } : undefined;
+}
+
+/**
+ * The remote exit code, kept in 0..254 and never turned into success: 255 is reserved for machine-level failures
+ * (a command that was killed has no code at all).
+ */
+export function remoteExitCode(code: number | null): number {
+  if (code === null) return EXIT.peer;
+  if (code === 0) return 0;
+  const low = code & 0xff;
+  return low === 0 || low === 255 ? 254 : low;
 }
 
 /** Writing a secret or a signed document: never over an existing file by accident, never half written. */
@@ -93,11 +115,13 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
       if (!args.out) return fail('register needs --out <bundle.json>: the bundle contains a secret and is never printed', EXIT.usage);
       if (existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
       const days = args.days === undefined ? 365 : Number(args.days);
-      const reused = args.secretFrom ? (readJson(args.secretFrom, 'bundle') as Partial<PeerBundle>).pairSecret : undefined;
+      // Everything that can be checked is checked before the admin is asked to type the passphrase.
+      if (!Number.isInteger(days) || days < 1 || days > 3650) return fail(`--days must be a whole number from 1 to 3650, got "${args.days}"`, EXIT.usage);
+      const reused = args.secretFrom ? readObject(args.secretFrom, 'bundle').pairSecret : undefined;
       if (args.secretFrom && typeof reused !== 'string') return fail(`${args.secretFrom} has no pair secret: pass the bundle produced by \`machine admin register\``);
-      const info = readJson(first, 'machine info') as MachineInfo;
-      io.stderr(`Registering "${String((info as { name?: unknown }).name)}" for ${days} day(s). Enter the admin passphrase to sign, Ctrl-C to cancel.\n`);
-      const bundle = await registerMachine(configDir, info, { now, prompt, validForDays: days, ...(reused ? { pairSecret: reused } : {}) });
+      const info = readObject(first, 'machine info') as unknown as MachineInfo;
+      io.stderr(`Registering "${String(info.name)}" for ${days} day(s). Enter the admin passphrase to sign, Ctrl-C to cancel.\n`);
+      const bundle = await registerMachine(configDir, info, { now: epochSeconds, prompt, validForDays: days, ...(typeof reused === 'string' ? { pairSecret: reused } : {}) });
       writeFileAtomic(args.out, `${JSON.stringify(bundle, null, 2)}\n`, 0o600);
       emit({ uuid: bundle.registration.body.uuid, out: args.out }, `[ok] registration written to ${args.out}: copy it to the machine that must trust "${bundle.registration.body.name}" (it contains a secret)\n`);
       return EXIT.ok;
@@ -122,7 +146,8 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
     }
     if (sub === 'import') {
       if (first === undefined || second !== undefined) return fail('usage: machine peer import <bundle.json>', EXIT.usage);
-      const bundle = readJson(first, 'bundle') as PeerBundle;
+      const bundle = readObject(first, 'bundle') as unknown as PeerBundle;
+      if (typeof bundle.registration !== 'object' || bundle.registration === null) throw new Error(`bundle ${first} has no registration: pass the file written by \`machine admin register\``);
       importPeer(configDir, bundle, { now });
       emit({ imported: bundle.registration.body.uuid }, `[ok] this machine now trusts "${bundle.registration.body.name}" (${bundle.registration.body.uuid})\n`);
       return EXIT.ok;
@@ -133,65 +158,80 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
   if (command === 'policy') {
     const [sub, first, second] = rest;
     if (sub !== 'install' || first === undefined || second !== undefined) return fail('usage: machine policy install <signed-policy.json>', EXIT.usage);
-    const body = installPolicy(configDir, readJson(first, 'policy') as never, { now });
+    const body = installPolicy(configDir, readObject(first, 'policy') as never, { now });
     emit({ version: body.version }, `[ok] policy version ${body.version} installed (${body.defaults.length} default entries, ${Object.keys(body.peers).length} peer-specific lists)\n`);
     return EXIT.ok;
   }
 
   if (command === 'run') {
-    const ref = rest[0];
-    if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-      return fail('usage: machine run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>', EXIT.usage);
-    }
-    const shell = args.shell ?? (process.platform === 'win32' ? 'cmd' : 'sh');
-    if (!(SHELLS as readonly string[]).includes(shell)) return fail(`unknown shell "${shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
-
-    const self = readMachine(configDir);
-    const network = loadNetwork(configDir, now);
-    const machines = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-    const resolved = resolveMachineRef(ref, machines, readAliases(configDir));
-    if (!resolved.ok) return fail(resolved.message, EXIT.peer);
-    if (resolved.uuid === self.uuid) return fail('that is this machine: run the command here directly', EXIT.peer);
-    const peer = network.directory.find(resolved.uuid);
-    if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.peer);
-    if (!args.address) {
-      return fail(`no address known for "${peer.name}": pass --address <host:port> (automatic address discovery arrives with the relay)`, EXIT.peer);
-    }
-    const where = parseAddress(args.address);
-    if (!where) return fail(`invalid --address "${args.address}": expected <host>:<port>, for example 192.168.1.20:47921`, EXIT.usage);
-
-    let answer;
+    // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.
     try {
-      const session = await connectToPeer({
-        identity: self.identity,
-        host: where.host,
-        port: where.port,
-        expectedPeerPublicKey: peer.identityPublicKey,
-        pairSecret: peer.pairSecret,
-      });
-      try {
-        answer = await runOnPeer(session, { identity: self.identity, source: self.uuid, target: peer.peerId, shell: shell as Shell, command: args.passthrough.join(' '), now });
-      } finally {
-        session.close();
-      }
+      return await runRemote(ctx);
     } catch (e) {
       return fail((e as Error).message, EXIT.peer);
     }
-    if (answer.type === 'refused') {
-      return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}`, EXIT.peer);
-    }
-    if (args.json) {
-      io.stdout(`${JSON.stringify(answer, null, 2)}\n`);
-    } else {
-      if (answer.stdout) io.stdout(answer.stdout);
-      if (answer.stderr) io.stderr(answer.stderr);
-    }
-    if (answer.timedOut) io.stderr('[warn] the command was stopped: it exceeded the time limit of the peer\n');
-    if (answer.truncated) io.stderr('[warn] the output was cut: it exceeded the output limit of the peer\n');
-    if (answer.outputNotUtf8) io.stderr('[warn] the output is not valid UTF-8 (probably an OEM code page): accented characters may be wrong\n');
-    // A command that was killed has no exit code: report it as a machine-level failure, not as a success.
-    return answer.exitCode === null ? EXIT.peer : Math.min(Math.max(answer.exitCode, 0), 254);
   }
 
   return undefined;
+}
+
+async function runRemote(ctx: CommandContext): Promise<number> {
+  const { args, rest, io, configDir } = ctx;
+  const fail = ctx.fail;
+  const ref = rest[0];
+  if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
+    return fail('usage: machine run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>', EXIT.peer);
+  }
+  const shell = args.shell ?? (process.platform === 'win32' ? 'cmd' : 'sh');
+  if (!(SHELLS as readonly string[]).includes(shell)) return fail(`unknown shell "${shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
+  if (args.address !== undefined && !parseAddress(args.address)) {
+    return fail(`invalid --address "${args.address}": expected <host>:<port>, for example 192.168.1.20:47921 or [::1]:47921`, EXIT.peer);
+  }
+  // The command is sent byte for byte. Several words are joined with single spaces, which is only faithful when no word
+  // holds spaces or quotes: otherwise the user must quote the whole command as one argument.
+  if (args.passthrough.length > 1 && args.passthrough.some((word) => /[\s"'`]/.test(word))) {
+    return fail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is sent exactly as written', EXIT.peer);
+  }
+  const command = args.passthrough.join(' ');
+
+  const self = readMachine(configDir);
+  const network = loadNetwork(configDir, epochSeconds());
+  const machines = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
+  const resolved = resolveMachineRef(ref, machines, readAliases(configDir));
+  if (!resolved.ok) return fail(resolved.message, EXIT.peer);
+  if (resolved.uuid === self.uuid) return fail('that is this machine: run the command here directly', EXIT.peer);
+  const peer = network.directory.find(resolved.uuid);
+  if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.peer);
+  if (!args.address) {
+    return fail(`no address known for "${peer.name}": pass --address <host:port> (automatic address discovery arrives with the relay)`, EXIT.peer);
+  }
+  const where = parseAddress(args.address) as { host: string; port: number };
+
+  const session = await connectToPeer({
+    identity: self.identity,
+    host: where.host,
+    port: where.port,
+    expectedPeerPublicKey: peer.identityPublicKey,
+    pairSecret: peer.pairSecret,
+  });
+  let answer;
+  try {
+    // The request is dated now, after the connection exists: a slow connection must not age it.
+    answer = await runOnPeer(session, { identity: self.identity, source: self.uuid, target: peer.peerId, shell: shell as Shell, command, now: epochSeconds() });
+  } finally {
+    session.close();
+  }
+  if (answer.type === 'refused') {
+    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}`, EXIT.peer);
+  }
+  if (args.json) {
+    io.stdout(`${JSON.stringify(answer, null, 2)}\n`);
+  } else {
+    if (answer.stdout) io.stdout(answer.stdout);
+    if (answer.stderr) io.stderr(answer.stderr);
+  }
+  if (answer.timedOut) io.stderr('[warn] the command was stopped: it exceeded the time limit of the peer\n');
+  if (answer.truncated) io.stderr('[warn] the output was cut: it exceeded the output limit of the peer\n');
+  if (answer.outputNotUtf8) io.stderr('[warn] the output is not valid UTF-8 (probably an OEM code page): accented characters may be wrong\n');
+  return remoteExitCode(answer.exitCode);
 }

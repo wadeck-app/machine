@@ -89,7 +89,8 @@ function writePeers(configDir: string, peers: PairedRegistration[]): void {
 }
 
 export interface RegisterOptions {
-  now: number;
+  /** Epoch seconds, or a function read AFTER the passphrase was typed (a slow prompt must not backdate the registration). */
+  now: number | (() => number);
   prompt: Prompt;
   validForDays: number;
   /** Reuse the pair secret of an existing pairing (so both sides of a pair hold the same secret). */
@@ -108,15 +109,16 @@ export async function registerMachine(configDir: string, info: MachineInfo, opti
 
   const pin = readAdminPin(configDir);
   const admin = await unlockAdminKey(configDir, options.prompt);
+  const issuedAt = typeof options.now === 'function' ? options.now() : options.now;
   const body: RegistrationBody = {
     v: 1,
     uuid: info.uuid,
     name: info.name,
     identityPublicKey: info.identityPublicKey,
     // A later registration of the same machine always has a higher serial.
-    serial: options.now,
-    validFrom: options.now,
-    validTo: options.now + options.validForDays * 86_400,
+    serial: issuedAt,
+    validFrom: issuedAt,
+    validTo: issuedAt + options.validForDays * 86_400,
     adminKeyId: pin.adminKeyId,
   };
   return { registration: signRegistration(body, admin.privateKeyPkcs8), pairSecret };
