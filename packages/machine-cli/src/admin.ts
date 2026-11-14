@@ -1,4 +1,5 @@
 import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { writeFileAtomic } from './fsutil.js';
 import { join } from 'node:path';
 import {
   assertPolicyBody,
@@ -66,6 +67,11 @@ export function adminInit(configDir: string): AdminPin & { passphrase: string } 
   if (existsSync(keyFile)) {
     throw new Error(`an admin key already exists (${keyFile}): it is kept; replacing it would invalidate every signed registration and policy. To start a new network, re-initialize every machine`);
   }
+  if (existsSync(adminPinFile(configDir))) {
+    throw new Error(
+      `an admin key is already pinned (${adminPinFile(configDir)}) but its encrypted file is not on this machine: copy ${keyFile} from the machine that holds it. Running init here would replace the network's admin key`,
+    );
+  }
   const pair = generateSigningKeyPair();
   const passphrase = generatePassphrase();
   const envelope = encryptAdminKey(pair, passphrase);
@@ -79,7 +85,13 @@ export function adminInit(configDir: string): AdminPin & { passphrase: string } 
   } finally {
     unlinkSync(temp);
   }
-  writeFileSync(adminPinFile(configDir), `${JSON.stringify({ v: 1, ...pin }, null, 2)}\n`, { mode: 0o644 });
+  try {
+    writeFileAtomic(adminPinFile(configDir), `${JSON.stringify({ v: 1, ...pin }, null, 2)}\n`, 0o644);
+  } catch (e) {
+    // Never leave a key without its pin: a retry would be refused and the machine stuck.
+    unlinkSync(keyFile);
+    throw new Error(`cannot write ${adminPinFile(configDir)}: ${(e as Error).message}; the admin key was not created, nothing changed`);
+  }
   return { ...pin, passphrase };
 }
 
@@ -92,11 +104,16 @@ function readEnvelope(configDir: string): AdminKeyEnvelope {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`the encrypted admin key ${file} is missing: copy it from the machine that has it, or run \`machine admin init\``);
     throw new Error(`cannot read ${file}: ${(e as Error).message}`);
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as AdminKeyEnvelope;
+    parsed = JSON.parse(text);
   } catch {
     throw new Error(`${file} is corrupt or invalid (not valid JSON): copy it again from another machine`);
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${file} is corrupt or invalid (not an admin key file): copy it again from another machine`);
+  }
+  return parsed as AdminKeyEnvelope;
 }
 
 export type Prompt = (label: string) => Promise<string>;

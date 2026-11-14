@@ -172,8 +172,9 @@ describe('machine admin', () => {
   it('admin init prints the passphrase once, tells to store it, and warns about an ignored environment variable', async () => {
     const r = await runWith(never, 'admin', 'init');
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/passphrase/i);
-    expect(r.out).toMatch(/shown only once/i);
+    // The passphrase goes to the terminal channel (stderr), never to stdout where a redirect or a log would keep it.
+    expect(r.out).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+    expect(r.err).toMatch(/shown only once/i);
     expect(r.err).toMatch(/MACHINE_PASSPHRASE is set but ignored/);
     expect(r.err + r.out).not.toContain('ignored-value');
   });
@@ -194,7 +195,7 @@ describe('machine admin', () => {
 
   it('sign-policy shows the summary on stderr, asks the prompt, writes the signed document', async () => {
     const init = await runWith(never, 'admin', 'init');
-    const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.out)?.[1]?.trim() ?? '';
+    const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
     expect(passphrase.length).toBeGreaterThan(20);
     const draft = join(dir, 'draft.json');
     const out = join(dir, 'signed.json');
@@ -228,5 +229,55 @@ describe('machine admin', () => {
     const r = await runWith(async () => 'definitely not the passphrase', 'admin', 'sign-policy', draft);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/wrong passphrase/);
+  });
+});
+
+describe('machine admin (review hardening)', () => {
+  const never = async () => {
+    throw new Error('the prompt must not be asked');
+  };
+  async function runWith(prompt: (label: string) => Promise<string>, args: string[], env: Record<string, string | undefined> = {}) {
+    let out = '';
+    let err = '';
+    const code = await runCli([...args, '--config-dir', dir], { stdout: (t) => (out += t), stderr: (t) => (err += t), prompt }, env);
+    return { code, out, err };
+  }
+  const draftBody = JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} });
+
+  it('admin init --json keeps the passphrase out of stdout', async () => {
+    const r = await runWith(never, ['admin', 'init', '--json']);
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.out) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('passphrase');
+    expect(parsed.adminKeyId).toBeTruthy();
+    expect(r.err).toMatch(/shown only once/i);
+  });
+
+  it('names the variable that is actually set', async () => {
+    const r = await runWith(never, ['admin', 'init'], { MACHINE_ADMIN_PASSPHRASE: 'x' });
+    expect(r.err).toMatch(/MACHINE_ADMIN_PASSPHRASE is set but ignored/);
+    expect(r.err).not.toMatch(/MACHINE_PASSPHRASE is set/);
+  });
+
+  it('refuses a stray argument for admin init', async () => {
+    const r = await runWith(never, ['admin', 'init', 'foo']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/unexpected argument "foo"/);
+  });
+
+  it('refuses to overwrite --out before asking for the passphrase, and overwrites with --force', async () => {
+    const init = await runWith(never, ['admin', 'init']);
+    const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
+    const draft = join(dir, 'draft.json');
+    const out = join(dir, 'signed.json');
+    writeFileSync(draft, draftBody);
+    writeFileSync(out, 'precious');
+    const refused = await runWith(never, ['admin', 'sign-policy', draft, '--out', out]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toMatch(/already exists.*--force/);
+    expect(readFileSync(out, 'utf8')).toBe('precious');
+    const forced = await runWith(async () => passphrase, ['admin', 'sign-policy', draft, '--out', out, '--force']);
+    expect(forced.code).toBe(0);
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toHaveProperty('signature');
   });
 });

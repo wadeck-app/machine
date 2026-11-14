@@ -1,8 +1,9 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { adminInit, signPolicyFile, type Prompt } from './admin.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
+import { writeFileAtomic } from './fsutil.js';
 import { initMachine } from './identity.js';
 import { resolveConfigDir } from './paths.js';
 import { promptHidden } from './prompt.js';
@@ -35,7 +36,7 @@ Commands:
 
 Options:
   --json                 machine-readable output
-  --out <file>           write the signed document to a file
+  --out <file>           write the signed document to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
 
@@ -49,13 +50,14 @@ interface Parsed {
   json: boolean;
   help: boolean;
   replace: boolean;
+  force: boolean;
   name?: string;
   out?: string;
   configDir?: string;
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], json: false, help: false, replace: false };
+  const out: Parsed = { positional: [], json: false, help: false, replace: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     const valueOf = (flag: string): string => {
@@ -66,6 +68,7 @@ function parse(argv: string[]): Parsed {
     if (a === '--json') out.json = true;
     else if (a === '--help' || a === '-h') out.help = true;
     else if (a === '--replace') out.replace = true;
+    else if (a === '--force') out.force = true;
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
@@ -132,36 +135,33 @@ ${HELP}`);
 
     if (command === 'admin') {
       const [sub, draft] = rest;
-      if (env.MACHINE_PASSPHRASE !== undefined || env.MACHINE_ADMIN_PASSPHRASE !== undefined) {
-        io.stderr('[warn] MACHINE_PASSPHRASE is set but ignored: passphrases are only read from the terminal prompt, never from the environment. Unset it\n');
+      for (const name of ['MACHINE_PASSPHRASE', 'MACHINE_ADMIN_PASSPHRASE']) {
+        if (env[name] !== undefined) {
+          io.stderr(`[warn] ${name} is set but ignored: passphrases are only read from the terminal prompt, never from the environment. Unset it\n`);
+        }
       }
       if (sub === 'init') {
+        if (draft !== undefined) return fail(`unexpected argument "${draft}" for \`machine admin init\``, EXIT.usage);
         const r = adminInit(configDir);
-        emit(
-          { adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey, passphrase: r.passphrase },
-          `[ok] admin key created (id ${r.adminKeyId})
-Admin passphrase (shown only once, write it down now; it cannot be recovered):
-  ${r.passphrase}
-`,
-        );
+        // The passphrase goes to the terminal channel only: stdout may be redirected or captured in a log.
+        io.stderr(`Admin passphrase (shown only once, write it down now; it cannot be recovered):\n  ${r.passphrase}\n`);
+        emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\n`);
         return EXIT.ok;
       }
       if (sub === 'sign-policy') {
         if (draft === undefined || rest.length > 2) return fail('usage: machine admin sign-policy <draft.json> [--out <file>]', EXIT.usage);
+        // Fail before the passphrase is typed, not after the key was unlocked.
+        if (args.out && existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
         const prompt = io.prompt ?? promptHidden;
         const { signed } = await signPolicyFile(configDir, draft, {
           now: Math.floor(Date.now() / 1000),
           prompt,
-          onSummary: (summary) => io.stderr(`${summary}
-Signing this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.
-`),
+          onSummary: (summary) => io.stderr(`${summary}\nSigning this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.\n`),
         });
-        const text = `${JSON.stringify(signed, null, 2)}
-`;
+        const text = `${JSON.stringify(signed, null, 2)}\n`;
         if (args.out) {
-          writeFileSync(args.out, text);
-          io.stderr(`[ok] signed policy written to ${args.out}
-`);
+          writeFileAtomic(args.out, text, 0o644);
+          io.stderr(`[ok] signed policy written to ${args.out}\n`);
         } else {
           io.stdout(text);
         }

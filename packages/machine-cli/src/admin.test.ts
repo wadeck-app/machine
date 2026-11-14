@@ -122,3 +122,17 @@ describe('signPolicyFile', () => {
     await expect(signPolicyFile(dir, policyDraft(), { now: NOW, prompt: async () => 'x' })).rejects.toThrow(/machine admin init/);
   });
 });
+
+describe('adminInit and the pin (review hardening)', () => {
+  it('refuses to start over a pinned admin key it does not hold, and names the pin file', () => {
+    writeFileSync(join(dir, 'admin.json'), '{}');
+    expect(() => adminInit(dir)).toThrow(/admin\.json/);
+    expect(existsSync(join(dir, '_secrets_', 'admin.key.json'))).toBe(false);
+  });
+
+  it('reports a wrong-shaped key file as corrupt instead of crashing inside the decryption', async () => {
+    const { passphrase } = adminInit(dir);
+    writeFileSync(join(dir, '_secrets_', 'admin.key.json'), 'null');
+    await expect(signPolicyFile(dir, policyDraft(), { now: NOW, prompt: async () => passphrase })).rejects.toThrow(/admin\.key\.json.*(corrupt|invalid)/);
+  });
+});

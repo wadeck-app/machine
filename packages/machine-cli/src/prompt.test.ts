@@ -54,3 +54,14 @@ describe('promptHidden', () => {
     await expect(result).rejects.toThrow(/ended/);
   });
 });
+
+describe('promptHidden (encoding)', () => {
+  it('keeps a multibyte character split across two chunks', async () => {
+    const t = fakeTerminal(true);
+    const result = promptHidden('P: ', { input: t.input, output: t.output });
+    const bytes = Buffer.from('café\n', 'utf8');
+    t.input.write(bytes.subarray(0, 4));
+    t.input.write(bytes.subarray(4));
+    expect(await result).toBe('café');
+  });
+});
