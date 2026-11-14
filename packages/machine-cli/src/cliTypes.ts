@@ -30,6 +30,7 @@ export interface Parsed {
   days?: string;
   secretFrom?: string;
   peerPort?: string;
+  apiPort?: string;
   peerHost?: string;
 }
 

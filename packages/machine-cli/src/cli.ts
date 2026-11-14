@@ -21,8 +21,9 @@ Commands:
   alias list | set <alias> <ref> | rm <alias>
   run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>
                                      run one allowed command on a peer
-  daemon [--peer-port <n>] [--peer-host <host>]
+  daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>]
                                      run the daemon in the foreground (started by orch)
+  stop                               stop the running daemon
 
 Administration (manual enrollment, until the relay does it):
   admin init                         create the admin key on this machine (passphrase shown once)
@@ -71,6 +72,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--days') out.days = valueOf('--days');
     else if (a === '--secret-from') out.secretFrom = valueOf('--secret-from');
     else if (a === '--peer-port') out.peerPort = valueOf('--peer-port');
+    else if (a === '--api-port') out.apiPort = valueOf('--api-port');
     else if (a === '--peer-host') out.peerHost = valueOf('--peer-host');
     else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
@@ -106,7 +108,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, resolve: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -134,8 +136,10 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         return n;
       };
       const peerPort = number(args.peerPort, '--peer-port');
+      const apiPort = number(args.apiPort, '--api-port');
       const daemon = await startMachineDaemon(configDir, {
         version: appVersion(),
+        ...(apiPort !== undefined ? { port: apiPort } : {}),
         ...(peerPort !== undefined ? { peerPort } : {}),
         ...(args.peerHost ? { peerHost: args.peerHost } : {}),
         log: (line) => io.stderr(`[machine] ${line}\n`),
@@ -153,6 +157,17 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     const notInitialized = (r: { initialized?: boolean; message?: string }): r is NotInitialized => r.initialized === false;
 
     switch (command) {
+      case 'stop': {
+        if (!(await client.isRunning())) {
+          emit({ stopped: false }, '[ok] daemon was not running\n');
+          return EXIT.ok;
+        }
+        await (client as unknown as { send(command: string): Promise<unknown> }).send('quit');
+        for (let i = 0; i < 50 && (await client.isRunning()); i++) await new Promise((r) => setTimeout(r, 100));
+        if (await client.isRunning()) return fail('the daemon did not stop within 5 seconds: stop its process (orch: `orch stop` on the machine job)');
+        emit({ stopped: true }, '[ok] daemon stopped\n');
+        return EXIT.ok;
+      }
       case 'status': {
         const r = (await client.send('status')) as StatusAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
