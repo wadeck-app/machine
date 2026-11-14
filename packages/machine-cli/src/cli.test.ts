@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runCli } from './cli.js';
 import { readMachine } from './identity.js';
+import { appVersion } from './version.js';
 
 let dir: string;
 beforeEach(() => {
@@ -122,6 +123,18 @@ describe('machine usage', () => {
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/init/);
     expect(r.out).toMatch(/exit codes/i);
+  });
+
+  it('--version prints the version alone on stdout, exits 0, needs no daemon, no network and no config folder', async () => {
+    const r = await run('--version');
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`${appVersion()}\n`);
+    expect(r.err).toBe('');
+    expect((await run('--version', '--json')).out).toBe(`${appVersion()}\n`);
+  });
+
+  it('--version is in the help', async () => {
+    expect((await run('--help')).out).toMatch(/--version\s+print the version/);
   });
 
   it('an unknown command exits 2 and points to --help', async () => {

@@ -72,6 +72,22 @@ describe('generate and pin scripts', () => {
     expect(r.out).toMatch(/usage/);
   });
 
+  it('publish script refuses an invalid or valueless --dist-tag before any network access', () => {
+    for (const tag of ['', 'a b', '1.2.3', '-x', 'a;b']) {
+      const r = node('publish-platform-packages.mjs', ['--dir', root, '--build-version', BUILD, '--dist-tag', tag]);
+      expect(r.status).toBe(1);
+      expect(r.out).toMatch(/\[fail\].*--dist-tag/);
+    }
+    const r = node('publish-platform-packages.mjs', ['--dir', root, '--build-version', BUILD, '--dist-tag']);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/--dist-tag needs a value/);
+  });
+
+  it('publish script documents --dist-tag in its usage', () => {
+    const r = node('publish-platform-packages.mjs', []);
+    expect(r.out).toMatch(/\[--dist-tag <tag>\]/);
+  });
+
   it('npm pack --dry-run of each generated folder lists the expected files', () => {
     gen();
     for (const key of Object.keys(PLATFORM_TARGETS)) {

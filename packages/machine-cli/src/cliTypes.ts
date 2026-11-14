@@ -46,6 +46,7 @@ export interface Parsed {
   passthrough: string[];
   json: boolean;
   help: boolean;
+  version: boolean;
   replace: boolean;
   force: boolean;
   name?: string;

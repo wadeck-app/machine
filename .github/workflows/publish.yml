@@ -1,10 +1,11 @@
-name: Publish @wadeck-app/machine-cli
+name: CI / Publish
 
-# Like the siblings: every push to main publishes an edge build; a manual dispatch can set a stable version.
-# The version comes from compute-version, not from a tag.
+# Pull requests and pushes to main run the tests on three OS. A push to main, or a manual dispatch on main, then publishes:
+# every push to main publishes an edge build, a dispatch can set a stable version. The version comes from compute-version, not from a tag.
 on:
     push:
         branches: [main]
+    pull_request:
     workflow_dispatch:
         inputs:
             version:
@@ -16,23 +17,31 @@ on:
                 required: false
                 default: 'false'
 
-# Same as the siblings.
-# TODO(user): GitHub Packages access for the four new package names (@wadeck-app/machine-cli and its three platform packages)
-# is unproven for this repo: the first run decides (packaging.md section 5, 9.10).
+# Read-only by default: the @wadeck-app packages are read with the run token. Only the publish job can write.
 permissions:
     contents: read
-    packages: write
+    packages: read
 
-# One publish at a time, never cancelled: a half-finished publish would leave the registry inconsistent.
+# One run per ref at a time, in push order. A run is never cancelled on main or on a dispatch (a half-finished publish would leave
+# the registry inconsistent); a pull request run is cancelled by a newer push to the same pull request.
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: false
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-    test:
-        # Only main publishes (a dispatch on a branch or a tag must not).
-        if: github.ref == 'refs/heads/main'
-        runs-on: ubuntu-latest
+    # Windows is the developer platform and macOS/Linux are published targets: the tests run on all three.
+    build-and-test:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+        runs-on: ${{ matrix.os }}
+        # Without it a hung job runs for 6 hours. TODO(user): the duration of this job per OS is not measured yet; adjust after the first runs.
+        timeout-minutes: 20
+        defaults:
+            run:
+                # windows-latest defaults to PowerShell; Git Bash ships on the runner.
+                shell: bash
         steps:
             - uses: actions/checkout@v5
 
@@ -43,6 +52,7 @@ jobs:
                   scope: '@wadeck-app'
                   cache: npm
 
+            # The launcher tests (src/launcherGo.test.ts) build the Go launcher. Same patch as the publish job.
             - uses: actions/setup-go@v5
               with:
                   go-version: '1.26.8'
@@ -52,6 +62,12 @@ jobs:
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+            # The launcher tests run Go with GOPROXY=off (offline by design): fetch the modules of the SDK launcher once, here.
+            # The Windows job failed with "module lookup disabled by GOPROXY=off" for golang.org/x/sys on a fresh runner.
+            - name: Download Go modules of the launcher
+              run: go mod download
+              working-directory: node_modules/@wadeck-app/singleton-daemon-kit/go-launcher
+
             - name: Typecheck
               run: npm run typecheck
 
@@ -59,8 +75,15 @@ jobs:
               run: npm test
 
     publish:
-        needs: test
+        needs: [build-and-test]
+        # Only main publishes: a pull request, or a dispatch on a branch or a tag, must not.
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
+        # TODO(user): GitHub Packages access for the four new package names (@wadeck-app/machine-cli and its three platform packages)
+        # is unproven for this repo: the first run decides (packaging.md section 5, 9.10).
+        permissions:
+            contents: read
+            packages: write
         env:
             PKG_OUT: ${{ github.workspace }}/dist-packages
         steps:
@@ -76,7 +99,7 @@ jobs:
                   cache: npm
 
             # Patch-pinned: a new Go patch changes every launcher hash, which republishes the three platform packages
-            # (hash-reuse) and moves the exact pin a rollback needs. Bump it on purpose. Same value as ci.yml.
+            # (hash-reuse) and moves the exact pin a rollback needs. Bump it on purpose, together with the matrix job.
             - uses: actions/setup-go@v5
               with:
                   go-version: '1.26.8'
@@ -94,11 +117,11 @@ jobs:
                   breaking-input: ${{ github.event.inputs.breaking || 'false' }}
 
             # The launcher kit's build.sh embeds the Windows PE metadata with goversioninfo; with LAUNCHER_REQUIRE_PE_METADATA=1 a
-            # missing tool fails the build instead of warning. No sibling workflow installs it (none of their workflows mentions it).
-            # TODO(user): pin goversioninfo to a version (@latest can change the exe hash, which republishes the win32 package).
+            # missing tool fails the build instead of warning. No sibling workflow installs it.
+            # Pinned to v1.7.0, the version of the binary on the development machine (go version -m).
             - name: Install goversioninfo
               run: |
-                  go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+                  go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
                   echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
             - name: Build Go launchers
@@ -123,6 +146,17 @@ jobs:
               run: npm run bundle:all
               env:
                   BUNDLE_VERSION: ${{ steps.version.outputs.version }}
+
+            # What gets published must know its version, or the auto-update of the installed CLIs would loop on it.
+            # `machine --version` reads the stamped version only: no config folder, no daemon, no network.
+            - name: Verify the generated bundle prints the stamped version
+              run: |
+                  expected="${{ steps.version.outputs.version }}"
+                  actual="$(node dist/machine.cjs --version)"
+                  if [ "$actual" != "$expected" ]; then
+                    echo "::error::machine.cjs --version printed '$actual', expected '$expected'"
+                    exit 1
+                  fi
 
             # Strict by default: a missing launcher, machine-updater.cjs or app-module/ is an error.
             - name: Generate the packages
@@ -155,10 +189,8 @@ jobs:
 
             # Reads the registry, publishes the three platform packages only when the launcher bytes changed (else checks all three
             # are already published), then pins the exact versions into the wrapper. It does not publish the wrapper.
-            # TODO(user): the script runs a plain `npm publish` for the platform packages: they get the dist-tag latest even when this
-            # run is a breaking-edge build. Decide whether that is acceptable.
             - name: Publish platform packages (hash-reuse) and pin the wrapper
-              run: node packages/machine-cli/ci/scripts/publish-platform-packages.mjs --dir "$PKG_OUT" --build-version "${{ steps.version.outputs.version }}" --publish
+              run: node packages/machine-cli/ci/scripts/publish-platform-packages.mjs --dir "$PKG_OUT" --build-version "${{ steps.version.outputs.version }}" --dist-tag "${{ steps.version.outputs.dist_tag }}" --publish
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

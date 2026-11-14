@@ -134,6 +134,7 @@ Options:
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
+  --version              print the version of this build (stamped in a release bundle) and exit
 
 A reference is a machine name, a local alias, a UUID or a unique UUID prefix of 4+ hex characters.
 Everything after "--" in \`run\` is the command, sent exactly as written.
@@ -144,7 +145,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, follow: false, advertise: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, follow: false, advertise: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -157,6 +158,7 @@ function parse(argv: string[]): Parsed {
     };
     if (a === '--json') out.json = true;
     else if (a === '--help' || a === '-h') out.help = true;
+    else if (a === '--version') out.version = true;
     else if (a === '--replace') out.replace = true;
     else if (a === '--force') out.force = true;
     else if (a === '--resume') out.resume = true;
@@ -199,6 +201,11 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
   if (args.help) {
     io.stdout(HELP);
+    return EXIT.ok;
+  }
+  // Before everything else (no config folder, no daemon, no update notice): CI reads it from the generated bundle.
+  if (args.version) {
+    io.stdout(`${appVersion()}\n`);
     return EXIT.ok;
   }
   const [command, ...rest] = args.positional;

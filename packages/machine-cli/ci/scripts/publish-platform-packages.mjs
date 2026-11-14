@@ -1,5 +1,6 @@
 // Hash-reuse publish of the platform packages, then pin of the wrapper (D29). Run by CI only (needs NODE_AUTH_TOKEN and the registry).
-// Usage: node ci/scripts/publish-platform-packages.mjs --dir <generated dir> --build-version <CalVer> [--publish]
+// Usage: node ci/scripts/publish-platform-packages.mjs --dir <generated dir> --build-version <CalVer> [--dist-tag <tag>] [--publish]
+// --dist-tag (default latest) is the dist_tag of compute-version; it is given to `npm publish --tag` of each platform package.
 // Without --publish: queries the registry and prints the plan; publishes nothing and writes nothing.
 // It does NOT publish the wrapper: run `npm publish` in <dir>/machine-cli-dist after this succeeded.
 import { execFileSync } from 'node:child_process';
@@ -7,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const usage = 'usage: node ci/scripts/publish-platform-packages.mjs --dir <generated dir> --build-version <CalVer> [--publish]';
+const usage = 'usage: node ci/scripts/publish-platform-packages.mjs --dir <generated dir> --build-version <CalVer> [--dist-tag <tag>] [--publish]';
 
 function fail(message) {
   process.stderr.write(`[fail] ${message}\n`);
@@ -16,6 +17,7 @@ function fail(message) {
 
 let dir;
 let buildVersion;
+let distTag = 'latest';
 let publish = false;
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
@@ -26,10 +28,13 @@ for (let i = 0; i < args.length; i++) {
   };
   if (args[i] === '--dir') dir = resolve(value());
   else if (args[i] === '--build-version') buildVersion = value();
+  else if (args[i] === '--dist-tag') distTag = value();
   else if (args[i] === '--publish') publish = true;
   else fail(`unknown argument "${args[i]}". ${usage}`);
 }
 if (dir === undefined || buildVersion === undefined) fail(usage);
+// A dist-tag is a name, not a version or a range (npm refuses a tag that parses as a semver range); no space, no digit-first (a version-like tag is refused by npm).
+if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(distTag)) fail(`--dist-tag "${distTag}" is not a valid npm dist-tag (letters, digits, . _ -; starts with a letter). It is the dist_tag output of compute-version`);
 
 // shell: true because npm is npm.cmd on Windows; every argument is a fixed string or a validated package name / folder.
 const npm = (npmArgs, cwd) => execFileSync('npm', npmArgs, { cwd, encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -50,7 +55,7 @@ const client = {
   },
   publish(folder) {
     try {
-      npm(['publish'], folder);
+      npm(['publish', '--tag', distTag], folder);
     } catch (e) {
       throw new Error(`npm publish in ${folder} failed: ${`${e.stderr ?? ''}`.trim() || e.message}. Check NODE_AUTH_TOKEN (write:packages) and that the version is not already published`);
     }

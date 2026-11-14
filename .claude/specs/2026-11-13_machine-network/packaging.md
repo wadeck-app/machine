@@ -183,6 +183,8 @@ Rules: the daemon's working directory must not be inside `node_modules` (launche
 
 ### 3.8 Workflow (`.github/workflows/publish.yml`)
 
+Implemented (2026-11-14): one workflow `CI / Publish` (push main, pull request, dispatch), jobs `build-and-test` (3 OS, `go mod download`, typecheck, test, 20 min limit) and `publish` (`needs`, main only, `packages: write` for this job only); jobs 2 and 4 below are not built. Differences from the plan: `goversioninfo@v1.7.0` is installed in `publish`; the stamped bundle is checked with `node dist/machine.cjs --version` (new flag: version alone on stdout, exit 0, no config folder, no network); platform packages are published with `--dist-tag <compute-version dist_tag>` (npm refuses a prerelease without `--tag`; the CalVer is one); a pull request run is cancelled by a newer push, a main or dispatch run never.
+
 Jobs, modelled on queue + task + project:
 
 1. `build-and-test`: matrix ubuntu/windows/macos (Windows is the developer platform: queue and orch also run it there), `npm ci`, `npm run typecheck`, `npm test`, Go setup (pinned patch) for the launcher test, `npm run bundle`.
