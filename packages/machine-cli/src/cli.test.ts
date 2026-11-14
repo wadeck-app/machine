@@ -62,7 +62,7 @@ describe('machine init / status', () => {
     await run('init', '--name', 'desktop');
     const r = await run('status');
     expect(r.out).toMatch(/not enrolled/);
-    expect(r.out).toMatch(/machine join/);
+    expect(r.out).toMatch(/machine admin pin/);
   });
 });
 

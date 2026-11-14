@@ -18,6 +18,8 @@ export interface Directory {
   /** The peer that owns this identity key, or undefined for a key that is not registered. */
   lookup(identityPublicKey: string): PeerRecord | undefined;
   machines(): MachineEntry[];
+  /** A peer by UUID, with the identity key its registration pins (what a connection to it must present). */
+  find(uuid: string): (PeerRecord & { identityPublicKey: string }) | undefined;
   /** Why registrations were left out. Shown by `machine status`: a missing peer is never silent. */
   problems: string[];
 }
@@ -88,17 +90,24 @@ export function buildDirectory(entries: PairedRegistration[], ctx: DirectoryCont
   const byKey = new Map<string, Accepted[]>();
   for (const a of current) byKey.set(a.key, [...(byKey.get(a.key) ?? []), a]);
   const trusted = new Map<string, PeerRecord>();
+  const keyOfUuid = new Map<string, string>();
   for (const [key, list] of byKey) {
     if (list.length > 1) {
       problems.push(`${list.map((a) => a.record.name).join(' and ')} present the same identity key: none of them is trusted until the admin fixes the registrations`);
     } else {
       trusted.set(key, (list[0] as Accepted).record);
+      keyOfUuid.set((list[0] as Accepted).record.peerId, key);
     }
   }
 
   return {
     lookup: (key) => trusted.get(key),
     machines: () => [...trusted.values()].map((r) => ({ uuid: r.peerId, name: r.name })),
+    find: (uuid) => {
+      const key = keyOfUuid.get(uuid);
+      const record = key === undefined ? undefined : trusted.get(key);
+      return record && key !== undefined ? { ...record, identityPublicKey: key } : undefined;
+    },
     problems,
   };
 }

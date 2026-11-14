@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { createTestDaemon } from '@wadeck-app/singleton-daemon-kit';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeCommands } from './commands.js';
+import { adminInit } from './admin.js';
 import { initMachine } from './identity.js';
+import { exportMachineInfo, importPeer, registerMachine } from './network.js';
 
 let dataDir: string;
 beforeEach(() => {
@@ -46,7 +48,16 @@ describe('the daemon answers the CLI commands over loopback HTTP', () => {
 describe('alias safety', () => {
   it('refuses an alias equal to the name of ANOTHER machine, which would silently redirect commands', async () => {
     initMachine(dataDir, 'desktop');
-    const commands = makeCommands(dataDir, 'v', [{ uuid: '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345', name: 'laptop' }]);
+    const admin = adminInit(dataDir);
+    const peerDir = mkdtempSync(join(tmpdir(), 'machine-daemon-peer-'));
+    try {
+      initMachine(peerDir, 'laptop');
+      const bundle = await registerMachine(dataDir, exportMachineInfo(peerDir), { now: 1_800_000_000, prompt: async () => admin.passphrase, validForDays: 30 });
+      importPeer(dataDir, bundle, { now: 1_800_000_000 });
+    } finally {
+      rmSync(peerDir, { recursive: true, force: true });
+    }
+    const commands = makeCommands(dataDir, 'v', () => 1_800_000_100);
     const r = commands.aliasSet({ alias: 'laptop', ref: 'desktop' });
     expect(r).toMatchObject({ ok: false, reason: 'conflict' });
     expect((r as { message: string }).message).toMatch(/machine named "laptop".*shadow/);

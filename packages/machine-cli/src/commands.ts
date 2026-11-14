@@ -1,10 +1,11 @@
 import { resolveMachineRef, type MachineEntry, type Resolution } from '@wadeck-app/machine-core';
-import { readMachine, type MachineIdentity } from './identity.js';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
+import { readMachine, type MachineIdentity } from './identity.js';
+import { loadNetwork } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
-// when no daemon is running and the tests need no network.
+// when no daemon is running and the tests need no network. No answer ever carries a secret.
 
 export interface NotInitialized {
   initialized: false;
@@ -18,6 +19,10 @@ export interface StatusAnswer {
   version: string;
   enrolled: boolean;
   peers: number;
+  /** Version of the policy in force on this machine; absent when there is none (everything is refused). */
+  policyVersion?: number;
+  /** What was left out of the network and why (invalid registration, tampered policy, ...). */
+  problems: string[];
   configDir: string;
   note?: string;
 }
@@ -33,12 +38,7 @@ export interface ListAnswer {
 export type ResolveAnswer = (Resolution & { name?: string }) | NotInitialized;
 export type AliasAnswer = { ok: true; alias: string; uuid: string; previous?: string } | Exclude<Resolution, { ok: true }> | { ok: false; reason: 'conflict' | 'missing'; message: string } | NotInitialized;
 
-const NOT_ENROLLED_NOTE = 'not enrolled: no admin key is pinned and no peer is registered yet; run `machine join` (enrollment) to get peers';
-
-/** Peers come from admin-signed registrations; enrollment (WP7) is what creates them. Until then there are none, and we say so. `injected` is for tests. */
-function peersOf(injected: MachineEntry[]): { enrolled: boolean; peers: MachineEntry[] } {
-  return { enrolled: false, peers: injected };
-}
+const NOT_ENROLLED_NOTE = 'not enrolled: no admin key is pinned on this machine; pin the admin key (`machine admin pin <admin.json>`) and import peers (`machine peer import <bundle.json>`)';
 
 function selfOf(configDir: string): MachineIdentity | NotInitialized {
   try {
@@ -59,37 +59,51 @@ function stringField(payload: unknown, field: string): string {
   return value;
 }
 
+const epochSeconds = () => Math.floor(Date.now() / 1000);
+
 /** `version` is read only by `status`: a failure to determine it must not break the other commands. */
-export function makeCommands(configDir: string, version: string | (() => string), testPeers: MachineEntry[] = []) {
-  const everyone = (self: MachineIdentity): MachineEntry[] => [{ uuid: self.uuid, name: self.name }, ...peersOf(testPeers).peers];
+export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds) {
+  const everyone = (self: MachineIdentity): MachineEntry[] => [{ uuid: self.uuid, name: self.name }, ...loadNetwork(configDir, now()).directory.machines()];
   return {
     status(): StatusAnswer | NotInitialized {
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
-      const { enrolled, peers } = peersOf(testPeers);
-      return { initialized: true, uuid: self.uuid, name: self.name, version: typeof version === 'string' ? version : version(), enrolled, peers: peers.length, configDir, ...(enrolled ? {} : { note: NOT_ENROLLED_NOTE }) };
+      const network = loadNetwork(configDir, now());
+      return {
+        initialized: true,
+        uuid: self.uuid,
+        name: self.name,
+        version: typeof version === 'string' ? version : version(),
+        enrolled: network.enrolled,
+        peers: network.directory.machines().length,
+        ...(network.policy ? { policyVersion: network.policy.version } : {}),
+        problems: network.problems,
+        configDir,
+        ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
+      };
     },
 
     list(): ListAnswer | NotInitialized {
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
-      const { enrolled, peers } = peersOf(testPeers);
+      const network = loadNetwork(configDir, now());
       const aliases = readAliases(configDir);
       return {
         initialized: true,
         self: { uuid: self.uuid, name: self.name },
-        peers: peers.map((p) => ({ ...p, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias) })),
-        enrolled,
-        ...(enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
+        peers: network.directory.machines().map((p) => ({ ...p, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias) })),
+        enrolled: network.enrolled,
+        ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };
     },
 
     resolve(payload?: unknown): ResolveAnswer {
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
-      const result = resolveMachineRef(stringField(payload, 'ref'), everyone(self), readAliases(configDir));
+      const machines = everyone(self);
+      const result = resolveMachineRef(stringField(payload, 'ref'), machines, readAliases(configDir));
       if (!result.ok) return result;
-      const machine = everyone(self).find((m) => m.uuid === result.uuid);
+      const machine = machines.find((m) => m.uuid === result.uuid);
       return { ...result, ...(machine ? { name: machine.name } : {}) };
     },
 
@@ -101,10 +115,11 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
       const alias = stringField(payload, 'alias');
+      const machines = everyone(self);
       // The target is resolved WITHOUT aliases: an alias always points to a machine, never to another alias.
-      const target = resolveMachineRef(stringField(payload, 'ref'), everyone(self), {});
+      const target = resolveMachineRef(stringField(payload, 'ref'), machines, {});
       if (!target.ok) return target;
-      const shadowed = everyone(self).find((m) => m.name.toLowerCase() === alias.toLowerCase() && m.uuid !== target.uuid);
+      const shadowed = machines.find((m) => m.name.toLowerCase() === alias.toLowerCase() && m.uuid !== target.uuid);
       if (shadowed) {
         return {
           ok: false,

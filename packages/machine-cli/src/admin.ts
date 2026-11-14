@@ -193,3 +193,25 @@ export async function signPolicyFile(configDir: string, draftFile: string, optio
 export async function unlockAdminKey(configDir: string, prompt: Prompt) {
   return unlock(configDir, readAdminPin(configDir), prompt);
 }
+
+/** Machine side of enrollment: trust the admin PUBLIC key found in a file copied from the admin machine. */
+export function pinAdminKey(configDir: string, file: string): AdminPin {
+  let raw: { v?: unknown; adminPublicKey?: unknown; adminKeyId?: unknown } | null;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8')) as typeof raw;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${file} does not exist`);
+    throw new Error(`${file} is not a valid admin pin file: ${(e as Error).message}`);
+  }
+  if (typeof raw !== 'object' || raw === null || raw.v !== 1 || typeof raw.adminPublicKey !== 'string' || typeof raw.adminKeyId !== 'string' || keyId(raw.adminPublicKey) !== raw.adminKeyId) {
+    throw new Error(`${file} is not a valid admin pin file (it must be the admin.json of the admin machine)`);
+  }
+  if (existsSync(adminPinFile(configDir))) {
+    const current = readAdminPin(configDir);
+    if (current.adminPublicKey === raw.adminPublicKey) return current;
+    throw new Error(`this machine already trusts another admin key (${current.adminKeyId}); pinning ${raw.adminKeyId} would move it to another network. Re-initialize this machine first if that is what you want`);
+  }
+  const pin = { adminPublicKey: raw.adminPublicKey, adminKeyId: raw.adminKeyId };
+  writeFileAtomic(adminPinFile(configDir), `${JSON.stringify({ v: 1, ...pin }, null, 2)}\n`, 0o644);
+  return pin;
+}

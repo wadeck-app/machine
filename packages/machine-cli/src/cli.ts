@@ -1,67 +1,62 @@
-import { existsSync } from 'node:fs';
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
-import { adminInit, signPolicyFile, type Prompt } from './admin.js';
+import { runNetworkCommand } from './cliNetwork.js';
+import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
-import { writeFileAtomic } from './fsutil.js';
 import { initMachine } from './identity.js';
 import { resolveConfigDir } from './paths.js';
-import { promptHidden } from './prompt.js';
 import { appVersion } from './version.js';
 
-export interface CliIo {
-  stdout: (text: string) => void;
-  stderr: (text: string) => void;
-  /** Hidden passphrase prompt; defaults to the terminal. Tests inject one. */
-  prompt?: Prompt;
-}
-
-export const EXIT = { ok: 0, failure: 1, usage: 2, reference: 3 } as const;
+export { EXIT, type CliIo } from './cliTypes.js';
 
 const HELP = `machine - private network between your machines
 
 Usage: machine <command> [options]
 
 Commands:
-  init --name <name>             create this machine's UUID and identity key
-  status                         identity, enrollment state, version
-  list                           this machine and its registered peers
-  resolve <reference>            show which machine a reference means
-  alias list                     local aliases
-  alias set <alias> <reference>  create an alias (--replace to repoint it)
-  alias rm <alias>               remove an alias
-  daemon                         run the daemon in the foreground (started by orch)
-  admin init                     create the admin key on this machine (passphrase shown once)
-  admin sign-policy <draft.json> sign a policy draft after showing it (--out <file>, else stdout)
+  init --name <name>                 create this machine's UUID and identity key
+  status                             identity, enrollment state, policy, what was left out
+  list                               this machine and its registered peers
+  resolve <reference>                show which machine a reference means
+  alias list | set <alias> <ref> | rm <alias>
+  run <machine> --address <host:port> [--shell cmd|ps|bash|sh] -- <command...>
+                                     run one allowed command on a peer
+  daemon [--peer-port <n>] [--peer-host <host>]
+                                     run the daemon in the foreground (started by orch)
+
+Administration (manual enrollment, until the relay does it):
+  admin init                         create the admin key on this machine (passphrase shown once)
+  admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout)
+  admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]
+                                     sign a machine's registration; the bundle holds a secret
+  admin pin <admin.json>             trust the admin key of another machine
+  peer info [--out <file>]           this machine's public identity, to give to the admin
+  peer import <bundle.json>          trust a peer from an admin-signed bundle
+  policy install <signed.json>       install a policy signed by the admin for this machine
 
 Options:
   --json                 machine-readable output
-  --out <file>           write the signed document to a file (--force to overwrite)
+  --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
 
 A reference is a machine name, a local alias, a UUID or a unique UUID prefix of 4+ hex characters.
+Everything after "--" in \`run\` is the command, sent exactly as written.
 
-Exit codes: 0 ok, 1 failure, 2 usage error, 3 unknown or ambiguous machine reference
+Exit codes: 0 ok, 1 failure, 2 usage error, 3 unknown or ambiguous machine reference.
+\`run\` returns the exit code of the remote command; its own failures (refused by the peer, unknown machine,
+no connection) are 255 with the reason on stderr.
 `;
 
-interface Parsed {
-  positional: string[];
-  json: boolean;
-  help: boolean;
-  replace: boolean;
-  force: boolean;
-  name?: string;
-  out?: string;
-  configDir?: string;
-}
-
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], json: false, help: false, replace: false, force: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i] as string;
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false };
+  const split = argv.indexOf('--');
+  const own = split === -1 ? argv : argv.slice(0, split);
+  if (split !== -1) out.passthrough = argv.slice(split + 1);
+  for (let i = 0; i < own.length; i++) {
+    const a = own[i] as string;
     const valueOf = (flag: string): string => {
-      const v = argv[++i];
+      const v = own[++i];
       if (v === undefined || v.startsWith('--')) throw new UsageError(`${flag} needs a value`);
       return v;
     };
@@ -71,17 +66,20 @@ function parse(argv: string[]): Parsed {
     else if (a === '--force') out.force = true;
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
+    else if (a === '--address') out.address = valueOf('--address');
+    else if (a === '--shell') out.shell = valueOf('--shell');
+    else if (a === '--days') out.days = valueOf('--days');
+    else if (a === '--secret-from') out.secretFrom = valueOf('--secret-from');
+    else if (a === '--peer-port') out.peerPort = valueOf('--peer-port');
+    else if (a === '--peer-host') out.peerHost = valueOf('--peer-host');
+    else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
       throw new UsageError('a passphrase is never accepted as an argument (it would stay in your shell history and in the process list): it is typed at the prompt');
-    }
-    else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
-    else if (a.startsWith('--')) throw new UsageError(`unknown option "${a}": see \`machine --help\``);
+    } else if (a.startsWith('--')) throw new UsageError(`unknown option "${a}": see \`machine --help\``);
     else out.positional.push(a);
   }
   return out;
 }
-
-class UsageError extends Error {}
 
 export async function runCli(argv: string[], io: CliIo, env: Record<string, string | undefined> = process.env): Promise<number> {
   let args: Parsed;
@@ -97,9 +95,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
   const [command, ...rest] = args.positional;
   if (command === undefined) {
-    io.stderr(`[fail] no command given
-
-${HELP}`);
+    io.stderr(`[fail] no command given\n\n${HELP}`);
     return EXIT.usage;
   }
 
@@ -115,60 +111,42 @@ ${HELP}`);
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
   }
+  if (args.passthrough.length > 0 && command !== 'run') {
+    return fail(`"--" is only used by \`machine run\` (it introduces the command to run on the peer)`, EXIT.usage);
+  }
 
   try {
     const configDir = resolveConfigDir(args.configDir, env);
+    const ctx: CommandContext = { args, rest, io, configDir, env, fail, emit };
 
     if (command === 'init') {
       if (args.name === undefined) return fail('init needs --name <name>, for example `machine init --name desktop`', EXIT.usage);
       const m = initMachine(configDir, args.name);
-      emit({ uuid: m.uuid, name: m.name }, `[ok] initialized "${m.name}"\nuuid: ${m.uuid}\nnext: enroll this machine (\`machine join\`) to reach your other machines\n`);
+      emit({ uuid: m.uuid, name: m.name }, `[ok] initialized "${m.name}"\nuuid: ${m.uuid}\nnext: \`machine admin init\` on the admin machine, or \`machine peer info\` to give to the admin\n`);
       return EXIT.ok;
     }
 
     if (command === 'daemon') {
-      const daemon = await startMachineDaemon(configDir, { version: appVersion() });
-      io.stdout(`[ok] machine daemon listening on 127.0.0.1:${daemon.port} (config ${configDir})\n`);
+      const number = (value: string | undefined, flag: string): number | undefined => {
+        if (value === undefined) return undefined;
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 0 || n > 65535) throw new UsageError(`${flag} must be a port number (0 to 65535), got "${value}"`);
+        return n;
+      };
+      const peerPort = number(args.peerPort, '--peer-port');
+      const daemon = await startMachineDaemon(configDir, {
+        version: appVersion(),
+        ...(peerPort !== undefined ? { peerPort } : {}),
+        ...(args.peerHost ? { peerHost: args.peerHost } : {}),
+        log: (line) => io.stderr(`[machine] ${line}\n`),
+      });
+      io.stdout(`[ok] machine daemon: local API 127.0.0.1:${daemon.port}, peers on port ${daemon.peerPort} (config ${configDir})\n`);
       await daemon.stopped;
       return EXIT.ok;
     }
 
-    if (command === 'admin') {
-      const [sub, draft] = rest;
-      for (const name of ['MACHINE_PASSPHRASE', 'MACHINE_ADMIN_PASSPHRASE']) {
-        if (env[name] !== undefined) {
-          io.stderr(`[warn] ${name} is set but ignored: passphrases are only read from the terminal prompt, never from the environment. Unset it\n`);
-        }
-      }
-      if (sub === 'init') {
-        if (draft !== undefined) return fail(`unexpected argument "${draft}" for \`machine admin init\``, EXIT.usage);
-        const r = adminInit(configDir);
-        // The passphrase goes to the terminal channel only: stdout may be redirected or captured in a log.
-        io.stderr(`Admin passphrase (shown only once, write it down now; it cannot be recovered):\n  ${r.passphrase}\n`);
-        emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\n`);
-        return EXIT.ok;
-      }
-      if (sub === 'sign-policy') {
-        if (draft === undefined || rest.length > 2) return fail('usage: machine admin sign-policy <draft.json> [--out <file>]', EXIT.usage);
-        // Fail before the passphrase is typed, not after the key was unlocked.
-        if (args.out && existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
-        const prompt = io.prompt ?? promptHidden;
-        const { signed } = await signPolicyFile(configDir, draft, {
-          now: Math.floor(Date.now() / 1000),
-          prompt,
-          onSummary: (summary) => io.stderr(`${summary}\nSigning this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.\n`),
-        });
-        const text = `${JSON.stringify(signed, null, 2)}\n`;
-        if (args.out) {
-          writeFileAtomic(args.out, text, 0o644);
-          io.stderr(`[ok] signed policy written to ${args.out}\n`);
-        } else {
-          io.stdout(text);
-        }
-        return EXIT.ok;
-      }
-      return fail('usage: machine admin init | sign-policy <draft.json>', EXIT.usage);
-    }
+    const handled = await runNetworkCommand(command, ctx);
+    if (handled !== undefined) return handled;
 
     // Everything else goes through the daemon when it runs and through the same code in-process when it does not.
     const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
@@ -178,7 +156,14 @@ ${HELP}`);
       case 'status': {
         const r = (await client.send('status')) as StatusAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
-        emit(r, `${r.name} (${r.uuid})\nversion: ${r.version}\nconfig: ${r.configDir}\n${r.enrolled ? `enrolled, ${r.peers} peer(s)` : (r.note ?? 'not enrolled')}\n`);
+        const lines = [
+          `${r.name} (${r.uuid})`,
+          `version: ${r.version}`,
+          `config: ${r.configDir}`,
+          r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
+          ...r.problems.map((p) => `[warn] ${p}`),
+        ];
+        emit(r, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {
@@ -228,6 +213,6 @@ ${HELP}`);
         return fail(`unknown command "${command}": see \`machine --help\``, EXIT.usage);
     }
   } catch (e) {
-    return fail((e as Error).message);
+    return fail((e as Error).message, e instanceof UsageError ? EXIT.usage : EXIT.failure);
   }
 }
