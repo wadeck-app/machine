@@ -84,6 +84,24 @@ describe.runIf(onWindows)('real PowerShell', () => {
     expect((await runCommand({ shell: 'ps', command: 'exit 7', ...quick })).exitCode).toBe(7);
   });
 
+  it('documents that a failing native command gives 1, not its own exit code, unless the string calls exit', async () => {
+    // PowerShell -Command semantics: 0 when the last command succeeded, 1 when it failed. The approved string is never
+    // wrapped by us (T-15), so a policy entry that needs the native code must say so: `cmd /c exit 5; exit $LASTEXITCODE`.
+    expect((await runCommand({ shell: 'ps', command: 'cmd /c exit 5', ...quick })).exitCode).toBe(1);
+    expect((await runCommand({ shell: 'ps', command: 'cmd /c exit 5; exit $LASTEXITCODE', ...quick })).exitCode).toBe(5);
+  });
+
+  it('does not report valid UTF-8 as non-UTF-8 when the output cap cuts a character in two', async () => {
+    const r = await runCommand({
+      shell: 'ps',
+      command: '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.Write(([string][char]0xE9) * 10)',
+      timeoutMs: 30_000,
+      maxOutputBytes: 5,
+    });
+    expect(r.truncated).toBe(true);
+    expect(r.outputNotUtf8).toBe(false);
+  });
+
   it('does not pass secrets of the daemon environment to the command', async () => {
     process.env.MACHINE_TEST_SECRET = 'leaked-value';
     try {

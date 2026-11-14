@@ -24,6 +24,10 @@ describe('launchSpec on Windows', () => {
     expect(() => launchSpec(shell, 'ls', 'win32', WIN_ENV)).toThrow(/not supported on Windows/);
   });
 
+  it('finds SystemRoot whatever its case, as Windows does', () => {
+    expect(launchSpec('cmd', 'dir', 'win32', { SYSTEMROOT: 'C:\\Windows' }).file).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+
   it('names the missing variable when SystemRoot is unknown', () => {
     expect(() => launchSpec('cmd', 'dir', 'win32', {})).toThrow(/SystemRoot/);
   });

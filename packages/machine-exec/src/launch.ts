@@ -9,6 +9,16 @@ export interface LaunchSpec {
 
 export type Platform = NodeJS.Platform;
 
+function powershellArgs(command: string): string[] {
+  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')];
+}
+
+/** Windows environment names are case-insensitive, a copied plain object is not: look the name up the Windows way. */
+export function windowsSystemRoot(env: Record<string, string | undefined>): string | undefined {
+  const name = Object.keys(env).find((k) => k.toUpperCase() === 'SYSTEMROOT');
+  return name === undefined ? undefined : env[name];
+}
+
 /**
  * How to start one approved command (T-15): the shell is named, the approved string travels as ONE argument and is
  * never normalized, escaped or re-quoted by us. cmd uses `/s` so that exactly our outer quotes are stripped; PowerShell
@@ -23,21 +33,18 @@ export function launchSpec(shell: Shell, command: string, platform: Platform, en
     if (shell === 'bash' || shell === 'sh') {
       throw new Error(`shell "${shell}" is not supported on Windows (bash.exe may be WSL, a different machine state): use "cmd" or "ps" in the policy entry`);
     }
-    const root = env.SystemRoot;
+    const root = windowsSystemRoot(env);
     if (!root) throw new Error('SystemRoot is not set in the daemon environment: cannot locate the Windows shells; start the daemon from a normal Windows session');
     if (shell === 'cmd') {
       return { file: `${root}\\System32\\cmd.exe`, args: ['/d', '/s', '/c', `"${command}"`], windowsVerbatimArguments: true };
     }
-    return {
-      file: `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')],
-      windowsVerbatimArguments: false,
-    };
+    return { file: `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, args: powershellArgs(command), windowsVerbatimArguments: false };
   }
 
   if (shell === 'cmd') throw new Error('shell "cmd" only exists on Windows: use "sh", "bash" or "ps" in the policy entry for this machine');
   if (shell === 'ps') {
-    return { file: 'pwsh', args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], windowsVerbatimArguments: false };
+    // Resolved through the daemon's PATH (no fixed install location for PowerShell 7 on Unix).
+    return { file: 'pwsh', args: powershellArgs(command), windowsVerbatimArguments: false };
   }
   if (shell === 'bash') return { file: '/bin/bash', args: ['--noprofile', '--norc', '-c', command], windowsVerbatimArguments: false };
   return { file: '/bin/sh', args: ['-c', command], windowsVerbatimArguments: false };

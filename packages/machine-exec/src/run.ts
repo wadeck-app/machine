@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import type { Shell } from '@wadeck-app/machine-core';
-import { launchSpec, scrubEnv } from './launch.js';
+import { launchSpec, scrubEnv, windowsSystemRoot } from './launch.js';
 
 export interface RunOptions {
   shell: Shell;
@@ -26,10 +26,11 @@ export interface RunResult {
   durationMs: number;
 }
 
-function decode(chunks: Buffer[]): { text: string; lossy: boolean } {
+function decode(chunks: Buffer[], cut: boolean): { text: string; lossy: boolean } {
   const bytes = Buffer.concat(chunks);
   try {
-    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), lossy: false };
+    // `stream` tolerates an incomplete character at the end: our own cap may have cut it, which is not an encoding problem.
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: cut }), lossy: false };
   } catch {
     return { text: bytes.toString('utf8'), lossy: true };
   }
@@ -37,7 +38,7 @@ function decode(chunks: Buffer[]): { text: string; lossy: boolean } {
 
 function killTree(pid: number, env: Record<string, string | undefined>, fallback: () => void): void {
   if (process.platform === 'win32') {
-    const root = env.SystemRoot;
+    const root = windowsSystemRoot(env);
     if (!root) return fallback();
     // /T ends the whole tree: a timed-out `cmd` must not leave its children (ping, for loops) running.
     spawn(`${root}\\System32\\taskkill.exe`, ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true }).on('error', fallback);
@@ -74,8 +75,13 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     let errBytes = 0;
     let timedOut = false;
     let truncated = false;
+    let killed = false;
     const stop = () => {
-      if (child.pid !== undefined) killTree(child.pid, sourceEnv, () => child.kill('SIGKILL'));
+      // A shell that already exited must not be killed: its PID may belong to someone else by now.
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return false;
+      killed = true;
+      killTree(child.pid, sourceEnv, () => child.kill('SIGKILL'));
+      return true;
     };
     const keep = (chunk: Buffer, store: Buffer[], used: number): number => {
       const room = options.maxOutputBytes - used;
@@ -93,9 +99,16 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     child.stdout.on('data', (c: Buffer) => (outBytes = keep(c, out, outBytes)));
     child.stderr.on('data', (c: Buffer) => (errBytes = keep(c, err, errBytes)));
     const timer = setTimeout(() => {
-      timedOut = true;
-      stop();
+      if (stop()) timedOut = true;
     }, options.timeoutMs);
+    // A broken pipe must become a rejected run, never an uncaught exception in the daemon.
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.on('error', (e) => {
+        clearTimeout(timer);
+        stop();
+        reject(new Error(`cannot read the output of "${options.shell}": ${e.message}`));
+      });
+    }
     child.on('error', (e: NodeJS.ErrnoException) => {
       clearTimeout(timer);
       const hint = e.code === 'ENOENT' ? `: "${spec.file}" is not installed or not on PATH on this machine; install it or remove the policy entries that use shell "${options.shell}"` : '';
@@ -103,10 +116,10 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      const o = decode(out);
-      const e = decode(err);
+      const o = decode(out, truncated);
+      const e = decode(err, truncated);
       resolve({
-        exitCode: timedOut || truncated ? null : code,
+        exitCode: killed ? null : code,
         stdout: o.text,
         stderr: e.text,
         timedOut,
