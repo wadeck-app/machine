@@ -66,6 +66,57 @@ describe('the bundle script', () => {
     expect(e.stderr).toMatch(/BUNDLE_VERSION is set but empty/);
   });
 
+  // The updater bundle (WP9.5): machine-updater.cjs next to machine.cjs, spawned by `cli update` and by the daemon.
+  describe('the updater bundle', () => {
+    const updater = () => join(root, 'out', 'machine-updater.cjs');
+    const UPDATER_CAP_BYTES = 500 * 1024;
+
+    it('is written next to the bundle and is announced by the script', () => {
+      expect(existsSync(updater())).toBe(true);
+      expect(output).toContain(updater());
+    });
+
+    it('stays under 500 KB', () => {
+      expect(statSync(updater()).size).toBeLessThan(UPDATER_CAP_BYTES);
+    });
+
+    it('imports nothing of the runtime: it runs from the install it is about to replace', () => {
+      const text = readFileSync(updater(), 'utf8');
+      // Identifiers and package names that only the daemon and the CLI bring in.
+      for (const marker of ['startMachineDaemon', 'makeCommands', 'machine-transport', 'machine-core', 'machine-exec', 'singleton-daemon-kit']) {
+        expect(text, marker).not.toContain(marker);
+      }
+      // A bundle is self-contained: no require of a file next to it.
+      expect(text).not.toMatch(/require\(["']\.\.?\//);
+    });
+
+    it('has the version inlined', () => {
+      expect(readFileSync(updater(), 'utf8')).toContain(JSON.stringify(packageJson.version));
+    });
+
+    it('BUNDLE_VERSION wins for the updater too', async () => {
+      const out = join(root, 'ci2', 'machine.cjs');
+      const calver = '2026.11.14-593-abcdef12';
+      await run(process.execPath, [script, '--out', out], { windowsHide: true, timeout: 60_000, env: { ...process.env, BUNDLE_VERSION: calver } });
+      expect(readFileSync(join(root, 'ci2', 'machine-updater.cjs'), 'utf8')).toContain(JSON.stringify(calver));
+    });
+
+    // Both refusals happen before any npm call, so this runs the real bundle with no risk for the install.
+    it('a development build refuses: exit 0 in the background (the reason goes to the log), exit 1 when forced', async () => {
+      const cfg = join(root, 'cfg-updater');
+      const base: NodeJS.ProcessEnv = { ...process.env, MACHINE_CONFIG_DIR: cfg };
+      delete base.UPDATER_FORCE;
+      const quiet = await run(process.execPath, [updater()], { windowsHide: true, timeout: 60_000, env: base });
+      expect(quiet.stderr).toBe('');
+      // MACHINE_CONFIG_DIR decides where the updater logs (the daemon hands its --config-dir over this way).
+      expect(readFileSync(join(cfg, 'logs', `${new Date().toISOString().slice(0, 10)}.ndjson`), 'utf8')).toMatch(/dev build/);
+      const forced = (await run(process.execPath, [updater()], { windowsHide: true, timeout: 60_000, env: { ...base, UPDATER_FORCE: '1' } }).catch((x: unknown) => x)) as { code?: number; stderr?: string };
+      expect(forced.code).toBe(1);
+      expect(forced.stderr).toMatch(/\[fail\].*dev build.*machine cli update/);
+    });
+
+  });
+
   it('runs --help', async () => {
     const r = await machine('--help');
     expect(r.stdout).toContain('startup enable | disable | status');

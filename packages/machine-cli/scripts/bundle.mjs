@@ -40,9 +40,16 @@ try {
   fail(`cannot load src/bundle.ts (${e.message}): this script needs Node 22.18 or newer, which runs TypeScript files directly (running ${process.version})`);
 }
 
+// The updater bundle must stay small: it is spawned by the daemon every 30 minutes and runs from the install it replaces.
+const UPDATER_CAP_BYTES = 500 * 1024;
+
+let updater;
 try {
-  await bundleMachine({ outfile, version });
+  ({ updater } = await bundleMachine({ outfile, version }));
 } catch (e) {
   fail(`the bundle failed: ${e.message}`);
 }
+const updaterSize = statSync(updater).size;
+if (updaterSize > UPDATER_CAP_BYTES) fail(`${updater} is ${updaterSize} bytes, over the ${UPDATER_CAP_BYTES} bytes cap: something of the runtime was bundled into the updater (it must import only shared-updater and small helpers)`);
 process.stdout.write(`[ok] ${outfile} (${statSync(outfile).size} bytes, version ${version})\n`);
+process.stdout.write(`[ok] ${updater} (${updaterSize} bytes, version ${version})\n`);

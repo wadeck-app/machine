@@ -109,3 +109,55 @@ describe('the daemon port file (what orch reads to know the daemon is alive)', (
     await expect(startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'v' })).rejects.toThrow(/daemon\.port\.json/);
   });
 });
+
+describe('startMachineDaemon app-core registration', () => {
+  it('registers the module once the daemon is up, with its own config dir and version, and never blocks the start', async () => {
+    initMachine(dir, 'desktop');
+    const calls: Array<{ machineConfigDir?: string | undefined; moduleStamp?: string | undefined }> = [];
+    const daemon = await startMachineDaemon(dir, {
+      port: 0,
+      version: '2026.11.14-001-abcdef12',
+      register: async (o) => {
+        // The port file means everything is up: registration comes after it.
+        expect(existsSync(join(dir, 'daemon.port.json'))).toBe(true);
+        calls.push({ machineConfigDir: o.machineConfigDir, moduleStamp: o.moduleStamp });
+      },
+    });
+    try {
+      expect(calls).toEqual([{ machineConfigDir: dir, moduleStamp: '2026.11.14-001-abcdef12' }]);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('a registration that throws is a log line, the daemon stays up', async () => {
+    initMachine(dir, 'desktop');
+    const lines: string[] = [];
+    const daemon = await startMachineDaemon(dir, {
+      port: 0,
+      version: 'x',
+      log: (l) => lines.push(l),
+      register: async () => {
+        throw new Error('app-core exploded');
+      },
+    });
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      expect(lines.join('\n')).toMatch(/app-core exploded/);
+      expect(existsSync(join(dir, 'daemon.port.json'))).toBe(true);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('a development build does not register and says so in the log', async () => {
+    initMachine(dir, 'desktop');
+    const lines: string[] = [];
+    const daemon = await startMachineDaemon(dir, { port: 0, version: '0.1.0', log: (l) => lines.push(l) });
+    try {
+      expect(lines.join('\n')).toMatch(/app-core registration skipped: 0\.1\.0 is a development build/);
+    } finally {
+      await daemon.stop();
+    }
+  });
+});

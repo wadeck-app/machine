@@ -2,6 +2,7 @@ import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { parseAdvertise } from './addressDiscovery.js';
 import { addRelayView, relayLines } from './listPresence.js';
 import { runNetworkCommand } from './cliNetwork.js';
+import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { runStartupCommand } from './cliStartup.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
@@ -69,6 +70,19 @@ Commands:
   join --resume [--timeout <seconds>] [--yes-final-code <code>]
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
+  cli version                        installed version and the latest published one
+  cli update                         install the latest published version now (even with autoUpdate: false in
+                                     config.yml), then refresh the startup job and restart the daemon when it runs
+                                     under it; a remote command still running is cut. A development build refuses.
+                                     The daemon also checks at start and every 30 minutes (autoUpdate: false in
+                                     <config dir>/config.yml turns that off)
+  cli rollback                       reinstall the version that preceded the last update, then refresh and restart as update
+  cli self-check [--quiet]           check the install (release version, Node >= 22, platform package pinned by this
+                                     package, writable config dir and launcher folder); run by the updater before it
+                                     accepts an update. Exit 1 when a check fails
+  cli logs [--follow | -f]           the updater and daemon log of today (<config dir>/logs)
+  cli post-update                    run by the updater after an update: refresh the startup job when it exists and restart
+                                     the daemon when it runs an older version (run it yourself when the updater says so)
 
 Administration (enrollment through the relay, or by files):
   admin login [<code>] [--relay <url>] [--force]
@@ -130,7 +144,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, advertise: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, follow: false, advertise: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -149,6 +163,8 @@ function parse(argv: string[]): Parsed {
     else if (a === '--no-wait') out.noWait = true;
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
+    else if (a === '--quiet') out.quiet = true;
+    else if (a === '--follow' || a === '-f') out.follow = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
@@ -208,6 +224,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
 
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
+  if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
+  if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
   if (args.autoStartup && command !== 'join') return fail('--auto-startup only applies to `machine join` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
 
   if (args.promptTimeout !== undefined) {
@@ -223,6 +241,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   try {
     const configDir = resolveConfigDir(args.configDir, env);
     const ctx: CommandContext = { args, rest, io, configDir, env, fail, emit };
+
+    // The result of a background update, once, on stderr. Not for `daemon` (it reads the state for its update-loop guard) nor `cli` (the updater and post-update).
+    if (command !== 'daemon' && command !== 'cli') printUpdateNotice(configDir, io.stderr);
 
     if (command === 'init') {
       if (args.name === undefined) return fail('init needs --name <name>, for example `machine init --name desktop`', EXIT.usage);
@@ -261,6 +282,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     }
 
     if (command === 'startup') return await runStartupCommand(ctx);
+    if (command === 'cli') return await runCliMeta(ctx);
 
     const handled = await runNetworkCommand(command, ctx);
     if (handled !== undefined) return handled;

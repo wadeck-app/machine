@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --bail=1",
-    "bundle": "node scripts/bundle.mjs"
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:app-module": "node scripts/copyAppModule.mjs --out ../../dist"
   },
   "dependencies": {
     "@wadeck-app/app-core-sdk": "latest",

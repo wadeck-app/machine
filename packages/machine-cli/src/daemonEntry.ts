@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createDaemon, type DaemonHandle } from '@wadeck-app/singleton-daemon-kit';
 import { adminPinFile } from './admin.js';
 import { resolveAdvertised, type AdvertiseSpec, type InterfaceProvider } from './addressDiscovery.js';
@@ -13,6 +13,10 @@ import { startPeerListener, type ServicedPeerListener } from './peerService.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 import { removeDaemonPortFile, writeDaemonPortFile } from './daemonPortFile.js';
+import { startUpdates, type DaemonUpdates } from './daemonUpdates.js';
+import { registerOnStart, type RegisterOnStartOptions } from './appCoreRegistration.js';
+import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
+import { fileURLToPath } from 'node:url';
 import { FileAuditLog, FileUsageStore } from './stores.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
@@ -41,6 +45,10 @@ export interface DaemonStart {
   interfaces?: InterfaceProvider;
   /** Tests only: the timer and the client of the inbox loop, which runs only when this machine joined a relay (relay.json). */
   inbox?: { timer?: InboxTimer; client?: RelayClient; heartbeatMs?: number };
+  /** Tests only: the update manager, the bundle path and the periodic timer of the update check. */
+  updates?: DaemonUpdates;
+  /** Tests only: replaces the registration of the module with app-core (the default one writes into the real app-core folder). */
+  register?: (options: RegisterOnStartOptions) => Promise<void>;
 }
 
 export interface RunningDaemon {
@@ -72,12 +80,14 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
 
   let listener: ServicedPeerListener | undefined;
   let inbox: InboxLoop | undefined;
+  let updateCheck: { stop: () => void } | undefined;
   let markStopped: () => void = () => undefined;
   const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
   const stopped = new Promise<void>((resolve) => (markStopped = resolve));
   const handle: DaemonHandle = await createDaemon({
     hooks: {
       onShutdown: () => {
+        updateCheck?.stop();
         inbox?.stop();
         listener?.close();
         removeDaemonPortFile(configDir, process.pid);
@@ -135,6 +145,20 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     );
     // Last step: the file means "everything is up". A failure here stops the daemon (below) instead of leaving it half alive.
     writeDaemonPortFile(configDir, { pid: process.pid, port: handle.port, peerPort: listener.port });
+    // Updates: the state a previous updater left, the loop guard, a check now and every 30 minutes. A problem there is a log line, never a stop.
+    updateCheck = startUpdates(configDir, options.version, options.updates, log);
+    // The admin page module is offered to app-core after the daemon is up. Never awaited, never a stop: a failure is a log line.
+    // A development build does not register (it would stage a repo build into the real app-core): it says so instead of staying silent.
+    if (options.register !== undefined || isReleaseVersion(options.version)) {
+      void (options.register ?? registerOnStart)({
+        packageRoot: dirname(fileURLToPath(import.meta.url)),
+        machineConfigDir: configDir,
+        moduleStamp: options.version,
+        log,
+      }).catch((e: unknown) => log(`app-core registration failed: ${(e as Error).message}`));
+    } else {
+      log(`app-core registration skipped: ${options.version} is a development build, not an installed release`);
+    }
     // A machine that joined a relay sends its heartbeat and reads the documents of the admin; one that did not, never calls any relay.
     // A corrupt relay.json stops the start here, like every other corrupt file.
     const relayConfig = readRelayConfig(configDir);

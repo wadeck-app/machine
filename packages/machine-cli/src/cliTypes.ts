@@ -1,5 +1,6 @@
 import type { Prompt } from './admin.js';
 import type { PromptTimer } from './prompt.js';
+import type { CliMetaDeps } from './cliMeta.js';
 import type { StartupContext } from './startup.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
@@ -24,6 +25,8 @@ export interface CliIo {
   promptTimer?: PromptTimer;
   /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
   startup?: Partial<StartupContext>;
+  /** Tests only: the updater process, npm, orch and the daemon behind `machine cli` (no command line option exists for it). */
+  cliMeta?: Partial<CliMetaDeps>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
   allowLoopbackPeers?: boolean;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
@@ -62,6 +65,10 @@ export interface Parsed {
   noWait: boolean;
   reject: boolean;
   autoStartup: boolean;
+  /** `machine cli self-check --quiet`. */
+  quiet: boolean;
+  /** `machine cli logs --follow` (-f). */
+  follow: boolean;
   timeout?: string;
   promptTimeout?: string;
   policy?: string;
