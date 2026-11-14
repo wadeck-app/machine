@@ -244,8 +244,11 @@ describe('machine admin approve: deciding', () => {
     expect(typed).toBe(1);
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain('laptop');
-    expect(asked[0]).toContain(readMachine(cand).uuid);
-    // The code was shown BEFORE the question, recomputed here.
+    // A plain confirmation on name, hostname and address: no code to compare before signing (decision 50).
+    expect(asked[0]).toContain('127.0.0.1');
+    expect(asked[0]).toContain('hostname');
+    expect(asked[0]).not.toMatch(/code/i);
+    // The code is shown as information, recomputed here.
     expect(approved.out).toContain(candidateCode);
     expect(decisions()).toHaveLength(1);
     expect(decisions()[0]?.authorization).toBe(`Bearer ${relay.adminToken}`);
@@ -258,6 +261,9 @@ describe('machine admin approve: deciding', () => {
     const random = (relay.candidacies.get(id) as unknown as { random: string }).random;
     const expectedFinal = finalCode(readMachine(cand).identity.publicKey, admin.adminPublicKey, random);
     expect(approved.out.split('\n')).toContain(`  ${expectedFinal}`);
+    expect(approved.out).toContain('On the new machine, the code must read exactly this. If it differs, run: machine admin revoke laptop');
+    // The final code comes after the decision, in the output.
+    expect(approved.out.indexOf(expectedFinal)).toBeGreaterThan(approved.out.indexOf('approved for'));
 
     // The candidate side, the existing code: it shows the same final code, pins, imports the admin machine as a peer.
     const candidateAsked: string[] = [];
@@ -280,12 +286,11 @@ describe('machine admin approve: deciding', () => {
     expect(relay.pendingIds()).toEqual([id]);
   });
 
-  it('no terminal: fails with the fix (the comparison is by eye, no flag skips it), nothing sent', async () => {
+  it("no terminal: fails with the fix (a person must confirm, no flag skips it), nothing sent", async () => {
     const r = await approve([id], { ask: noTty, prompt: forbidden('the passphrase') });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/no terminal/);
-    expect(r.err).toMatch(/by eye/);
-    expect(r.err).toContain(candidateCode);
+    expect(r.err).toMatch(/needs a person at a terminal/);
     expect(decisions()).toHaveLength(0);
     // No option exists to skip the comparison.
     expect((await cli(adminDir, ['admin', 'approve', id, '--yes', '--relay', relay.url])).code).toBe(2);
@@ -430,5 +435,86 @@ describe('the stored admin token', () => {
     await login();
     const raw = JSON.parse(readFileSync(relayAdminFile(adminDir), 'utf8')) as Record<string, string>;
     expect(Object.keys(raw).sort()).toEqual(['claimedAt', 'label', 'relayUrl', 'token']);
+  });
+});
+
+describe('machine admin revoke', () => {
+  const revoke = (args: string[], io: { ask?: (l: string) => Promise<string>; prompt?: () => Promise<string> } = {}) =>
+    cli(adminDir, ['admin', 'revoke', ...args], io.prompt ?? (async () => admin.passphrase), { ask: io.ask ?? yes });
+  const trusted = () => loadNetwork(adminDir, Math.floor(Date.now() / 1000)).directory.machines().map((m) => m.name);
+
+  // The admin approved "laptop": it is now a peer of the admin machine.
+  beforeEach(async () => {
+    await login();
+    const { id } = await candidatePosts();
+    const r = await approve([id]);
+    expect(r.code, r.err).toBe(0);
+    expect(trusted()).toEqual(['laptop']);
+  });
+
+  it('end to end: shows what is revoked, asks, signs, installs; the machine leaves the directory and `run` refuses it; the limit is stated', async () => {
+    const asked: string[] = [];
+    let typed = 0;
+    const r = await revoke(['laptop'], { ask: async (l) => (asked.push(l), 'y'), prompt: async () => (typed++, admin.passphrase) });
+    expect(r.code, r.err).toBe(0);
+    expect(typed).toBe(1);
+    expect(asked).toHaveLength(1);
+    expect(r.out).toContain(readMachine(cand).uuid);
+    expect(r.out).toMatch(/serial\s+\d+/);
+    expect(r.out).toMatch(/KNOWN LIMIT.*THIS machine only/);
+    expect(trusted()).toEqual([]);
+    const run = await cli(adminDir, ['run', 'laptop', '--address', '127.0.0.1:1', '--', 'echo']);
+    expect(run.code).toBe(255);
+    expect(run.err).toMatch(/laptop/);
+    noToken(r.out, r.err);
+  });
+
+  it('a unique uuid prefix works as a reference', async () => {
+    const r = await revoke([readMachine(cand).uuid.slice(0, 8)]);
+    expect(r.code, r.err).toBe(0);
+    expect(trusted()).toEqual([]);
+  });
+
+  it('an unknown reference: exit 3, nothing asked, nothing signed', async () => {
+    const r = await revoke(['ghost'], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(3);
+    expect(r.err).toMatch(/unknown machine "ghost"/);
+    expect(trusted()).toEqual(['laptop']);
+  });
+
+  it('a wrong passphrase: nothing installed', async () => {
+    const r = await revoke(['laptop'], { prompt: async () => 'not the right passphrase at all' });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/passphrase|decrypt/i);
+    expect(trusted()).toEqual(['laptop']);
+  });
+
+  it('no terminal: fails with the fix, no passphrase asked, nothing installed', async () => {
+    const r = await revoke(['laptop'], { ask: noTty, prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/no terminal/);
+    expect(trusted()).toEqual(['laptop']);
+  });
+
+  it('an answer other than y: nothing signed', async () => {
+    const r = await revoke(['laptop'], { ask: no, prompt: forbidden('the passphrase') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not revoked/);
+    expect(trusted()).toEqual(['laptop']);
+  });
+
+  it('usage: no reference, --days (a revocation does not expire), no admin key', async () => {
+    expect((await revoke([])).code).toBe(2);
+    const days = await revoke(['laptop', '--days', '5']);
+    expect(days.code).toBe(2);
+    expect(days.err).toMatch(/does not expire/);
+    const noKey = await cli(cand, ['admin', 'revoke', 'desktop']);
+    expect(noKey.code).toBe(1);
+    expect(noKey.err).toMatch(/machine admin init/);
+  });
+
+  it('HELP states the local-only limit', async () => {
+    const r = await cli(adminDir, ['--help']);
+    expect(r.out).toMatch(/KNOWN LIMIT: installed on\s+THIS machine only/);
   });
 });

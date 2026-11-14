@@ -231,3 +231,13 @@ export function loadNetwork(configDir: string, now: number): Network {
   const policy = loadPolicy(configDir, pin.adminPublicKey, problems);
   return { enrolled: true, directory, policy, revocations, problems };
 }
+
+/** The highest serial among the registrations stored here for `uuid`: what a revocation of that machine must cover. */
+export function registeredSerial(configDir: string, uuid: string): number | undefined {
+  let highest: number | undefined;
+  for (const p of readPeers(configDir)) {
+    const body = (p.registration as { body?: RegistrationBody } | undefined)?.body;
+    if (body && body.uuid === uuid && (highest === undefined || body.serial > highest)) highest = body.serial;
+  }
+  return highest;
+}

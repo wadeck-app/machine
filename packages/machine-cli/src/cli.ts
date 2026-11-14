@@ -38,10 +38,15 @@ Administration (enrollment through the relay, or by files):
                                      _secrets_/relay-admin.json (a machine-scoped token is refused)
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
                                      without id: list the pending candidacies (id, name, host, address, age, code);
-                                     with an id (or unique prefix): show it, compare the code with the candidate's
-                                     screen (y/N, terminal only, no way to skip it), type the admin passphrase,
-                                     sign and send the approval, then print the final code to compare again;
-                                     --reject refuses it (no passphrase)
+                                     with an id (or unique prefix): show it (the code is information only), ask
+                                     "approve this machine?" (y/N, terminal only, no way to skip it), type the admin
+                                     passphrase, sign and send the approval, then print the FINAL code: the one
+                                     comparison. On the new machine it must read exactly the same; if not, run
+                                     \`admin revoke\`. --reject refuses a candidacy (no passphrase)
+  admin revoke <machine>             revoke a trusted machine (name, alias, uuid or prefix): shows it, asks y/N,
+                                     admin passphrase, installs the signed revocation. KNOWN LIMIT: installed on
+                                     THIS machine only; distributing it to the other peers is a separate contract
+                                     that does not exist yet, so they keep trusting that machine until then
   admin init                         create the admin key on this machine (passphrase shown once)
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout)
   admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]

@@ -3,6 +3,7 @@ import { SHELLS, resolveMachineRef, type Shell } from '@wadeck-app/machine-core'
 import { connectToPeer } from '@wadeck-app/machine-transport';
 import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { adminLogin, runApprove } from './adminApprove.js';
+import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
@@ -186,7 +187,21 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
         throw e;
       }
     }
-    return fail('usage: machine admin init | login [<code>] | approve [<id>] | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    if (sub === 'revoke') {
+      if (first === undefined || second !== undefined) return fail('usage: machine admin revoke <name|alias|uuid>', EXIT.usage);
+      // A revocation has no validity period: refused rather than silently ignored.
+      if (args.days !== undefined) return fail('--days does not apply to `machine admin revoke`: a revocation does not expire (it covers the registration serial it names)', EXIT.usage);
+      try {
+        const r = await runRevoke(configDir, { reference: first, prompt, ask: io.ask ?? promptLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        emit({ revoked: r.uuid, name: r.name, serial: r.serial, scope: 'this machine only' }, '');
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
+    }
+    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
   }
 
   if (command === 'peer') {
@@ -272,7 +287,7 @@ export async function runNetworkCommand(command: string, ctx: CommandContext): P
           say(
             `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
               `Candidacy ${p.candidacyId} posted, valid until ${new Date(p.expiresAt * 1000).toISOString()}.\n` +
-              `Verification code, the admin must see exactly this one before approving:\n\n  ${p.verificationCode}\n\n`,
+              `Verification code (informational, the admin sees the same one; the code that matters is shown after approval):\n\n  ${p.verificationCode}\n\n`,
           );
         },
       });

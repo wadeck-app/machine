@@ -8,7 +8,9 @@ import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './r
 
 // Admin side of the enrollment by candidacy (decisions 35, 35a, 37): list what machines asked to join, recompute the
 // verification code from the key and random AS RECEIVED (the relay is untrusted, a code string it sends proves
-// nothing), let a human compare it with the candidate's screen, then sign the registration and send the decision.
+// nothing; shown as information and checked against any code the relay sends), ask a plain "approve this machine?",
+// sign the registration and send the decision, then print the FINAL code: the one human comparison (decision 50).
+// A different final code on the new machine means a swapped key: `machine admin revoke <name>`.
 
 const MAX_APPROVAL_BYTES = 16 * 1024;
 
@@ -115,7 +117,7 @@ export function reviewCandidacy(raw: unknown, nowSeconds: number): CandidacyView
     const given = o[field];
     if (typeof given === 'string' && code !== '(cannot be computed)' && normalizeCode(given) !== normalizeCode(code)) {
       blockers.push(
-        `the relay sent a verification code (${printable(given)}) that does not match the key and random it sent (they give ${code}): the relay is inconsistent or swapped the key; do NOT approve, and compare ${code}, not the relay's code, with the candidate's screen`,
+        `the relay sent a verification code (${printable(given)}) that does not match the key and random it sent (they give ${code}): the relay is inconsistent or swapped the key; do NOT approve`,
       );
     }
   }
@@ -158,7 +160,7 @@ function formatDetail(v: CandidacyView, nowSeconds: number): string {
     `  uuid       ${v.uuid ?? '(missing)'}`,
     `  created    ${iso(v.createdAt)} (${age(nowSeconds, v.createdAt)} ago), expires ${iso(v.expiresAt)}`,
     '',
-    "Verification code, recomputed here from the key and random received. It must be exactly the one on the candidate's screen:",
+    'Verification code, recomputed here from the key and random received (information only, nothing to compare now; the one comparison comes after signing):',
     '',
     `  ${v.code}`,
     '',
@@ -262,13 +264,13 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
 
   let answer: string;
   try {
-    answer = await o.ask(`Is this the code on the candidate's screen? Approve "${printable(view.name)}" (${uuid})? [y/N] `);
+    answer = await o.ask(`Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}? [y/N] `);
   } catch {
     throw new Error(
-      `no terminal to compare the verification code ${view.code} with the candidate's screen: the comparison is done by eye and there is no option to skip it. Run \`machine admin approve ${printable(view.id)}\` in a terminal window`,
+      `no terminal to confirm "${printable(view.name)}": approving always needs a person at a terminal and there is no option to skip the question. Run \`machine admin approve ${printable(view.id)}\` in a terminal window`,
     );
   }
-  if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error('not approved: the code was not confirmed. Nothing was signed or sent');
+  if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error('not approved: the machine was not confirmed. Nothing was signed or sent');
 
   // One passphrase typed, used for both registrations of this command, then dropped with the process.
   let typed: string | undefined;
@@ -307,7 +309,8 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const code = finalCode(view.identityPublicKey, pin.adminPublicKey, view.random);
   o.say(
     `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
-      `Final code (admin key ${pin.adminKeyId}): compare it with the one the candidate shows. If they differ, the candidate must answer N:\n\n  ${code}\n\n`,
+      `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
+      `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`,
   );
   return { kind: 'approved', candidacy: view, finalCode: code, adminKeyId: pin.adminKeyId, registered: { uuid: self.registration.body.uuid, name: self.registration.body.name } };
 }
