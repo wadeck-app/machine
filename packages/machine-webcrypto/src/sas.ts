@@ -1,8 +1,8 @@
 import { decodeBase64urlStrict } from './base64url.js';
 import { concat, sha256 } from './keys.js';
 
-// Verification codes for enrollment by candidacy: 80 bits, four groups of four Crockford base32 characters.
-// Same domains and byte layout as machine-core sas.ts.
+// Codes for enrollment by candidacy. Candidacy code: 80 bits, four groups of four Crockford base32 characters.
+// Final code ("security code", decision 55): 83 bits, five groups of five digits. Same domains, byte layout and display as machine-core sas.ts.
 
 const CANDIDACY_DOMAIN = 'machine/candidacy-code/v1';
 const FINAL_DOMAIN = 'machine/final-code/v1';
@@ -28,9 +28,18 @@ export async function candidacyCode(candidatePublicKey: string, random: string):
   return formatVerificationCode(await sha256(input));
 }
 
+/** The first 83 bits of a digest as 25 decimal digits in five groups of five (twin of machine-core formatFinalCode). */
+export function formatFinalCode(digest: Uint8Array): string {
+  if (digest.length < 11) throw new Error('formatFinalCode: need at least 11 bytes');
+  let bits = 0n;
+  for (let i = 0; i < 11; i++) bits = (bits << 8n) | BigInt(digest[i] as number);
+  const digits = (bits >> 5n).toString().padStart(25, '0');
+  return [0, 5, 10, 15, 20].map((i) => digits.slice(i, i + 5)).join(' ');
+}
+
 /** Shown on both sides after approval, before the candidate pins the admin public key. */
 export async function finalCode(candidatePublicKey: string, adminPublicKey: string, random: string): Promise<string> {
   const input = concat(text(`${FINAL_DOMAIN}\u0000`), rawKey(candidatePublicKey, 'candidate public key'), rawKey(adminPublicKey, 'admin public key'), rawRandom(random));
-  return formatVerificationCode(await sha256(input));
+  return formatFinalCode(await sha256(input));
 }
 

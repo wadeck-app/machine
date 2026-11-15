@@ -1,6 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { generateSigningKeyPair } from './keys.js';
-import { candidacyCode, finalCode, newCandidacyRandom } from './sas.js';
+import { candidacyCode, finalCode, formatFinalCode, newCandidacyRandom } from './sas.js';
+
+// Decision 55: the final code ("security code") is shown as 25 decimal digits in five groups of five, visibly unlike the
+// base32 candidacy code and the relay login code. It carries 83 bits of the digest (80 before): never fewer.
+describe('final code display (decision 55)', () => {
+  it('shows five groups of five digits separated by spaces', () => {
+    const code = finalCode(generateSigningKeyPair().publicKey, generateSigningKeyPair().publicKey, newCandidacyRandom());
+    expect(code).toMatch(/^\d{5}( \d{5}){4}$/);
+  });
+
+  it('fixed vectors of the display encoding (the same ones are checked in machine-webcrypto)', () => {
+    expect(formatFinalCode(Buffer.alloc(32))).toBe('00000 00000 00000 00000 00000');
+    // 2^83 - 1: every kept bit set.
+    expect(formatFinalCode(Buffer.alloc(32, 255))).toBe('96714 06556 91703 33976 49407');
+    // 2^82: only the first bit set.
+    expect(formatFinalCode(Buffer.concat([Buffer.from([0x80]), Buffer.alloc(31)]))).toBe('48357 03278 45851 66988 24704');
+  });
+
+  it('fixed vector from all-zero keys and random', () => {
+    const zero = Buffer.alloc(32).toString('base64url');
+    expect(finalCode(zero, zero, Buffer.alloc(16).toString('base64url'))).toBe(FIXED_FINAL_ZERO);
+  });
+
+  it('keeps 83 bits: the last kept bit changes the code, the 5 dropped bits do not', () => {
+    const base = Buffer.alloc(32);
+    const lastKept = Buffer.from(base);
+    lastKept[10] = 0x20;
+    const dropped = Buffer.from(base);
+    dropped[10] = 0x1f;
+    expect(formatFinalCode(lastKept)).not.toBe(formatFinalCode(base));
+    expect(formatFinalCode(dropped)).toBe(formatFinalCode(base));
+    expect(formatFinalCode(lastKept)).toBe('00000 00000 00000 00000 00001');
+  });
+
+  it('refuses a digest shorter than 11 bytes', () => {
+    expect(() => formatFinalCode(Buffer.alloc(10))).toThrow(/at least 11 bytes/);
+  });
+});
+
+// Computed once by machine-core and checked by the independent WebCrypto twin (machine-webcrypto/src/sas.test.ts).
+const FIXED_FINAL_ZERO = '66266 06377 45699 09220 73088';
 
 describe('verification codes (enrollment)', () => {
   it('shows 80 bits as four groups of four Crockford base32 characters', () => {

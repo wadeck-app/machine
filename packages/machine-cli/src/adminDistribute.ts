@@ -16,7 +16,7 @@ import {
   type FormattedDistribution,
   type Sender,
 } from './distribute.js';
-import { loadNetwork } from './network.js';
+import { loadNetwork, resolveRevokedMachine } from './network.js';
 import type { RelayClient } from './relayClient.js';
 import { readAliases } from './state.js';
 
@@ -83,17 +83,20 @@ export async function runDistribute(configDir: string, o: DistributeOptions): Pr
 
   const reference = o.reference as string;
   const network = loadNetwork(configDir, o.now());
-  const resolved = resolveMachineRef(reference, network.directory.machines(), readAliases(configDir));
-  // A machine revoked here is no longer in the directory: it is named by its uuid.
-  const revoked = !resolved.ok && isUuid(reference) ? network.revocations.find((r) => r.uuid === reference.toLowerCase()) : undefined;
+  const aliases = readAliases(configDir);
+  const resolved = resolveMachineRef(reference, network.directory.machines(), aliases);
+  // A machine revoked here is no longer in the directory: it is found by the name its registration had, or by its uuid.
+  const gone = resolved.ok ? undefined : resolveRevokedMachine(configDir, reference, aliases);
+  if (gone !== undefined && !gone.ok && gone.reason === 'ambiguous') throw new UnresolvedReferenceError(gone.message);
+  const revoked = gone?.ok ? gone.machine : !resolved.ok && isUuid(reference) ? network.revocations.find((r) => r.uuid === reference.toLowerCase()) : undefined;
   if (!resolved.ok && revoked === undefined) {
-    throw new UnresolvedReferenceError(`${resolved.message} (distribute takes a machine this one trusts, or the uuid of a machine revoked here)`);
+    throw new UnresolvedReferenceError(`${resolved.message} (distribute takes a machine this one trusts, or a machine revoked here: name or uuid, \`machine status\` lists them)`);
   }
   o.say('Enter the admin passphrase to sign the documents, Ctrl-C to cancel.\n');
   const key = await unlockAdminKey(configDir, o.prompt);
   const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now };
   if (revoked !== undefined) {
-    const report = await distributeRevocation(configDir, revoked.uuid, revoked.uuid, sender);
+    const report = await distributeRevocation(configDir, revoked.uuid, gone?.ok ? (gone.machine.name ?? revoked.uuid) : revoked.uuid, sender);
     return { what: `the revocation of ${revoked.uuid}`, report, formatted: formatDistribution(report, 'the revocation', retryDistribution(revoked.uuid)) };
   }
   const uuid = (resolved as { ok: true; uuid: string }).uuid;

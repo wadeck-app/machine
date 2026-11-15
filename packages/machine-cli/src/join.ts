@@ -3,6 +3,7 @@ import { candidacyCode, finalCode, newCandidacyRandom } from '@wadeck-app/machin
 import { applyApproval, checkApproval, isAlreadyPinned } from './approval.js';
 import type { Timing } from './cliTypes.js';
 import { readMachine } from './identity.js';
+import { expiryText } from './humanTime.js';
 import { exportMachineInfo, type MachineInfo } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
 import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
@@ -164,9 +165,10 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   const started = await publicClient.deviceLoginStart(deviceLabel(info.name));
   const { deviceCode, userCode, verificationUrl } = started;
   say(
-    `Relay access for "${deviceLabel(info.name)}" on ${relayUrl}. Approve it in the relay console:\n\n` +
-      `${printable(userCode)}\n\n${printable(verificationUrl)}\n\n` +
-      `Open that page, check that the address and label match this machine, and type this code to approve\n\n` +
+    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page: it only gives this machine access to the relay (it is not the security code compared later):\n\n` +
+      `  ${printable(userCode)}\n\n` +
+      `Relay page: ${printable(verificationUrl)}\n` +
+      `Open it (any browser), check that the address and the label match this machine, and type the code there.\n\n` +
       `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).\n`,
   );
 
@@ -307,7 +309,7 @@ export interface FlowOptions {
   hostname?: () => string;
   /** Human text of the progress (stdout, or stderr with --json). */
   say: (text: string) => void;
-  /** Where the candidacy is announced, with its verification code. */
+  /** Where the candidacy is announced (its candidacy code is shown only with --verbose). */
   onPosted: (info: JoinResult & { resumed: boolean }) => void;
   /**
    * Called after the candidacy is posted and before the wait, only when no approval was received yet. The machine that holds the
@@ -328,7 +330,6 @@ export interface Enrolled {
 
 export type FlowResult = { status: 'posted'; posted: JoinResult } | { status: 'enrolled'; posted: JoinResult; enrolled: Enrolled };
 
-const iso = (epochSeconds: number) => new Date(epochSeconds * 1000).toISOString();
 const normalizeCode = (code: string) => code.toUpperCase().replace(/[\s-]/g, '');
 
 export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowResult> {
@@ -385,10 +386,10 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     if (current?.status === 'pending') approvedHere = await o.beforeWait(state);
   }
 
-  const stopped = (why: string) =>
-    new Error(`${why}: the token is saved and the candidacy ${state.id} stays valid until ${iso(state.expiresAt)}. Run \`machine join --resume\` to keep waiting (verification code ${candidacyCode(state.identityPublicKey, state.random)})`);
-
   const clock = o.now ?? (() => new Date());
+  const stopped = (why: string) =>
+    new Error(`${why}: the token is saved and the candidacy ${state.id} ${expiryText(state.expiresAt, Math.floor(clock().getTime() / 1000))}. Run \`machine join --resume\` to keep waiting`);
+
   for (let attempt = 0; state.approval === undefined; attempt++) {
     // The wait never outlasts the candidacy: a relay that forgets to answer 404 does not keep this client waiting.
     const untilExpiry = Math.max(0, state.expiresAt * 1000 - clock().getTime()) + CANDIDACY_EXPIRY_GRACE_MS;
@@ -397,8 +398,8 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     if (!approvedHere || attempt > 0) {
       o.say(
         `Waiting for the admin (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later).\n` +
-          `On the admin machine run: machine admin approve   (it shows this machine; check the verification code above)\n` +
-          'When it is approved, the admin machine prints a final code: compare it with the one shown here.\n',
+          `On the admin machine run: machine admin approve   (it shows this machine by name, hostname and address)\n` +
+          'When the admin approves, a security code appears on the admin machine and here: compare them, they must read exactly the same.\n',
       );
     }
     let outcome = await waitForDecision(client, state.id, { timing: o.timing, timeoutMs, ...(o.timing.signal ? { signal: o.timing.signal } : {}), warn: (t) => o.say(`${t}\n`) });
@@ -414,10 +415,10 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     } else if (outcome.kind === 'expired') {
       deleteCandidacy(configDir);
       if (!o.resume || attempt > 0) {
-        throw new Error('the candidacy expired before the admin decided (it lives 15 minutes). The token is kept: run `machine join --resume` to post a new candidacy, then tell the admin to compare the new verification code');
+        throw new Error('the candidacy expired before the admin decided (it lives 15 minutes). The token is kept: run `machine join --resume` to post a new candidacy, then ask the admin to run `machine admin approve` again');
       }
       // Resume: the old candidacy is gone, a new one with a fresh random replaces it.
-      o.say('[warn] the previous candidacy expired: posting a new one (new verification code)\n');
+      o.say('[warn] the previous candidacy expired: posting a new one (the admin approves it again with \`machine admin approve\`)\n');
       state = await postNewCandidacy(configDir, client, info, hostname);
       o.onPosted({ ...resultOf(relayUrl, label, state), resumed: true });
     } else if (outcome.kind === 'timeout') {
@@ -457,27 +458,30 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
   }
 
   const code = finalCode(info.identityPublicKey, checked.admin.adminPublicKey, state.random);
+  // The admin machine is named when the approval carries it among the peers (always, unless the admin machine has no identity).
+  const adminName = checked.approval.adminUuid === null ? undefined : checked.peerBodies.find((b) => b.uuid === checked.approval.adminUuid)?.name;
+  const adminRef = adminName !== undefined ? `"${printable(adminName)}"` : 'the admin machine';
   // Throws when another admin key is already pinned: before the human is asked anything.
   const alreadyPinned = isAlreadyPinned(configDir, checked);
   if (alreadyPinned) {
     // Never silent: the human sees why no code is compared (the first machine of a network created this admin key itself).
     o.say(`The admin key ${checked.admin.adminKeyId} is already pinned on this machine (it created it, or pinned it earlier): there is no new key to confirm, so no code is compared.\n`);
   } else {
-    o.say(`The admin approved this machine. Final code, it must be exactly the one the admin sees (admin key ${checked.admin.adminKeyId}):\n\n  ${code}\n\n`);
+    o.say(`The admin approved this machine. Security code of "${printable(info.name)}" (this machine) with admin key ${checked.admin.adminKeyId}. It must read exactly the same on ${adminRef}:\n\n  ${code}\n\n`);
     const keep = `The approval is kept in ${candidacyFile(configDir)}: run \`machine join --resume\` once you can answer`;
     if (o.yesFinalCode !== undefined) {
       if (normalizeCode(o.yesFinalCode) !== normalizeCode(code)) {
-        throw new Error(`--yes-final-code ${o.yesFinalCode} does not match the final code ${code}: the admin key was NOT pinned. Either you mistyped it, or the admin key offered here is not the one of the admin (a swapped key): ask the admin to read the code again. ${keep}`);
+        throw new Error(`--yes-final-code "${o.yesFinalCode}" does not match the security code ${code}: the admin key was NOT pinned. Either you mistyped it, or the admin key offered here is not the one of the admin (a swapped key): ask the admin to read the code again. ${keep}`);
       }
     } else {
       let answer: string;
       try {
-        answer = await o.ask(`Is this the code shown to the admin? Pin the admin key ${checked.admin.adminKeyId}? [y/N] `);
+        answer = await o.ask(`Does ${adminRef} show exactly this security code? If yes, pin its admin key ${checked.admin.adminKeyId}? [y/N] `);
       } catch (e) {
         if (e instanceof PromptTimeoutError) throw e;
-        throw new Error(`no terminal to confirm the final code ${code}: the admin key was NOT pinned. Compare it with the admin, then run \`machine join --resume --yes-final-code ${code}\`. ${keep}`);
+        throw new Error(`no terminal to confirm the security code ${code}: the admin key was NOT pinned. Compare it with the one on ${adminRef}, then run \`machine join --resume --yes-final-code "${code}"\` (keep the quotes). ${keep}`);
       }
-      if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error(`final code not confirmed: the admin key was NOT pinned. ${keep}`);
+      if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error(`security code not confirmed: the admin key was NOT pinned. ${keep}`);
     }
   }
 

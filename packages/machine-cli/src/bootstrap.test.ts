@@ -112,7 +112,7 @@ describe('one command per machine', () => {
       expect(decisions()).toHaveLength(1);
       expect(r.out).toContain(`[ok] enrolled "desktop" (${readMachine(a).uuid})`);
       expect(r.out).toMatch(/already pinned/);
-      expect(r.out).not.toMatch(/Is this the code|Final code|On the admin machine run|join --resume|Waiting for the admin/);
+      expect(r.out).not.toMatch(/Is this the code|Security code|On the admin machine run|join --resume|Waiting for the admin/);
       expect(r.out).toMatch(/no other machine yet: this machine is the first of the network/);
       expect(r.out).toContain(`machine join ${relay.url}`);
       expect(r.out).toMatch(/machine admin allow/);
@@ -282,7 +282,7 @@ describe('one command per machine', () => {
       expect(asked).toHaveLength(1);
       expect(r.out).toContain(`Candidacy ${id}`);
       expect(r.out).toMatch(/One pending candidacy/);
-      expect(r.out).toMatch(/Final code/);
+      expect(r.out).toMatch(/Security code of /);
       expect(decisions()).toHaveLength(1);
     });
 
@@ -325,8 +325,8 @@ describe('one command per machine', () => {
       // At the start: what to run on the admin machine; at the end: the code to compare, asked once.
       expect(r.out.indexOf('machine admin approve')).toBeGreaterThan(-1);
       expect(r.out).toMatch(/On the admin machine run: machine admin approve/);
-      expect(r.out).toMatch(/final code.*compare it with the one shown here/is);
-      expect(r.out).toMatch(/Final code, it must be exactly the one the admin sees/);
+      expect(r.out).toMatch(/security code.*compare/is);
+      expect(r.out).toMatch(/Security code of "[a-z0-9-]+" \(this machine\).*must read exactly the same on /s);
       expect(asked).toHaveLength(1);
       expect(r.out).toContain('[ok] enrolled "laptop"');
       expect(r.out).toMatch(/machine admin allow <this machine> -- <command>/);
@@ -372,7 +372,7 @@ describe('relay with ownership bound at approval', () => {
       expect(joined.out).toContain(`[ok] enrolled "desktop" (${readMachine(a).uuid})`);
       // The admin key was created here: it is already pinned, nothing to compare, and the output says so instead of staying silent.
       expect(joined.out).toMatch(/already pinned/);
-      expect(joined.out).not.toMatch(/Is this the code/);
+      expect(joined.out).not.toMatch(/Security code of/);
       expect(readFileSync(join(a, 'admin.json'), 'utf8')).toBe(before);
       expect(joined.out).toMatch(/no other machine yet: this machine is the first of the network/);
       expect(joined.out).not.toMatch(/peers trusted: none|the admin included none/);

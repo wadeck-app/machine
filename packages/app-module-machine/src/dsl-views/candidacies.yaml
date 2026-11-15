@@ -32,9 +32,9 @@ sections:
             status: todo
             info: "Threat: a local process signing for you. The passphrase is typed in this page only and the signature is made in your browser, never by the daemon or the module backend."
           - id: final-code
-            title: Final code compared
+            title: Security code compared
             status: todo
-            info: "Threat: the relay swaps a public key (candidate or admin). Compare the final code on the candidate machine, never the one displayed by the relay."
+            info: "Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay."
           - id: distributed
             title: Documents distributed
             status: todo

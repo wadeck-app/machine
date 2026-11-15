@@ -19,7 +19,7 @@ const yes = async () => 'y';
 const noTty = async (): Promise<string> => {
   throw new Error('no tty');
 };
-const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].at(-1)?.[1] as string;
+const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}(\d{5}(?: \d{5}){4})$/gm)].at(-1)?.[1] as string;
 
 function fakeTerminal() {
   const input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode: (mode: boolean) => void; rawModes: boolean[] };
@@ -283,7 +283,7 @@ describe('admin approve and join: the relay flow', () => {
     };
     const r = await cli(adminDir, approveArgs(id), async () => admin.passphrase, { ask: slowYes, now });
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/expired at .*while the question was open: nothing was signed or sent/);
+    expect(r.err).toMatch(/expired .*ago \(\d\d:\d\d\), while the question was open: nothing was signed or sent/);
     expect(r.err).toMatch(/machine join --resume/);
     expect(decisions()).toHaveLength(0);
   });
@@ -303,7 +303,7 @@ describe('admin approve and join: the relay flow', () => {
     t.fire();
     const r = await run;
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/Pin the admin key.*within 120 s/s);
+    expect(r.err).toMatch(/show exactly this security code.*within 120 s/s);
     expect(r.err).toMatch(/NOT pinned/);
     expect(r.err).toMatch(/machine join --resume/);
     expect(existsSync(adminPinFile(cand))).toBe(false);

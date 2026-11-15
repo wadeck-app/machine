@@ -1,5 +1,6 @@
 import type { AddressEntry } from '@wadeck-app/machine-core';
 import type { ListAnswer } from './commands.js';
+import { whenText } from './humanTime.js';
 import { loadNetwork } from './network.js';
 import { PeerAddressError, describeAddress, lookupPeerPresence, readPeerRecords, type PeerPresence, type PeerRef, type UseOptions } from './peerAddresses.js';
 import { RelayError, createRelayClient, type RelayClient } from './relayClient.js';
@@ -81,12 +82,12 @@ export async function addRelayView(configDir: string, answer: ListAnswer, now: n
 }
 
 /** The text of one peer under its line: what the relay says, or why it says nothing. */
-export function relayLines(relay: PeerRelayInfo | undefined): string[] {
+export function relayLines(relay: PeerRelayInfo | undefined, nowSeconds: number): string[] {
   if (relay === undefined) return [];
   const addresses = relay.addresses.map(describeAddress).join(', ');
   const lines: string[] = [];
   if (relay.source === 'relay') {
-    const presence = relay.online === undefined ? 'presence unknown' : relay.online ? 'online' : `offline${typeof relay.lastSeen === 'number' ? ` (last seen ${new Date(relay.lastSeen * 1000).toISOString()})` : ''}`;
+    const presence = relay.online === undefined ? 'presence unknown' : relay.online ? 'online' : `offline${typeof relay.lastSeen === 'number' ? `, last seen ${whenText(relay.lastSeen, nowSeconds)}` : ''}`;
     lines.push(`  relay: ${presence}, ${addresses}`);
   } else if (relay.source === 'last-known') {
     lines.push(`  relay: last known addresses (not confirmed now): ${addresses}`);

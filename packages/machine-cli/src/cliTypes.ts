@@ -68,6 +68,8 @@ export interface Parsed {
   noWait: boolean;
   reject: boolean;
   autoStartup: boolean;
+  /** `--verbose` (join, setup, admin approve): also shows the candidacy code, which is internal by default (decision 55). */
+  verbose: boolean;
   /** `machine cli self-check --quiet`. */
   quiet: boolean;
   /** `machine admin init --generate` and `machine setup --generate`: a random passphrase, no question. */

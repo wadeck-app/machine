@@ -85,6 +85,10 @@ describe('two machines, then the second leaves', () => {
   it('after the revoke: the desktop no longer lists nor runs on the laptop, and the relay no longer holds its record', async () => {
     const status = JSON.parse((await w.run('desktop', a, ['status', '--json'])).out) as { peers: number };
     expect(status.peers).toBe(0);
+    // The revoked machine is named in its own block, with its uuid (UX audit 16).
+    const text = await w.run('desktop', a, ['status']);
+    expect(text.out).toMatch(/revoked machines \(1\)/);
+    expect(text.out).toContain(`laptop  uuid ${readMachine(b).uuid.slice(0, 8)}`);
     const run = await w.run('desktop', a, ['run', 'laptop', '--shell', SHELL, '--', 'echo hello-laptop'], { allowLoopbackPeers: true });
     expect(run.code).toBe(255);
     expect(run.err).toMatch(/laptop/);
@@ -105,9 +109,10 @@ describe('two machines, then the second leaves', () => {
     expect(((await heartbeat.json()) as { error: string }).error).toBe('not_registered');
   });
 
-  it('forget-relay-record of a machine already revoked: by name it is unknown, by uuid it works (the relay says nothing to forget)', async () => {
+  it('forget-relay-record of a machine already revoked: by name and by uuid both work (the relay says nothing to forget)', async () => {
     const byName = await w.run('desktop', a, ['admin', 'forget-relay-record', 'laptop'], { visible: ['y'] });
-    expect(byName.code).toBe(3);
+    expect(byName.code, byName.err).toBe(0);
+    expect(byName.out).toMatch(/"laptop" \(revoked machine /);
     const byUuid = await w.run('desktop', a, ['admin', 'forget-relay-record', readMachine(b).uuid], { visible: ['y'] });
     expect(byUuid.code, byUuid.err).toBe(0);
   });
@@ -180,8 +185,8 @@ describe('a candidacy that is rejected, interrupted or cut short', () => {
   it('a candidacy that the client considers expired (clock 16 minutes ahead) is dropped and a new one is posted', async () => {
     const d = w.machineDir('tablet');
     await w.run('tablet', d, ['join', w.relay.url, '--no-wait'], { hostname: 'Tablet' });
-    const r = await w.run('tablet', d, ['join', '--resume'], { nowMs: () => Date.now() + 16 * 60_000, visible: [] });
-    // Real relay: re-posting the same identity key with the same token replaces the entry (a new random, so a new verification code).
+    const r = await w.run('tablet', d, ['join', '--resume', '--verbose'], { nowMs: () => Date.now() + 16 * 60_000, visible: [] });
+    // Real relay: re-posting the same identity key with the same token replaces the entry (a new random, so a new candidacy code, shown with --verbose).
     expect(r.out).toMatch(/\[warn\] the previous candidacy expired: posting a new one/);
     expect(r.err).toMatch(/expired/);
     const codes = [...r.out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].map((m) => m[1]);

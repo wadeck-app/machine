@@ -153,6 +153,9 @@ describe('machine run without --address', () => {
     const r = await runHello();
     expect(r.code).toBe(0);
     expect(r.err).toMatch(/\[warn\].*laptop.*offline/);
+    // Local time with a relative hint, never an ISO string in UTC.
+    expect(r.err).not.toMatch(/20\d\d-\d\d-\d\dT/);
+    expect(r.err).toMatch(/offline \(last seen .*\(\d\d:\d\d\)\)/);
   });
 
   it('a damaged peer-records.json stops the run with the file and the fix', async () => {
@@ -242,6 +245,7 @@ describe('machine list with a relay', () => {
     const r = await cli(a, ['list']);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/laptop.*\n.*no record published yet/);
+    expect(r.out).toMatch(/On "laptop" run `machine startup enable`/);
     // Not a warning and not an error: the line is a plain note.
     expect(r.err).toBe('');
   });

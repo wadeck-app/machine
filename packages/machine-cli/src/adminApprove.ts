@@ -3,6 +3,7 @@ import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { sealBundle } from './approval.js';
 import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
+import { expiryText, whenText } from './humanTime.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, installedRevocations, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
@@ -13,8 +14,8 @@ import { readRelayAdminConfig, readRelayConfig, relayAdminFile, writeRelayAdminC
 // Admin side of the enrollment by candidacy (decisions 35, 35a, 37): list what machines asked to join, recompute the
 // verification code from the key and random AS RECEIVED (the relay is untrusted, a code string it sends proves
 // nothing; shown as information and checked against any code the relay sends), ask a plain "approve this machine?",
-// sign the registration and send the decision, then print the FINAL code: the one human comparison (decision 50).
-// A different final code on the new machine means a swapped key: `machine admin revoke <name>`.
+// sign the registration and send the decision, then print the security code (the final code): the one human comparison (decisions 50, 55).
+// The candidacy code is recomputed and checked but shown only with --verbose. A different security code on the new machine means a swapped key: `machine admin revoke <name>`.
 
 const MAX_APPROVAL_BYTES = 16 * 1024;
 
@@ -157,7 +158,7 @@ export function reviewCandidacy(raw: unknown, nowSeconds: number): CandidacyView
     else blockers.push('the relay sent an invalid "boundToCandidateToken" (not true or false): it may be an incompatible version');
   }
   const boundTokenLabel = typeof o.boundTokenLabel === 'string' && o.boundTokenLabel.length > 0 ? o.boundTokenLabel : undefined;
-  if (expiresAt !== 0 && nowSeconds >= expiresAt) blockers.push(`this candidacy expired at ${iso(expiresAt)}: the candidate must post a new one (\`machine join --resume\`)`);
+  if (expiresAt !== 0 && nowSeconds >= expiresAt) blockers.push(`this candidacy ${expiryText(expiresAt, nowSeconds)}: the candidate must post a new one (\`machine join --resume\`)`);
 
   return { id, name, hostname, identityPublicKey, random, observedIp, createdAt, expiresAt, uuid, uuidBound, boundTokenLabel, boundToCandidateToken, code, blockers };
 }
@@ -175,17 +176,15 @@ function bindingWarning(v: CandidacyView): string | undefined {
   return `the uuid is already bound to ${which}`;
 }
 
-const iso = (epochSeconds: number): string => new Date(epochSeconds * 1000).toISOString();
-
 function age(nowSeconds: number, createdAt: number): string {
   const seconds = Math.max(0, nowSeconds - createdAt);
   return seconds < 120 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 }
 
-function formatList(views: CandidacyView[], nowSeconds: number): string {
+function formatList(views: CandidacyView[], nowSeconds: number, verbose: boolean): string {
   const lines = [`${views.length} pending candidacy(ies); approve one with \`machine admin approve <id>\` (a unique prefix of the id is enough):`];
   for (const v of views) {
-    lines.push('', `  ${printable(v.id)}  ${printable(v.name)}  host ${printable(v.hostname)}  from ${printable(v.observedIp)}  age ${age(nowSeconds, v.createdAt)}  code ${v.code}`);
+    lines.push('', `  ${printable(v.id)}  ${printable(v.name)}  host ${printable(v.hostname)}  from ${printable(v.observedIp)}  age ${age(nowSeconds, v.createdAt)}${verbose ? `  candidacy code ${v.code}` : ''}`);
     const binding = bindingWarning(v);
     if (binding !== undefined) lines.push(`    [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`);
     for (const b of v.blockers) lines.push(`    [warn] cannot be approved: ${b}`);
@@ -193,7 +192,7 @@ function formatList(views: CandidacyView[], nowSeconds: number): string {
   return `${lines.join('\n')}\n`;
 }
 
-function formatDetail(v: CandidacyView, nowSeconds: number): string {
+function formatDetail(v: CandidacyView, nowSeconds: number, verbose: boolean): string {
   const binding = bindingWarning(v);
   return [
     `Candidacy ${printable(v.id)}`,
@@ -203,11 +202,11 @@ function formatDetail(v: CandidacyView, nowSeconds: number): string {
     `  uuid       ${v.uuid ?? '(missing)'}`,
     ...(binding !== undefined ? [`  [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`] : []),
     ...(isReapproval(v) ? ['  binding    the uuid is already bound to the same token as this candidacy: a re-approval, nothing is rebound'] : []),
-    `  created    ${iso(v.createdAt)} (${age(nowSeconds, v.createdAt)} ago), expires ${iso(v.expiresAt)}`,
+    `  created    ${whenText(v.createdAt, nowSeconds)}, ${expiryText(v.expiresAt, nowSeconds)}`,
     '',
-    'Verification code, recomputed here from the key and random received (information only, nothing to compare now; the one comparison comes after signing):',
-    '',
-    `  ${v.code}`,
+    // Decision 55: the candidacy code is internal (recomputed here from the key and random received); the one comparison is the security code.
+    ...(verbose ? ['Candidacy code (--verbose; recomputed here from the key and random received, there is nothing to compare):', '', `  ${v.code}`, ''] : []),
+    `After you sign, a security code is shown here and on "${printable(v.name)}": it must read exactly the same on both.`,
     '',
     '',
   ].join('\n');
@@ -227,6 +226,8 @@ export interface ApproveOptions {
   relayUrl?: string;
   days: number;
   reject: boolean;
+  /** Also show the candidacy code (internal by default, decision 55). */
+  verbose?: boolean;
   /** Hidden passphrase prompt. */
   prompt: Prompt;
   /** Visible question; rejects without a terminal. */
@@ -288,7 +289,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       return { kind: 'list', candidacies: views };
     }
     if (views.length > 1) {
-      o.say(formatList(views, o.now()));
+      o.say(formatList(views, o.now(), o.verbose === true));
       return { kind: 'list', candidacies: views };
     }
     wanted = (views[0] as CandidacyView).id;
@@ -304,11 +305,11 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   // The questions can take minutes: a candidacy that expired meanwhile is not signed for (the relay would refuse the decision anyway).
   const stillPending = (when: string): void => {
     if (view.expiresAt !== 0 && o.now() >= view.expiresAt) {
-      throw new Error(`the candidacy ${printable(view.id)} expired at ${iso(view.expiresAt)}, ${when}: nothing was signed or sent. Ask the candidate to run \`machine join --resume\` and approve the new candidacy`);
+      throw new Error(`the candidacy ${printable(view.id)} ${expiryText(view.expiresAt, o.now())}, ${when}: nothing was signed or sent. Ask the candidate to run \`machine join --resume\` and approve the new candidacy`);
     }
   };
   // The details of a candidacy this very command just posted are the machine's own: not repeated.
-  if (joining === undefined) o.say(formatDetail(view, o.now()));
+  if (joining === undefined) o.say(formatDetail(view, o.now(), o.verbose === true));
   else {
     const binding = bindingWarning(view);
     o.say(`This machine holds the admin key: approving its own candidacy "${printable(view.name)}" (nothing to compare, nobody else to ask).\n${binding !== undefined ? `[info] ${binding}: it is this machine's own uuid, its new token replaces the old binding\n` : ''}`);
@@ -423,10 +424,10 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   } else {
     o.say(
       `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
-        `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
+        `Security code of "${printable(view.name)}" (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
         (selfApproval
           ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
-          : `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`),
+          : `It must read exactly the same on "${printable(view.name)}". If it differs, run: machine admin revoke ${printable(view.name)}\n`),
     );
   }
 

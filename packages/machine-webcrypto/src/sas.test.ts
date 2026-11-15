@@ -1,7 +1,7 @@
 import { candidacyCode as coreCandidacy, finalCode as coreFinal, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import { b64u, bytes, newPair } from '../test-support/kit.js';
-import { candidacyCode, finalCode, formatVerificationCode } from './sas.js';
+import { candidacyCode, finalCode, formatFinalCode, formatVerificationCode } from './sas.js';
 
 describe('verification codes', () => {
   it('fixed vector: all-zero keys and random, equal to machine-core', async () => {
@@ -11,6 +11,26 @@ describe('verification codes', () => {
     expect(core).toMatch(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
     expect(await candidacyCode(zero, random)).toBe(core);
     expect(await finalCode(zero, zero, random)).toBe(coreFinal(zero, zero, random));
+  });
+
+  // Decision 55: the final code is 25 digits in five groups of five (83 bits). Same fixed vectors as machine-core sas.test.ts.
+  it('final code: fixed vectors, five groups of five digits, equal to machine-core', async () => {
+    expect(formatFinalCode(new Uint8Array(32))).toBe('00000 00000 00000 00000 00000');
+    expect(formatFinalCode(new Uint8Array(32).fill(255))).toBe('96714 06556 91703 33976 49407');
+    const first = new Uint8Array(32);
+    first[0] = 0x80;
+    expect(formatFinalCode(first)).toBe('48357 03278 45851 66988 24704');
+    const lastKept = new Uint8Array(32);
+    lastKept[10] = 0x20;
+    expect(formatFinalCode(lastKept)).toBe('00000 00000 00000 00000 00001');
+    const dropped = new Uint8Array(32);
+    dropped[10] = 0x1f;
+    expect(formatFinalCode(dropped)).toBe('00000 00000 00000 00000 00000');
+    expect(() => formatFinalCode(new Uint8Array(10))).toThrow(/at least 11 bytes/);
+    const zero = b64u(new Uint8Array(32));
+    const random = b64u(new Uint8Array(16));
+    expect(await finalCode(zero, zero, random)).toBe('66266 06377 45699 09220 73088');
+    expect(coreFinal(zero, zero, random)).toBe('66266 06377 45699 09220 73088');
   });
 
   it('100 random cases give the same candidacy and final codes as machine-core', async () => {

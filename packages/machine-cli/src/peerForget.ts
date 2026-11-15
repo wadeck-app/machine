@@ -1,5 +1,6 @@
 import { isUuid, resolveMachineRef } from '@wadeck-app/machine-core';
 import { UnresolvedReferenceError } from './adminRevoke.js';
+import { whenText } from './humanTime.js';
 import { loadNetwork } from './network.js';
 import { forgetPeerRecord, readPeerRecords } from './peerAddresses.js';
 import { PromptTimeoutError } from './prompt.js';
@@ -43,7 +44,7 @@ export async function runForgetPeerRecord(configDir: string, o: ForgetRecordOpti
   }
   o.say(
     [
-      `Forgetting the address records seen for ${label}: the highest is seq ${known.seq} (issued ${new Date(known.issuedAt * 1000).toISOString()}).`,
+      `Forgetting the address records seen for ${label}: the highest is seq ${known.seq} (issued ${whenText(known.issuedAt, o.now())}).`,
       'Afterwards the next record the relay gives for this machine is accepted WITHOUT any rollback check: the relay (or anybody holding a token) could then',
       'serve an old but validly signed record, up to 30 days old, and this machine would use its addresses.',
       `Use it ONLY after confirming out of band (phone call, in person, ssh) that ${name !== undefined ? `"${name}"` : 'that machine'} was reinstalled or lost its state.`,

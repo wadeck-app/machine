@@ -16,7 +16,7 @@ let daemonB: RunningDaemon;
 const lineAfter = (text: string, marker: RegExp): string => {
   const m = marker.exec(text);
   if (m === null) throw new Error(`"${marker}" not found in:\n${text}`);
-  const code = /^\s{2}([A-Z0-9]{4}(?:-[A-Z0-9]{4})+)\s*$/m.exec(text.slice(m.index));
+  const code = /^\s{2}(\d{5}(?: \d{5}){4})\s*$/m.exec(text.slice(m.index));
   if (code === null) throw new Error(`no code after "${marker}" in:\n${text}`);
   return code[1] as string;
 };
@@ -71,7 +71,7 @@ describe('onboarding with the real relay', () => {
     await w.run('desktop', a, ['status']);
   });
 
-  it('join of a second machine: device login, wait, the admin approves, the final codes are identical', async () => {
+  it('join of a second machine: device login, wait, the admin approves, the security codes are identical', async () => {
     let approved: { code: number; out: string; err: string } | undefined;
     const r = await w.run('laptop', b, ['join', w.relay.url], {
       hostname: 'Laptop',
@@ -84,8 +84,8 @@ describe('onboarding with the real relay', () => {
     expect(approved?.code, approved?.err).toBe(0);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('[ok] enrolled "laptop"');
-    const seenByAdmin = lineAfter(approved?.out ?? '', /Final code/);
-    const seenByNewMachine = lineAfter(r.out, /Final code/);
+    const seenByAdmin = lineAfter(approved?.out ?? '', /Security code of /);
+    const seenByNewMachine = lineAfter(r.out, /Security code of /);
     expect(seenByNewMachine).toBe(seenByAdmin);
   });
 

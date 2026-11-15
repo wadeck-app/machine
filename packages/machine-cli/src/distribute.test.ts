@@ -148,7 +148,7 @@ describe('machine admin approve distributes the new machine to the existing peer
     expect(result.err).toMatch(/approval (stands|is kept|was not undone)/i);
     // The approval stands and the final code was printed.
     expect(relay.candidacies.get(id)?.status).toBe('approved');
-    expect(result.out).toMatch(/Final code/);
+    expect(result.out).toMatch(/Security code of /);
     // The other direction was delivered, this one was not.
     expect(inboxOf('server')).toHaveLength(1);
     expect(inboxOf('laptop')).toHaveLength(0);

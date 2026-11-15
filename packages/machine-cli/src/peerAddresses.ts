@@ -157,7 +157,7 @@ export async function resolvePeerAddresses(configDir: string, peer: PeerRef, cli
   }
   if (entry === undefined) {
     throw new PeerAddressError(
-      `the relay has no address record for "${peer.name}" (${peer.uuid}): no record published yet. The relay lists a machine only once its daemon has published its address record, which is normal for a machine approved a moment ago or whose daemon is not running. Start \`machine daemon\` on that machine (\`machine status\` there, and its daemon log), wait a minute, or ${BYPASS}`,
+      `the relay has no address record for "${peer.name}" (${peer.uuid}): no record published yet. The relay lists a machine only once its daemon has published its address record, which is normal for a machine approved a moment ago or whose daemon is not running. ${startDaemonHint(peer.name)}, wait a minute (its daemon log: \`machine cli logs\` there), or ${BYPASS}`,
     );
   }
   const verified = accept(configDir, peer, entry.record, now, known, options);
@@ -175,6 +175,10 @@ export async function resolvePeerAddresses(configDir: string, peer: PeerRef, cli
     lastSeen: typeof entry.lastSeen === 'number' || entry.lastSeen === null ? entry.lastSeen : undefined,
   };
 }
+
+/** Which machine must do what when the relay has no address record of a peer (the daemon of that machine publishes it). */
+export const startDaemonHint = (peerName: string): string =>
+  `On "${peerName}" run \`machine startup enable\` (starts its daemon at login; needs orch) or leave \`machine daemon\` running in a terminal`;
 
 export interface PeerPresence {
   uuid: string;
@@ -202,7 +206,7 @@ export async function lookupPeerPresence(configDir: string, peers: PeerRef[], cl
     const known = remembered[peer.uuid];
     const lastKnown = (problem: string): PeerPresence => (known === undefined ? { uuid: peer.uuid, name: peer.name, addresses: [], source: 'none', problem } : { uuid: peer.uuid, name: peer.name, addresses: known.addresses, source: 'last-known', seq: known.seq, problem });
     const entry = byUuid.get(peer.uuid);
-    if (entry === undefined) return lastKnown('no record published yet (the relay lists a machine once its daemon has published its address record)');
+    if (entry === undefined) return lastKnown(`no record published yet: the relay lists a machine only once its daemon has published its address. ${startDaemonHint(peer.name)}, wait about a minute, then run \`machine list\` again here`);
     const verified = accept(configDir, peer, entry.record, now, known, options);
     if (!verified.ok) return lastKnown(`address record refused: ${verified.message}`);
     toCommit[peer.uuid] = verified.entry;

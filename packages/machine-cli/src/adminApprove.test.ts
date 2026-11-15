@@ -28,7 +28,9 @@ const noTty = async (): Promise<string> => {
 const forbidden = (what: string) => async (): Promise<string> => {
   throw new Error(`${what} must not be asked`);
 };
+// The candidacy code (base32, only with --verbose) and the security code (final code, 25 digits in five groups).
 const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].at(-1)?.[1] as string;
+const lastSecurityCodeLine = (out: string): string => [...out.matchAll(/^ {2}(\d{5}(?: \d{5}){4})$/gm)].at(-1)?.[1] as string;
 const login = () => cli(adminDir, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
 const approve = (args: string[] = [], io: { ask?: (l: string) => Promise<string>; prompt?: () => Promise<string> } = {}) =>
   cli(adminDir, ['admin', 'approve', ...args, '--relay', relay.url], io.prompt ?? (async () => admin.passphrase), { ask: io.ask ?? yes });
@@ -39,7 +41,7 @@ const noToken = (...texts: string[]) => {
 
 /** The candidate joins without waiting; the join itself sends its uuid (a candidacy without it is built by deleting the field). */
 async function candidatePosts(withUuid = true): Promise<{ id: string; code: string }> {
-  const joined = await ok(cand, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+  const joined = await ok(cand, ['join', '12345678', '--relay', relay.url, '--no-wait', '--verbose']);
   const id = [...relay.candidacies.keys()].at(-1) as string;
   // The relay stored the uuid the join sent.
   expect((relay.candidacies.get(id) as Record<string, unknown>).uuid).toBe(readMachine(cand).uuid);
@@ -200,7 +202,7 @@ describe('machine admin approve: listing', () => {
     expect(r.out).toMatch(/no pending candidacy/);
   });
 
-  it('one candidacy: id, name, hostname, address, age and the code recomputed here (equal to the candidate screen)', async () => {
+  it('one candidacy: id, name, hostname, address and age; the candidacy code is NOT shown by default (decision 55), --verbose shows it, equal to the candidate screen', async () => {
     const { id, code } = await candidatePosts();
     await strayPosts();
     const r = await approve();
@@ -209,7 +211,11 @@ describe('machine admin approve: listing', () => {
     expect(r.out).toContain('laptop');
     expect(r.out).toContain('127.0.0.1');
     expect(r.out).toMatch(/age \d+ s/);
-    expect(r.out).toContain(code);
+    expect(r.out).not.toContain(code);
+    expect(r.out).not.toMatch(/\bcode [0-9A-Z]{4}-/);
+    const verbose = await approve(['--verbose']);
+    expect(verbose.code, verbose.err).toBe(0);
+    expect(verbose.out).toContain(code);
     const posted = relay.candidacies.get(id) as unknown as { identityPublicKey: string; random: string };
     expect(code).toBe(candidacyCode(posted.identityPublicKey, posted.random));
     noToken(r.out, r.err);
@@ -270,8 +276,9 @@ describe('machine admin approve: deciding', () => {
     expect(asked[0]).toContain('127.0.0.1');
     expect(asked[0]).toContain('hostname');
     expect(asked[0]).not.toMatch(/code/i);
-    // The code is shown as information, recomputed here.
-    expect(approved.out).toContain(candidateCode);
+    // The candidacy code is no longer shown (decision 55); the details say where the one comparison happens.
+    expect(approved.out).toMatch(/After you sign, a security code .* "laptop"/s);
+    expect(approved.out).not.toContain(candidateCode);
     expect(decisions()).toHaveLength(1);
     expect(decisions()[0]?.authorization).toBe(`Bearer ${relay.adminToken}`);
     const body = decisions()[0]?.body as { decision: string; approval: { v: number; self: unknown; admin: { adminKeyId: string }; peers: unknown[] } };
@@ -283,7 +290,9 @@ describe('machine admin approve: deciding', () => {
     const random = (relay.candidacies.get(id) as unknown as { random: string }).random;
     const expectedFinal = finalCode(readMachine(cand).identity.publicKey, admin.adminPublicKey, random);
     expect(approved.out.split('\n')).toContain(`  ${expectedFinal}`);
-    expect(approved.out).toContain('On the new machine, the code must read exactly this. If it differs, run: machine admin revoke laptop');
+    expect(expectedFinal).toMatch(/^\d{5}( \d{5}){4}$/);
+    expect(approved.out).toContain('Security code of "laptop"');
+    expect(approved.out).toContain('It must read exactly the same on "laptop". If it differs, run: machine admin revoke laptop');
     // The final code comes after the decision, in the output.
     expect(approved.out.indexOf(expectedFinal)).toBeGreaterThan(approved.out.indexOf('approved for'));
 
@@ -291,7 +300,10 @@ describe('machine admin approve: deciding', () => {
     const candidateAsked: string[] = [];
     const joined = await cli(cand, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: async (l) => (candidateAsked.push(l), 'y') });
     expect(joined.code, joined.err).toBe(0);
-    expect(lastCodeLine(joined.out.split('[ok] enrolled')[0] as string)).toBe(expectedFinal);
+    expect(lastSecurityCodeLine(joined.out.split('[ok] enrolled')[0] as string)).toBe(expectedFinal);
+    expect(joined.out).toContain('Security code of "laptop" (this machine)');
+    expect(joined.out).toContain('It must read exactly the same on "desktop"');
+    expect(candidateAsked[0]).toContain('"desktop"');
     expect(readAdminPin(cand).adminKeyId).toBe(admin.adminKeyId);
     expect(loadNetwork(cand, Math.floor(Date.now() / 1000)).directory.machines().map((m) => m.name)).toEqual(['desktop']);
     // And the admin machine trusts the candidate with the same pair secret.
@@ -383,7 +395,7 @@ describe('machine admin approve: deciding', () => {
     const entry = relay.candidacies.get(id) as Record<string, unknown>;
     entry.code = candidateCode;
     entry.identityPublicKey = other;
-    const r = await approve([id], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
+    const r = await approve([id, '--verbose'], { ask: forbidden('a confirmation'), prompt: forbidden('the passphrase') });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/does not match the key and random/);
     expect(r.err).toMatch(/do NOT approve/);
@@ -398,7 +410,7 @@ describe('machine admin approve: deciding', () => {
     const other = readMachine(adminDir).identity.publicKey;
     (relay.candidacies.get(id) as Record<string, unknown>).identityPublicKey = other;
     const asked: string[] = [];
-    const r = await approve([id], { ask: async (l) => (asked.push(l), 'n') });
+    const r = await approve([id, '--verbose'], { ask: async (l) => (asked.push(l), 'n') });
     expect(r.code).toBe(1);
     expect(lastCodeLine(r.out)).not.toBe(candidateCode);
     expect(decisions()).toHaveLength(0);

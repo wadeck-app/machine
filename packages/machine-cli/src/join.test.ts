@@ -28,10 +28,10 @@ describe('sanitizeHostname', () => {
 });
 
 describe('machine join', () => {
-  it('claims, stores the token, posts the candidacy and prints the code alone on a line, never the token', async () => {
+  it('claims, stores the token, posts the candidacy and prints the candidacy code (--verbose only) alone on a line, never the token', async () => {
     relay = await startFakeRelay();
     await ok(dir, ['init', '--name', 'laptop']);
-    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait', '--verbose']);
 
     expect(readRelayConfig(dir)).toMatchObject({ relayUrl: relay.url, token: relay.token, label: 'machine-pairing' });
 
@@ -47,6 +47,24 @@ describe('machine join', () => {
     expect(r.out + r.err).not.toContain(relay.token);
     // The token is only in the secrets file.
     expect(readFileSync(relayFile(dir), 'utf8')).toContain(relay.token);
+  });
+
+  it('by default the candidacy code is not shown (decision 55): one meaningful code at each moment', async () => {
+    relay = await startFakeRelay();
+    await ok(dir, ['init', '--name', 'laptop']);
+    const r = await ok(dir, ['join', '12345678', '--relay', relay.url, '--no-wait']);
+    const posted = [...relay.candidacies.values()][0] as Record<string, string>;
+    const me = readMachine(dir);
+    expect(r.out).not.toContain(candidacyCode(me.identity.publicKey, posted.random as string));
+    expect(r.out).not.toMatch(/[Vv]erification code|Candidacy code/);
+    expect(r.out).toMatch(/Candidacy \S+ posted: it expires in \d+ (min|s) \(\d\d:\d\d\)/);
+    expect(r.out).not.toMatch(/20\d\d-\d\d-\d\dT/);
+  });
+
+  it('--verbose is refused where it does nothing', async () => {
+    const r = await cli(dir, ['status', '--verbose']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--verbose only applies to/);
   });
 
   it('--json carries the code and id but not the token', async () => {

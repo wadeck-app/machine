@@ -103,9 +103,11 @@ describe('machine join by device login', () => {
     expect(r.code, r.err).toBe(0);
 
     const lines = r.out.split('\n');
-    expect(lines).toContain('BCDF-GH23');
-    expect(lines).toContain('https://relay.example/device?code=BCDF-GH23');
-    expect(lines).toContain('Open that page, check that the address and label match this machine, and type this code to approve');
+    // The relay login code: named, alone on its line, said to be typed on the relay page (decision 55).
+    expect(lines).toContain('  BCDF-GH23');
+    expect(r.out).toMatch(/Relay login code for "laptop" on .*Type it on the relay page/);
+    expect(lines).toContain('Relay page: https://relay.example/device?code=BCDF-GH23');
+    expect(lines).toContain('Open it (any browser), check that the address and the label match this machine, and type the code there.');
     expect(timing.sleeps).toHaveLength(3);
     for (const ms of timing.sleeps) expect(ms).toBeGreaterThanOrEqual(MIN_DEVICE_POLL_MS);
 
@@ -141,7 +143,7 @@ describe('machine join by device login', () => {
     const r = await join_(['--no-wait', '--json'], { timing });
     expect(r.code, r.err).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ label: 'laptop' });
-    expect(r.err.split('\n')).toContain('BCDF-GH23');
+    expect(r.err.split('\n')).toContain('  BCDF-GH23');
     noSecrets(r.out, r.err);
   });
 

@@ -53,6 +53,9 @@ const revocationsFile = (configDir: string) => join(configDir, 'revocations.json
 const revocationListsFile = (configDir: string) => join(configDir, 'revocation-lists.json');
 // The revocation version each peer announced at its last handshake: shown by `machine list`, so the admin sees who is behind.
 const revocationSeenFile = (configDir: string) => join(configDir, 'revocation-seen.json');
+// When each revocation was installed on THIS machine (epoch seconds, the first time): the revocation entries carry only uuid and serial, and the
+// signed lists are pruned, so the date of a revocation is not derivable from them. Informational: shown by `machine status`.
+const revocationTimesFile = (configDir: string) => join(configDir, 'revocation-times.json');
 const policyFile = (configDir: string) => join(configDir, 'policy.json');
 const policyStateFile = (configDir: string) => join(configDir, 'policy-state.json');
 
@@ -227,6 +230,76 @@ function readStoredLists(configDir: string, adminPublicKey: string): SignedRevoc
   });
 }
 
+/** Remember the time of every machine that became revoked with this install (called inside the revocation lock). */
+function recordRevocationTimes(configDir: string, before: RevocationEntry[], after: RevocationEntry[], now: number): void {
+  const added = after.filter((entry) => !before.some((b) => b.uuid === entry.uuid && b.serial >= entry.serial)).map((entry) => entry.uuid);
+  if (added.length === 0) return;
+  const times = readRevocationTimes(configDir);
+  for (const uuid of added) times[uuid] ??= now;
+  writeFileAtomic(revocationTimesFile(configDir), `${JSON.stringify({ v: 1, times }, null, 2)}\n`, 0o644);
+}
+
+function readRevocationTimes(configDir: string): Record<string, number> {
+  const raw = readJsonObject(revocationTimesFile(configDir), 'delete it: the dates of the revocations then show as unknown');
+  if (!raw) return {};
+  const times = raw.times;
+  if (raw.v !== 1 || typeof times !== 'object' || times === null || Array.isArray(times)) {
+    throw new Error(`${revocationTimesFile(configDir)} is corrupt or invalid (unexpected shape): delete it, the dates of the revocations then show as unknown`);
+  }
+  return { ...(times as Record<string, number>) };
+}
+
+export interface RevokedMachine {
+  uuid: string;
+  /** From the registration still stored here; absent when this machine never held one (the revocation came from another machine). */
+  name: string | undefined;
+  serial: number;
+  /** Epoch seconds when this machine installed the revocation; absent for a revocation installed before this was recorded. */
+  installedAt: number | undefined;
+}
+
+/** The machines revoked on this machine, newest installation last. Their registration is no longer trusted but stays in peers.json, so the name is known. */
+export function revokedMachines(configDir: string): RevokedMachine[] {
+  const entries = readRevocations(configDir);
+  if (entries.length === 0) return [];
+  const times = readRevocationTimes(configDir);
+  const stored = readPeers(configDir);
+  return entries
+    .map((entry): RevokedMachine => {
+      let name: string | undefined;
+      let best = -1;
+      for (const p of stored) {
+        const body = (p.registration as { body?: RegistrationBody } | undefined)?.body;
+        if (body && body.uuid === entry.uuid && body.serial > best) {
+          best = body.serial;
+          name = body.name;
+        }
+      }
+      return { uuid: entry.uuid, name, serial: entry.serial, installedAt: times[entry.uuid] };
+    })
+    .sort((p, q) => (p.installedAt ?? 0) - (q.installedAt ?? 0) || (p.uuid < q.uuid ? -1 : 1));
+}
+
+export type RevokedResolution = { ok: true; machine: RevokedMachine } | { ok: false; reason: 'none' | 'ambiguous'; message: string };
+
+/** A revoked machine by name (case-insensitive), local alias, full uuid or unique uuid prefix of 4+ hex characters. */
+export function resolveRevokedMachine(configDir: string, reference: string, aliases: Record<string, string>): RevokedResolution {
+  const ref = reference.trim().toLowerCase();
+  const revoked = revokedMachines(configDir);
+  const aliased = aliases[ref];
+  const byAlias = aliased === undefined ? [] : revoked.filter((m) => m.uuid === aliased);
+  const byName = revoked.filter((m) => m.name?.toLowerCase() === ref);
+  const byUuid = revoked.filter((m) => m.uuid === ref || (/^[0-9a-f-]{4,}$/.test(ref) && m.uuid.startsWith(ref)));
+  const matches = [...new Map([...byAlias, ...byName, ...byUuid].map((m) => [m.uuid, m])).values()];
+  if (matches.length === 1) return { ok: true, machine: matches[0] as RevokedMachine };
+  if (matches.length === 0) return { ok: false, reason: 'none', message: `no revoked machine matches "${reference}"` };
+  return {
+    ok: false,
+    reason: 'ambiguous',
+    message: `"${reference}" matches ${matches.length} revoked machines (${matches.map((m) => `${m.name ?? 'unnamed'} ${m.uuid}`).join(', ')}): give the uuid`,
+  };
+}
+
 /** The body of an install, with the lock held and everything re-read: what another process wrote meanwhile is kept. */
 function installLocked(configDir: string, adminPublicKey: string, signed: SignedRevocation, options: InstallOptions): InstallResult {
   const stored = readStoredLists(configDir, adminPublicKey);
@@ -239,7 +312,10 @@ function installLocked(configDir: string, adminPublicKey: string, signed: Signed
     throw new Error(`revocation refused (future): the list is dated ${signed.body.issuedAt}, more than a day in the future of this machine's clock (${options.now}): check the clock of the machine that signed it, or of this one`);
   }
   options.afterRead?.();
-  if (applied.changed) writeFileAtomic(revocationsFile(configDir), `${JSON.stringify({ v: 1, entries: applied.entries }, null, 2)}\n`, 0o644);
+  if (applied.changed) {
+    writeFileAtomic(revocationsFile(configDir), `${JSON.stringify({ v: 1, entries: applied.entries }, null, 2)}\n`, 0o644);
+    recordRevocationTimes(configDir, local, applied.entries, options.now ?? Math.floor(Date.now() / 1000));
+  }
   const { kept, dropped } = pruneLists([...stored, signed]);
   writeFileAtomic(revocationListsFile(configDir), `${JSON.stringify({ v: 1, lists: kept }, null, 2)}\n`, 0o644);
   return { changed: applied.changed, dropped };

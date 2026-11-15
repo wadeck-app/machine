@@ -15,7 +15,7 @@ export interface FinalCodeDisplayProps {
 type Computed = { state: 'pending' } | { state: 'ready'; code: string } | { state: 'error'; message: string };
 
 /**
- * The final verification code, recomputed in the page, to compare with the code shown on the candidate machine before
+ * The security code (decision 55: the final code, 25 digits in five groups), recomputed in the page, to compare with the code shown on the candidate machine before
  * the candidate pins the admin key. Only public values are involved.
  *
  * @registryCategory atomic
@@ -37,7 +37,7 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
         if (!cancelled) {
           setComputed({
             state: 'error',
-            message: `Cannot compute the final code: ${(e as Error).message}. Reload the candidacy list; if it persists the relay sent a malformed candidacy, reject it.`,
+            message: `Cannot compute the security code: ${(e as Error).message}. Reload the candidacy list; if it persists the relay sent a malformed candidacy, reject it.`,
           });
         }
       },
@@ -51,12 +51,12 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
     return <div role="alert" className="text-sm text-red-700">{computed.message}</div>;
   }
   if (computed.state === 'pending') {
-    return <div className="text-sm text-gray-500">Computing the final code...</div>;
+    return <div className="text-sm text-gray-500">Computing the security code...</div>;
   }
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm">Compare this code with the one shown on the candidate machine. They must be identical.</p>
-      <div aria-label="Final verification code" role="group" className="font-mono text-2xl tracking-widest">
+      <p className="text-sm">Compare this security code with the one shown on the candidate machine: it must read exactly the same.</p>
+      <div aria-label="Security code" role="group" className="font-mono text-2xl tracking-widest">
         {computed.code}
       </div>
       <label className="flex items-center gap-2 text-sm">

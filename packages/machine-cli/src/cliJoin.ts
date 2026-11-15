@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { adminInit, adminKeyFile, askAdminPassphrase, assertCanInitAdminKey, type Prompt } from './admin.js';
 import { adminLogin, missingAdminTokenMessage, runApprove } from './adminApprove.js';
 import { enableAfterJoin } from './cliStartup.js';
+import { expiryText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { NotInitializedError } from './errors.js';
 import { ensureMachine, readMachine } from './identity.js';
@@ -120,10 +121,13 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         say('[info] this machine already holds the admin key: it is kept\n');
       }
       if (readRelayAdminConfig(configDir) === undefined) {
-        say('Admin access to the relay: in the relay console open Tokens, Add token, WITHOUT "Limited to scopes". It shows a pairing code.\n');
+        say(
+          'Setup needs two things from the relay console: first a full-access pairing code (asked now), then the approval of a relay login code that this machine shows (you type it on the relay page).\n' +
+            'Admin access to the relay: in the relay console open Tokens, Add token, WITHOUT "Limited to scopes". It shows an 8-digit pairing code.\n',
+        );
         let pairing: string;
         try {
-          pairing = (await o.ask('Full-access pairing code from the relay console: ')).trim();
+          pairing = (await o.ask('Full-access pairing code (8 digits, shown by the relay console): ')).trim();
         } catch (e) {
           if (e instanceof PromptTimeoutError) throw e;
           return fail(`no pairing code could be asked (${(e as Error).message}): get the code in the relay console, then run \`machine admin login <code> --relay ${effectiveRelay ?? '<relay-host>'}\` and \`machine setup\` again`, EXIT.usage);
@@ -172,13 +176,13 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       ...(io.now ? { now: io.now } : {}),
       ...(io.hostname ? { hostname: io.hostname } : {}),
       say,
-      // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
+      // Decision 55: the candidacy code is internal (the admin machine recomputes it and refuses a different one); a person compares the security code only.
       onPosted: (p) => {
         if (args.json && args.noWait) return;
         say(
           `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
-            `Candidacy ${p.candidacyId} posted, valid until ${new Date(p.expiresAt * 1000).toISOString()}.\n` +
-            (selfApproves ? '' : `Verification code (the admin sees the same one; the code that matters is shown after approval):\n\n  ${p.verificationCode}\n\n`),
+            `Candidacy ${p.candidacyId} posted: it ${expiryText(p.expiresAt, epochSeconds())}.\n` +
+            (args.verbose && !selfApproves ? `Candidacy code (--verbose; the admin machine recomputes it itself, there is nothing to compare):\n\n  ${p.verificationCode}\n\n` : ''),
         );
       },
       ...(selfApproves
@@ -201,6 +205,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
                   ...(effectiveRelay !== undefined ? { relayUrl: effectiveRelay } : {}),
                   days: 365,
                   reject: false,
+                  verbose: args.verbose,
                   prompt: signPrompt,
                   ask: o.ask,
                   say,
@@ -213,7 +218,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
                 return approved.kind === 'approved';
               } catch (e) {
                 if (e instanceof PromptTimeoutError) throw e;
-                throw new Error(`${(e as Error).message}. This machine's candidacy ${state.id} stays valid until ${new Date(state.expiresAt * 1000).toISOString()}: run \`machine join --resume\` to try again`);
+                throw new Error(`${(e as Error).message}. This machine's candidacy ${state.id} ${expiryText(state.expiresAt, epochSeconds())}: run \`machine join --resume\` to try again`);
               }
             },
           }
@@ -229,7 +234,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   // Nothing is started at login unless --auto-startup was given: otherwise only a suggestion (stderr with --json, so stdout stays one JSON document).
   const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
   if (result.status === 'posted') {
-    emit(result.posted, 'next: on the admin machine run `machine admin approve`, compare the final code it prints with the one this machine shows, then run `machine join --resume` here\n' + startupHint);
+    emit(result.posted, 'next: on the admin machine run `machine admin approve`; it prints a security code for this machine. Then run `machine join --resume` here: it shows the security code, which must read exactly the same on the admin machine\n' + startupHint);
   } else {
     const e = result.enrolled;
     const peerLines =

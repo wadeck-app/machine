@@ -1,6 +1,8 @@
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { parseAdvertise } from './addressDiscovery.js';
+import { whenText } from './humanTime.js';
 import { addRelayView, relayLines } from './listPresence.js';
+import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { runStartupCommand } from './cliStartup.js';
@@ -24,14 +26,16 @@ Getting started (one command per machine; the name of a machine is the computer 
     machine setup <relay>            creates the admin key (you choose its passphrase), asks the full-access code of the
                                      relay console, does the device login, approves itself and enrolls
   every other machine:
-    machine join <relay>             on the new machine: waits for the admin and finishes by itself; tells you the final
-                                     code to compare
+    machine join <relay>             on the new machine: waits for the admin and finishes by itself; shows the
+                                     security code to compare with the admin machine
     machine admin approve            on the admin machine: shows the new machine, asks y/N and the passphrase, prints the
-                                     final code (with several pending machines it lists them: pass the id)
+                                     security code (with several pending machines it lists them: pass the id)
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
   then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
-  Stays manual: the passphrase, the relay console codes and the final-code comparison (these are the human steps).
+  Stays manual: the passphrase, the relay console codes (pairing code, relay login code) and the security-code comparison (the human steps).
+  Three kinds of code, never mixed: the relay login code (XXXX-XXXX, typed on the relay page), the pairing code (8 digits, from
+  the relay console) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
 
 Commands:
   setup <relay> [--generate] [--name <name>] [--auto-startup]
@@ -45,7 +49,7 @@ Commands:
                                      (a note says what was changed); it is the stable reference signed at enrollment, a
                                      friendlier local label is \`machine alias set <label> <name>\`
   status                            identity, enrollment state, policy, revocation version and peers last seen
-                                     behind on it, what was left out
+                                     behind on it, the machines revoked here (name, uuid, when), what was left out
   list                               this machine and its registered peers (and the revocation version each peer
                                      announced at its last handshake); with a relay also their last known
                                      addresses and whether the relay says they are online (a relay problem is a
@@ -70,12 +74,12 @@ Commands:
                                      one command: the identity is created when there is none (--name, else the computer name). On the
                                      machine that holds the admin key it approves its own enrollment (one passphrase, nothing to compare;
                                      needs the admin relay token: \`machine admin login\`, or use \`machine setup\`). On any other machine it
-                                     prints what the admin runs (\`machine admin approve\`), waits, then shows the final code to compare
+                                     prints what the admin runs (\`machine admin approve\`), waits, then shows the security code, which must read exactly the same on the admin machine
                                      --timeout (default 900 s) is the wait for the admin; it never outlasts the candidacy (15 min)
                                      or the device code. An approval received but not confirmed is kept 15 minutes only:
                                      later it is discarded and nothing is pinned (ask the admin again: join --resume).
                                      get a relay token, post this machine's candidacy (with its uuid), wait for the
-                                     admin's approval, then show the final code and enroll. Without a code: device
+                                     admin's approval, then show the security code and enroll. Without a code: device
                                      login. It prints a code and a page; open the page (any browser), check that
                                      the address and label match this machine and type the code there. Nothing is
                                      typed here, no terminal is needed (SSH works). Ctrl-C or a lost session during
@@ -95,7 +99,7 @@ Commands:
                                      the job (run it again after moving machine); disable removes it; status shows
                                      whether it exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
-  join --resume [--timeout <seconds>] [--yes-final-code <code>]
+  join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
   cli version                        installed version and the latest published one
@@ -118,11 +122,11 @@ Administration (enrollment through the relay, or by files):
                                      _secrets_/relay-admin.json (a machine-scoped token is refused)
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
                                      without id: no pending candidacy says so; exactly ONE goes straight to its details; several are listed
-                                     (id, name, host, address, age, code) and you pass the id;
-                                     the details (the code is information only), then ask
+                                     (id, name, host, address, age) and you pass the id;
+                                     the details, then ask
                                      "approve this machine?" (y/N, terminal only, no way to skip it), type the admin
-                                     passphrase, sign and send the approval, then print the FINAL code: the one
-                                     comparison. On the new machine it must read exactly the same; if not, run
+                                     passphrase, sign and send the approval, then print the SECURITY code of the new
+                                     machine (25 digits): the one comparison. On the new machine it must read exactly the same; if not, run
                                      \`admin revoke\`. Then the other peers are told about the new machine through the
                                      relay (a failure is reported and exits 1, the approval stands; finish with
                                      \`admin distribute\`). --reject refuses a candidacy (no passphrase)
@@ -168,7 +172,9 @@ Administration (enrollment through the relay, or by files):
 Options:
   --json                 machine-readable output
   --relay <url>          relay for \`join\` and \`admin login\` (no default: required the first time, then the stored one is reused; https only, http on 127.0.0.1 for tests)
-  --prompt-timeout <s>   limit for every question to a person (y/N, passphrase, final code): 1 to 3600 s, default 120; on expiry the
+  --verbose              also show the candidacy code (join, setup, admin approve): internal by default, the admin machine recomputes
+                         and checks it itself; the security code is the one to compare
+  --prompt-timeout <s>   limit for every question to a person (y/N, passphrase, security code): 1 to 3600 s, default 120; on expiry the
                          question is cancelled, nothing is assumed and nothing is signed, pinned or revoked (join, admin approve|revoke|sign-policy|distribute|register|login)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --name <name>          machine name for init, join, setup when the identity is created (normalised: lowercase letters, digits, hyphens)
@@ -185,8 +191,18 @@ Exit codes: 0 ok, 1 failure (relay failures included, reason on stderr), 2 usage
 no connection) are 255 with the reason on stderr.
 `;
 
+/** The revoked machines of `machine status`, apart from the peers: not trusted here, each with the uuid that names it for `forget-relay-record`. */
+function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
+  if (revoked.length === 0) return [];
+  return [
+    '',
+    `revoked machines (${revoked.length}), refused here until approved again:`,
+    ...revoked.map((m) => `  ${m.name ?? '(name unknown)'}  uuid ${m.uuid.slice(0, 8)}  ${m.installedAt === undefined ? 'revocation installed here: date not recorded' : `revocation installed here ${whenText(m.installedAt, nowSeconds)}`}${m.name !== undefined ? `  (remove it from the relay: machine admin forget-relay-record ${m.name})` : `  (remove it from the relay: machine admin forget-relay-record ${m.uuid})`}`),
+  ];
+}
+
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -207,13 +223,19 @@ function parse(argv: string[]): Parsed {
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
     else if (a === '--quiet') out.quiet = true;
+    else if (a === '--verbose') out.verbose = true;
     else if (a === '--generate') out.generate = true;
     else if (a === '--list') out.list = true;
     else if (a === '--remove') out.remove = true;
     else if (a === '--follow' || a === '-f') out.follow = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
-    else if (a === '--yes-final-code') out.yesFinalCode = valueOf('--yes-final-code');
+    else if (a === '--yes-final-code') {
+      // The security code has five groups of five digits: typed without quotes the shell splits it, the groups are one value again.
+      let code = valueOf('--yes-final-code');
+      while (/^\d{5}$/.test(code.split(' ').at(-1) as string) && /^\d{5}$/.test(own[i + 1] ?? '')) code += ` ${own[++i] as string}`;
+      out.yesFinalCode = code;
+    }
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
@@ -286,6 +308,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   }
 
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
+  if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && rest[0] === 'approve'))) {
+    return fail('--verbose only applies to `machine join`, `machine setup` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);
+  }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
   if (args.autoStartup && command !== 'join' && command !== 'setup') return fail('--auto-startup only applies to `machine join` and `machine setup` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
@@ -376,6 +401,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
           `config: ${r.configDir}`,
           r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
           ...(r.revocationVersion === undefined ? [] : [`revocations: version ${r.revocationVersion}`]),
+          ...revokedBlock(r.revoked ?? [], Math.floor((io.now?.() ?? new Date()).getTime() / 1000)),
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
         ];
@@ -386,8 +412,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         const r = (await client.send('list')) as ListAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
-        const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000), undefined, { allowLocal: io.allowLoopbackPeers === true });
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay)])];
+        const nowSeconds = Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
+        const view = await addRelayView(configDir, r, nowSeconds, undefined, { allowLocal: io.allowLoopbackPeers === true });
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds)])];
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);

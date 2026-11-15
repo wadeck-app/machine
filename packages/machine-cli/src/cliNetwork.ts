@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
+import { whenText } from './humanTime.js';
 import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, PeerAddressError, resolvePeerAddresses } from './peerAddresses.js';
 import { adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { createAdminKey, runJoinCommand } from './cliJoin.js';
@@ -297,6 +298,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           ...(args.relay !== undefined ? { relayUrl: args.relay } : {}),
           days,
           reject: args.reject,
+          verbose: args.verbose,
           prompt,
           ask: askLine,
           // With --json stdout carries the final JSON only: the human text goes to stderr.
@@ -453,7 +455,7 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     for (const line of found.refused) io.stderr(`[warn] ${line}\n`);
     // What the relay says about presence is information (it can lag or lie): the addresses are tried anyway.
     if (found.online === false) {
-      io.stderr(`[warn] the relay says "${peer.name}" is offline${typeof found.lastSeen === 'number' ? ` (last seen ${new Date(found.lastSeen * 1000).toISOString()})` : ''}: trying its published addresses anyway\n`);
+      io.stderr(`[warn] the relay says "${peer.name}" is offline${typeof found.lastSeen === 'number' ? ` (last seen ${whenText(found.lastSeen, epochSeconds())})` : ''}: trying its published addresses anyway\n`);
     }
     const connected = await connectFirst(found.addresses, (address) => connect(address.host, address.port, CONNECT_TIMEOUT_MS));
     for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}\n`);

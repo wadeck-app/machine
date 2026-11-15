@@ -35,7 +35,7 @@ const approveOnFirstSleep = (approval: unknown) =>
   fakeTiming((_ms, n) => {
     if (n === 1) relay.approve(relay.pendingIds()[0] as string, approval);
   });
-const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].at(-1)?.[1] as string;
+const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}(\d{5}(?: \d{5}){4})$/gm)].at(-1)?.[1] as string;
 const noToken = (...texts: string[]) => expect(texts.join('\n')).not.toContain(relay.token);
 
 beforeEach(async () => {
@@ -65,8 +65,13 @@ describe('machine join: waiting for the approval and enrolling', () => {
     const random = relay.candidacies.get(id)?.random as string;
     const expected = finalCode(readMachine(cand).identity.publicKey, admin.adminPublicKey, random);
     expect(r.out.split('\n')).toContain(`  ${expected}`);
+    // One meaningful code, named, with the machine it concerns and where it is compared (decision 55).
+    expect(r.out).toContain('Security code of "laptop" (this machine)');
+    expect(r.out).toContain('It must read exactly the same on the admin machine');
+    expect(r.out).not.toMatch(/[Vv]erification code/);
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain(admin.adminKeyId);
+    expect(asked[0]).toMatch(/security code/);
 
     expect(readAdminPin(cand).adminKeyId).toBe(admin.adminKeyId);
     const network = loadNetwork(cand, Math.floor(Date.now() / 1000));
@@ -111,7 +116,8 @@ describe('machine join: waiting for the approval and enrolling', () => {
 
     // The relay is not needed any more: the approval was kept locally.
     const before = relay.requests.length;
-    const second = await resume(['--yes-final-code', code.toLowerCase().replaceAll('-', ' ')], { ask: noTty, timing: fakeTiming() });
+    // The five groups typed without quotes are one value (the shell would otherwise split them into five arguments).
+    const second = await resume(['--yes-final-code', ...code.split(' ')], { ask: noTty, timing: fakeTiming() });
     expect(second.code, second.err).toBe(0);
     expect(relay.requests.length).toBe(before);
     expect(readAdminPin(cand).adminKeyId).toBe(admin.adminKeyId);
@@ -121,7 +127,7 @@ describe('machine join: waiting for the approval and enrolling', () => {
 
   it('a wrong --yes-final-code is refused: nothing pinned, approval kept', async () => {
     const timing = approveOnFirstSleep(await approvalFor({ peerDirs: [peerDir] }));
-    const r = await runJoinCli(['--yes-final-code', '0000-0000-0000-0000'], { timing, ask: yes });
+    const r = await runJoinCli(['--yes-final-code', '00000 00000 00000 00000 00000'], { timing, ask: yes });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/does not match/);
     expect(r.err).toMatch(/swapped/);
@@ -161,7 +167,9 @@ describe('machine join: waiting for the approval and enrolling', () => {
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/no decision after 60 s/);
     expect(r.err).toMatch(/machine join --resume/);
-    expect(r.err).toMatch(/valid until 20\d\d-/);
+    // Local time with a relative hint, never UTC.
+    expect(r.err).toMatch(/expires in \d+ (min|s) \(\d\d:\d\d\)/);
+    expect(r.err).not.toMatch(/20\d\d-\d\d-\d\dT/);
     expect(readCandidacy(cand)?.id).toBeDefined();
     expect(readRelayConfig(cand)?.token).toBe(relay.token);
     // Polls every 3 s, and stops at the deadline.

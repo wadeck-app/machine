@@ -2,7 +2,7 @@ import { isUuid, resolveMachineRef } from '@wadeck-app/machine-core';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { viaAdminToken } from './adminRelay.js';
 import { adminRelayAccess, noAdminRelayTokenMessage } from './distribute.js';
-import { loadNetwork } from './network.js';
+import { loadNetwork, resolveRevokedMachine } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
 import { readAliases } from './state.js';
@@ -32,20 +32,34 @@ export async function runForgetRelayRecord(configDir: string, o: ForgetOptions):
   const access = adminRelayAccess(configDir, o.client);
   if (access === undefined) throw new Error(noAdminRelayTokenMessage(configDir));
 
-  // A machine this one trusts by name, alias or uuid; or any uuid (a machine that was revoked or removed, whose record is still on the relay).
+  // A machine this one trusts by name, alias or uuid; a machine revoked here by name, alias, uuid or uuid prefix (its registration is still stored,
+  // so the name survives the revoke); or any full uuid (a machine removed some other way, whose record is still on the relay).
   const network = loadNetwork(configDir, o.now());
-  const resolved = resolveMachineRef(o.reference, network.directory.machines(), readAliases(configDir));
+  const aliases = readAliases(configDir);
+  const resolved = resolveMachineRef(o.reference, network.directory.machines(), aliases);
   let uuid: string;
   let name: string | undefined;
+  let revoked = false;
   if (resolved.ok) {
     uuid = resolved.uuid;
     name = network.directory.find(uuid)?.name;
-  } else if (isUuid(o.reference)) {
-    uuid = o.reference.toLowerCase();
   } else {
-    throw new UnresolvedReferenceError(`${resolved.message} (forget-relay-record takes a machine this one trusts, or a full machine uuid)`);
+    const gone = resolveRevokedMachine(configDir, o.reference, aliases);
+    if (gone.ok) {
+      uuid = gone.machine.uuid;
+      name = gone.machine.name;
+      revoked = true;
+    } else if (gone.reason === 'ambiguous') {
+      throw new UnresolvedReferenceError(gone.message);
+    } else if (isUuid(o.reference)) {
+      uuid = o.reference.toLowerCase();
+    } else {
+      throw new UnresolvedReferenceError(
+        `"${o.reference}" matches no trusted machine (\`machine list\`) and no revoked machine (\`machine status\` lists them): give a name or uuid from one of those, or the full uuid of a machine this one never knew`,
+      );
+    }
   }
-  const label = name !== undefined ? `"${name}" (${uuid})` : uuid;
+  const label = name !== undefined ? `"${name}" (${revoked ? 'revoked machine ' : ''}${uuid})` : revoked ? `${uuid} (revoked machine)` : uuid;
 
   o.say(
     [
@@ -66,6 +80,14 @@ export async function runForgetRelayRecord(configDir: string, o: ForgetOptions):
   if (!/^\s*(y|yes)\s*$/i.test(answer)) throw new Error('not removed: the deletion was not confirmed. Nothing was deleted');
 
   await viaAdminToken(() => access.client.deleteMachine(uuid));
+  if (revoked) {
+    // Nothing to re-send to a revoked machine: it stays refused here, and the admin approves it again only if that is wanted.
+    o.say(
+      `[ok] the relay forgot ${label}: record, owner binding and inbox removed.\n` +
+        `The machine stays revoked on this machine (it is refused here). To let it back: it runs \`machine join --resume\`, then \`machine admin approve\` here enrolls it again with a new registration.\n`,
+    );
+    return { uuid, name };
+  }
   o.say(
     `[ok] the relay forgot ${label}: record, owner binding and inbox removed.\n` +
       `If this machine is still in use: it is not registered on the relay any more (not_registered). Run \`machine join --resume\` on it, then \`machine admin approve\` here to approve the new candidacy: only then does it publish its record and read its inbox again. ` +

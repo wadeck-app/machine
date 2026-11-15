@@ -144,6 +144,8 @@ describe('resolvePeerAddresses', () => {
     // Calm: a registered machine is not listed by the relay until its daemon has published; nothing is broken.
     expect(e.message).toMatch(/no record published yet/);
     expect(e.message).not.toMatch(/has not published one/);
+    // Which machine, which command (UX audit item 13).
+    expect(e.message).toMatch(/On "laptop" run `machine startup enable`.*`machine daemon`/s);
     expect(e.message).toContain('--address');
   });
 
@@ -192,6 +194,7 @@ describe('lookupPeerPresence (machine list)', () => {
     const [row] = await lookupPeerPresence(a, [peerOf()], publisher, now);
     expect(row).toMatchObject({ uuid: laptop().uuid, problem: expect.stringMatching(/no record published yet/) });
     expect(row?.problem).not.toMatch(/has not published one|error|failed/i);
+    expect(row?.problem).toMatch(/On "laptop" run `machine startup enable`.*`machine daemon`.*`machine list` again/s);
     expect(row?.source).toBe('none');
   });
 

@@ -1,7 +1,7 @@
 import { resolveMachineRef, type MachineEntry, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
-import { loadNetwork, readRevocationSeen, revocationState } from './network.js';
+import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
@@ -25,6 +25,8 @@ export interface StatusAnswer {
   revocationVersion?: number;
   /** Peers whose revocations, announced (digest) at their last handshake, differ from ours: they may still trust a revoked machine until they meet a peer that has the lists. The version is informational. */
   peersBehind?: Array<{ uuid: string; name: string; revocationVersionSeen: number }>;
+  /** Machines revoked on this machine (not trusted any more), with the uuid and when the revocation was installed here. Absent when there is none. */
+  revoked?: RevokedMachine[];
   /** What was left out of the network and why (invalid registration, tampered policy, ...). */
   problems: string[];
   configDir: string;
@@ -76,7 +78,8 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
       const network = loadNetwork(configDir, now());
-      const problems = [...network.problems];
+      // A revoked registration is listed in `revoked` (with its uuid and date), not as a problem of the network.
+      const problems = network.problems.filter((p) => !/: registration revoked \(/.test(p));
       let revocation: Pick<StatusAnswer, 'revocationVersion' | 'peersBehind'> = {};
       if (network.enrolled) {
         try {
@@ -91,6 +94,14 @@ export function makeCommands(configDir: string, version: string | (() => string)
           problems.push(`revocation catch-up state unavailable: ${(e as Error).message}`);
         }
       }
+      let revoked: RevokedMachine[] = [];
+      if (network.enrolled) {
+        try {
+          revoked = revokedMachines(configDir);
+        } catch (e) {
+          problems.push(`the revoked machines are not listed: ${(e as Error).message}`);
+        }
+      }
       return {
         initialized: true,
         uuid: self.uuid,
@@ -100,6 +111,7 @@ export function makeCommands(configDir: string, version: string | (() => string)
         peers: network.directory.machines().length,
         ...(network.policy ? { policyVersion: network.policy.version } : {}),
         ...revocation,
+        ...(revoked.length > 0 ? { revoked } : {}),
         problems,
         configDir,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),

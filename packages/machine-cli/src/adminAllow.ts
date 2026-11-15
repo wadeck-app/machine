@@ -7,6 +7,7 @@ import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { writeFileAtomic } from './fsutil.js';
 import { exportMachineInfo, installPolicy, loadNetwork } from './network.js';
+import { clockText, relativeText } from './humanTime.js';
 import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
@@ -128,7 +129,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
       `Policy for "${target.name}" (${target.uuid}): version ${body.baseVersion} -> ${body.version}`,
       ...edit.added.map((e) => `  + ${line(e)}`),
       ...edit.removed.map((e) => `  - ${line(e)}`),
-      `  ${body.defaults.length} entr${body.defaults.length === 1 ? 'y' : 'ies'} allowed to every trusted peer after this change; may be applied until ${new Date(body.notAfter * 1000).toISOString()}`,
+      `  ${body.defaults.length} entr${body.defaults.length === 1 ? 'y' : 'ies'} allowed to every trusted peer after this change; may be applied until ${clockText(body.notAfter, o.now())} (${relativeText(body.notAfter, o.now())})`,
       '',
     ].join('\n'),
   );
