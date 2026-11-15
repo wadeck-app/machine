@@ -1,4 +1,4 @@
-import { adminLoginFix, ADMIN_TOKEN_WHY, capitalized } from './fullAccess.js';
+import { adminLoginFix, ADMIN_TOKEN_WHY, capitalized } from './adminAccess.js';
 import { RelayError } from './relayClient.js';
 
 // Calls made with the admin token of `machine admin login` (relay-admin.json, a token of the machine-admin scope, or a legacy full-access one):

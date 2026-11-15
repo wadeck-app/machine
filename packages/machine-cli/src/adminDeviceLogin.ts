@@ -3,7 +3,7 @@ import { adminLogin } from './adminApprove.js';
 import type { Timing } from './cliTypes.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
-import { FULL_ACCESS_WARNING, FULL_PAIRING_PARAGRAPH, fullPairingFix, MACHINE_ADMIN_CHIP, machineAdminUnsupportedAdvice } from './fullAccess.js';
+import { FULL_ACCESS_WARNING, FULL_PAIRING_PARAGRAPH, fullPairingFix, MACHINE_ADMIN_CHIP, machineAdminUnsupportedAdvice } from './adminAccess.js';
 import { awaitDeviceApproval, deviceLabel, MAX_DEVICE_LOGIN_SECONDS, printable } from './join.js';
 import { PromptTimeoutError } from './prompt.js';
 import { AccessLoginUnsupportedError, createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';

@@ -1,4 +1,4 @@
-import { adminLoginFix, fullPairingFix, MACHINE_ADMIN_RELAY_COMMIT } from './fullAccess.js';
+import { adminLoginFix, fullPairingFix, MACHINE_ADMIN_RELAY_COMMIT } from './adminAccess.js';
 // Client of the relay API (relay-api.md v0.2 + pairing claim). The relay is untrusted: this client only moves opaque
 // documents. The token is held in a closure and is never part of an error message, a log line or a returned value.
 

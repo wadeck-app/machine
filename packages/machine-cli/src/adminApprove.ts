@@ -1,4 +1,4 @@
-import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './adminAccess.js';
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';

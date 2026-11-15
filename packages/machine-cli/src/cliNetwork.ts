@@ -9,7 +9,7 @@ import { recordSignedPolicy, runAllow } from './adminAllow.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { adminLoginByConsole, AdminLoginInputError, adminLoginName } from './adminDeviceLogin.js';
-import { FULL_ACCESS_WARNING } from './fullAccess.js';
+import { FULL_ACCESS_WARNING } from './adminAccess.js';
 import { runDistribute } from './adminDistribute.js';
 import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';

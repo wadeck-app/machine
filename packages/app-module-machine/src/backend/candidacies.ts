@@ -13,7 +13,7 @@ import { SECRETS_DIRNAME } from './configDir.js';
 
 const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 1024 * 1024;
-// Same sentences as machine-cli fullAccess.ts (the two packages do not import each other).
+// Same sentences as machine-cli adminAccess.ts (the two packages do not import each other).
 const ADMIN_TOKEN_WHY = 'approving a machine needs the admin relay token (limited to machine rights, it cannot manage tokens)';
 const PAIRING_CLICK_PATH = 'in the relay console open Tokens, Add token, "Limited to scopes", machine-admin';
 // The confirm-once login first (decision 59), the pairing code as the alternative.

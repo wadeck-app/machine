@@ -1,5 +1,6 @@
 import { AdminLoginInputError, adminLoginByConsole } from './adminDeviceLogin.js';
-import { adminLoginFix } from './fullAccess.js';import { existsSync } from 'node:fs';
+import { adminLoginFix } from './adminAccess.js';
+import { existsSync } from 'node:fs';
 import { adminInit, adminKeyFile, askAdminPassphrase, assertCanInitAdminKey, type Prompt } from './admin.js';
 import { missingAdminTokenMessage, runApprove } from './adminApprove.js';
 import { enableAfterJoin } from './cliStartup.js';

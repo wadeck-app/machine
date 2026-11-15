@@ -1,4 +1,4 @@
-import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './adminAccess.js';
 import { existsSync } from 'node:fs';
 import {
   DOCUMENT_RETENTION_SECONDS,
