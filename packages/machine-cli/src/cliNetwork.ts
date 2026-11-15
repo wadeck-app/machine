@@ -317,6 +317,9 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         }
         return EXIT.ok;
       } catch (e) {
+        if (first !== undefined && args.optionLike.includes(first) && e instanceof Error && e.message.startsWith('no pending candidacy matches')) {
+          return fail(`unknown option "${first}": see \`machine --help\` (and it is not the id of a pending candidacy either: run \`machine admin approve\` to list them)`, EXIT.usage);
+        }
         if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
         throw e;
       }
@@ -478,7 +481,10 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     session.close();
   }
   if (answer.type === 'refused') {
-    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}`, EXIT.peer);
+    // The fix is the command to run on the admin machine, with this exact command (an exact match is the only rule).
+    const quoted = /[\s"'`]/.test(command) ? `"${command}"` : command;
+    const how = answer.reason === 'not-listed' ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted}` : '';
+    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);

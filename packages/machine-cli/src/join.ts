@@ -166,7 +166,8 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   say(
     `Relay access for "${deviceLabel(info.name)}" on ${relayUrl}. Approve it in the relay console:\n\n` +
       `${printable(userCode)}\n\n${printable(verificationUrl)}\n\n` +
-      `Open that page, check that the address and label match this machine, and type this code to approve\n\n`,
+      `Open that page, check that the address and label match this machine, and type this code to approve\n\n` +
+      `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).\n`,
   );
 
   let intervalMs = Math.max(MIN_DEVICE_POLL_MS, Math.ceil(started.pollIntervalSeconds * 1000));

@@ -697,3 +697,71 @@ describe('machine admin approve: a uuid already bound to a token (deployed relay
     expect(decisions()).toHaveLength(2);
   });
 });
+
+// A candidacy id is 128 random bits in base64url: about 1 in 4096 starts with "--", which the option parser took for an option.
+describe('a candidacy id that starts with "--"', () => {
+  beforeEach(async () => {
+    await login();
+  });
+
+  it('is taken as the id when it names a pending candidacy (and is approved)', async () => {
+    await candidatePosts();
+    const real = [...relay.candidacies.keys()].at(-1) as string;
+    const dashed = `--${real.slice(2)}`;
+    const entry = relay.candidacies.get(real) as Record<string, unknown>;
+    relay.candidacies.delete(real);
+    relay.candidacies.set(dashed, entry as never);
+    const r = await approve([dashed]);
+    expect(r.code, r.err).toBe(0);
+    expect(decisions()).toHaveLength(1);
+    expect(decisions()[0]?.path).toContain(encodeURIComponent(dashed));
+  });
+
+  it('a prefix that starts with "--" works too, and --reject with such an id', async () => {
+    await candidatePosts();
+    const real = [...relay.candidacies.keys()].at(-1) as string;
+    const dashed = `--${real.slice(2)}`;
+    relay.candidacies.set(dashed, relay.candidacies.get(real) as never);
+    relay.candidacies.delete(real);
+    const r = await cli(adminDir, ['admin', 'approve', dashed.slice(0, 8), '--reject', '--relay', relay.url], async () => admin.passphrase, { ask: yes });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/rejected/);
+  });
+
+  it('an unknown "--word" is still an unknown option (a typo is not taken for an id), saying that no candidacy matches either', async () => {
+    await candidatePosts();
+    const r = await approve(['--rejct']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/unknown option "--rejct"/);
+    expect(r.err).toMatch(/not the id of a pending candidacy/);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('on any other command an unknown option is refused as before', async () => {
+    const r = await cli(adminDir, ['status', '--wat']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/unknown option "--wat"/);
+  });
+});
+
+describe('approving a machine that was revoked here earlier', () => {
+  beforeEach(async () => {
+    await login();
+  });
+
+  it('the detail says so, with the old serial, before the question (the machine comes back with a new registration)', async () => {
+    await candidatePosts();
+    expect((await approve()).code).toBe(0);
+    const enrolled = await cli(cand, ['join', '--resume'], undefined, { timing: fakeTiming(), ask: yes });
+    expect(enrolled.code, enrolled.err).toBe(0);
+    const revoked = await cli(adminDir, ['admin', 'revoke', 'laptop'], async () => admin.passphrase, { ask: yes });
+    expect(revoked.code, revoked.err).toBe(0);
+    const again = await cli(cand, ['join', '--resume', '--no-wait'], undefined, { timing: fakeTiming(), ask: yes });
+    expect(again.code, again.err).toBe(0);
+    const asked: string[] = [];
+    const r = await approve([], { ask: async (l) => (asked.push(l), 'y') });
+    expect(r.out).toMatch(/\[warn\] this machine was REVOKED on this machine earlier \(serial \d+\)/);
+    expect(r.out).toMatch(/new registration/);
+    expect(asked[0]).toMatch(/revoked here earlier/);
+  });
+});

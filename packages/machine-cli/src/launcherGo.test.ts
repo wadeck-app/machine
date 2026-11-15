@@ -151,7 +151,7 @@ describe('the built launcher against the real bundle', () => {
     expect(direct.code).toBe(1);
     expect(viaLauncher.code).toBe(1);
     expect(viaLauncher.stdout).toBe(direct.stdout);
-    expect(viaLauncher.stderr).toContain('[fail] this machine has no identity yet: run `machine init --name <name>` first');
+    expect(viaLauncher.stderr).toContain('[fail] this machine has no identity yet: run `machine setup <relay>`');
     expect(readdirSync(join(dir, 'logs')).some(f => f.endsWith('-launcher.log'))).toBe(true);
   });
 

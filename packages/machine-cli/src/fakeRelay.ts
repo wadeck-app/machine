@@ -91,6 +91,9 @@ export interface FakeRelay {
   close: () => Promise<void>;
 }
 
+/** ISO 8601 of an epoch in seconds: how the real relay dates a candidacy. */
+const iso = (epochSeconds: number): string => new Date(epochSeconds * 1000).toISOString();
+
 export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<FakeRelay> {
   const code = options.code ?? '12345678';
   const token = options.token ?? `tok_${randomBytes(12).toString('hex')}`;
@@ -146,7 +149,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   };
   const presence = (uuid: string) => {
     const seen = lastSeen.get(uuid);
-    return { lastSeen: seen ?? null, online: seen !== undefined && clock() - seen < ONLINE_SECONDS };
+    // ISO 8601 like the real relay (null before any write).
+    return { lastSeen: seen === undefined ? null : iso(seen), online: seen !== undefined && clock() - seen < ONLINE_SECONDS };
   };
   const send = (res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
@@ -232,11 +236,12 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const createdAt = Math.floor(Date.now() / 1000);
       postedBy.set(id, presented);
       candidacies.set(id, { status: 'pending', ...(body as object), createdAt, expiresAt: createdAt + 900 });
-      return send(res, 201, { id, createdAt, expiresAt: createdAt + 900 });
+      return send(res, 201, { success: true, id, createdAt: iso(createdAt), expiresAt: iso(createdAt + 900) });
     }
     if (method === 'GET' && path === '/api/machines/candidacies') {
       if (!admin) return err(res, 403, 'full_access_required', 'listing candidacies needs a full-access token');
       return send(res, 200, {
+        success: true,
         candidacies: [...candidacies.entries()]
           .filter(([, c]) => c.status === 'pending')
           .map(([id, c]) => {
@@ -246,7 +251,9 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
             const bound = typeof fields.uuid === 'string' ? owners.get(fields.uuid) : undefined;
             // A token revoked in the console no longer has a label: the relay says so with a placeholder.
             const binding = { uuidBound: bound !== undefined, ...(bound !== undefined ? { boundTokenLabel: machineTokens.get(bound) ?? '(revoked token)' } : {}), boundToCandidateToken: bound !== undefined && bound === postedBy.get(id) };
-            return { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...binding, ...fields };
+            const entry = { id, observedIp: '127.0.0.1', createdAt, expiresAt: createdAt + 900, ...binding, ...fields };
+            // The real relay dates a candidacy with ISO 8601 strings (relay-api.md said epoch seconds; the integration tests found the difference). Stored as seconds here.
+            return { ...entry, createdAt: iso(entry.createdAt as number), expiresAt: iso(entry.expiresAt as number) };
           }),
       });
     }
@@ -272,7 +279,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       }
     }
     if (method === 'GET' && path === '/api/machines') {
-      return send(res, 200, { machines: [...records.entries()].map(([uuid, r]) => ({ uuid, record: r.record, ...presence(uuid) })) });
+      return send(res, 200, { success: true, machines: [...records.entries()].map(([uuid, r]) => ({ uuid, record: r.record, ...presence(uuid) })) });
     }
     const bearer = (authorization ?? '').replace(/^Bearer /, '');
     const inboxRoute = /^\/api\/machines\/([^/]+)\/inbox(?:\/([^/]+))?$/.exec(path);
@@ -308,7 +315,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         const start = cursorAt + 1;
         const page = all.slice(start, start + pageSize);
         const more = start + pageSize < all.length;
-        return send(res, 200, { documents: page.map(({ id: docId, document, storedAt }) => ({ id: docId, document, storedAt })), more, ...(more ? { next: (page.at(-1) as FakeInboxDocument).id } : {}) });
+        return send(res, 200, { success: true, documents: page.map(({ id: docId, document, storedAt }) => ({ id: docId, document, storedAt: iso(storedAt) })), more, next: more ? (page.at(-1) as FakeInboxDocument).id : null });
       }
       if (method === 'DELETE' && id !== undefined) {
         inboxes.get(uuid)?.delete(id);
@@ -330,12 +337,15 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       // The count is that of the inbox the caller owns; a token that does not own the uuid sees 0.
       if (method === 'POST' && machine[2]) {
         if (notRegistered(uuid)) return;
-        if (owners.get(uuid) === bearer) lastSeen.set(uuid, clock());
-        return send(res, 200, { success: true, serverTime: 1, inbox: { count: owners.get(uuid) === bearer ? (inboxes.get(uuid)?.size ?? 0) : 0 } });
+        // As the real relay: another token's uuid is refused, and a heartbeat before the first address record is a 404 (the record is written first).
+        if (!admin && owners.get(uuid) !== bearer) return err(res, 403, 'not_owner', 'This machine belongs to another token (the one whose candidacy the admin approved). Use that token, or a full-access one; after a token rotation the machine posts a new candidacy and the admin approves it.');
+        if (!records.has(uuid)) return err(res, 404, 'not_found', 'No address record for this uuid yet: write it first with PUT /api/machines/<uuid>.');
+        lastSeen.set(uuid, clock());
+        return send(res, 200, { success: true, serverTime: 1, inbox: { count: inboxes.get(uuid)?.size ?? 0 } });
       }
       if (method === 'GET' && !machine[2]) {
         const r = records.get(uuid);
-        return r ? send(res, 200, { uuid, record: r.record, ...presence(uuid), etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
+        return r ? send(res, 200, { success: true, uuid, record: r.record, ...presence(uuid), etag: String(r.etag) }) : err(res, 404, 'not_found', 'no such machine');
       }
       if (method === 'PUT' && !machine[2]) {
         if (notRegistered(uuid)) return;

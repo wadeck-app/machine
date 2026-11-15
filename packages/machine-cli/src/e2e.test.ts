@@ -49,6 +49,8 @@ describe('two machines through the command line', () => {
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/refused.*not-listed|not-listed.*refused/s);
     expect(r.out).toBe('');
+    // The fix is the exact command to run on the admin machine, not a description of a list.
+    expect(r.err).toContain(`To allow it, on the admin machine run: machine admin allow laptop --shell ${SHELL} -- "echo something else"`);
   });
 
   it('propagates the exit code of the remote command', async () => {

@@ -1,6 +1,6 @@
 # Getting started
 
-**Version:** v0.1 (2026-11-15). Implements decisions 51 to 54. Nothing here was run against the real relay (fake relay tests only).
+**Version:** v0.1 (2026-11-15). Implements decisions 51 to 54. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
 
 ## Commands per case
 

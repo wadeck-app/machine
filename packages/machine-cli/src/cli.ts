@@ -186,7 +186,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -229,8 +229,13 @@ function parse(argv: string[]): Parsed {
     else if (a === '--config-dir') out.configDir = valueOf('--config-dir');
     else if (a === '--passphrase' || a.startsWith('--passphrase=')) {
       throw new UsageError('a passphrase is never accepted as an argument (it would stay in your shell history and in the process list): it is typed at the prompt');
-    } else if (a.startsWith('--')) throw new UsageError(`unknown option "${a}": see \`machine --help\``);
-    else out.positional.push(a);
+    } else if (a.startsWith('--')) {
+      // A candidacy id is 128 random bits in base64url: one in 4096 starts with "--". After `admin approve` it is kept as the id; the command refuses it when no pending candidacy matches.
+      if (out.positional[0] === 'admin' && out.positional[1] === 'approve' && out.positional.length === 2 && /^--[A-Za-z0-9_-]+$/.test(a)) {
+        out.optionLike.push(a);
+        out.positional.push(a);
+      } else throw new UsageError(`unknown option "${a}": see \`machine --help\``);
+    } else out.positional.push(a);
   }
   return out;
 }

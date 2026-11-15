@@ -176,6 +176,74 @@ describe('candidacy errors (injected fetch)', () => {
   });
 });
 
+// The REAL relay (found by the integration tests of `npm run test:relay`) dates candidacies with ISO 8601 strings, not epoch seconds.
+describe('dates of a candidacy as the real relay sends them (ISO 8601)', () => {
+  const candidacy = { name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: '11111111-2222-4333-8444-555555555555' };
+  const created = '2026-11-15T12:00:00.000Z';
+  const expires = '2026-11-15T12:15:00.000Z';
+  const seconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+
+  it('a post is read into epoch seconds', async () => {
+    const posted = await clientWith(() => json(201, { success: true, id: 'abc', createdAt: created, expiresAt: expires })).postCandidacy(candidacy);
+    expect(posted).toEqual({ id: 'abc', createdAt: seconds(created), expiresAt: seconds(expires) });
+  });
+
+  it('the admin list is read into epoch seconds, every other field kept', async () => {
+    const entry = { id: 'abc', name: 'laptop', hostname: 'h', uuid: candidacy.uuid, identityPublicKey: 'k', random: 'r', observedIp: '1.2.3.4', createdAt: created, expiresAt: expires, uuidBound: false };
+    const listed = await clientWith(() => json(200, { success: true, candidacies: [entry] })).listCandidacies();
+    expect(listed).toEqual([{ ...entry, createdAt: seconds(created), expiresAt: seconds(expires) }]);
+  });
+
+  it.each([
+    ['a number (not what the relay sends)', 1_800_000_000],
+    ['text that is not a date', 'tomorrow'],
+    ['nothing', undefined],
+  ])('%s is refused loudly, naming the field', async (_what, bad) => {
+    const e = await failure(clientWith(() => json(201, { success: true, id: 'abc', createdAt: created, expiresAt: bad })).postCandidacy(candidacy));
+    expect(e.message).toMatch(/unexpected answer to the candidacy post/);
+    expect(e.message).toMatch(/expiresAt/);
+  });
+
+  it('a list entry with a bad date is refused loudly, naming the field', async () => {
+    const e = await failure(clientWith(() => json(200, { success: true, candidacies: [{ id: 'abc', createdAt: 'nope', expiresAt: expires }] })).listCandidacies());
+    expect(e.message).toMatch(/unexpected answer to the candidacy list/);
+    expect(e.message).toMatch(/createdAt/);
+  });
+});
+
+// Same for the inbox (storedAt) and the presence (lastSeen): the real relay sends ISO 8601 strings, the rest of the program counts epoch seconds.
+describe('inbox and presence dates as the real relay sends them (ISO 8601)', () => {
+  const stored = '2026-11-15T12:00:05.123Z';
+  const seen = '2026-11-15T12:01:00.000Z';
+  const seconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+  const doc = { body: { v: 1, kind: 'peer', to: UUID, id: 'a'.repeat(22), issuedAt: 1, expiresAt: 2, payload: {} }, signature: 's' };
+
+  it('an inbox page is read with storedAt in epoch seconds', async () => {
+    const entries = await clientWith(() => json(200, { success: true, documents: [{ id: 'a'.repeat(22), document: doc, storedAt: stored }], more: false, next: null })).listInbox(UUID);
+    expect(entries).toEqual([{ id: 'a'.repeat(22), document: doc, storedAt: seconds(stored) }]);
+  });
+
+  it('an inbox entry with a storedAt that is not a date is refused loudly, naming the field', async () => {
+    const e = await failure(clientWith(() => json(200, { success: true, documents: [{ id: 'a'.repeat(22), document: doc, storedAt: 12 }], more: false, next: null })).listInbox(UUID));
+    expect(e.message).toMatch(/unexpected answer to the inbox list/);
+    expect(e.message).toMatch(/storedAt/);
+  });
+
+  it('the machine list and one machine are read with lastSeen in epoch seconds (null stays null)', async () => {
+    const record = { body: { v: 1, uuid: UUID, addresses: [], seq: 1, issuedAt: 1 }, signature: 's' };
+    const listed = await clientWith(() => json(200, { success: true, machines: [{ uuid: UUID, record, lastSeen: seen, online: true }, { uuid: UUID, record, lastSeen: null, online: false }] })).getMachines();
+    expect(listed.map((m) => m.lastSeen)).toEqual([seconds(seen), null]);
+    const one = await clientWith(() => json(200, { success: true, uuid: UUID, record, etag: '3', lastSeen: seen, online: true })).getMachine(UUID);
+    expect(one).toMatchObject({ lastSeen: seconds(seen), etag: '3', online: true });
+  });
+
+  it('a lastSeen that is not a date or null is refused loudly, naming the field', async () => {
+    const e = await failure(clientWith(() => json(200, { success: true, machines: [{ uuid: UUID, record: {}, lastSeen: 'yesterday', online: false }] })).getMachines());
+    expect(e.message).toMatch(/unexpected answer to the machine list/);
+    expect(e.message).toMatch(/lastSeen/);
+  });
+});
+
 describe('against the fake relay', () => {
   let relay: FakeRelay | undefined;
   afterEach(async () => {
@@ -301,6 +369,8 @@ describe('inbox (documents distributed through the relay)', () => {
     r.setOwner(TO, r.token);
     await admin.putInboxDocument(TO, doc(1));
     await admin.putInboxDocument(TO, doc(2));
+    // The real relay refuses a heartbeat until the address record exists.
+    await machine.putRecord(TO, { body: { v: 1, uuid: TO, addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: 1_800_000_000 }, signature: 's' });
     expect((await machine.heartbeat(TO)).inboxCount).toBe(2);
     const listed = await machine.listInbox(TO);
     expect(listed.map((e) => e.id)).toEqual([idOf(1), idOf(2)]);
@@ -414,7 +484,7 @@ describe('inbox (documents distributed through the relay)', () => {
   });
 
   it('a relay that keeps saying more with the same next is stopped, not followed forever', async () => {
-    const e = await failure(clientWith(() => json(200, { documents: [{ id: idOf(1), document: {}, storedAt: 1 }], more: true, next: 'same' })).listInbox(TO));
+    const e = await failure(clientWith(() => json(200, { documents: [{ id: idOf(1), document: {}, storedAt: '2026-11-15T12:00:00.000Z' }], more: true, next: 'same' })).listInbox(TO));
     expect(e.message).toMatch(/unexpected answer/);
   });
 
@@ -473,7 +543,7 @@ describe('inbox (documents distributed through the relay)', () => {
 
 describe('inbox: sizes and bounds', () => {
   const TO = '11111111-1111-4111-8111-111111111111';
-  const entry = (n: number) => ({ id: `${String(n).padStart(2, '0')}${'A'.repeat(20)}`, document: {}, storedAt: 1 });
+  const entry = (n: number) => ({ id: `${String(n).padStart(2, '0')}${'A'.repeat(20)}`, document: {}, storedAt: '2026-11-15T12:00:00.000Z' });
 
   it('a page above 1 MiB is a loud error naming the limit, not something that is parsed', async () => {
     const huge = 'x'.repeat(1024 * 1024 + 10);

@@ -196,6 +196,10 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
           cached = undefined;
           listener?.revalidate();
         },
+        // A new peer or a new policy applies at once too: `machine run` right after `machine admin allow` must not be refused by a cache.
+        onInstalled: () => {
+          cached = undefined;
+        },
         log: (line) => log(line),
         ...(options.inbox?.timer ? { timer: options.inbox.timer } : {}),
         ...(options.inbox?.heartbeatMs !== undefined ? { heartbeatMs: options.inbox.heartbeatMs } : {}),

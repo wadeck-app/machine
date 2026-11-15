@@ -412,3 +412,15 @@ describe('no default relay', () => {
     expect(relay.requests).toHaveLength(0);
   });
 });
+
+// Found while reading what a first-time user sees against the real relay: after the code and the page, the command went silent.
+describe('the wait for the approval in the relay console is announced', () => {
+  it('says how long it waits, that Ctrl-C stops it and that nothing is stored meanwhile', async () => {
+    const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+    const r = await cli(dir, ['join', relay.url, '--no-wait'], forbidden('a prompt'), { ...headless, timing });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/Waiting for the approval in the relay console \(up to 5 min, Ctrl-C stops it and nothing is stored\)/);
+    expect(r.out.indexOf('Waiting for the approval')).toBeGreaterThan(r.out.indexOf('type this code to approve'));
+    expect(r.out.indexOf('Waiting for the approval')).toBeLessThan(r.out.indexOf('[ok] relay access approved'));
+  });
+});

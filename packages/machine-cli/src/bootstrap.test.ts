@@ -114,7 +114,7 @@ describe('one command per machine', () => {
       expect(r.out).toMatch(/already pinned/);
       expect(r.out).not.toMatch(/Is this the code|Final code|On the admin machine run|join --resume|Waiting for the admin/);
       expect(r.out).toMatch(/no other machine yet: this machine is the first of the network/);
-      expect(r.out).toMatch(/machine join <relay>/);
+      expect(r.out).toContain(`machine join ${relay.url}`);
       expect(r.out).toMatch(/machine admin allow/);
       expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
       expect(r.err).toBe('');
@@ -198,7 +198,7 @@ describe('one command per machine', () => {
       expect(r.out).toContain('[ok] admin key created');
       expect(r.out).toContain('[ok] enrolled "midgard2"');
       expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
-      expect(r.out).toMatch(/another machine: run `machine join <relay>`/);
+      expect(r.out).toContain(`another machine: run \`machine join ${relay.url}\``);
       expect(r.out + r.err).not.toContain(chosen);
       expect(existsSync(join(a, '_secrets_', 'admin.key.json'))).toBe(true);
       expect(existsSync(join(a, '_secrets_', 'relay-admin.json'))).toBe(true);
@@ -329,7 +329,7 @@ describe('one command per machine', () => {
       expect(r.out).toMatch(/Final code, it must be exactly the one the admin sees/);
       expect(asked).toHaveLength(1);
       expect(r.out).toContain('[ok] enrolled "laptop"');
-      expect(r.out).toMatch(/machine admin allow <this machine> <command>/);
+      expect(r.out).toMatch(/machine admin allow <this machine> -- <command>/);
       expect(peersOf(b)).toHaveLength(1);
     });
   });

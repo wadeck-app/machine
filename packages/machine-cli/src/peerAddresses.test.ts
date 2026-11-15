@@ -127,7 +127,7 @@ describe('resolvePeerAddresses', () => {
   it('refuses a record that belongs to another machine (the relay serves the record of C under the uuid of B)', async () => {
     // Served as-is by the relay under the uuid of B: its body names another uuid.
     const other = '11111111-2222-4333-8444-555555555555';
-    relay.force(`/api/machines/${laptop().uuid}`, 200, { uuid: laptop().uuid, record: record(1, A1, { uuid: other }), lastSeen: now, online: true, etag: '1' }, {}, 'GET');
+    relay.force(`/api/machines/${laptop().uuid}`, 200, { uuid: laptop().uuid, record: record(1, A1, { uuid: other }), lastSeen: new Date(now * 1000).toISOString(), online: true, etag: '1' }, {}, 'GET');
     expect((await refused()).message).toMatch(new RegExp(`written for machine ${other}`));
   });
 

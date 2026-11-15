@@ -239,8 +239,8 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
           ? 'no other machine yet: this machine is the first of the network\n'
           : 'peers trusted: none (the admin included none)\n';
     const next = e.isAdminMachine
-      ? 'next:\n  another machine: run `machine join <relay>` on it, then `machine admin approve` here\n  allow a command: `machine admin allow <machine> <command>` (this machine or another)\n'
-      : 'next: the admin allows commands on this machine (`machine admin allow <this machine> <command>`, run on the admin machine), then `machine status`\n';
+      ? `next:\n  another machine: run \`machine join ${result.posted.relayUrl}\` on it, then \`machine admin approve\` here\n  allow a command: \`machine admin allow <machine> -- <command>\` (this machine or another)\n`
+      : 'next: the admin allows commands on this machine (`machine admin allow <this machine> -- <command>`, run on the admin machine), then `machine status`\n';
     emit({ ...e, relayUrl: result.posted.relayUrl }, `[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}${next}${startupHint}`);
   }
   if (args.json && startupHint) io.stderr(startupHint);

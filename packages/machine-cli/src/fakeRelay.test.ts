@@ -95,7 +95,7 @@ describe('fake relay: address records', () => {
     expect((await c.getMachines()).map((m) => [m.uuid, m.online])).toEqual([[uuidN(1), true]]);
   });
 
-  it('a heartbeat of a token that does not own the uuid does not make it look online', async () => {
+  it('a heartbeat of a token that does not own the uuid is refused (403 not_owner) and does not make it look online', async () => {
     relay = await startFakeRelay();
     relay.setOwner(uuidN(1), relay.token);
     let now = 1_800_000_000;
@@ -106,7 +106,7 @@ describe('fake relay: address records', () => {
     const stranger = createRelayClient({ baseUrl: relay.url, token: strangerToken });
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
     now += 500;
-    await stranger.heartbeat(uuidN(1));
+    expect((await failure(stranger.heartbeat(uuidN(1)))).code).toBe('not_owner');
     expect(await stranger.getMachine(uuidN(1))).toMatchObject({ online: false });
   });
 
@@ -242,5 +242,62 @@ describe('fake relay: ownership bound at approval (deployed, poc-owner 719f36f)'
     // Once the candidacies are gone (rejected), the key may come back with another uuid.
     for (const id of relay.pendingIds()) relay.reject(id);
     await post(relay.token, uuidN(2));
+  });
+});
+
+// Found by the integration tests against the REAL relay (poc-node, `npm run test:relay`): it dates a candidacy with ISO 8601 strings.
+describe('fake relay: dates as the real relay sends them', () => {
+  it('the post answer and the admin list carry ISO 8601 strings, 15 minutes apart', async () => {
+    relay = await startFakeRelay({ scopes: null });
+    const body = { name: 'laptop', hostname: 'h', identityPublicKey: 'k', random: 'r', uuid: uuidN(1) };
+    const post = await fetch(`${relay.url}/api/machines/candidacies`, { method: 'POST', headers: { authorization: `Bearer ${relay.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const posted = (await post.json()) as { createdAt: unknown; expiresAt: unknown };
+    expect(posted.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(Date.parse(posted.expiresAt as string) - Date.parse(posted.createdAt as string)).toBe(900_000);
+    const list = await fetch(`${relay.url}/api/machines/candidacies`, { headers: { authorization: `Bearer ${relay.token}` } });
+    const [entry] = ((await list.json()) as { candidacies: { createdAt: unknown; expiresAt: unknown }[] }).candidacies;
+    expect(entry?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(entry?.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe('fake relay: presence and inbox as the real relay answers', () => {
+  const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  const get = async (path: string, token: string) => {
+    const r = await fetch(`${relay?.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+
+  it('a heartbeat before the first address record is 404 not_found (the record is written first), then 200', async () => {
+    relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
+    const before = await fetch(`${relay.url}/api/machines/${uuidN(1)}/heartbeat`, { method: 'POST', headers: { authorization: `Bearer ${relay.token}` } });
+    expect(before.status).toBe(404);
+    expect(await before.json()).toMatchObject({ success: false, error: 'not_found', message: 'No address record for this uuid yet: write it first with PUT /api/machines/<uuid>.' });
+    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
+    const after = await fetch(`${relay.url}/api/machines/${uuidN(1)}/heartbeat`, { method: 'POST', headers: { authorization: `Bearer ${relay.token}` } });
+    expect(after.status).toBe(200);
+  });
+
+  it('lastSeen is an ISO string (null before any write) in the list and in one machine', async () => {
+    relay = await startFakeRelay();
+    relay.setOwner(uuidN(1), relay.token);
+    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putRecord(uuidN(1), recordFor(uuidN(1)));
+    const list = await get('/api/machines', relay.token);
+    expect(list.body.success).toBe(true);
+    expect(((list.body.machines as { lastSeen: unknown }[])[0] as { lastSeen: unknown }).lastSeen).toMatch(isoPattern);
+    const one = await get(`/api/machines/${uuidN(1)}`, relay.token);
+    expect(one.body).toMatchObject({ success: true, uuid: uuidN(1), online: true });
+    expect(one.body.lastSeen).toMatch(isoPattern);
+  });
+
+  it('an inbox page carries storedAt as an ISO string and next: null on the last page', async () => {
+    relay = await startFakeRelay({ scopes: null });
+    relay.setOwner(uuidN(1), relay.token);
+    const id = 'a'.repeat(22);
+    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putInboxDocument(uuidN(1), { body: { id, to: uuidN(1) } } as never);
+    const page = await get(`/api/machines/${uuidN(1)}/inbox`, relay.token);
+    expect(page.body).toMatchObject({ success: true, more: false, next: null });
+    expect(((page.body.documents as { storedAt: unknown }[])[0] as { storedAt: unknown }).storedAt).toMatch(isoPattern);
   });
 });

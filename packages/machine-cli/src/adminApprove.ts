@@ -5,7 +5,7 @@ import { sealBundle } from './approval.js';
 import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { PromptTimeoutError } from './prompt.js';
 import { NotInitializedError } from './errors.js';
-import { exportMachineInfo, importPeer, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
+import { exportMachineInfo, importPeer, installedRevocations, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
 import { viaAdminToken } from './adminRelay.js';
 import { createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, readRelayConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
@@ -350,13 +350,18 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       `refusing to approve ${printable(view.id)}: it claims the uuid of "${printable(known?.name ?? view.name)}" (${uuid}), already trusted here, with another identity key. The relay does not say that the uuid is bound to a token (uuidBound is not true), so this cannot be told from someone taking the uuid. Nothing was signed or sent. Reject it (\`machine admin approve ${printable(view.id)} --reject\`); if the machine really has a new key, revoke the old machine (\`machine admin revoke ${printable(view.name)}\`) and enroll it again`,
     );
   }
+  // A machine revoked on this machine that asks again (`join --resume` after a revoke): approving enrolls it again with a new registration.
+  const revokedBefore = view.uuid === undefined ? undefined : installedRevocations(configDir).filter((entry) => entry.uuid === view.uuid).at(-1);
+  if (revokedBefore !== undefined) {
+    o.say(`[warn] this machine was REVOKED on this machine earlier (serial ${revokedBefore.serial}): approving it enrolls it again with a new registration. Approve only if that is what you want (\`machine admin approve ${printable(view.id)} --reject\` refuses it)\n`);
+  }
   const rebind = bindingWarning(view);
   let answer: string;
   try {
     // Only the candidacy this process posted itself (checked above, field by field) is approved without the y/N question: the passphrase stays.
     if (joining !== undefined) answer = 'y';
     else answer = await o.ask(
-      `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''}${keyChanged ? ' WARNING: this uuid is already trusted here with another identity key: approving replaces the old key on this machine (it is not revoked).' : ''} [y/N] `,
+      `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''}${revokedBefore !== undefined ? ' WARNING: this machine was revoked here earlier, approving enrolls it again.' : ''}${keyChanged ? ' WARNING: this uuid is already trusted here with another identity key: approving replaces the old key on this machine (it is not revoked).' : ''} [y/N] `,
     );
   } catch (e) {
     if (e instanceof PromptTimeoutError) throw e;

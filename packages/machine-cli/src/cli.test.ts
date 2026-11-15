@@ -26,6 +26,7 @@ describe('machine init / status', () => {
     const r = await run('status');
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/machine init --name/);
+    expect(r.err).toMatch(/machine setup <relay>.*machine join <relay>/s);
   });
 
   it('init prints the UUID and name, never the private key', async () => {

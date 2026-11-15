@@ -69,7 +69,7 @@ async function enroll(name: string): Promise<void> {
 }
 
 /** The machine `laptop` as the daemon sees it: admin key pinned, relay token stored, and it owns its inbox. */
-function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; client?: ReturnType<typeof createRelayClient>; now?: () => number; handledCap?: number; onRevocationInstalled?: () => void } = {}) {
+function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; client?: ReturnType<typeof createRelayClient>; now?: () => number; handledCap?: number; onRevocationInstalled?: () => void; onInstalled?: () => void } = {}) {
   const timer = options.timer ?? fakeTimer();
   const audit = new FileAuditLog(join(dirOf(name), 'audit.log'));
   const loop = startInboxLoop({
@@ -82,6 +82,7 @@ function loopFor(name: string, options: { timer?: ReturnType<typeof fakeTimer>; 
     timer,
     ...(options.handledCap !== undefined ? { handledCap: options.handledCap } : {}),
     ...(options.onRevocationInstalled ? { onRevocationInstalled: options.onRevocationInstalled } : {}),
+    ...(options.onInstalled ? { onInstalled: options.onInstalled } : {}),
   });
   loops.push(loop);
   return { loop, timer };
@@ -137,6 +138,8 @@ describe('the inbox loop: documents from the admin', () => {
   });
 
   it('reads the inbox only when the heartbeat says there is something (and once at start)', async () => {
+    // The real relay answers a heartbeat 404 until the address record exists: this machine published its record already.
+    await createRelayClient({ baseUrl: relay.url, token: relay.adminToken }).putRecord(uuidOf('laptop'), { body: { v: 1, uuid: uuidOf('laptop'), addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: nowSeconds() }, signature: 's' });
     const { loop } = loopFor('laptop');
     await loop.ready;
     const lists = () => relay.requests.filter((q) => q.method === 'GET' && q.path.endsWith('/inbox')).length;
@@ -150,6 +153,43 @@ describe('the inbox loop: documents from the admin', () => {
     await loop.runOnce();
     expect(lists()).toBe(2);
     expect(machineNames('laptop')).toEqual(['server']);
+  });
+
+  describe('a heartbeat before the first address record (the real relay answers 404 not_found until the record exists)', () => {
+    const recordOf = (name: string) => ({ body: { v: 1 as const, uuid: uuidOf(name), addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: nowSeconds() }, signature: 's' });
+
+    it('is not an outage: the heartbeat is asked again once the publisher wrote the record, and what waited in the inbox is installed in the very first round', async () => {
+      await enroll('laptop');
+      await enroll('server');
+      const admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
+      const timer = fakeTimer();
+      const audit = new FileAuditLog(join(dirOf('laptop'), 'audit.log'));
+      const withPublisher = startInboxLoop({
+        configDir: dirOf('laptop'),
+        self: readMachine(dirOf('laptop')),
+        client: createRelayClient({ baseUrl: relay.url, token: relay.token }),
+        audit,
+        now: () => nowSeconds(),
+        log: (line) => logs.push(line),
+        timer,
+        publisher: { tick: () => admin.putRecord(uuidOf('laptop'), recordOf('laptop')).then(() => undefined) },
+      });
+      loops.push(withPublisher);
+      await withPublisher.ready;
+      expect(logs.filter((l) => /not found|No address record/i.test(l))).toEqual([]);
+      expect(machineNames('laptop')).toEqual(['server']);
+      // No failure was counted: the next round is one heartbeat away, not a backoff.
+      expect(timer.delays.at(-1)).toBe(60_000);
+    });
+
+    it('without a publisher and without a record the inbox is read anyway (reading needs no record), with no failure logged', async () => {
+      await enroll('laptop');
+      await enroll('server');
+      const { loop } = loopFor('laptop');
+      await loop.ready;
+      expect(logs.filter((l) => /not found|No address record/i.test(l))).toEqual([]);
+      expect(machineNames('laptop')).toEqual(['server']);
+    });
   });
 
   it('rejects a document signed by another key: audited with the reason, deleted, nothing installed', async () => {
@@ -197,7 +237,7 @@ describe('the inbox loop: documents from the admin', () => {
     await enroll('laptop');
     const real = { body: { v: 1 }, signature: 'x' };
     const longId = 'A'.repeat(5000);
-    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: longId, document: real, storedAt: 1 }, { id: '../../etc', document: real, storedAt: 1 }], more: false }, {}, 'GET');
+    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: longId, document: real, storedAt: '2026-11-15T12:00:00.000Z' }, { id: '../../etc', document: real, storedAt: '2026-11-15T12:00:00.000Z' }], more: false }, {}, 'GET');
     const mark = relay.requests.length;
     const { loop } = loopFor('laptop');
     await loop.ready;
@@ -210,7 +250,7 @@ describe('the inbox loop: documents from the admin', () => {
     await enroll('laptop');
     await enroll('server');
     const real = relay.inbox(uuidOf('laptop'))[0] as { id: string; document: SignedDocument; storedAt: number };
-    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: documentId('another id'), document: real.document, storedAt: real.storedAt }], more: false }, {}, 'GET');
+    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: documentId('another id'), document: real.document, storedAt: new Date(real.storedAt * 1000).toISOString() }], more: false }, {}, 'GET');
     const { loop } = loopFor('laptop');
     await loop.ready;
     expect(machineNames('laptop')).toEqual([]);
@@ -285,6 +325,24 @@ describe('the inbox loop: documents from the admin', () => {
     await loop.runOnce();
     expect(machineNames('laptop')).toEqual([]);
     expect(auditText('laptop')).toMatch(/"reason":"revoked"/);
+  });
+
+  it('tells the daemon when any document changed what this machine trusts or may run (a new peer, a policy), so that it does not keep answering from its cache', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    let calls = 0;
+    const { loop } = loopFor('laptop', { onInstalled: () => (calls += 1) });
+    await loop.ready;
+    // The peer document that waited in the inbox.
+    expect(calls).toBe(1);
+    const draft = join(root, 'draft-notify.json');
+    writeFileSync(draft, JSON.stringify({ v: 1, target: uuidOf('laptop'), version: 1, baseVersion: 0, defaults: [{ shell: 'sh', command: 'echo hi' }], peers: {} }));
+    await ok(adminDir, ['admin', 'sign-policy', draft, '--out', join(root, 'p-notify.json')], pass);
+    await loop.runOnce();
+    expect(calls).toBe(2);
+    // Nothing new: no notification.
+    await loop.runOnce();
+    expect(calls).toBe(2);
   });
 
   it('tells the daemon when a revocation document was installed (so the open sessions of the revoked peer are closed)', async () => {
@@ -576,7 +634,7 @@ describe('the inbox loop: floods and lies of the relay', () => {
 
   it('a page above 1 MiB is said once, nothing is installed, and the loop goes on', async () => {
     const huge = 'x'.repeat(1024 * 1024 + 10);
-    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: documentId('a'), document: huge, storedAt: 1 }], more: false }, {}, 'GET');
+    relay.force(`/api/machines/${uuidOf('laptop')}/inbox`, 200, { documents: [{ id: documentId('a'), document: huge, storedAt: '2026-11-15T12:00:00.000Z' }], more: false }, {}, 'GET');
     const { loop, timer } = loopFor('laptop');
     await loop.ready;
     expect(logs.filter((l) => /1 MiB/.test(l))).toHaveLength(1);

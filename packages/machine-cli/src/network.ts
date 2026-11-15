@@ -155,6 +155,11 @@ export function importPeer(configDir: string, bundle: PeerBundle, options: { now
   writePeers(configDir, kept);
 }
 
+/** The revocations installed on this machine (uuid and serial of each revoked registration). */
+export function installedRevocations(configDir: string): RevocationEntry[] {
+  return readRevocations(configDir);
+}
+
 function readRevocations(configDir: string): RevocationEntry[] {
   const raw = readJsonObject(revocationsFile(configDir), 'restore it from another machine');
   if (!raw) return [];

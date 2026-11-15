@@ -346,7 +346,14 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     });
   }
 
-  const malformed = (what: string) => new RelayError({ status: 0, message: `the relay ${baseUrl} sent an unexpected answer to ${what}: it may be an incompatible version, tell the relay owner` });
+  const malformed = (what: string, field?: string) => new RelayError({ status: 0, message: `the relay ${baseUrl} sent an unexpected answer to ${what}${field !== undefined ? ` (${field})` : ''}: it may be an incompatible version, tell the relay owner` });
+  // The relay dates a candidacy with ISO 8601 strings (found against the real relay); the rest of this program counts epoch seconds.
+  const presenceInSeconds = (entry: Record<string, unknown>, what: string): Record<string, unknown> => ({ ...entry, lastSeen: entry.lastSeen === null || entry.lastSeen === undefined ? null : epochSecondsOf(entry.lastSeen, what, 'lastSeen') });
+  const epochSecondsOf = (value: unknown, what: string, field: string): number => {
+    const ms = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) ? Date.parse(value) : Number.NaN;
+    if (!Number.isFinite(ms)) throw malformed(what, `${field} is not an ISO 8601 date`);
+    return Math.floor(ms / 1000);
+  };
 
   return {
     baseUrl,
@@ -418,8 +425,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     async postCandidacy(candidacy) {
       const r = (await call({ method: 'POST', path: '/api/machines/candidacies', body: candidacy, candidacyPost: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       const { id, createdAt, expiresAt } = r.body;
-      if (typeof id !== 'string' || typeof createdAt !== 'number' || typeof expiresAt !== 'number') throw malformed('the candidacy post');
-      return { id, createdAt, expiresAt };
+      if (typeof id !== 'string') throw malformed('the candidacy post', 'id');
+      return { id, createdAt: epochSecondsOf(createdAt, 'the candidacy post', 'createdAt'), expiresAt: epochSecondsOf(expiresAt, 'the candidacy post', 'expiresAt') };
     },
 
     async getCandidacy(id) {
@@ -463,8 +470,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         if (!Array.isArray(documents)) throw malformed('the inbox list');
         for (const d of documents) {
           const entry = asObject(d);
-          if (typeof entry.id !== 'string' || !('document' in entry) || typeof entry.storedAt !== 'number') throw malformed('the inbox list');
-          entries.push({ id: entry.id, document: entry.document, storedAt: entry.storedAt });
+          if (typeof entry.id !== 'string' || !('document' in entry)) throw malformed('the inbox list');
+          entries.push({ id: entry.id, document: entry.document, storedAt: epochSecondsOf(entry.storedAt, 'the inbox list', 'storedAt') });
         }
         if (max !== undefined && entries.length >= max) return entries.slice(0, max);
         if (r.body.more !== true) return entries;
@@ -487,19 +494,19 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     async getMachines() {
       const r = (await call({ method: 'GET', path: '/api/machines', maxBytes: MAX_MACHINES_ANSWER_BYTES, what: 'the machine list (1000 records of 2 KiB at most)' })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       if (!Array.isArray(r.body.machines)) throw malformed('the machine list');
-      return r.body.machines as MachineEntry[];
+      return (r.body.machines as Record<string, unknown>[]).map((m) => presenceInSeconds(m, 'the machine list') as unknown as MachineEntry);
     },
 
     async getMachine(uuid) {
       const r = await call({ method: 'GET', path: `/api/machines/${uuidPath(uuid)}`, accept: [404], maxBytes: MAX_MACHINE_ANSWER_BYTES, what: 'one machine record (2 KiB at most)' });
       if (r === undefined) return undefined;
-      return r.body as unknown as MachineEntry & { etag?: string };
+      return presenceInSeconds(r.body, 'the machine record') as unknown as MachineEntry & { etag?: string };
     },
 
     async listCandidacies() {
       const r = (await call({ method: 'GET', path: '/api/machines/candidacies' })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       if (!Array.isArray(r.body.candidacies)) throw malformed('the candidacy list');
-      return r.body.candidacies as PendingCandidacy[];
+      return (r.body.candidacies as Record<string, unknown>[]).map((c) => ({ ...c, createdAt: epochSecondsOf(c.createdAt, 'the candidacy list', 'createdAt'), expiresAt: epochSecondsOf(c.expiresAt, 'the candidacy list', 'expiresAt') })) as unknown as PendingCandidacy[];
     },
 
     async decideCandidacy(id, decision) {

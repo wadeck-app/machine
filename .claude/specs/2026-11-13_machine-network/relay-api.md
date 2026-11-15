@@ -177,3 +177,7 @@ Deployed details beyond the table:
 - `DELETE /api/machines/{uuid}` also forgets the binding: a machine that comes back must post a new candidacy and be approved again. A token rotation does not need it any more: a new candidacy plus approval rebinds.
 - `not_registered` message (403): "This machine is not registered on the relay: approve this machine first (the admin approves its candidacy, `machine admin approve`), then retry."
 - Residual unchanged: the relay cannot verify the machine key; a squatter whose candidacy the admin approves by mistake owns the uuid (the admin check is the barrier). Not tested on production with a machine token.
+
+## Corrections found against the real relay (2026-11-15, `npm run test:relay`)
+
+Details and the client changes: `ux-audit-2026-11-15.md`. The real relay dates `createdAt`, `expiresAt` (candidacies), `storedAt` (inbox) and `lastSeen` (machines) with ISO 8601 strings, not epoch seconds; a heartbeat before the first address record is `404 not_found`; the heartbeat of a token that does not own the uuid is `403 not_owner`; `next` is `null` on the last inbox page. The tables above that say epoch seconds describe the old contract.

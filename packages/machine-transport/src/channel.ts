@@ -386,7 +386,7 @@ export function connectToPeer(options: ConnectOptions): Promise<PeerSession> {
         try {
           ok = await exchangeProofs(socket, stream, options.pairSecret, 'client');
         } catch (e) {
-          return fail(`${where} closed the connection during authentication (${(e as Error).message}): this machine is probably not registered there or the pair secret differs; check the peer log`);
+          return fail(`${where} closed the connection during authentication (${(e as Error).message}): this machine is probably not registered there, was revoked there, or the pair secret differs; check the peer log`);
         }
         if (!ok) return fail(`${where} failed the pair secret proof: the pair secret differs, re-run the pairing from the admin console`);
         if (settled) return;

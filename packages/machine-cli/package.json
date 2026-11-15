@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --bail=1",
+    "test:relay": "vitest run --config vitest.relay.config.ts --bail=1",
     "bundle": "node scripts/bundle.mjs",
     "bundle:app-module": "node scripts/copyAppModule.mjs --out ../../dist"
   },

@@ -81,6 +81,8 @@ export interface Parsed {
   promptTimeout?: string;
   policy?: string;
   yesFinalCode?: string;
+  /** Unknown "--word" kept as a positional after `admin approve` (a candidacy id may start with "--"): refused later when it names no pending candidacy. */
+  optionLike: string[];
 }
 
 export class UsageError extends Error {}

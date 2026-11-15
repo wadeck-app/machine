@@ -162,6 +162,8 @@ describe('the inbox loop calls the publisher from its own round', () => {
         return fetch(url, init);
       }) as typeof fetch,
     });
+    // The real relay answers a heartbeat 404 until the address record exists: the record is there, so each round has exactly one heartbeat.
+    await createRelayClient({ baseUrl: relay.url, token: relay.adminToken }).putRecord(readMachine(dirOf('laptop')).uuid, { body: { v: 1, uuid: readMachine(dirOf('laptop')).uuid, addresses: [{ host: '10.0.0.1', port: 1 }], seq: 1, issuedAt: Math.floor(Date.now() / 1000) }, signature: 's' });
     const timer = fakeTimer();
     let ticks = 0;
     const loop = startInboxLoop({

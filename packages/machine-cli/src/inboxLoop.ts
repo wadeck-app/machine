@@ -56,6 +56,8 @@ export interface InboxLoopOptions {
   publisher?: { tick(): Promise<void> };
   /** Called after a revocation list was installed (the daemon drops its network cache and closes the open sessions of revoked peers). */
   onRevocationInstalled?: () => void;
+  /** Called after a document changed what this machine trusts or may run (a new peer, a policy, a revocation): the daemon drops its network cache, so the change applies now and not up to 5 seconds later. */
+  onInstalled?: () => void;
   /** Tests: size of the set of installed ids. */
   handledCap?: number;
 }
@@ -251,6 +253,7 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
     if (verified.kind === 'peer') {
       const pairSecret = openPairSecret(verified, o.self.identity.privateKeyPkcs8);
       importPeer(o.configDir, { registration: verified.signedRegistration, pairSecret }, { now });
+      o.onInstalled?.();
       return {};
     }
     if (verified.kind === 'policy') {
@@ -262,13 +265,17 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
         if (sameAsInForce && /policy refused \((stale-base|rollback)\)/.test((e as Error).message)) return { reason: 'already-installed' };
         throw e;
       }
+      o.onInstalled?.();
       return {};
     }
     if (verified.revocation.body.entries.some((entry) => entry.uuid === selfUuid)) {
       o.log('inbox: THIS machine is on the revocation list of the admin: its peers no longer trust it');
     }
     const installed = installRevocation(o.configDir, verified.revocation, { now });
-    if (installed.changed) o.onRevocationInstalled?.();
+    if (installed.changed) {
+      o.onRevocationInstalled?.();
+      o.onInstalled?.();
+    }
     return installed.changed ? {} : { reason: 'already-installed' };
   };
 
@@ -431,13 +438,38 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
     } catch (e) {
       heartbeatError = e as Error;
     }
+    let ticked = false;
     if (o.publisher !== undefined) {
       try {
         // The first publication binds the inbox to this token: the read below, in the same round, already works.
         await o.publisher.tick();
+        ticked = true;
       } catch (e) {
         failed(`address record: unexpected error: ${(e as Error).message}`);
       }
+    }
+    // The real relay answers a heartbeat 404 until the address record exists (found by the integration tests against the real relay). That is not an
+    // outage: the record was just published by the tick above, so ask once more; when there is still none, read the inbox anyway (reading needs no record).
+    const noRecord = (e: Error | undefined): boolean => e instanceof RelayError && e.status === 404;
+    let countUnknown = false;
+    if (noRecord(heartbeatError)) {
+      heartbeatError = undefined;
+      if (ticked) {
+        try {
+          count = (await o.client.heartbeat(selfUuid)).inboxCount;
+        } catch (e) {
+          heartbeatError = e as Error;
+        }
+      }
+      if ((heartbeatError === undefined && count === undefined) || noRecord(heartbeatError)) {
+        heartbeatError = undefined;
+        countUnknown = true;
+      }
+    }
+    // The real relay refuses the heartbeat of a token that does not own the uuid (not_owner), like the inbox read: read the inbox, which says why (a state, no backoff).
+    if (heartbeatError instanceof RelayError && heartbeatError.status === 403 && heartbeatError.code === 'not_owner') {
+      heartbeatError = undefined;
+      countUnknown = true;
     }
     if (heartbeatError !== undefined) {
       if (heartbeatError instanceof RelayError && heartbeatError.status === 403 && heartbeatError.code === 'not_registered') {
@@ -457,10 +489,10 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
       // What waited for the approval is read at once.
       first = true;
     }
-    if (count === undefined) {
+    if (count === undefined && !countUnknown) {
       notice('no-count', 'inbox: the relay does not report the inbox count in its heartbeat answer (relay not updated to distribution.md?): the inbox is read at every round instead');
     }
-    const mustRead = first || count === undefined || count > 0 || notOwner;
+    const mustRead = first || countUnknown || count === undefined || count > 0 || notOwner;
     first = false;
     if (mustRead && !(await readInbox())) {
       // not_owner is a state and does not count as a failure of the relay.
