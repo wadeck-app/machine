@@ -173,9 +173,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
 ` +
       `Relay page: ${printable(verificationUrl)}
 ` +
-      `Click the code ${printable(userCode)} in the relay console (the Tokens page lists the request "${deviceLabel(info.name)}", with six codes): it must be the same as this one. A different code denies the request.
-` +
-      `Check that the address and the label match this machine before you click.
+      `Compare this code with the one in the relay console (the Tokens page lists the request "${deviceLabel(info.name)}", marked machine), check that the source address is this computer, then approve. If the console shows several codes, click this one.
 
 ` +
       `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).
@@ -232,7 +230,7 @@ export async function awaitDeviceApproval(o: AwaitDeviceApprovalOptions): Promis
       const polled = await client.deviceLoginPoll(deviceCode, o.access);
       if (polled.status === 'approved') return polled;
       if (polled.status === 'denied') {
-        throw new Error(`the request was denied in the relay console (a different code was clicked than the one shown here, or it was denied there): nothing was stored. If it was a mistake, ${restart}, and click the code it shows`);
+        throw new Error(`the request was denied in the relay console (a different code was chosen than the one shown here, or it was denied there): nothing was stored. If it was a mistake, ${restart}, and approve the request that shows this code`);
       }
       if (polled.status === 'expired') {
         throw new Error(`the code ${printable(userCode)} expired (or was already used) before it was approved: nothing was stored: ${restart}`);

@@ -55,7 +55,7 @@ describe('machine admin login (no code): a token of the machine-admin scope', ()
     expect(r.out).toContain('Admin login on ');
     expect(r.out).toContain('(MACHINE ADMIN: can approve machines, cannot manage tokens).');
     expect(lines).toContain('  ADMN-7K42');
-    expect(r.out).toContain("Click the code ADMN-7K42 in the relay console (the Tokens page lists the request \"desk admin\", marked MACHINE ADMIN): it must be the same as this one. A different code denies the request.");
+    expect(r.out).toContain("Compare this code with the one in the relay console (the Tokens page lists the request \"desk admin\", marked MACHINE ADMIN), check that the source address is this computer, then approve. If the console shows several codes, click this one.");
     // Clicking, not typing: the console shows six codes.
     expect(r.out).not.toMatch(/[Tt]ype (the|it)/);
     expect(r.out).toMatch(/Waiting for the approval in the relay console \(up to 5 min, Ctrl-C stops it and nothing is stored\)\./);
@@ -322,9 +322,9 @@ describe('the console shows six codes and the person clicks one (relay 7e0b586)'
     const r = await login([], { timing: fakeTiming((_ms, n) => n === 1 && clickDecoy()) });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/the request was denied/);
-    expect(r.err).toMatch(/a different code was clicked/);
+    expect(r.err).toMatch(/a different code was chosen/);
     expect(r.err).toMatch(/run `machine admin login` again/);
-    expect(r.err).toMatch(/click the code it shows/);
+    expect(r.err).toMatch(/approve the request that shows this code/);
     expect(readRelayAdminConfig(dir)).toBeUndefined();
     expect(readRelayConfig(dir)).toBeUndefined();
     expect(existsSync(join(dir, '_secrets_', 'relay-admin.json'))).toBe(false);
@@ -334,7 +334,7 @@ describe('the console shows six codes and the person clicks one (relay 7e0b586)'
     await start({ deniedPoll: 'conflict' });
     const r = await login([], { timing: fakeTiming((_ms, n) => n === 1 && clickDecoy()) });
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/a different code was clicked/);
+    expect(r.err).toMatch(/a different code was chosen/);
     expect(readRelayAdminConfig(dir)).toBeUndefined();
   });
 

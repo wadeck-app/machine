@@ -101,13 +101,14 @@ export async function adminLoginByConsole(configDir: string, o: AdminConsoleLogi
   const marked = access === 'full' ? 'FULL ACCESS' : 'MACHINE ADMIN';
   o.say(
     `${heading}\n\n` +
-      `Code to ${access === 'full' ? 'type' : 'click'} in the relay console (nothing to copy, it is not a secret):\n\n` +
+      `Code to ${access === 'full' ? 'type' : 'compare'} in the relay console (nothing to copy, it is not a secret):\n\n` +
       `  ${printable(started.userCode)}\n\n` +
       (access === 'full'
         ? `In the relay console open Tokens: the request "${label}" is listed there, marked ${marked}. Type this code there, then approve (a full-access request has no codes to click).\n`
-        : `Click the code ${printable(started.userCode)} in the relay console (the Tokens page lists the request "${label}", marked ${marked}): it must be the same as this one. A different code denies the request.\n`) +
+        : `Compare this code with the one in the relay console (the Tokens page lists the request "${label}", marked ${marked}), check that the source address is this computer, then approve. If the console shows several codes, click this one.\n`) +
       `Relay page: ${printable(started.verificationUrl)}\n` +
-      `Check that the address and the label match this machine before you ${access === 'full' ? 'approve' : 'click'}.\n\n` +
+      (access === 'full' ? `Check that the address and the label match this machine before you approve.\n` : '') +
+      `\n` +
       `Waiting for the approval in the relay console (up to ${minutes} min, Ctrl-C stops it and nothing is stored).\n`,
   );
   const restart = o.restart ?? 'run `machine admin login` again for a new code';

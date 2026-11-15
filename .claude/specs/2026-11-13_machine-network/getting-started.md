@@ -17,7 +17,7 @@ The relay is named once (`<relay>` is a host or URL), then stored. A machine tha
 
 | Code | Looks like | Where it comes from | What you do with it |
 |---|---|---|---|
-| Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | click the same code among the six the relay console shows (Tokens page lists the request "<name>" or "<name> admin"; a different code denies the request and you run the command again): nothing to copy |
+| Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | compare it with the code the relay console shows (Tokens page lists the request "<name>" or "<name> admin"), check the source address is this computer, then approve; if the console shows several codes, click this one (a different code denies the request and you run the command again): nothing to copy |
 | Relay login code (machine) | `X35M-M87M` | printed by `join` | type it in the relay console: it only gives this machine access to the relay |
 | Pairing code | 8 digits | relay console, Tokens, Add token, "Limited to scopes", machine-admin | only for scripts (`machine admin login <code>`); with `--full-access` on a relay that predates the full-access login (`[warn]` line, then it is asked, WITHOUT "Limited to scopes") |
 | Security code | `31447 56532 70010 53274 49389` | printed on the admin machine after it signs, and on the new machine | compare the two: it must read exactly the same on both. If not, `machine admin revoke <name>` |

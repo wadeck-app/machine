@@ -105,9 +105,9 @@ describe('machine join by device login', () => {
     const lines = r.out.split('\n');
     // The relay login code: named, alone on its line, said to be typed on the relay page (decision 55).
     expect(lines).toContain('  BCDF-GH23');
-    expect(r.out).toMatch(/Relay login code for "laptop" on [\s\S]*Click the code BCDF-GH23 in the relay console/);
+    expect(r.out).toMatch(/Relay login code for "laptop" on [\s\S]*Compare this code with the one in the relay console/);
     expect(lines).toContain('Relay page: https://relay.example/device?code=BCDF-GH23');
-    expect(r.out).toContain("it must be the same as this one. A different code denies the request.");
+    expect(r.out).toContain("check that the source address is this computer, then approve. If the console shows several codes, click this one.");
     expect(timing.sleeps).toHaveLength(3);
     for (const ms of timing.sleeps) expect(ms).toBeGreaterThanOrEqual(MIN_DEVICE_POLL_MS);
 
@@ -165,9 +165,9 @@ describe('machine join by device login', () => {
     const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceClick(relay.deviceChoices().find((c) => c !== 'BCDF-GH23') as string));
     const r = await join_([], { timing });
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/a different code was clicked/);
+    expect(r.err).toMatch(/a different code was chosen/);
     expect(r.err).toMatch(/machine join/);
-    expect(r.err).toMatch(/click the code it shows/);
+    expect(r.err).toMatch(/approve the request that shows this code/);
     expect(existsSync(relayFile(dir))).toBe(false);
     expect(existsSync(candidacyFile(dir))).toBe(false);
   });

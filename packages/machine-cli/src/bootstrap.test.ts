@@ -210,8 +210,8 @@ describe('one command per machine', () => {
       expect(h.visible[0]).toMatch(/Hint to help you remember it/);
       // One request, access machine-admin, labelled with the machine name: the console shows it as MACHINE ADMIN.
       expect(deviceRequests().filter((q) => q.path.endsWith('/start')).map((q) => q.body)).toEqual([{ label: 'midgard2', access: 'machine-admin' }]);
-      expect(r.out).toMatch(/\n\nRelay login on \S+ \(MACHINE ADMIN: can approve machines, cannot manage tokens\): one confirmation gives this machine its relay token and the admin rights to approve machines\.\n\nCode to click in the relay console[^\n]*\n\n {2}ADMN-7K42\n\n/);
-      expect(r.out).toContain("Click the code ADMN-7K42 in the relay console (the Tokens page lists the request \"midgard2\", marked MACHINE ADMIN)");
+      expect(r.out).toMatch(/\n\nRelay login on \S+ \(MACHINE ADMIN: can approve machines, cannot manage tokens\): one confirmation gives this machine its relay token and the admin rights to approve machines\.\n\nCode to compare in the relay console[^\n]*\n\n {2}ADMN-7K42\n\n/);
+      expect(r.out).toContain("Compare this code with the one in the relay console (the Tokens page lists the request \"midgard2\", marked MACHINE ADMIN)");
       expect(r.out).toMatch(/\[ok\] machine admin access approved\n\[ok\] relay token "midgard2" saved for \S+: it is the token of this machine and its admin token \(MACHINE ADMIN: it cannot manage tokens\)\n\n/);
       expect(r.out + r.err).not.toMatch(/pairing code|FULL ACCESS|WITHOUT|Relay login code for|\[warn\]/i);
       expect(r.out).toMatch(/\[ok\] admin key created \(id [0-9a-f]+\)\n\n/);
@@ -276,7 +276,7 @@ describe('one command per machine', () => {
       const decoy = () => relay.deviceClick(relay.deviceChoices().find((c) => c !== 'ADMN-7K42') as string);
       const failed = await cli(a, ['setup', relay.url], h.prompt, { timing: fakeTiming((_ms, n) => n === 1 && decoy()), ask: h.ask, hostname: () => 'desktop' });
       expect(failed.code).toBe(1);
-      expect(failed.err).toMatch(/a different code was clicked/);
+      expect(failed.err).toMatch(/a different code was chosen/);
       expect(failed.err).toMatch(/run `machine setup` again/);
       expect(existsSync(join(a, '_secrets_', 'relay.json'))).toBe(false);
       expect(existsSync(join(a, '_secrets_', 'relay-admin.json'))).toBe(false);
@@ -297,7 +297,7 @@ describe('one command per machine', () => {
       const again = await cli(a, ['setup', relay.url], h2.prompt, { timing: fakeTiming(consoleApprovesAll), ask: h2.ask, hostname: () => 'desktop' });
       expect(again.code, again.err).toBe(0);
       expect(again.out).toContain('[ok] enrolled "desktop"');
-      expect(again.out).not.toMatch(/Code to click/);
+      expect(again.out).not.toMatch(/Code to compare/);
       expect(deviceRequests().filter((q) => q.path.endsWith('/start'))).toHaveLength(1);
     });
 

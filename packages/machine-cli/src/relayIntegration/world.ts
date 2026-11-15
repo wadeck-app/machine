@@ -77,7 +77,7 @@ export interface World {
   stop: () => Promise<void>;
 }
 
-export async function startWorld(name: string, relayOptions: { maxMachinesPerToken?: number } = {}): Promise<World> {
+export async function startWorld(name: string, relayOptions: { maxMachinesPerToken?: number; deviceLoginChoices?: boolean } = {}): Promise<World> {
   // Fails loudly (never skips) when the relay module is not configured.
   const createTestRelay = await loadCreateTestRelay();
   const saved: Record<string, string | undefined> = {};
