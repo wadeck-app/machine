@@ -9,10 +9,12 @@ import { runStartupCommand } from './cliStartup.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
+import { checkHint } from '@wadeck-app/machine-core';
 import { chooseMachineName, initMachine } from './identity.js';
 import { MachineNameError } from './errors.js';
 import { MAX_PROMPT_TIMEOUT_SECONDS } from './prompt.js';
 import { resolveConfigDir } from './paths.js';
+import { openCliLog, type CliLog } from './cliLog.js';
 import { appVersion } from './version.js';
 
 export { EXIT, type CliIo } from './cliTypes.js';
@@ -38,7 +40,7 @@ Getting started (one command per machine; the name of a machine is the computer 
   the relay console) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
 
 Commands:
-  setup <relay> [--generate] [--name <name>] [--auto-startup]
+  setup <relay> [--generate] [--hint <text>] [--name <name>] [--auto-startup]
                                      the first machine in one command: identity (name from the computer name), admin key
                                      (passphrase typed twice, or --generate for a random one), the full-access pairing
                                      code of the relay console (asked here, kept for next time), device login, self-approval
@@ -147,10 +149,12 @@ Administration (enrollment through the relay, or by files):
                                      machines that are gone. A machine that comes back must run \`join --resume\` and be
                                      approved again; what waited in its inbox is gone (admin distribute sends it again).
                                      After a token change it is not needed: a new join and an approval rebind the uuid
-  admin init [--generate]            create the admin key on this machine. You choose its passphrase (hidden prompt, typed
+  admin init [--generate] [--hint <text>]
+                                     create the admin key on this machine. You choose its passphrase (hidden prompt, typed
                                      twice; at least 12 characters, 6 different, not only digits; below 20 a warning says a
                                      stolen machine could allow offline guessing, an encrypted copy of the key is on every
-                                     machine). --generate, or an empty answer, makes a random one (100 bits, shown once)
+                                     machine). --generate, or an empty answer, makes a random one (100 bits, shown once). An optional hint
+                                     (Enter = none, or --hint) is shown above every passphrase prompt on every machine
   admin allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] -- <command...>
                                      allow ONE exact command on a machine (for every trusted peer): builds the next policy
                                      version from the last one signed here, shows the difference, asks y/N and the admin
@@ -179,6 +183,7 @@ Options:
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --name <name>          machine name for init, join, setup when the identity is created (normalised: lowercase letters, digits, hyphens)
   --generate             random admin passphrase for admin init and setup (no question)
+  --hint <text>          hint shown at every passphrase prompt, for admin init and setup (optional, max 80 printable ASCII characters, stored in clear in the key file: never write the passphrase in it)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
   --version              print the version of this build (stamped in a release bundle) and exit
@@ -237,6 +242,7 @@ function parse(argv: string[]): Parsed {
       out.yesFinalCode = code;
     }
     else if (a === '--name') out.name = valueOf('--name');
+    else if (a === '--hint') out.hint = valueOf('--hint');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
     else if (a === '--address') out.address = valueOf('--address');
@@ -262,7 +268,33 @@ function parse(argv: string[]): Parsed {
   return out;
 }
 
+/** Runs one command and leaves its trace in the log of the configuration directory (`machine cli logs`). */
 export async function runCli(argv: string[], io: CliIo, env: Record<string, string | undefined> = process.env): Promise<number> {
+  let log: CliLog | undefined;
+  try {
+    // A command line that does not parse has no configuration directory to write to: the command itself reports it.
+    // --help and --version need no configuration directory and say nothing worth diagnosing.
+    const parsed = parse(argv);
+    log = parsed.help || parsed.version ? undefined : openCliLog(resolveConfigDir(parsed.configDir, env), argv, io.stderr);
+  } catch {
+    log = undefined;
+  }
+  if (log === undefined) return runCommandLine(argv, io, env);
+  const opened = log;
+  const traced: CliIo = { ...io, stdout: (t) => (opened.output(t), io.stdout(t)), stderr: (t) => (opened.output(t), io.stderr(t)) };
+  let code = 1;
+  try {
+    code = await runCommandLine(argv, traced, env);
+    return code;
+  } catch (e) {
+    opened.output(`[fail] unexpected error: ${(e as Error).message}`);
+    throw e;
+  } finally {
+    opened.finish(code);
+  }
+}
+
+async function runCommandLine(argv: string[], io: CliIo, env: Record<string, string | undefined>): Promise<number> {
   let args: Parsed;
   try {
     args = parse(argv);
@@ -307,6 +339,12 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     return fail('--generate only applies to `machine admin init` and `machine setup` (a random admin passphrase instead of a chosen one)', EXIT.usage);
   }
 
+  if (args.hint !== undefined) {
+    if (!(command === 'setup' || (command === 'admin' && rest[0] === 'init'))) return fail('--hint only applies to `machine admin init` and `machine setup` (a hint shown at every passphrase prompt)', EXIT.usage);
+    // The rules that do not depend on the passphrase fail now, before anything is asked.
+    const problem = checkHint(args.hint);
+    if (!problem.ok) return fail(`--hint: ${problem.message}`, EXIT.usage);
+  }
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
   if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && rest[0] === 'approve'))) {
     return fail('--verbose only applies to `machine join`, `machine setup` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);

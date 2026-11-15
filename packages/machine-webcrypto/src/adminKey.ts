@@ -49,6 +49,21 @@ function parseEnvelope(fileContent: string): Record<string, any> {
   return parsed as Record<string, any>;
 }
 
+/** Decision 57, same rules as machine-core: 1 to 80 printable ASCII characters. Throws on a malformed one. */
+function readHint(envelope: Record<string, any>): string | undefined {
+  const hint: unknown = envelope.hint;
+  if (hint === undefined) return undefined;
+  if (typeof hint !== 'string' || hint.length === 0 || Array.from(hint).length > 80 || !/^[\x20-\x7e]+$/.test(hint)) {
+    throw new Error('admin key file: the hint is malformed (it must be 1 to 80 printable ASCII characters); restore the file from another machine');
+  }
+  return hint;
+}
+
+/** The hint of a key file, readable without the passphrase (it is stored in clear, authenticated at unlock). */
+export function adminKeyHint(fileContent: string): string | undefined {
+  return readHint(parseEnvelope(fileContent));
+}
+
 export async function unlockAdminKey(fileContent: string, passphrase: string, options: { extractable: false }): Promise<UnlockedAdminKey> {
   if (options?.extractable !== false) {
     throw new Error('unlockAdminKey: the unlocked key is always non-extractable; call it with { extractable: false } (the page never holds the raw key)');
@@ -57,8 +72,13 @@ export async function unlockAdminKey(fileContent: string, passphrase: string, op
   if (typeof fileContent !== 'string') throw new Error('unlockAdminKey: the file content must be the text of the admin key file');
   const envelope = parseEnvelope(fileContent);
 
-  if (envelope.v !== 1) {
-    throw new Error(`admin key file: unsupported format version ${String(envelope.v)} (this build reads version 1); update machine`);
+  if (envelope.v !== 1 && envelope.v !== 2) {
+    throw new Error(`admin key file: unsupported format version ${String(envelope.v)} (this build reads versions 1 and 2); update machine`);
+  }
+  // Version 2 is the version with a hint: the two must agree, or the header would not be the one that was authenticated.
+  const hint = readHint(envelope);
+  if ((envelope.v === 2) !== (hint !== undefined)) {
+    throw new Error(envelope.v === 2 ? 'admin key file: version 2 without a hint, the file is damaged; restore it from another machine' : 'admin key file: a version 1 file cannot carry a hint, the file is damaged; restore it from another machine');
   }
   if (envelope.kdf?.name !== 'pbkdf2-sha256' || envelope.cipher?.name !== 'aes-256-gcm') throw new Error('admin key file: unknown kdf or cipher; update machine');
   const iterations: unknown = envelope.kdf.iterations;
@@ -81,7 +101,7 @@ export async function unlockAdminKey(fileContent: string, passphrase: string, op
   }
   if (sealed.length < 17) throw new Error(WRONG_OR_DAMAGED);
 
-  const aad = new TextEncoder().encode(canonicalize({ v: envelope.v, publicKey: envelope.publicKey, kdf: envelope.kdf, cipher: { name: envelope.cipher.name } }));
+  const aad = new TextEncoder().encode(canonicalize({ v: envelope.v, publicKey: envelope.publicKey, kdf: envelope.kdf, cipher: { name: envelope.cipher.name }, ...(hint !== undefined ? { hint } : {}) }));
 
   const passphraseBytes = new TextEncoder().encode(passphrase.normalize('NFKC'));
   let plain: Uint8Array | undefined;

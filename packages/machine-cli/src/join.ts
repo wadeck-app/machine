@@ -165,7 +165,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   const started = await publicClient.deviceLoginStart(deviceLabel(info.name));
   const { deviceCode, userCode, verificationUrl } = started;
   say(
-    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page: it only gives this machine access to the relay (it is not the security code compared later):\n\n` +
+    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page (it only gives this machine access to the relay, it is not the security code):\n\n` +
       `  ${printable(userCode)}\n\n` +
       `Relay page: ${printable(verificationUrl)}\n` +
       `Open it (any browser), check that the address and the label match this machine, and type the code there.\n\n` +
@@ -397,9 +397,9 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     const timeoutMs = Math.min(o.timeoutMs, untilExpiry);
     if (!approvedHere || attempt > 0) {
       o.say(
-        `Waiting for the admin (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later).\n` +
-          `On the admin machine run: machine admin approve   (it shows this machine by name, hostname and address)\n` +
-          'When the admin approves, a security code appears on the admin machine and here: compare them, they must read exactly the same.\n',
+        `\nWaiting for the admin (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later).\n` +
+          `On the admin machine run: machine admin approve\n` +
+          'When the admin approves, a security code appears there and here: compare them, they must read exactly the same.\n\n',
       );
     }
     let outcome = await waitForDecision(client, state.id, { timing: o.timing, timeoutMs, ...(o.timing.signal ? { signal: o.timing.signal } : {}), warn: (t) => o.say(`${t}\n`) });
@@ -465,7 +465,7 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
   const alreadyPinned = isAlreadyPinned(configDir, checked);
   if (alreadyPinned) {
     // Never silent: the human sees why no code is compared (the first machine of a network created this admin key itself).
-    o.say(`The admin key ${checked.admin.adminKeyId} is already pinned on this machine (it created it, or pinned it earlier): there is no new key to confirm, so no code is compared.\n`);
+    o.say(`The admin key ${checked.admin.adminKeyId} is already pinned here (this machine created it or pinned it earlier): no security code to compare.\n\n`);
   } else {
     o.say(`The admin approved this machine. Security code of "${printable(info.name)}" (this machine) with admin key ${checked.admin.adminKeyId}. It must read exactly the same on ${adminRef}:\n\n  ${code}\n\n`);
     const keep = `The approval is kept in ${candidacyFile(configDir)}: run \`machine join --resume\` once you can answer`;

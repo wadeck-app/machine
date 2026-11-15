@@ -2,7 +2,7 @@ export { decodeBase64urlAny, decodeBase64urlStrict, encodeBase64url } from './ba
 export { canonicalize, signingInput, type Json } from './canonical.js';
 export { keyId, tryKeyId } from './keys.js';
 export { signBody, verifyBody, type SignedBody } from './signed.js';
-export { MAX_ITERATIONS, MIN_ITERATIONS, unlockAdminKey, type UnlockedAdminKey } from './adminKey.js';
+export { MAX_ITERATIONS, MIN_ITERATIONS, adminKeyHint, unlockAdminKey, type UnlockedAdminKey } from './adminKey.js';
 export {
   DOCUMENT_DOMAIN,
   DOCUMENT_KINDS,

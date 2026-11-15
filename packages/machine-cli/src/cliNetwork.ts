@@ -1,3 +1,4 @@
+import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_PARAGRAPH, FULL_ACCESS_WHY } from './fullAccess.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
@@ -122,8 +123,8 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     }
     if (sub === 'init') {
       if (first !== undefined) return fail(`unexpected argument "${first}" for \`machine admin init\``, EXIT.usage);
-      const r = await createAdminKey(ctx, prompt);
-      emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\nnext: \`machine join <relay>\` enrolls this machine (it approves itself), \`machine setup <relay>\` does everything in one command\n`);
+      const r = await createAdminKey(ctx, prompt, askLine);
+      emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\n\nnext: \`machine join <relay>\` enrolls this machine (it approves itself), \`machine setup <relay>\` does everything in one command\n`);
       return EXIT.ok;
     }
     if (sub === 'allow') {
@@ -265,10 +266,12 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       let code = first;
       if (code === undefined) {
         try {
-          code = await prompt('Full-access pairing code from the relay console: ');
+          // The why and the click path, as a paragraph of their own above the question.
+          io.stderr(`\n${FULL_ACCESS_PARAGRAPH}\n\n`);
+          code = await prompt('Full-access pairing code (8 digits): ');
         } catch (e) {
           if (e instanceof PromptTimeoutError) throw e;
-          return fail('no pairing code given and no terminal to ask for it: pass it as `machine admin login <code>` (relay console: Tokens, Add token, WITHOUT "Limited to scopes")', EXIT.usage);
+          return fail('no pairing code given and no terminal to ask for it: pass it as `machine admin login <code>`. ' + capitalized(FULL_ACCESS_CLICK_PATH) + ` (${FULL_ACCESS_WHY})`, EXIT.usage);
         }
       }
       code = code.trim();

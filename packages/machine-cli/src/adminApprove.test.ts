@@ -99,6 +99,8 @@ describe('machine admin login', () => {
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/limited to scopes/);
     expect(r.err).toMatch(/WITHOUT "Limited to scopes"/);
+    // The reason comes with the click path: the admin is told WHY a full-access token is needed.
+    expect(r.err).toMatch(/approving a machine needs a full-access relay token \(the machines themselves only get a limited one\)/);
     expect(r.err).toMatch(/NOT saved/);
     expect(existsSync(relayAdminFile(adminDir))).toBe(false);
     noToken(r.out, r.err);

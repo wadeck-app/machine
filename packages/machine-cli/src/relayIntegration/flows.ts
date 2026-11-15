@@ -3,8 +3,9 @@ import { SHELL, type World } from './world.js';
 
 // The enrollment steps shared by the suites: the first machine (setup) and a second machine (join + admin approve), against the real relay.
 
+// The first visible answer is the passphrase hint (Enter = none), the second the full-access pairing code.
 export async function setupFirst(w: World, dir: string, hostname = 'Desktop'): Promise<void> {
-  const r = await w.run('desktop', dir, ['setup', w.relay.url], { hostname, visible: [await w.relay.adminPairingCode()] });
+  const r = await w.run('desktop', dir, ['setup', w.relay.url], { hostname, visible: ['', await w.relay.adminPairingCode()] });
   expect(r.code, r.err).toBe(0);
 }
 

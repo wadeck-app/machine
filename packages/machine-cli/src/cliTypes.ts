@@ -74,6 +74,8 @@ export interface Parsed {
   quiet: boolean;
   /** `machine admin init --generate` and `machine setup --generate`: a random passphrase, no question. */
   generate: boolean;
+  /** `machine admin init --hint <text>` and `machine setup --hint <text>` (decision 57): the passphrase hint, no question. */
+  hint?: string;
   /** `machine admin allow <machine> --list` / `--remove`. */
   list: boolean;
   remove: boolean;

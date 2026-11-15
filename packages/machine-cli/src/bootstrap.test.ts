@@ -138,6 +138,7 @@ describe('one command per machine', () => {
       expect(r.err).toMatch(/holds the admin key/);
       expect(r.err).toContain(`machine admin login <code> --relay ${relay.url}`);
       expect(r.err).toMatch(/Add token, WITHOUT "Limited to scopes"/);
+      expect(r.err).toMatch(/needs a full-access relay token/);
       expect(deviceRequests()).toHaveLength(0);
       expect(readRelayConfig(a)).toBeUndefined();
     });
@@ -185,16 +186,25 @@ describe('one command per machine', () => {
     }
 
     it('creates the identity (computer name), the admin key (chosen passphrase, typed twice), takes the full-access code, does the device login, approves itself and enrolls', async () => {
-      const h = human(ADMIN_CODE);
+      // The questions come in this order: the hint of the passphrase (Enter = none), then the full-access pairing code.
+      const h = human('', ADMIN_CODE);
       const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
       const r = await cli(a, ['setup', relay.url], h.prompt, { timing, ask: h.ask, hostname: () => 'Midgard2.local' });
       expect(r.code, r.err).toBe(0);
       expect(readMachine(a).name).toBe('midgard2');
       // The passphrase is typed twice (choice and confirmation) and signs the enrollment without being asked a third time.
       expect(h.hidden).toHaveLength(2);
-      expect(h.visible).toHaveLength(1);
-      expect(h.visible[0]).toMatch(/Full-access pairing code/);
-      expect(r.out).toMatch(/Add token, WITHOUT "Limited to scopes"/);
+      expect(h.visible).toHaveLength(2);
+      expect(h.visible[0]).toMatch(/Hint to help you remember it/);
+      expect(h.visible[1]).toMatch(/Full-access pairing code/);
+      // Why and where to click: a paragraph of its own, between blank lines, with a short question after it.
+      expect(r.out).toMatch(/\n\nNext, the relay: approving a machine needs a full-access relay token \(the machines themselves only get a limited one\)\.\nIn the relay console open Tokens, Add token, WITHOUT "Limited to scopes": it shows an 8-digit pairing code\.\n\n/);
+      expect(h.visible[1]).toBe('Full-access pairing code (8 digits): ');
+      expect(r.out).toMatch(/\[ok\] admin key created \(id [0-9a-f]+\)\n\n/);
+      // The self-approval is said once (no candidacy id, no "Enter the admin passphrase" before "Signing with ...").
+      expect(r.out).toContain('\nSigning with the admin passphrase you just set.\n');
+      expect(r.out).not.toMatch(/Candidacy \S+ posted|Enter the admin passphrase to sign/);
+      expect(r.out).toMatch(/\[ok\] enrolled "midgard2"[^\n]*\n[^\n]*\n[^\n]*\n\nnext:/);
       expect(r.out).toContain('[ok] admin key created');
       expect(r.out).toContain('[ok] enrolled "midgard2"');
       expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
@@ -220,7 +230,7 @@ describe('one command per machine', () => {
     });
 
     it('a wrong relay code stops with the relay reason; what was created is kept and the re-run asks only what is missing', async () => {
-      const h = human('00000000');
+      const h = human('', '00000000');
       const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
       const failed = await cli(a, ['setup', relay.url], h.prompt, { timing, ask: h.ask, hostname: () => 'desktop' });
       expect(failed.code).toBe(1);

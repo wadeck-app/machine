@@ -1,3 +1,4 @@
+import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
@@ -24,7 +25,7 @@ const MAX_APPROVAL_BYTES = 16 * 1024;
 /** The one missing step, with the exact command: the admin token is a human step in the relay console (decision 50). */
 export function missingAdminTokenMessage(configDir: string, relayUrl?: string): string {
   const relay = relayUrl !== undefined ? ` --relay ${relayUrl}` : ' --relay <relay-host>';
-  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): in the relay console open a full-access pairing (Tokens, Add token, WITHOUT "Limited to scopes"), then run \`machine admin login <code>${relay}\``;
+  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(FULL_ACCESS_CLICK_PATH)}, then run \`machine admin login <code>${relay}\``;
 }
 
 export interface AdminLoginOptions {
@@ -230,6 +231,8 @@ export interface ApproveOptions {
   verbose?: boolean;
   /** Hidden passphrase prompt. */
   prompt: Prompt;
+  /** Replaces the line that announces the passphrase prompt (the caller already holds the passphrase and says so itself). */
+  signingNote?: string;
   /** Visible question; rejects without a terminal. */
   ask: (label: string) => Promise<string>;
   /** Human text (stdout, or stderr with --json). */
@@ -376,7 +379,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   // One passphrase typed, used for both registrations of this command, then dropped with the process.
   let typed: string | undefined;
   const prompt: Prompt = async (label) => (typed ??= await o.prompt(label));
-  o.say('Enter the admin passphrase to sign this registration, Ctrl-C to cancel.\n');
+  o.say(o.signingNote ?? '\nEnter the admin passphrase to sign this registration, Ctrl-C to cancel.\n');
   const self = await registerMachine(configDir, { v: 1, uuid, name: view.name, identityPublicKey: view.identityPublicKey }, { now: o.now, prompt, validForDays: o.days });
 
   // The candidate also gets this machine as a peer, with the SAME pair secret, and this machine trusts the candidate with it
@@ -420,14 +423,14 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
 
   const code = finalCode(view.identityPublicKey, pin.adminPublicKey, view.random);
   if (joining !== undefined) {
-    o.say(`[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n`);
+    o.say(`\n[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n\n`);
   } else {
     o.say(
-      `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
+      `\n[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n\n` +
         `Security code of "${printable(view.name)}" (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
         (selfApproval
           ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
-          : `It must read exactly the same on "${printable(view.name)}". If it differs, run: machine admin revoke ${printable(view.name)}\n`),
+          : `It must read exactly the same on "${printable(view.name)}". If it differs, run: machine admin revoke ${printable(view.name)}\n\n`),
     );
   }
 

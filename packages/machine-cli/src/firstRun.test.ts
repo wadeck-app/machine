@@ -153,19 +153,30 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
     };
     return { prompt, labels };
   }
+  /** Scripted visible question (the hint): no answer left means the test did not expect the question. */
+  function questions(...answers: string[]) {
+    const labels: string[] = [];
+    const ask = async (label: string): Promise<string> => {
+      labels.push(label);
+      const next = answers.shift();
+      if (next === undefined) throw new Error(`unexpected question "${label}"`);
+      return next;
+    };
+    return { ask, labels };
+  }
   const warnings = (text: string) => text.split('\n').filter((l) => l.startsWith('[warn]'));
+  const noHint = () => questions('');
 
   it('accepts a chosen passphrase typed twice, shows it nowhere, and the key opens with it', async () => {
     const chosen = 'correct horse battery staple';
     const s = scripted(chosen, chosen);
-    const r = await cli(a, ['admin', 'init'], s.prompt);
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: noHint().ask });
     expect(r.code, r.err).toBe(0);
     expect(r.out + r.err).not.toContain(chosen);
     expect(warnings(r.err)).toEqual([]);
-    expect(s.labels).toHaveLength(2);
-    expect(s.labels[0]).toMatch(/at least 12 characters/);
-    expect(s.labels[0]).toMatch(/Enter.*random/);
-    expect(s.labels[1]).toMatch(/again/i);
+    // The prompts are short: the explanation is a separate paragraph above them (a long prompt line hides that something must be typed).
+    expect(s.labels).toEqual(['Admin passphrase: ', 'Confirm passphrase: ']);
+    expect(r.out).toMatch(/^\nThe admin passphrase[^\n]*\nAt least 12 characters[^\n]*Enter[^\n]*random[^\n]*\n\n\[ok\]/);
     expect(r.out).toMatch(/\[ok\] admin key created/);
     // The chosen passphrase really protects the key: a registration is signed with it.
     await ok(a, ['init', '--name', 'desktop']);
@@ -177,7 +188,7 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
   it('a chosen passphrase of 12 to 19 characters is accepted with exactly one clear warning line', async () => {
     const chosen = 'abcdef123456';
     const s = scripted(chosen, chosen);
-    const r = await cli(a, ['admin', 'init'], s.prompt);
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: noHint().ask });
     expect(r.code, r.err).toBe(0);
     expect(keyExists()).toBe(true);
     const lines = warnings(r.err);
@@ -189,37 +200,62 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
     expect(r.out + r.err).not.toContain(chosen);
   });
 
-  it('refuses a chosen passphrase below the minimum with the rule and the way out, and creates nothing', async () => {
-    const s = scripted('abcdef12345');
-    const r = await cli(a, ['admin', 'init'], s.prompt);
+  it('a passphrase below the minimum is asked again with the reason, up to 3 attempts, then nothing is created', async () => {
+    const s = scripted('abcdef12345', 'abcdef12346', 'abcdef12347');
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: forbidden('a question') });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/at least 12 characters/);
     expect(r.err).toMatch(/--generate/);
+    expect(r.err).toMatch(/attempt 1 of 3/);
+    expect(r.err).toMatch(/attempt 2 of 3/);
+    expect(r.err).toMatch(/Nothing was created/);
     expect(keyExists()).toBe(false);
-    expect(s.labels).toHaveLength(1);
+    expect(s.labels).toEqual(['Admin passphrase: ', 'Admin passphrase: ', 'Admin passphrase: ']);
+  });
+
+  it('a short passphrase then a valid one: the second attempt is used', async () => {
+    const good = 'correct horse battery staple';
+    const s = scripted('short', good, good);
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: noHint().ask });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/at least 12 characters.*attempt 1 of 3/s);
+    expect(s.labels).toEqual(['Admin passphrase: ', 'Admin passphrase: ', 'Confirm passphrase: ']);
+    expect(keyExists()).toBe(true);
   });
 
   it.each([
     ['digits only', '123456789012', /digits only/],
     ['too few different characters', 'abcabcabcabc', /different characters/],
-  ])('refuses %s', async (_name, chosen, message) => {
-    const r = await cli(a, ['admin', 'init'], scripted(chosen).prompt);
+  ])('refuses %s after 3 attempts', async (_name, chosen, message) => {
+    const r = await cli(a, ['admin', 'init'], scripted(chosen, chosen, chosen).prompt);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(message);
     expect(keyExists()).toBe(false);
   });
 
-  it('refuses two different entries, says nothing was created, and never prints either', async () => {
-    const r = await cli(a, ['admin', 'init'], scripted('correct horse battery staple', 'correct horse battery stapel').prompt);
+  it('a mismatch at the confirmation asks the whole choice again (up to 3 attempts), and never prints either entry', async () => {
+    const good = 'correct horse battery staple';
+    const s = scripted(good, 'correct horse battery stapel', good, good);
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: noHint().ask });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/do not match.*attempt 1 of 3/s);
+    expect(s.labels).toEqual(['Admin passphrase: ', 'Confirm passphrase: ', 'Admin passphrase: ', 'Confirm passphrase: ']);
+    expect(r.out + r.err).not.toContain('correct horse');
+    expect(keyExists()).toBe(true);
+  });
+
+  it('three mismatches fail with "nothing was created" and never print any entry', async () => {
+    const s = scripted('correct horse battery staple', 'correct horse battery stapel', 'correct horse battery staple', 'correct horse battery stapes', 'correct horse battery staple', 'correct horse battery stapet');
+    const r = await cli(a, ['admin', 'init'], s.prompt);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/do not match.*nothing was created/s);
     expect(r.err).not.toContain('correct horse');
     expect(keyExists()).toBe(false);
   });
 
-  it('an empty answer generates the random passphrase (shown once on stderr), without asking a second time', async () => {
+  it('an empty answer generates the random passphrase (shown once on stderr), without asking a second time or for a hint', async () => {
     const s = scripted('');
-    const r = await cli(a, ['admin', 'init'], s.prompt);
+    const r = await cli(a, ['admin', 'init'], s.prompt, { ask: forbidden('a question') });
     expect(r.code, r.err).toBe(0);
     expect(s.labels).toHaveLength(1);
     const generated = /shown only once[^\n]*\n\s*([A-Z0-9-]{20,})/i.exec(r.err)?.[1] ?? '';
@@ -229,7 +265,7 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
   });
 
   it('--generate never asks anything and shows the random passphrase once on stderr', async () => {
-    const r = await cli(a, ['admin', 'init', '--generate'], forbidden('a passphrase'));
+    const r = await cli(a, ['admin', 'init', '--generate'], forbidden('a passphrase'), { ask: forbidden('a question') });
     expect(r.code, r.err).toBe(0);
     expect(r.err).toMatch(/shown only once/i);
     expect(keyExists()).toBe(true);
@@ -252,9 +288,9 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
     expect(keyExists()).toBe(false);
   });
 
-  it('--json keeps the chosen passphrase and the warning out of stdout', async () => {
+  it('--json keeps the chosen passphrase, the explanation and the warning out of stdout', async () => {
     const s = scripted('abcdef123456', 'abcdef123456');
-    const r = await cli(a, ['admin', 'init', '--json'], s.prompt);
+    const r = await cli(a, ['admin', 'init', '--json'], s.prompt, { ask: noHint().ask });
     expect(r.code, r.err).toBe(0);
     expect(JSON.parse(r.out)).toHaveProperty('adminKeyId');
     expect(r.out).not.toContain('abcdef123456');
@@ -268,11 +304,120 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
     expect(timed.code, timed.err).toBe(0);
   });
 
-  it('the key file written with a 12 character passphrase is a normal envelope (no weaker format)', async () => {
-    await cli(a, ['admin', 'init'], scripted('abcdef123456', 'abcdef123456').prompt);
-    const file = JSON.parse(readFileSync(adminKeyFile(a), 'utf8')) as { v: number; kdf: { iterations: number } };
+  it('the key file written with a 12 character passphrase and no hint is a normal version 1 envelope (no weaker format, no hint field)', async () => {
+    await cli(a, ['admin', 'init'], scripted('abcdef123456', 'abcdef123456').prompt, { ask: noHint().ask });
+    const file = JSON.parse(readFileSync(adminKeyFile(a), 'utf8')) as { v: number; hint?: string; kdf: { iterations: number } };
     expect(file.v).toBe(1);
+    expect('hint' in file).toBe(false);
     expect(file.kdf.iterations).toBeGreaterThanOrEqual(600_000);
     writeFileSync(join(root, 'ok'), 'x');
+  });
+});
+
+describe('passphrase hint (decision 57)', () => {
+  const GOOD = 'correct horse battery staple';
+  function scripted(...answers: string[]) {
+    const labels: string[] = [];
+    return {
+      labels,
+      prompt: async (label: string): Promise<string> => {
+        labels.push(label);
+        const next = answers.shift();
+        if (next === undefined) throw new Error(`unexpected prompt "${label}"`);
+        return next;
+      },
+    };
+  }
+  function questions(...answers: string[]) {
+    const labels: string[] = [];
+    return {
+      labels,
+      ask: async (label: string): Promise<string> => {
+        labels.push(label);
+        const next = answers.shift();
+        if (next === undefined) throw new Error(`unexpected question "${label}"`);
+        return next;
+      },
+    };
+  }
+  const stored = () => JSON.parse(readFileSync(adminKeyFile(a), 'utf8')) as { v: number; hint?: string };
+
+  it('is asked right after the confirmation (Enter = none is covered above), stored in the key file, and shown above EVERY unlock prompt', async () => {
+    const q = questions('the street of my first school');
+    const r = await cli(a, ['admin', 'init'], scripted(GOOD, GOOD).prompt, { ask: q.ask });
+    expect(r.code, r.err).toBe(0);
+    expect(q.labels).toEqual(['Hint to help you remember it (optional, shown on every unlock, never write the passphrase itself): ']);
+    expect(stored()).toMatchObject({ v: 2, hint: 'the street of my first school' });
+    await ok(a, ['init', '--name', 'desktop']);
+    await ok(a, ['peer', 'info', '--out', join(root, 'info.json')]);
+    const unlock = scripted(GOOD);
+    const signed = await cli(a, ['admin', 'register', join(root, 'info.json'), '--out', join(root, 'bundle.json')], unlock.prompt);
+    expect(signed.code, signed.err).toBe(0);
+    // The hint is the line above the short prompt, in the same label (the terminal shows them together).
+    expect(unlock.labels).toEqual(['Hint: the street of my first school\nAdmin passphrase: ']);
+  });
+
+  it('--hint gives it without a question', async () => {
+    const r = await cli(a, ['admin', 'init', '--hint', 'my first school'], scripted(GOOD, GOOD).prompt, { ask: forbidden('a question') });
+    expect(r.code, r.err).toBe(0);
+    expect(stored().hint).toBe('my first school');
+  });
+
+  it('--hint with --generate is accepted (a scripted setup)', async () => {
+    const r = await cli(a, ['admin', 'init', '--generate', '--hint', 'on the paper in the drawer'], forbidden('a passphrase'), { ask: forbidden('a question') });
+    expect(r.code, r.err).toBe(0);
+    expect(stored().hint).toBe('on the paper in the drawer');
+  });
+
+  it('a hint that contains the passphrase (any case) is refused with the reason and asked again, then accepted', async () => {
+    const q = questions(`it is ${GOOD.toUpperCase()}`, 'a safe hint');
+    const r = await cli(a, ['admin', 'init'], scripted(GOOD, GOOD).prompt, { ask: q.ask });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/contains the passphrase/);
+    expect(r.err).not.toContain(GOOD.toUpperCase());
+    expect(stored().hint).toBe('a safe hint');
+  });
+
+  it('three unusable hints fail and create nothing', async () => {
+    const bad = `${GOOD} again`;
+    const r = await cli(a, ['admin', 'init'], scripted(GOOD, GOOD).prompt, { ask: questions(bad, bad, bad).ask });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/contains the passphrase.*[Nn]othing was created/s);
+    expect(existsSync(adminKeyFile(a))).toBe(false);
+  });
+
+  it('--hint that contains the passphrase fails with the reason and creates nothing', async () => {
+    const r = await cli(a, ['admin', 'init', '--hint', `${GOOD}!`], scripted(GOOD, GOOD).prompt, { ask: forbidden('a question') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/contains the passphrase.*[Nn]othing was created/s);
+    expect(existsSync(adminKeyFile(a))).toBe(false);
+  });
+
+  it('--hint too long or not printable ASCII is a usage error, before anything is asked', async () => {
+    const long = await cli(a, ['admin', 'init', '--hint', 'x'.repeat(81)], forbidden('a passphrase'));
+    expect(long.code).toBe(2);
+    expect(long.err).toMatch(/--hint.*at most 80/);
+    const accent = await cli(a, ['admin', 'init', '--hint', 'caf' + String.fromCharCode(233)], forbidden('a passphrase'));
+    expect(accent.code).toBe(2);
+    expect(accent.err).toMatch(/--hint.*printable ASCII/);
+    expect(existsSync(adminKeyFile(a))).toBe(false);
+  });
+
+  it('--hint is refused anywhere else', async () => {
+    const r = await cli(a, ['status', '--hint', 'x']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--hint only applies to `machine admin init` and `machine setup`/);
+  });
+
+  it('a malformed hint in the key file stops the unlock before the prompt, naming the file', async () => {
+    await ok(a, ['admin', 'init', '--generate', '--hint', 'fine']);
+    const file = JSON.parse(readFileSync(adminKeyFile(a), 'utf8')) as Record<string, unknown>;
+    writeFileSync(adminKeyFile(a), JSON.stringify({ ...file, hint: 'bad' + String.fromCharCode(27) }));
+    await ok(a, ['init', '--name', 'desktop']);
+    await ok(a, ['peer', 'info', '--out', join(root, 'info.json')]);
+    const r = await cli(a, ['admin', 'register', join(root, 'info.json'), '--out', join(root, 'bundle.json')], forbidden('a passphrase'));
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/the hint is malformed/);
+    expect(r.err).toContain('admin.key.json');
   });
 });

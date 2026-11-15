@@ -49,7 +49,7 @@ describe('onboarding with the real relay', () => {
 
   it('setup of the first machine: admin key, full-access code, device login approved in the relay console, self-approval, enrollment', async () => {
     const code = await w.relay.adminPairingCode();
-    const r = await w.run('desktop', a, ['setup', w.relay.url], { hostname: 'Desktop', visible: [code] });
+    const r = await w.run('desktop', a, ['setup', w.relay.url], { hostname: 'Desktop', visible: ['', code] });
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('[ok] admin key created');
     expect(r.out).toMatch(/\[ok\] admin token "[^"]+" saved for /);

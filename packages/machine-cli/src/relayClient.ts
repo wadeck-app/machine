@@ -1,3 +1,4 @@
+import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
 // Client of the relay API (relay-api.md v0.2 + pairing claim). The relay is untrusted: this client only moves opaque
 // documents. The token is held in a closure and is never part of an error message, a log line or a returned value.
 
@@ -303,7 +304,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     let message: string;
     if (c.pairing && (status === 400 || status === 401)) {
       message = c.forAdmin
-        ? `the pairing code was refused${detail}: open a new pairing in the relay console (Tokens, Add token, WITHOUT "Limited to scopes") and run \`machine admin login <code>\` again`
+        ? `the pairing code was refused${detail}: ${capitalized(FULL_ACCESS_CLICK_PATH)} for a new code (${FULL_ACCESS_WHY}), then run \`machine admin login <code>\` again`
         : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
       message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
@@ -387,7 +388,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         if (scopes !== null) {
           throw new RelayError({
             status: r.status,
-            message: `the pairing code gives a token limited to scopes (${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}): it could not list or decide candidacies, and the token was NOT saved. Open a pairing WITHOUT "Limited to scopes" in the relay console (Tokens, Add token), note that the code is now used up, and run \`machine admin login <code>\` again`,
+            message: `the pairing code gives a token limited to scopes (${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}): it could not list or decide candidacies (${FULL_ACCESS_WHY}), and the token was NOT saved. ${capitalized(FULL_ACCESS_CLICK_PATH)} for a new code (this one is now used up), then run \`machine admin login <code>\` again`,
           });
         }
         return { token: claimed, label: typeof label === 'string' ? label : '', scopes: null };

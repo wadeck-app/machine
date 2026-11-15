@@ -1,3 +1,4 @@
+import { FULL_ACCESS_PARAGRAPH } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import { adminInit, adminKeyFile, askAdminPassphrase, assertCanInitAdminKey, type Prompt } from './admin.js';
 import { adminLogin, missingAdminTokenMessage, runApprove } from './adminApprove.js';
@@ -18,16 +19,22 @@ import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
  * Create the admin key (decision 51): the passphrase is chosen at the hidden prompt (typed twice) or generated. The
  * existing-key check comes before any question. Nothing secret reaches stdout: a generated passphrase goes to stderr once.
  */
-export async function createAdminKey(ctx: CommandContext, prompt: Prompt): Promise<ReturnType<typeof adminInit>> {
+export async function createAdminKey(ctx: CommandContext, prompt: Prompt, ask: (label: string) => Promise<string>): Promise<ReturnType<typeof adminInit>> {
   const { args, io, configDir } = ctx;
   assertCanInitAdminKey(configDir);
-  const { chosen, advice } = await askAdminPassphrase(prompt, { generate: args.generate });
-  const r = adminInit(configDir, chosen);
+  const { chosen, advice, hint } = await askAdminPassphrase(prompt, {
+    generate: args.generate,
+    ...(args.hint !== undefined ? { hint: args.hint } : {}),
+    say: args.json ? io.stderr : io.stdout,
+    warn: io.stderr,
+    ask,
+  });
+  const r = adminInit(configDir, chosen, hint);
   if (r.generated) {
     // The passphrase goes to the terminal channel only: stdout may be redirected or captured in a log.
-    io.stderr(`Admin passphrase (shown only once, write it down now; it cannot be recovered):\n  ${r.passphrase}\n`);
+    io.stderr(`\nAdmin passphrase (shown only once, write it down now; it cannot be recovered):\n\n  ${r.passphrase}\n\n`);
   } else {
-    io.stderr('[info] admin passphrase set. It cannot be recovered: if you forget it, no machine can sign or approve any more\n');
+    io.stderr('\n[info] admin passphrase set. It cannot be recovered: if you forget it, no machine can sign or approve any more\n');
     if (advice !== undefined) io.stderr(`[warn] ${advice}\n`);
   }
   return r;
@@ -99,7 +106,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       if (args.name !== undefined) ensureMachine(configDir, { name: args.name });
     } else {
       const ensured = ensureMachine(configDir, { ...(args.name !== undefined ? { name: args.name } : {}), ...(io.hostname ? { hostname: io.hostname } : {}) });
-      if (ensured.note !== undefined) io.stderr(`[info] ${ensured.note}\n`);
+      if (ensured.note !== undefined) io.stderr(`[info] ${ensured.note}\n\n`);
     }
   } catch (e) {
     if (e instanceof NotInitializedError) return fail(e.message);
@@ -113,28 +120,26 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   if (o.setup) {
     try {
       if (!existsSync(adminKeyFile(configDir))) {
-        say('The admin key of the new network: it signs every enrollment and policy, and its encrypted copy goes to every machine.\n');
-        const created = await createAdminKey(ctx, o.prompt);
+        const created = await createAdminKey(ctx, o.prompt, o.ask);
         passphrase = created.passphrase;
-        say(`[ok] admin key created (id ${created.adminKeyId})\n`);
+        say(`[ok] admin key created (id ${created.adminKeyId})\n\n`);
       } else {
-        say('[info] this machine already holds the admin key: it is kept\n');
+        say('[info] this machine already holds the admin key: it is kept\n\n');
+        if (args.hint !== undefined) io.stderr('[warn] --hint ignored: the admin key already exists on this machine, its hint cannot change here\n\n');
       }
       if (readRelayAdminConfig(configDir) === undefined) {
-        say(
-          'Setup needs two things from the relay console: first a full-access pairing code (asked now), then the approval of a relay login code that this machine shows (you type it on the relay page).\n' +
-            'Admin access to the relay: in the relay console open Tokens, Add token, WITHOUT "Limited to scopes". It shows an 8-digit pairing code.\n',
-        );
+        // The why and the click path, as a paragraph of their own (the relay owner may offer a confirm-only login later).
+        say(`${FULL_ACCESS_PARAGRAPH}\n\n`);
         let pairing: string;
         try {
-          pairing = (await o.ask('Full-access pairing code (8 digits, shown by the relay console): ')).trim();
+          pairing = (await o.ask('Full-access pairing code (8 digits): ')).trim();
         } catch (e) {
           if (e instanceof PromptTimeoutError) throw e;
           return fail(`no pairing code could be asked (${(e as Error).message}): get the code in the relay console, then run \`machine admin login <code> --relay ${effectiveRelay ?? '<relay-host>'}\` and \`machine setup\` again`, EXIT.usage);
         }
         if (pairing.length === 0 || pairing.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console, then run `machine setup` again', EXIT.usage);
         const login = await adminLogin(configDir, { code: pairing, relayUrl: effectiveRelay as string, force: false });
-        say(`[ok] admin token "${login.label}" saved for ${login.relayUrl}\n`);
+        say(`[ok] admin token "${login.label}" saved for ${login.relayUrl}\n\n`);
       }
     } catch (e) {
       if (e instanceof RelayError) return fail(`${e.message}. Nothing else was done; run \`machine setup\` again (what was created is kept)`);
@@ -181,7 +186,8 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         if (args.json && args.noWait) return;
         say(
           `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
-            `Candidacy ${p.candidacyId} posted: it ${expiryText(p.expiresAt, epochSeconds())}.\n` +
+            // The machine that holds the admin key approves its own candidacy a moment later: the id and the expiry are noise there.
+            (selfApproves ? '\n' : `Candidacy ${p.candidacyId} posted: it ${expiryText(p.expiresAt, epochSeconds())}.\n`) +
             (args.verbose && !selfApproves ? `Candidacy code (--verbose; the admin machine recomputes it itself, there is nothing to compare):\n\n  ${p.verificationCode}\n\n` : ''),
         );
       },
@@ -195,7 +201,6 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
                 if (reuse === undefined) return o.prompt(label);
                 const typed = reuse;
                 reuse = undefined;
-                say('Signing with the admin passphrase you just set.\n');
                 return typed;
               };
               try {
@@ -207,6 +212,8 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
                   reject: false,
                   verbose: args.verbose,
                   prompt: signPrompt,
+                  // The passphrase just set signs this enrollment: said once instead of the usual "Enter the admin passphrase".
+                  ...(passphrase !== undefined ? { signingNote: '\nSigning with the admin passphrase you just set.\n' } : {}),
                   ask: o.ask,
                   say,
                   now: epochSeconds,
@@ -233,8 +240,10 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
 
   // Nothing is started at login unless --auto-startup was given: otherwise only a suggestion (stderr with --json, so stdout stays one JSON document).
   const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
+  // A paragraph of its own (the human reads the next steps, then the optional one).
+  const startupSpaced = startupHint === '' ? '' : `\n${startupHint}`;
   if (result.status === 'posted') {
-    emit(result.posted, 'next: on the admin machine run `machine admin approve`; it prints a security code for this machine. Then run `machine join --resume` here: it shows the security code, which must read exactly the same on the admin machine\n' + startupHint);
+    emit(result.posted, 'next: on the admin machine run `machine admin approve`; it prints a security code for this machine. Then run `machine join --resume` here: it shows the security code, which must read exactly the same on the admin machine\n' + startupSpaced);
   } else {
     const e = result.enrolled;
     const peerLines =
@@ -246,7 +255,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     const next = e.isAdminMachine
       ? `next:\n  another machine: run \`machine join ${result.posted.relayUrl}\` on it, then \`machine admin approve\` here\n  allow a command: \`machine admin allow <machine> -- <command>\` (this machine or another)\n`
       : 'next: the admin allows commands on this machine (`machine admin allow <this machine> -- <command>`, run on the admin machine), then `machine status`\n';
-    emit({ ...e, relayUrl: result.posted.relayUrl }, `[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}${next}${startupHint}`);
+    emit({ ...e, relayUrl: result.posted.relayUrl }, `${e.isAdminMachine ? '' : '\n'}[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}\n${next}${startupSpaced}`);
   }
   if (args.json && startupHint) io.stderr(startupHint);
   if (args.autoStartup) {

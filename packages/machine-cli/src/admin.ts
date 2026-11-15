@@ -3,6 +3,8 @@ import { writeFileAtomic } from './fsutil.js';
 import { join } from 'node:path';
 import {
   assertPolicyBody,
+  adminKeyHint,
+  checkHint,
   checkPassphrase,
   passphraseAdvice,
   PASSPHRASE_MIN_LENGTH,
@@ -70,13 +72,13 @@ export function readAdminPin(configDir: string): AdminPin {
  * Create the admin key on THIS machine. Returns the generated passphrase: the caller shows it once and never stores it.
  * Refuses when an admin key exists: a second key would invalidate every signature already issued.
  */
-export function adminInit(configDir: string, chosen?: string): AdminPin & { passphrase: string; generated: boolean } {
+export function adminInit(configDir: string, chosen?: string, hint?: string): AdminPin & { passphrase: string; generated: boolean } {
   const keyFile = adminKeyFile(configDir);
   assertCanInitAdminKey(configDir);
   const pair = generateSigningKeyPair();
   // A chosen passphrase (decision 51) is checked by encryptAdminKey too: the rule lives in one place (machine-core).
   const passphrase = chosen ?? generatePassphrase();
-  const envelope = encryptAdminKey(pair, passphrase);
+  const envelope = encryptAdminKey(pair, passphrase, hint !== undefined ? { hint } : {});
   const pin: AdminPin = { adminPublicKey: pair.publicKey, adminKeyId: keyId(pair.publicKey) };
   mkdirSync(join(configDir, SECRETS_DIRNAME), { recursive: true, mode: 0o700 });
   // Complete file under a temporary name, then link: no half-written key file, no overwrite.
@@ -110,27 +112,87 @@ export function assertCanInitAdminKey(configDir: string): void {
   }
 }
 
+/** Decision 57: a typo at the confirmation, or a passphrase that fails the rules, is asked again; this many attempts in all. */
+export const PASSPHRASE_ATTEMPTS = 3;
+
+export interface PassphraseIo {
+  /** The explanation paragraph (normal output channel). */
+  say: (text: string) => void;
+  /** A reason to try again (error channel; never contains a passphrase or a hint). */
+  warn: (text: string) => void;
+  /** A visible question (the hint). */
+  ask: (label: string) => Promise<string>;
+}
+
+const HINT_LABEL = 'Hint to help you remember it (optional, shown on every unlock, never write the passphrase itself): ';
+
 /**
  * The passphrase of a new admin key (decision 51): chosen at the hidden prompt (typed twice), or generated (`--generate`, or an
  * empty answer: the hidden prompt cannot show a typo, and a random 100-bit phrase shown once is never worse than what was meant).
+ * A mistake is asked again with the reason (PASSPHRASE_ATTEMPTS attempts in all), then it fails with "nothing was created".
+ * The prompts are short; the explanation is a separate paragraph above them. Then the optional hint (decision 57).
  * Nothing is created here. `advice` is the single warning line for a valid but short passphrase.
  */
-export async function askAdminPassphrase(prompt: Prompt, options: { generate: boolean }): Promise<{ chosen: string | undefined; advice: string | undefined }> {
-  if (options.generate) return { chosen: undefined, advice: undefined };
-  let first: string;
-  try {
-    first = await prompt(`Choose the admin passphrase (at least ${PASSPHRASE_MIN_LENGTH} characters, ${PASSPHRASE_RECOMMENDED_LENGTH} or more recommended), or press Enter to generate a random one: `);
-  } catch (e) {
-    if (e instanceof PromptTimeoutError) throw e;
-    const noTerminal = /interactive terminal/.test((e as Error).message);
-    throw new Error(`${(e as Error).message}${noTerminal ? '; in a script or without a terminal use `machine admin init --generate` (a random passphrase, shown once)' : ''}`);
+export async function askAdminPassphrase(
+  prompt: Prompt,
+  options: { generate: boolean; hint?: string } & PassphraseIo,
+): Promise<{ chosen: string | undefined; advice: string | undefined; hint: string | undefined }> {
+  if (options.generate) return { chosen: undefined, advice: undefined, hint: options.hint };
+  options.say(
+    '\nThe admin passphrase protects the key that signs every machine and policy of your network (an encrypted copy of it goes to every machine).\n' +
+      `At least ${PASSPHRASE_MIN_LENGTH} characters, ${PASSPHRASE_RECOMMENDED_LENGTH} or more recommended. Press Enter at the first prompt to get a random one instead.\n\n`,
+  );
+  const again = (reason: string, attempt: number, final: string): void => {
+    if (attempt >= PASSPHRASE_ATTEMPTS) throw new Error(final);
+    options.warn(`[warn] ${reason}. Try again (attempt ${attempt} of ${PASSPHRASE_ATTEMPTS} used)\n`);
+  };
+  let chosen: string | undefined;
+  for (let attempt = 1; chosen === undefined; attempt++) {
+    let first: string;
+    try {
+      first = await prompt('Admin passphrase: ');
+    } catch (e) {
+      if (e instanceof PromptTimeoutError) throw e;
+      const noTerminal = /interactive terminal/.test((e as Error).message);
+      throw new Error(`${(e as Error).message}${noTerminal ? '; in a script or without a terminal use `machine admin init --generate` (a random passphrase, shown once)' : ''}`);
+    }
+    if (first.length === 0) return { chosen: undefined, advice: undefined, hint: options.hint };
+    const check = checkPassphrase(first);
+    if (!check.ok) {
+      again(check.message, attempt, `${check.message}. Nothing was created`);
+      continue;
+    }
+    const second = await prompt('Confirm passphrase: ');
+    if (second !== first) {
+      again('the two passphrases do not match', attempt, 'the two passphrases do not match: nothing was created, run the command again');
+      continue;
+    }
+    chosen = first;
   }
-  if (first.length === 0) return { chosen: undefined, advice: undefined };
-  const check = checkPassphrase(first);
-  if (!check.ok) throw new Error(`${check.message}. Nothing was created`);
-  const second = await prompt('Type the passphrase again to confirm: ');
-  if (second !== first) throw new Error('the two passphrases do not match: nothing was created, run the command again');
-  return { chosen: first, advice: passphraseAdvice(first) };
+  return { chosen, advice: passphraseAdvice(chosen), hint: await askHint(chosen, options) };
+}
+
+/** The optional hint (decision 57): the flag when given, else a visible question (Enter = none). A hint that gives the passphrase away is refused. */
+async function askHint(passphrase: string, options: { hint?: string } & PassphraseIo): Promise<string | undefined> {
+  if (options.hint !== undefined) {
+    const check = checkHint(options.hint, passphrase);
+    if (!check.ok) throw new Error(`--hint: ${check.message}. Nothing was created`);
+    return options.hint;
+  }
+  for (let attempt = 1; ; attempt++) {
+    let answer: string;
+    try {
+      answer = (await options.ask(HINT_LABEL)).trim();
+    } catch (e) {
+      if (e instanceof PromptTimeoutError) throw e;
+      throw new Error(`${(e as Error).message}; the hint question needs a terminal: pass \`--hint <text>\` to give it without a question. Nothing was created`);
+    }
+    if (answer.length === 0) return undefined;
+    const check = checkHint(answer, passphrase);
+    if (check.ok) return answer;
+    if (attempt >= PASSPHRASE_ATTEMPTS) throw new Error(`${check.message}. Nothing was created`);
+    options.warn(`[warn] ${check.message}. Try again, or press Enter for no hint (attempt ${attempt} of ${PASSPHRASE_ATTEMPTS} used)\n`);
+  }
 }
 
 function readEnvelope(configDir: string): AdminKeyEnvelope {
@@ -158,7 +220,14 @@ export type Prompt = (label: string) => Promise<string>;
 
 async function unlock(configDir: string, pin: AdminPin, prompt: Prompt) {
   const envelope = readEnvelope(configDir);
-  const passphrase = await prompt('Admin passphrase: ');
+  // Decision 57: the hint (stored in clear in the key file) is shown above the short prompt, on every machine.
+  let hint: string | undefined;
+  try {
+    hint = adminKeyHint(envelope);
+  } catch (e) {
+    throw new Error(`${(e as Error).message} (${adminKeyFile(configDir)})`);
+  }
+  const passphrase = await prompt(hint === undefined ? 'Admin passphrase: ' : `Hint: ${hint}\nAdmin passphrase: `);
   let pair;
   try {
     pair = decryptAdminKey(envelope, passphrase);

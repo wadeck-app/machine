@@ -1,7 +1,7 @@
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { canonicalize } from './canonical.js';
-import { checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, PASSPHRASE_RECOMMENDED_LENGTH } from './adminKey.js';
+import { adminKeyHint, checkHint, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, PASSPHRASE_RECOMMENDED_LENGTH } from './adminKey.js';
 import { generateSigningKeyPair, signBytes, verifyBytes } from './keys.js';
 
 const STRONG = 'correct horse battery staple 7391';
@@ -40,7 +40,7 @@ describe('admin key at rest', () => {
 
   it('refuses an unknown format version', () => {
     const envelope = encryptAdminKey(generateSigningKeyPair(), STRONG);
-    expect(() => decryptAdminKey({ ...envelope, v: 2 } as never, STRONG)).toThrow(/version 2/);
+    expect(() => decryptAdminKey({ ...envelope, v: 3 } as never, STRONG)).toThrow(/version 3/);
   });
 
   it('uses a fresh salt and nonce each time', () => {
@@ -117,5 +117,57 @@ describe('passphrase strength (T-06, S-03)', () => {
     expect(p).toMatch(/^([0-9A-HJKMNP-TV-Z]{4}-){4}[0-9A-HJKMNP-TV-Z]{4}$/);
     expect(checkPassphrase(p)).toEqual({ ok: true });
     expect(generatePassphrase()).not.toBe(p);
+  });
+});
+
+describe('passphrase hint (decision 57)', () => {
+  it('a file without a hint is unchanged: version 1, no hint field, read as undefined', () => {
+    const envelope = encryptAdminKey(generateSigningKeyPair(), STRONG);
+    expect(envelope.v).toBe(1);
+    expect('hint' in envelope).toBe(false);
+    expect(adminKeyHint(envelope)).toBeUndefined();
+  });
+
+  it('a hint is stored in clear in the header (version 2), read without the passphrase, and the key still unlocks', () => {
+    const kp = generateSigningKeyPair();
+    const envelope = encryptAdminKey(kp, STRONG, { hint: 'the street of my first school' });
+    expect(envelope.v).toBe(2);
+    expect(envelope.hint).toBe('the street of my first school');
+    expect(adminKeyHint(envelope)).toBe('the street of my first school');
+    expect(decryptAdminKey(envelope, STRONG).publicKey).toBe(kp.publicKey);
+  });
+
+  it('an empty or blank hint means no hint', () => {
+    expect(encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: '   ' }).v).toBe(1);
+  });
+
+  it('the hint is authenticated: swapping, removing or adding it breaks decryption', () => {
+    const envelope = encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: 'original hint' });
+    expect(() => decryptAdminKey({ ...envelope, hint: 'swapped hint' }, STRONG)).toThrow(/wrong passphrase or damaged key file/);
+    const { hint: _removed, ...without } = envelope;
+    expect(() => decryptAdminKey({ ...without, v: 1 } as never, STRONG)).toThrow(/wrong passphrase or damaged key file/);
+    const plain = encryptAdminKey(generateSigningKeyPair(), STRONG);
+    expect(() => decryptAdminKey({ ...plain, hint: 'added hint' } as never, STRONG)).toThrow(/admin key file/);
+  });
+
+  it('refuses a hint that is too long, not printable ASCII, or that contains the passphrase (any case)', () => {
+    expect(checkHint('x'.repeat(81), STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/at most 80/) });
+    expect(checkHint(String.fromCharCode(99, 97, 102, 233), STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/printable ASCII/) });
+    expect(checkHint('line' + String.fromCharCode(10) + 'break', STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/printable ASCII/) });
+    expect(checkHint(`it is ${STRONG.toUpperCase()} indeed`, STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/contains the passphrase/) });
+    expect(checkHint('x'.repeat(80), STRONG)).toEqual({ ok: true });
+    expect(checkHint(STRONG)).toEqual({ ok: true });
+    expect(() => encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: STRONG })).toThrow(/contains the passphrase/);
+  });
+
+  it('a malformed hint in a file is reported by name, never shown', () => {
+    const envelope = { ...encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: 'ok' }), hint: 'bad' + String.fromCharCode(27) + '[31m' };
+    expect(() => adminKeyHint(envelope)).toThrow(/admin key file: the hint is malformed/);
+    expect(() => decryptAdminKey(envelope, STRONG)).toThrow(/admin key file: the hint is malformed/);
+  });
+
+  it('a version 1 file that carries a hint is refused (an old build would report a wrong passphrase)', () => {
+    const envelope = encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: 'ok' });
+    expect(() => decryptAdminKey({ ...envelope, v: 1 } as never, STRONG)).toThrow(/admin key file: .*hint/);
   });
 });

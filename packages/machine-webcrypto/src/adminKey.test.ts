@@ -1,8 +1,9 @@
-import { encryptAdminKey, keyId as coreKeyId, signDocument, verifyDocument } from '@wadeck-app/machine-core';
+import { decryptAdminKey, encryptAdminKey, keyId as coreKeyId, signDocument, verifyDocument } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import { STRONG, b64u, newPair } from '../test-support/kit.js';
 import { signBody } from './signed.js';
-import { unlockAdminKey } from './adminKey.js';
+import { adminKeyHint, unlockAdminKey } from './adminKey.js';
+import { canonicalize } from './canonical.js';
 
 const MAX_ITERATIONS_PLUS_ONE = 20_000_001;
 const OTHER = 'another passphrase that is long enough 1';
@@ -93,7 +94,7 @@ describe('unlockAdminKey: validation before any key derivation (same rules and m
   });
 
   it('refuses an unknown version, kdf, cipher, a malformed salt, iv or ciphertext', async () => {
-    expect(await run({ v: 2 })).toMatch(/unsupported format version 2/);
+    expect(await run({ v: 3 })).toMatch(/unsupported format version 3/);
     expect(await run({ kdf: { ...envelope.kdf, name: 'argon2id' } })).toMatch(/unknown kdf or cipher/);
     expect(await run({ cipher: { ...envelope.cipher, name: 'chacha' } })).toMatch(/unknown kdf or cipher/);
     expect(await run({ kdf: { ...envelope.kdf, salt: 'AAAA' } })).toMatch(/kdf salt is missing or malformed/);
@@ -113,5 +114,52 @@ describe('unlockAdminKey: validation before any key derivation (same rules and m
     const text = JSON.stringify(envelope);
     expect(await messageOfAsync(() => unlockAdminKey(text, STRONG, { extractable: true as never }))).toMatch(/non-extractable/);
     expect(await messageOfAsync(() => unlockAdminKey(text, 5 as never, { extractable: false }))).toMatch(/passphrase must be a string/);
+  });
+});
+
+describe('passphrase hint (decision 57): the two implementations agree on the authenticated header', () => {
+  it('a file made by machine-core WITH a hint is opened here, and the hint is readable without the passphrase', async () => {
+    const pair = newPair();
+    const file = JSON.stringify(encryptAdminKey(pair, STRONG, { hint: 'the street of my first school' }));
+    expect(adminKeyHint(file)).toBe('the street of my first school');
+    const unlocked = await unlockAdminKey(file, STRONG, { extractable: false });
+    expect(unlocked.publicKey).toBe(pair.publicKey);
+  });
+
+  it('a file made by machine-core WITHOUT a hint has no hint here and still opens', async () => {
+    const file = JSON.stringify(encryptAdminKey(newPair(), STRONG));
+    expect(adminKeyHint(file)).toBeUndefined();
+    await unlockAdminKey(file, STRONG, { extractable: false });
+  });
+
+  it('a swapped, removed or added hint is refused here too', async () => {
+    const withHint = encryptAdminKey(newPair(), STRONG, { hint: 'original hint' });
+    expect(await messageOfAsync(() => unlockAdminKey(JSON.stringify({ ...withHint, hint: 'swapped hint' }), STRONG, { extractable: false }))).toMatch(/wrong passphrase or damaged key file/);
+    const { hint: _removed, ...removed } = withHint;
+    expect(await messageOfAsync(() => unlockAdminKey(JSON.stringify({ ...removed, v: 1 }), STRONG, { extractable: false }))).toMatch(/wrong passphrase or damaged key file/);
+    expect(await messageOfAsync(() => unlockAdminKey(JSON.stringify({ ...withHint, v: 1 }), STRONG, { extractable: false }))).toMatch(/version 1 file cannot carry a hint/);
+    expect(await messageOfAsync(() => unlockAdminKey(JSON.stringify({ ...removed, v: 2 }), STRONG, { extractable: false }))).toMatch(/version 2 without a hint/);
+  });
+
+  it('a malformed hint is refused by name', async () => {
+    const withHint = encryptAdminKey(newPair(), STRONG, { hint: 'ok' });
+    const bad = JSON.stringify({ ...withHint, hint: 'bad' + String.fromCharCode(27) });
+    expect(() => adminKeyHint(bad)).toThrow(/the hint is malformed/);
+    expect(await messageOfAsync(() => unlockAdminKey(bad, STRONG, { extractable: false }))).toMatch(/the hint is malformed/);
+  });
+
+  it('a file written with WebCrypto only (header with a hint, built here) is opened by machine-core', async () => {
+    const pair = newPair();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const kdf = { name: 'pbkdf2-sha256', iterations: 600_000, salt: b64u(salt) };
+    const head = { v: 2, publicKey: pair.publicKey, hint: 'written by the page twin', kdf, cipher: { name: 'aes-256-gcm', iv: b64u(iv) } };
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(STRONG), 'PBKDF2', false, ['deriveKey']);
+    const aes = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations: 600_000 }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const aad = new TextEncoder().encode(canonicalize({ v: 2, publicKey: head.publicKey, kdf, cipher: { name: 'aes-256-gcm' }, hint: head.hint }));
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource, additionalData: aad as BufferSource, tagLength: 128 }, aes, pair.privateKeyPkcs8 as BufferSource));
+    const envelope = { ...head, ciphertext: b64u(sealed) };
+    expect(decryptAdminKey(envelope as never, STRONG).publicKey).toBe(pair.publicKey);
+    expect((await unlockAdminKey(JSON.stringify(envelope), STRONG, { extractable: false })).publicKey).toBe(pair.publicKey);
   });
 });
