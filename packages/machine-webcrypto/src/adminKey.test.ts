@@ -35,6 +35,13 @@ describe('unlockAdminKey: a file written by machine-core adminKey', () => {
     expect(signed.signature).toBe(signDocument('machine/test/v1', { a: 1 }, pair.privateKeyPkcs8));
   });
 
+  it('decision 51: a chosen passphrase of the minimum length (12 characters) written by machine-core is opened here, and the unlock imposes no length rule of its own', async () => {
+    const pair = newPair();
+    const minimum = 'abcdef123456';
+    const unlocked = await unlockAdminKey(JSON.stringify(encryptAdminKey(pair, minimum)), minimum, { extractable: false });
+    expect(unlocked.publicKey).toBe(pair.publicKey);
+  });
+
   it('the unlocked key cannot be exported in any format', async () => {
     const file = JSON.stringify(encryptAdminKey(newPair(), STRONG));
     const unlocked = await unlockAdminKey(file, STRONG, { extractable: false });

@@ -99,8 +99,6 @@ describe('--prompt-timeout', () => {
     const status = await cli(dir, ['status', '--prompt-timeout', '30']);
     expect(status.code).toBe(2);
     expect(status.err).toMatch(/only applies to the commands that ask a question/);
-    const init = await cli(dir, ['admin', 'init', '--prompt-timeout', '30']);
-    expect(init.code).toBe(2);
     expect((await cli(dir, ['admin', 'pin', 'x.json', '--prompt-timeout', '30'])).code).toBe(2);
   });
 
@@ -108,7 +106,7 @@ describe('--prompt-timeout', () => {
     const a = join(dir, 'a2');
     mkdirSync(a);
     await ok(a, ['init', '--name', 'desktop']);
-    const generated = await ok(a, ['admin', 'init']);
+    const generated = await ok(a, ['admin', 'init', '--generate']);
     expect(generated.code).toBe(0);
     const peer = await ok(a, ['peer', 'info', '--out', join(dir, 'info.json')]);
     expect(peer.code).toBe(0);

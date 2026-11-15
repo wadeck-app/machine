@@ -23,13 +23,30 @@ export interface AdminKeyEnvelope {
 
 export type PassphraseCheck = { ok: true } | { ok: false; message: string };
 
+/** Decision 51: the floor of a passphrase CHOSEN by the user (the generated one has 20 characters, 100 bits). */
+export const PASSPHRASE_MIN_LENGTH = 12;
+/** Below this a passphrase is accepted with a warning (offline guessing risk if a machine holding the key file is stolen). */
+export const PASSPHRASE_RECOMMENDED_LENGTH = 20;
+const MIN_DISTINCT = 6;
+
+const charsOf = (passphrase: string): string[] => Array.from(passphrase.normalize('NFKC'));
+
 export function checkPassphrase(passphrase: string): PassphraseCheck {
   // Counted in characters (code points), not UTF-16 units.
-  const chars = Array.from(passphrase.normalize('NFKC'));
-  if (chars.length < 20) return { ok: false, message: 'the passphrase must be at least 20 characters; use `machine admin init` to generate one (100 bits)' };
-  if (new Set(chars).size < 8) return { ok: false, message: 'the passphrase uses too few different characters (at least 8 are required)' };
+  const chars = charsOf(passphrase);
+  if (chars.length < PASSPHRASE_MIN_LENGTH) {
+    return { ok: false, message: `the passphrase must be at least ${PASSPHRASE_MIN_LENGTH} characters (${PASSPHRASE_RECOMMENDED_LENGTH} or more is recommended): type a longer one, or use \`machine admin init --generate\` for a random one (100 bits)` };
+  }
+  if (new Set(chars).size < MIN_DISTINCT) return { ok: false, message: `the passphrase uses too few different characters (at least ${MIN_DISTINCT} are required)` };
   if (/^[0-9\s-]+$/.test(chars.join(''))) return { ok: false, message: 'the passphrase must not be digits only' };
   return { ok: true };
+}
+
+/** A warning (never a refusal) for a valid passphrase shorter than the recommended length; undefined when it is long enough. */
+export function passphraseAdvice(passphrase: string): string | undefined {
+  const length = charsOf(passphrase).length;
+  if (length >= PASSPHRASE_RECOMMENDED_LENGTH) return undefined;
+  return `this passphrase has ${length} characters, the minimum is ${PASSPHRASE_MIN_LENGTH} and ${PASSPHRASE_RECOMMENDED_LENGTH} or more is recommended: an encrypted copy of the admin key is on every machine, so anyone who steals one of them can try to guess it offline; a longer phrase is stronger`;
 }
 
 /** 20 Crockford base32 characters (100 bits) in five groups of four. */

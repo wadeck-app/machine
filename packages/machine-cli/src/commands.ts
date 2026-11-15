@@ -33,7 +33,7 @@ export interface StatusAnswer {
 
 export interface ListAnswer {
   initialized: true;
-  self: MachineEntry;
+  self: MachineEntry & { aliases: string[] };
   /** revocationVersionSeen: the revocation version the peer announced at its last handshake (absent: never seen), revocationSeenAt: when (epoch seconds). */
   peers: Array<MachineEntry & { aliases: string[]; revocationVersionSeen?: number; revocationSeenAt?: number }>;
   /** Why the revocation versions are missing (unreadable state file). */
@@ -115,7 +115,7 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const seen = readRevocationSeen(configDir, (warning) => (revocationWarning = `the revocation versions are not shown: ${warning}`));
       return {
         initialized: true,
-        self: { uuid: self.uuid, name: self.name },
+        self: { uuid: self.uuid, name: self.name, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === self.uuid).map(([alias]) => alias) },
         peers: network.directory.machines().map((p) => ({
           ...p,
           aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias),

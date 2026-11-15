@@ -7,7 +7,8 @@ import { runStartupCommand } from './cliStartup.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
-import { initMachine } from './identity.js';
+import { chooseMachineName, initMachine } from './identity.js';
+import { MachineNameError } from './errors.js';
 import { MAX_PROMPT_TIMEOUT_SECONDS } from './prompt.js';
 import { resolveConfigDir } from './paths.js';
 import { appVersion } from './version.js';
@@ -18,9 +19,32 @@ const HELP = `machine - private network between your machines
 
 Usage: machine <command> [options]
 
+Getting started (one command per machine; the name of a machine is the computer name, lowercase):
+  first machine (it also becomes the admin machine):
+    machine setup <relay>            creates the admin key (you choose its passphrase), asks the full-access code of the
+                                     relay console, does the device login, approves itself and enrolls
+  every other machine:
+    machine join <relay>             on the new machine: waits for the admin and finishes by itself; tells you the final
+                                     code to compare
+    machine admin approve            on the admin machine: shows the new machine, asks y/N and the passphrase, prints the
+                                     final code (with several pending machines it lists them: pass the id)
+  allow a command on a machine (admin machine):
+    machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
+  then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
+  Stays manual: the passphrase, the relay console codes and the final-code comparison (these are the human steps).
+
 Commands:
-  init --name <name>                 create this machine's UUID and identity key
-  status                             identity, enrollment state, policy, revocation version and peers last seen
+  setup <relay> [--generate] [--name <name>] [--auto-startup]
+                                     the first machine in one command: identity (name from the computer name), admin key
+                                     (passphrase typed twice, or --generate for a random one), the full-access pairing
+                                     code of the relay console (asked here, kept for next time), device login, self-approval
+                                     (the passphrase just chosen signs it) and enrollment. Run it again after an interruption:
+                                     what exists is kept. Other machines never create an admin key: they use join
+  init [--name <name>]               create this machine's UUID and identity key only (optional: setup and join do it). The
+                                     name is --name or the computer name, normalised to lowercase letters, digits and hyphens
+                                     (a note says what was changed); it is the stable reference signed at enrollment, a
+                                     friendlier local label is \`machine alias set <label> <name>\`
+  status                            identity, enrollment state, policy, revocation version and peers last seen
                                      behind on it, what was left out
   list                               this machine and its registered peers (and the revocation version each peer
                                      announced at its last handshake); with a relay also their last known
@@ -42,7 +66,11 @@ Commands:
                                      to 8: a NAT, a hostname, a VPN, an SSH tunnel; without a port the peer port is
                                      used). With nothing to publish it says why and publishes nothing
   stop                               stop the running daemon
-  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup]
+  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup] [--name <name>]
+                                     one command: the identity is created when there is none (--name, else the computer name). On the
+                                     machine that holds the admin key it approves its own enrollment (one passphrase, nothing to compare;
+                                     needs the admin relay token: \`machine admin login\`, or use \`machine setup\`). On any other machine it
+                                     prints what the admin runs (\`machine admin approve\`), waits, then shows the final code to compare
                                      --timeout (default 900 s) is the wait for the admin; it never outlasts the candidacy (15 min)
                                      or the device code. An approval received but not confirmed is kept 15 minutes only:
                                      later it is discarded and nothing is pinned (ask the admin again: join --resume).
@@ -89,8 +117,9 @@ Administration (enrollment through the relay, or by files):
                                      claim a FULL-ACCESS pairing code of the relay console and keep the token in
                                      _secrets_/relay-admin.json (a machine-scoped token is refused)
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
-                                     without id: list the pending candidacies (id, name, host, address, age, code);
-                                     with an id (or unique prefix): show it (the code is information only), ask
+                                     without id: no pending candidacy says so; exactly ONE goes straight to its details; several are listed
+                                     (id, name, host, address, age, code) and you pass the id;
+                                     the details (the code is information only), then ask
                                      "approve this machine?" (y/N, terminal only, no way to skip it), type the admin
                                      passphrase, sign and send the approval, then print the FINAL code: the one
                                      comparison. On the new machine it must read exactly the same; if not, run
@@ -114,7 +143,17 @@ Administration (enrollment through the relay, or by files):
                                      machines that are gone. A machine that comes back must run \`join --resume\` and be
                                      approved again; what waited in its inbox is gone (admin distribute sends it again).
                                      After a token change it is not needed: a new join and an approval rebind the uuid
-  admin init                         create the admin key on this machine (passphrase shown once)
+  admin init [--generate]            create the admin key on this machine. You choose its passphrase (hidden prompt, typed
+                                     twice; at least 12 characters, 6 different, not only digits; below 20 a warning says a
+                                     stolen machine could allow offline guessing, an encrypted copy of the key is on every
+                                     machine). --generate, or an empty answer, makes a random one (100 bits, shown once)
+  admin allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] -- <command...>
+                                     allow ONE exact command on a machine (for every trusted peer): builds the next policy
+                                     version from the last one signed here, shows the difference, asks y/N and the admin
+                                     passphrase, signs, and sends it through the relay inbox (or installs it here when the
+                                     machine is this one; --out writes the signed file, the way without an admin relay
+                                     token). Without --shell: this machine's platform, said. --remove withdraws a command,
+                                     --list shows what is allowed. Nothing widens without your signature
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout); with the admin relay
                                      token it is also sent to its target machine through the relay
   admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]
@@ -132,6 +171,8 @@ Options:
   --prompt-timeout <s>   limit for every question to a person (y/N, passphrase, final code): 1 to 3600 s, default 120; on expiry the
                          question is cancelled, nothing is assumed and nothing is signed, pinned or revoked (join, admin approve|revoke|sign-policy|distribute|register|login)
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
+  --name <name>          machine name for init, join, setup when the identity is created (normalised: lowercase letters, digits, hyphens)
+  --generate             random admin passphrase for admin init and setup (no question)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
   --version              print the version of this build (stamped in a release bundle) and exit
@@ -145,7 +186,7 @@ no connection) are 255 with the reason on stderr.
 `;
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, follow: false, advertise: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -166,6 +207,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
     else if (a === '--quiet') out.quiet = true;
+    else if (a === '--generate') out.generate = true;
+    else if (a === '--list') out.list = true;
+    else if (a === '--remove') out.remove = true;
     else if (a === '--follow' || a === '-f') out.follow = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
@@ -221,19 +265,25 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
   }
-  if (args.passthrough.length > 0 && command !== 'run') {
-    return fail(`"--" is only used by \`machine run\` (it introduces the command to run on the peer)`, EXIT.usage);
+  if (args.passthrough.length > 0 && command !== 'run' && !(command === 'admin' && rest[0] === 'allow')) {
+    return fail('"--" is only used by `machine run` and `machine admin allow` (it introduces the command line)', EXIT.usage);
+  }
+  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow')) {
+    return fail('--list and --remove only apply to `machine admin allow` (`machine admin allow <machine> --list`, `machine admin allow <machine> --remove -- <command>`)', EXIT.usage);
+  }
+  if (args.generate && !(command === 'setup' || (command === 'admin' && rest[0] === 'init'))) {
+    return fail('--generate only applies to `machine admin init` and `machine setup` (a random admin passphrase instead of a chosen one)', EXIT.usage);
   }
 
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
-  if (args.autoStartup && command !== 'join') return fail('--auto-startup only applies to `machine join` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
+  if (args.autoStartup && command !== 'join' && command !== 'setup') return fail('--auto-startup only applies to `machine join` and `machine setup` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
 
   if (args.promptTimeout !== undefined) {
     const seconds = Number(args.promptTimeout);
@@ -241,8 +291,8 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || (command === 'admin' && ['approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record'));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, admin approve, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
+    const prompts = command === 'join' || command === 'setup' || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record'));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
   }
 
   try {
@@ -253,9 +303,11 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     if (command !== 'daemon' && command !== 'cli') printUpdateNotice(configDir, io.cliMeta?.version ?? appVersion(), io.stderr);
 
     if (command === 'init') {
-      if (args.name === undefined) return fail('init needs --name <name>, for example `machine init --name desktop`', EXIT.usage);
-      const m = initMachine(configDir, args.name);
-      emit({ uuid: m.uuid, name: m.name }, `[ok] initialized "${m.name}"\nuuid: ${m.uuid}\nnext: \`machine admin init\` on the admin machine, or \`machine peer info\` to give to the admin\n`);
+      // Optional: `machine join` and `machine setup` create the identity themselves. The name comes from --name or from the computer name.
+      const choice = chooseMachineName(args.name, io.hostname);
+      const m = initMachine(configDir, choice.name);
+      if (choice.note !== undefined) io.stderr(`[info] ${choice.note}\n`);
+      emit({ uuid: m.uuid, name: m.name }, `[ok] initialized "${m.name}"\nuuid: ${m.uuid}\nnext: \`machine setup <relay>\` on the first machine of the network, \`machine join <relay>\` on the others\n`);
       return EXIT.ok;
     }
 
@@ -330,7 +382,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         if (notInitialized(r)) return fail(r.message);
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
         const view = await addRelayView(configDir, r, Math.floor((io.now?.() ?? new Date()).getTime() / 1000), undefined, { allowLocal: io.allowLoopbackPeers === true });
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]`, ...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay)])];
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay)])];
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
@@ -358,7 +410,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         }
         if (sub === 'set') {
           if (a === undefined || b === undefined) return fail('usage: machine alias set <alias> <reference>', EXIT.usage);
-          const r = (await client.send('aliasSet', { alias: a, ref: b, replace: args.replace })) as AliasAnswer;
+          // References are case-insensitive: "Home" is stored as "home", and the CLI says so.
+          if (a !== a.toLowerCase()) io.stderr(`[info] alias stored as "${a.toLowerCase()}" (references are case-insensitive)\n`);
+          const r = (await client.send('aliasSet', { alias: a.toLowerCase(), ref: b, replace: args.replace })) as AliasAnswer;
           if ('initialized' in r) return fail(r.message);
           if (!r.ok) return fail(r.message, r.reason === 'conflict' ? EXIT.failure : EXIT.reference);
           emit(r, `[ok] ${r.alias} -> ${r.uuid}${r.previous ? ` (was ${r.previous})` : ''}\n`);
@@ -366,9 +420,9 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         }
         if (sub === 'rm') {
           if (a === undefined) return fail('usage: machine alias rm <alias>', EXIT.usage);
-          const r = (await client.send('aliasRemove', { alias: a })) as { ok: boolean; message?: string };
+          const r = (await client.send('aliasRemove', { alias: a.toLowerCase() })) as { ok: boolean; message?: string };
           if (!r.ok) return fail(r.message ?? 'no such alias');
-          emit(r, `[ok] removed ${a}\n`);
+          emit(r, `[ok] removed ${a.toLowerCase()}\n`);
           return EXIT.ok;
         }
         return fail('usage: machine alias list | set <alias> <reference> | rm <alias>', EXIT.usage);
@@ -377,6 +431,6 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
         return fail(`unknown command "${command}": see \`machine --help\``, EXIT.usage);
     }
   } catch (e) {
-    return fail((e as Error).message, e instanceof UsageError ? EXIT.usage : EXIT.failure);
+    return fail((e as Error).message, e instanceof UsageError || e instanceof MachineNameError ? EXIT.usage : EXIT.failure);
   }
 }

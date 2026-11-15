@@ -8,7 +8,7 @@ import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
 import { viaAdminToken } from './adminRelay.js';
 import { createRelayClient, normalizeRelayUrl, type RelayClient } from './relayClient.js';
-import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
+import { readRelayAdminConfig, readRelayConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
 
 // Admin side of the enrollment by candidacy (decisions 35, 35a, 37): list what machines asked to join, recompute the
 // verification code from the key and random AS RECEIVED (the relay is untrusted, a code string it sends proves
@@ -19,6 +19,12 @@ import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './r
 const MAX_APPROVAL_BYTES = 16 * 1024;
 
 // ---- admin login: the full-access token of the relay console ----
+
+/** The one missing step, with the exact command: the admin token is a human step in the relay console (decision 50). */
+export function missingAdminTokenMessage(configDir: string, relayUrl?: string): string {
+  const relay = relayUrl !== undefined ? ` --relay ${relayUrl}` : ' --relay <relay-host>';
+  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): in the relay console open a full-access pairing (Tokens, Add token, WITHOUT "Limited to scopes"), then run \`machine admin login <code>${relay}\``;
+}
 
 export interface AdminLoginOptions {
   code: string;
@@ -210,8 +216,13 @@ function formatDetail(v: CandidacyView, nowSeconds: number): string {
 // ---- the approval ----
 
 export interface ApproveOptions {
-  /** Candidacy id or unique prefix. Absent: list. */
+  /** Candidacy id or unique prefix. Absent: none or several are listed, exactly one is approved directly. */
   id?: string;
+  /**
+   * `machine join` on the machine that holds the admin key: the candidacy it just posted, approved here without the y/N question and
+   * without the details (the relay's copy must match every field, or nothing is signed). The passphrase is still asked.
+   */
+  selfJoin?: { id: string; uuid: string; identityPublicKey: string; random: string; name: string };
   /** Absent: the relay of the saved admin token; a different one is refused. */
   relayUrl?: string;
   days: number;
@@ -259,7 +270,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const pin = readAdminPin(configDir);
   const config = readRelayAdminConfig(configDir);
   if (config === undefined) {
-    throw new Error(`no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): open a full-access pairing in the relay console (Tokens, Add token, WITHOUT "Limited to scopes") and run \`machine admin login <code>\``);
+    throw new Error(missingAdminTokenMessage(configDir, o.relayUrl ?? readRelayConfig(configDir)?.relayUrl));
   }
   if (o.relayUrl !== undefined && normalizeRelayUrl(o.relayUrl) !== config.relayUrl) {
     throw new Error(`the saved admin token belongs to ${config.relayUrl}, not ${normalizeRelayUrl(o.relayUrl)}: drop --relay, or run \`machine admin login <code> --relay <url> --force\``);
@@ -269,20 +280,39 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const listed = await viaAdminToken(() => client.listCandidacies());
   const views = listed.map((c) => reviewCandidacy(c, o.now()));
 
-  if (o.id === undefined) {
-    if (views.length === 0) o.say('no pending candidacy\n');
-    else o.say(formatList(views, o.now()));
-    return { kind: 'list', candidacies: views };
+  // Without an id: none or several are listed; exactly ONE goes straight to its details (no id to copy).
+  let wanted = o.id ?? o.selfJoin?.id;
+  if (wanted === undefined) {
+    if (views.length === 0) {
+      o.say('no pending candidacy: on the new machine run `machine join <relay>` (its candidacy appears here at once), then run `machine admin approve` again\n');
+      return { kind: 'list', candidacies: views };
+    }
+    if (views.length > 1) {
+      o.say(formatList(views, o.now()));
+      return { kind: 'list', candidacies: views };
+    }
+    wanted = (views[0] as CandidacyView).id;
+    o.say('One pending candidacy: showing it (with several, `machine admin approve <id>` picks one).\n');
   }
 
-  const view = pick(views, o.id);
+  const view = pick(views, wanted);
+  // This machine approving the candidacy it posted itself a moment ago: the relay's copy must be exactly that one.
+  const joining = o.selfJoin;
+  if (joining !== undefined && (view.id !== joining.id || view.uuid !== joining.uuid || view.identityPublicKey !== joining.identityPublicKey || view.random !== joining.random || view.name !== joining.name)) {
+    throw new Error(`the relay lists a candidacy ${printable(view.id)} that is not the one this machine just posted (key, name, uuid or random differ): nothing was signed or sent. Do not trust this relay answer; run \`machine join --resume\` to post a new candidacy`);
+  }
   // The questions can take minutes: a candidacy that expired meanwhile is not signed for (the relay would refuse the decision anyway).
   const stillPending = (when: string): void => {
     if (view.expiresAt !== 0 && o.now() >= view.expiresAt) {
       throw new Error(`the candidacy ${printable(view.id)} expired at ${iso(view.expiresAt)}, ${when}: nothing was signed or sent. Ask the candidate to run \`machine join --resume\` and approve the new candidacy`);
     }
   };
-  o.say(formatDetail(view, o.now()));
+  // The details of a candidacy this very command just posted are the machine's own: not repeated.
+  if (joining === undefined) o.say(formatDetail(view, o.now()));
+  else {
+    const binding = bindingWarning(view);
+    o.say(`This machine holds the admin key: approving its own candidacy "${printable(view.name)}" (nothing to compare, nobody else to ask).\n${binding !== undefined ? `[info] ${binding}: it is this machine's own uuid, its new token replaces the old binding\n` : ''}`);
+  }
 
   if (o.reject) {
     await viaAdminToken(() => client.decideCandidacy(view.id, { decision: 'reject' }));
@@ -304,6 +334,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     if (!(e instanceof NotInitializedError)) throw e;
   }
   const selfApproval = adminInfo !== undefined && adminInfo.uuid === uuid;
+  if (joining !== undefined && !selfApproval) throw new Error('internal: a self-join approval was requested for a uuid that is not this machine: nothing was signed or sent');
   if (adminInfo !== undefined && selfApproval && (adminInfo.identityPublicKey !== view.identityPublicKey || adminInfo.name !== view.name)) {
     throw new Error(
       `refusing to approve ${printable(view.id)}: it claims the uuid of this machine (${uuid}) with another key or name than this machine has. Nothing was signed or sent (\`machine admin approve ${printable(view.id)} --reject\` rejects it)`,
@@ -322,7 +353,9 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   const rebind = bindingWarning(view);
   let answer: string;
   try {
-    answer = await o.ask(
+    // Only the candidacy this process posted itself (checked above, field by field) is approved without the y/N question: the passphrase stays.
+    if (joining !== undefined) answer = 'y';
+    else answer = await o.ask(
       `Approve this machine: "${printable(view.name)}", hostname ${printable(view.hostname)}, from ${printable(view.observedIp)}${selfApproval ? ' (this is the admin machine itself: the first machine of the network)' : ''}?${rebind !== undefined ? ` WARNING: ${rebind}, approving replaces it (the old token then no longer works for this machine).` : ''}${keyChanged ? ' WARNING: this uuid is already trusted here with another identity key: approving replaces the old key on this machine (it is not revoked).' : ''} [y/N] `,
     );
   } catch (e) {
@@ -380,13 +413,17 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   }
 
   const code = finalCode(view.identityPublicKey, pin.adminPublicKey, view.random);
-  o.say(
-    `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
-      `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
-      (selfApproval
-        ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
-        : `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`),
-  );
+  if (joining !== undefined) {
+    o.say(`[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n`);
+  } else {
+    o.say(
+      `[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n` +
+        `Final code (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
+        (selfApproval
+          ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
+          : `On the new machine, the code must read exactly this. If it differs, run: machine admin revoke ${printable(view.name)}\n`),
+    );
+  }
 
   // Only after the decision went through: the other peers are told about the new machine (and it about them). A failure is reported
   // loudly with the retry command and never undoes the approval.

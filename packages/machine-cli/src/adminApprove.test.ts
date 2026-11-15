@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidacyCode, finalCode, newCandidacyRandom, openSealed } from '@wadeck-app/machine-core';
+import { randomUUID } from 'node:crypto';
+import { candidacyCode, finalCode, generateSigningKeyPair, newCandidacyRandom, openSealed } from '@wadeck-app/machine-core';
 import { pairSecretContext } from './approval.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readAdminPin } from './admin.js';
@@ -45,6 +46,16 @@ async function candidatePosts(withUuid = true): Promise<{ id: string; code: stri
   // An old entry: posted before the join sent the uuid.
   if (!withUuid) delete (relay.candidacies.get(id) as Record<string, unknown>).uuid;
   return { id, code: lastCodeLine(joined.out) };
+}
+
+/**
+ * Another machine's candidacy, so that the admin has SEVERAL pending (with exactly one, `machine admin approve` goes straight to it, decision 53):
+ * the tests of the list need a list.
+ */
+async function strayPosts(): Promise<string> {
+  const pair = generateSigningKeyPair();
+  const posted = await createRelayClient({ baseUrl: relay.url, token: relay.token }).postCandidacy({ name: 'stray', hostname: 'other', identityPublicKey: pair.publicKey, random: newCandidacyRandom(), uuid: randomUUID() });
+  return posted.id;
 }
 
 beforeEach(async () => {
@@ -191,6 +202,7 @@ describe('machine admin approve: listing', () => {
 
   it('one candidacy: id, name, hostname, address, age and the code recomputed here (equal to the candidate screen)', async () => {
     const { id, code } = await candidatePosts();
+    await strayPosts();
     const r = await approve();
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(id);
@@ -205,16 +217,20 @@ describe('machine admin approve: listing', () => {
 
   it('--json lists the candidacies with the recomputed code', async () => {
     const { id, code } = await candidatePosts();
+    await strayPosts();
     const r = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
     expect(r.code, r.err).toBe(0);
     const parsed = JSON.parse(r.out) as { id: string; code: string; blockers: string[] }[];
-    expect(parsed[0]?.id).toBe(id);
-    expect(parsed[0]?.code).toBe(code);
-    expect(parsed[0]?.blockers).toEqual([]);
+    const mine = parsed.find((c) => c.id === id);
+    expect(parsed).toHaveLength(2);
+    expect(mine?.id).toBe(id);
+    expect(mine?.code).toBe(code);
+    expect(mine?.blockers).toEqual([]);
   });
 
   it('a candidacy without uuid is listed with a warning (old entry)', async () => {
     await candidatePosts(false);
+    await strayPosts();
     const r = await approve();
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/\[warn\] cannot be approved: .*carries no uuid.*machine join --resume/);
@@ -222,6 +238,7 @@ describe('machine admin approve: listing', () => {
 
   it('a relay code that differs from the code of the key and random it sent: listed with the real code, exit 1', async () => {
     const { id, code } = await candidatePosts();
+    await strayPosts();
     (relay.candidacies.get(id) as Record<string, unknown>).code = 'AAAA-AAAA-AAAA-AAAA';
     const r = await approve();
     expect(r.code).toBe(1);
@@ -581,6 +598,7 @@ describe('machine admin approve: a uuid already bound to a token (deployed relay
   it('the list and the detail say that the uuid is bound, to which token label, and that approving replaces it', async () => {
     expect((await approve([firstId])).code).toBe(0);
     const second = await secondTokenPosts();
+    await strayPosts();
     const list = await approve();
     expect(list.out).toMatch(/\[warn\] the uuid is already bound to the token labelled "machine-pairing": approving replaces that binding/);
     const asked: string[] = [];
@@ -606,6 +624,7 @@ describe('machine admin approve: a uuid already bound to a token (deployed relay
   it('a uuid bound to the token of the candidacy itself (re-approval) carries NO rebind warning, in the list, the detail and the question; the detail says it quietly', async () => {
     expect((await approve([firstId])).code).toBe(0);
     const again = await sameTokenPosts();
+    await strayPosts();
     const list = await approve();
     expect(list.out).not.toMatch(/already bound|replaces/);
     const asked: string[] = [];
@@ -659,9 +678,10 @@ describe('machine admin approve: a uuid already bound to a token (deployed relay
   it('--json carries uuidBound, boundTokenLabel and boundToCandidateToken', async () => {
     expect((await approve([firstId])).code).toBe(0);
     await secondTokenPosts();
+    await strayPosts();
     const r = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
     const parsed = JSON.parse(r.out) as { uuidBound: boolean; boundTokenLabel?: string }[];
-    expect(parsed).toMatchObject([{ uuidBound: true, boundTokenLabel: 'machine-pairing', boundToCandidateToken: false }]);
+    expect(parsed.filter((c) => c.uuidBound)).toMatchObject([{ uuidBound: true, boundTokenLabel: 'machine-pairing', boundToCandidateToken: false }]);
   });
 
   it('confirmed: the binding moves to the new token; text from the relay is shown as printable ASCII', async () => {

@@ -50,9 +50,10 @@ export {
   type Shell,
   type SignedPolicy,
 } from './policy.js';
+export { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
 export { candidacyCode, finalCode, newCandidacyRandom } from './sas.js';
-export { MIN_ITERATIONS, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
-export { isUuid, machineNameProblem, resolveMachineRef, type MachineEntry, type Resolution } from './reference.js';
+export { MIN_ITERATIONS, PASSPHRASE_MIN_LENGTH, PASSPHRASE_RECOMMENDED_LENGTH, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
+export { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry, type NormalizedName, type Resolution } from './reference.js';
 export {
   DEFAULT_REQUEST_LIFETIME_SECONDS,
   MAX_REQUEST_LIFETIME_SECONDS,

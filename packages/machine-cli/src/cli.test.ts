@@ -37,10 +37,11 @@ describe('machine init / status', () => {
     expect(r.out + r.err).not.toContain(Buffer.from(m.identity.privateKeyPkcs8).toString('base64url'));
   });
 
-  it('init without --name is a usage error naming the option', async () => {
+  it('init without --name takes the computer name (decision 52; the derivation is tested with an injected computer name in firstRun.test.ts)', async () => {
     const r = await run('init');
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/--name/);
+    expect(r.code, r.err).toBe(0);
+    expect(readMachine(dir).name).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/);
+    expect(r.err).toMatch(/\[info\].*computer name/);
   });
 
   it('init twice fails and says the machine is already initialized', async () => {
@@ -183,7 +184,7 @@ describe('machine admin', () => {
   };
 
   it('admin init prints the passphrase once, tells to store it, and warns about an ignored environment variable', async () => {
-    const r = await runWith(never, 'admin', 'init');
+    const r = await runWith(never, 'admin', 'init', '--generate');
     expect(r.code).toBe(0);
     // The passphrase goes to the terminal channel (stderr), never to stdout where a redirect or a log would keep it.
     expect(r.out).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
@@ -193,8 +194,8 @@ describe('machine admin', () => {
   });
 
   it('admin init twice fails', async () => {
-    await runWith(never, 'admin', 'init');
-    const r = await runWith(never, 'admin', 'init');
+    await runWith(never, 'admin', 'init', '--generate');
+    const r = await runWith(never, 'admin', 'init', '--generate');
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/already exists/);
   });
@@ -207,7 +208,7 @@ describe('machine admin', () => {
   });
 
   it('sign-policy shows the summary on stderr, asks the prompt, writes the signed document', async () => {
-    const init = await runWith(never, 'admin', 'init');
+    const init = await runWith(never, 'admin', 'init', '--generate');
     const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
     expect(passphrase.length).toBeGreaterThan(20);
     const draft = join(dir, 'draft.json');
@@ -226,7 +227,7 @@ describe('machine admin', () => {
   });
 
   it('sign-policy without an interactive terminal fails with the reason', async () => {
-    await runWith(never, 'admin', 'init');
+    await runWith(never, 'admin', 'init', '--generate');
     const draft = join(dir, 'draft.json');
     writeFileSync(draft, JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} }));
     let err = '';
@@ -236,7 +237,7 @@ describe('machine admin', () => {
   });
 
   it('a wrong passphrase exits 1 with a clear message', async () => {
-    await runWith(never, 'admin', 'init');
+    await runWith(never, 'admin', 'init', '--generate');
     const draft = join(dir, 'draft.json');
     writeFileSync(draft, JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} }));
     const r = await runWith(async () => 'definitely not the passphrase', 'admin', 'sign-policy', draft);
@@ -258,7 +259,7 @@ describe('machine admin (review hardening)', () => {
   const draftBody = JSON.stringify({ v: 1, target: '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab', version: 1, baseVersion: 0, defaults: [], peers: {} });
 
   it('admin init --json keeps the passphrase out of stdout', async () => {
-    const r = await runWith(never, ['admin', 'init', '--json']);
+    const r = await runWith(never, ['admin', 'init', '--generate', '--json']);
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.out) as Record<string, unknown>;
     expect(parsed).not.toHaveProperty('passphrase');
@@ -267,7 +268,7 @@ describe('machine admin (review hardening)', () => {
   });
 
   it('names the variable that is actually set', async () => {
-    const r = await runWith(never, ['admin', 'init'], { MACHINE_ADMIN_PASSPHRASE: 'x' });
+    const r = await runWith(never, ['admin', 'init', '--generate'], { MACHINE_ADMIN_PASSPHRASE: 'x' });
     expect(r.err).toMatch(/MACHINE_ADMIN_PASSPHRASE is set but ignored/);
     expect(r.err).not.toMatch(/MACHINE_PASSPHRASE is set/);
   });
@@ -279,7 +280,7 @@ describe('machine admin (review hardening)', () => {
   });
 
   it('refuses to overwrite --out before asking for the passphrase, and overwrites with --force', async () => {
-    const init = await runWith(never, ['admin', 'init']);
+    const init = await runWith(never, ['admin', 'init', '--generate']);
     const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
     const draft = join(dir, 'draft.json');
     const out = join(dir, 'signed.json');

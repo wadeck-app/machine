@@ -1,7 +1,7 @@
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { canonicalize } from './canonical.js';
-import { checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase } from './adminKey.js';
+import { checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, PASSPHRASE_RECOMMENDED_LENGTH } from './adminKey.js';
 import { generateSigningKeyPair, signBytes, verifyBytes } from './keys.js';
 
 const STRONG = 'correct horse battery staple 7391';
@@ -88,6 +88,24 @@ describe('passphrase strength (T-06, S-03)', () => {
     expect(checkPassphrase('short')).toMatchObject({ ok: false });
     expect(checkPassphrase('aaaaaaaaaaaaaaaaaaaaaaaa')).toMatchObject({ ok: false });
     expect(checkPassphrase('12345678901234567890')).toMatchObject({ ok: false });
+  });
+
+  it('decision 51: a chosen passphrase needs 12 characters, 6 distinct ones and not only digits', () => {
+    expect(checkPassphrase('abcdef123456')).toEqual({ ok: true });
+    expect(checkPassphrase('abcdef12345')).toMatchObject({ ok: false, message: expect.stringMatching(/at least 12 characters/) });
+    expect(checkPassphrase('abcabcabcabc')).toMatchObject({ ok: false, message: expect.stringMatching(/at least 6 are required/) });
+    expect(checkPassphrase('abcdefabcdef')).toEqual({ ok: true });
+    expect(checkPassphrase('123456789012')).toMatchObject({ ok: false, message: expect.stringMatching(/digits only/) });
+    // The failure of the length names the way out: choose a longer one, or let the tool generate one.
+    expect(checkPassphrase('short')).toMatchObject({ message: expect.stringMatching(/--generate/) });
+  });
+
+  it('advises (never refuses) below the recommended length, and only then', () => {
+    expect(PASSPHRASE_RECOMMENDED_LENGTH).toBe(20);
+    expect(passphraseAdvice('abcdef123456')).toMatch(/12 characters.*steals.*longer/s);
+    expect(passphraseAdvice('abcdefghijklmnopqrs')).toBeDefined();
+    expect(passphraseAdvice('abcdefghijklmnopqrst')).toBeUndefined();
+    expect(passphraseAdvice(generatePassphrase())).toBeUndefined();
   });
 
   it('accepts a long varied passphrase', () => {

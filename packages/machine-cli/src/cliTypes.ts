@@ -29,6 +29,8 @@ export interface CliIo {
   cliMeta?: Partial<CliMetaDeps>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
   allowLoopbackPeers?: boolean;
+  /** Tests only: the computer name that default machine names are derived from (default: os.hostname()). */
+  hostname?: () => string;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
   now?: () => Date;
 }
@@ -68,6 +70,11 @@ export interface Parsed {
   autoStartup: boolean;
   /** `machine cli self-check --quiet`. */
   quiet: boolean;
+  /** `machine admin init --generate` and `machine setup --generate`: a random passphrase, no question. */
+  generate: boolean;
+  /** `machine admin allow <machine> --list` / `--remove`. */
+  list: boolean;
+  remove: boolean;
   /** `machine cli logs --follow` (-f). */
   follow: boolean;
   timeout?: string;

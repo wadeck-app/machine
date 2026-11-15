@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { hostname as osHostname } from 'node:os';
 import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodeBase64urlStrict, generateSigningKeyPair, machineNameProblem, signBytes, verifyBytes, type SigningKeyPair } from '@wadeck-app/machine-core';
-import { NotInitializedError } from './errors.js';
+import { decodeBase64urlStrict, generateSigningKeyPair, machineNameProblem, normalizeMachineName, signBytes, verifyBytes, type SigningKeyPair } from '@wadeck-app/machine-core';
+import { MachineNameError, NotInitializedError } from './errors.js';
 import { SECRETS_DIRNAME } from './paths.js';
 
 export interface MachineIdentity {
@@ -27,6 +28,50 @@ const PUBLIC_KEY_BYTES = 32;
 
 export function identityFile(configDir: string): string {
   return join(configDir, SECRETS_DIRNAME, 'identity.json');
+}
+
+export interface NameChoice {
+  name: string;
+  /** One line for the person: what was derived or normalised. Absent when the typed name was already valid. */
+  note?: string;
+}
+
+/**
+ * The machine name (decision 52): a typed one is normalised (lowercase, letters, digits and hyphens), never refused for its
+ * case; without one the computer name is used, cut at its first dot ("Midgard2.local" is "midgard2"). Both say what they did.
+ */
+export function chooseMachineName(typed: string | undefined, hostname: () => string = osHostname): NameChoice {
+  if (typed !== undefined) {
+    const r = normalizeMachineName(typed);
+    if (!r.ok) throw new MachineNameError(r.message);
+    return r.changed ? { name: r.name, note: `using the name "${r.name}" (typed: "${typed}"; a name is lowercase letters, digits and hyphens, and references are case-insensitive)` } : { name: r.name };
+  }
+  const raw = hostname();
+  const firstLabel = raw.split('.')[0] ?? '';
+  const r = normalizeMachineName(firstLabel.length > 0 ? firstLabel : raw);
+  if (!r.ok) throw new MachineNameError(`the computer name ${JSON.stringify(raw)} cannot be turned into a machine name: pass one with --name <name> (letters, digits and hyphens, for example --name desktop)`);
+  return {
+    name: r.name,
+    note: `name "${r.name}" taken from the computer name "${raw}" (it is the stable reference of this machine, signed at enrollment; for a friendlier local label later: machine alias set <label> ${r.name})`,
+  };
+}
+
+/** The identity of this machine, created when there is none (the name from `chooseMachineName`). `--name` on an existing identity is refused, never ignored. */
+export function ensureMachine(configDir: string, options: { name?: string; hostname?: () => string } = {}): { machine: MachineIdentity; created: boolean; note?: string } {
+  let existing: MachineIdentity | undefined;
+  try {
+    existing = readMachine(configDir);
+  } catch (e) {
+    if (!(e instanceof NotInitializedError)) throw e;
+  }
+  if (existing !== undefined) {
+    if (options.name !== undefined) {
+      throw new MachineNameError(`this machine is already initialized as "${existing.name}" (${existing.uuid}): --name only applies when the identity is created, its name is signed at enrollment; for a friendlier local label use \`machine alias set <label> ${existing.name}\``);
+    }
+    return { machine: existing, created: false };
+  }
+  const choice = chooseMachineName(options.name, options.hostname);
+  return { machine: initMachine(configDir, choice.name), created: true, ...(choice.note !== undefined ? { note: choice.note } : {}) };
 }
 
 

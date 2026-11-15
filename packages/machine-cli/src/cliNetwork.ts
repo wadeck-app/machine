@@ -2,7 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
 import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, PeerAddressError, resolvePeerAddresses } from './peerAddresses.js';
-import { adminInit, adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
+import { adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
+import { createAdminKey, runJoinCommand } from './cliJoin.js';
+import { recordSignedPolicy, runAllow } from './adminAllow.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { runDistribute } from './adminDistribute.js';
@@ -76,7 +78,7 @@ function writeOutput(ctx: CommandContext, file: string, content: string, mode: n
 function promptTimeoutAdvice(e: PromptTimeoutError, command: string, ctx: CommandContext): string {
   const [sub] = ctx.rest;
   const slower = `(\`--prompt-timeout <seconds>\`, 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, allows a slower answer)`;
-  if (command === 'join') {
+  if (command === 'join' || command === 'setup') {
     return `${e.message}. The admin key was NOT pinned and nothing was imported. The approval is kept for ${APPROVAL_MAX_AGE_SECONDS / 60} minutes in ${candidacyFile(ctx.configDir)}: run \`machine join --resume\` and answer in time ${slower}`;
   }
   const done: Record<string, string> = {
@@ -119,11 +121,46 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     }
     if (sub === 'init') {
       if (first !== undefined) return fail(`unexpected argument "${first}" for \`machine admin init\``, EXIT.usage);
-      const r = adminInit(configDir);
-      // The passphrase goes to the terminal channel only: stdout may be redirected or captured in a log.
-      io.stderr(`Admin passphrase (shown only once, write it down now; it cannot be recovered):\n  ${r.passphrase}\n`);
-      emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\n`);
+      const r = await createAdminKey(ctx, prompt);
+      emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\nnext: \`machine join <relay>\` enrolls this machine (it approves itself), \`machine setup <relay>\` does everything in one command\n`);
       return EXIT.ok;
+    }
+    if (sub === 'allow') {
+      const usage = 'usage: machine admin allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] -- <command...> | machine admin allow <machine> --remove [--shell <shell>] -- <command...> | machine admin allow <machine> --list';
+      if (first === undefined) return fail(usage, EXIT.usage);
+      if (args.list && args.remove) return fail(`--list and --remove cannot be combined. ${usage}`, EXIT.usage);
+      if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
+      // The command is what follows "--", or the words after the machine; sent byte for byte like `machine run`.
+      const words = args.passthrough.length > 0 ? args.passthrough : rest.slice(2);
+      if (args.list) {
+        if (words.length > 0) return fail(`--list takes no command. ${usage}`, EXIT.usage);
+      } else {
+        if (words.length === 0) return fail(usage, EXIT.usage);
+        if (words.length > 1 && words.some((word) => /[\s"'`]/.test(word))) {
+          return fail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is allowed exactly as written', EXIT.usage);
+        }
+      }
+      if (args.out && existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
+      const mode = args.list ? 'list' : args.remove ? 'remove' : 'allow';
+      try {
+        const r = await runAllow(configDir, {
+          reference: first,
+          mode,
+          ...(mode !== 'list' ? { command: words.join(' ') } : {}),
+          ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
+          ...(args.out !== undefined ? { out: args.out } : {}),
+          prompt,
+          ask: askLine,
+          say: args.json ? io.stderr : io.stdout,
+          now: epochSeconds,
+        });
+        emit(r, '');
+        return r.kind === 'signed' && r.failed ? EXIT.failure : EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
     }
     if (sub === 'pin') {
       if (first === undefined || second !== undefined) return fail('usage: machine admin pin <admin.json>', EXIT.usage);
@@ -140,6 +177,8 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         prompt,
         onSummary: (summary) => io.stderr(`${summary}\nSigning this exact policy. Enter the admin passphrase to confirm, Ctrl-C to cancel.\n`),
       });
+      // The base of the next `machine admin allow` for this machine.
+      recordSignedPolicy(configDir, signed);
       const text = `${JSON.stringify(signed, null, 2)}\n`;
       if (args.out) {
         writeFileAtomic(args.out, text, 0o644);
@@ -298,7 +337,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         throw e;
       }
     }
-    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | distribute <machine> | forget-relay-record <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | allow <machine> <command> | distribute <machine> | forget-relay-record <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
   }
 
   if (command === 'peer') {
@@ -347,100 +386,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     return EXIT.ok;
   }
 
-  if (command === 'join') {
-    // Fail before a one-shot code is asked for or spent.
-    readMachine(configDir);
-    let code: string | undefined;
-    let relayUrl = args.relay;
-    if (args.resume) {
-      if (rest[0] !== undefined) return fail('--resume continues with the saved token and takes no pairing code or relay argument (use --relay to check which relay it belongs to)', EXIT.usage);
-      if (args.force) return fail('--resume and --force cannot be combined: --force replaces the token with a new device login or pairing code', EXIT.usage);
-    } else {
-      if (args.yesFinalCode !== undefined && args.noWait) return fail('--yes-final-code needs the wait: it cannot be combined with --no-wait', EXIT.usage);
-      // A positional made of digits is a pairing code, anything else is the relay (URL or bare host). Nothing: device login on the default relay.
-      if (rest[0] !== undefined) {
-        const given = classifyJoinArgument(rest[0]);
-        if (given.kind === 'code') {
-          code = given.code;
-          if (code.length > 32) return fail('the pairing code is longer than 32 characters: copy it again from the relay console', EXIT.usage);
-        } else {
-          if (args.relay !== undefined) return fail(`the relay is given twice ("${rest[0]}" and --relay ${args.relay}): give it once`, EXIT.usage);
-          relayUrl = given.relayUrl;
-        }
-      }
-    }
-    // No default relay, never a silent one: named here, or the one stored by a previous join.
-    if (!args.resume) {
-      relayUrl ??= readRelayConfig(configDir)?.relayUrl;
-      if (relayUrl === undefined) {
-        return fail(
-          code !== undefined
-            ? 'a pairing code needs the relay: `machine join <code> --relay <host-or-url>`, for example --relay relay.example.com (the relay is named once, then stored)'
-            : 'machine join needs the relay: `machine join <host>`, for example `machine join relay.example.com` (the relay is named once, then stored)',
-          EXIT.usage,
-        );
-      }
-    }
-    const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
-    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
-
-    // Ctrl-C stops the wait cleanly (token and candidacy kept) instead of killing the process mid-write.
-    const controller = new AbortController();
-    const onSigint = () => controller.abort();
-    if (io.timing === undefined) process.once('SIGINT', onSigint);
-    const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
-    // With --json stdout carries the final JSON only: the human progress goes to stderr.
-    const say = args.json ? io.stderr : io.stdout;
-    let result;
-    try {
-      result = await runJoin(configDir, {
-        ...(code !== undefined ? { code } : {}),
-        resume: args.resume,
-        ...(relayUrl !== undefined ? { relayUrl } : {}),
-        force: args.force,
-        wait: !args.noWait,
-        timeoutMs: timeoutSeconds * 1000,
-        ...(args.yesFinalCode !== undefined ? { yesFinalCode: args.yesFinalCode } : {}),
-        ask: askLine,
-        timing,
-        ...(io.now ? { now: io.now } : {}),
-        say,
-        // The verification code stands alone on its line, easy to read aloud over a phone or compare in an SSH terminal.
-        onPosted: (p) => {
-          if (args.json && args.noWait) return;
-          say(
-            `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
-              `Candidacy ${p.candidacyId} posted, valid until ${new Date(p.expiresAt * 1000).toISOString()}.\n` +
-              `Verification code (informational, the admin sees the same one; the code that matters is shown after approval):\n\n  ${p.verificationCode}\n\n`,
-          );
-        },
-      });
-    } catch (e) {
-      if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
-      throw e;
-    } finally {
-      process.removeListener('SIGINT', onSigint);
-    }
-    // Nothing is started at login unless --auto-startup was given: otherwise only a suggestion (stderr with --json, so stdout stays one JSON document).
-    const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
-    if (result.status === 'posted') {
-      emit(result.posted, 'next: ask the admin to approve this machine in the admin console and to compare the code above, then run \x60machine join --resume\x60\n' + startupHint);
-    } else {
-      const e = result.enrolled;
-      const peerLines = e.peers.length > 0 ? 'peers trusted (' + e.peers.length + '):\n' + e.peers.map((p) => '  ' + p.name + ' (' + p.uuid + ')').join('\n') + '\n' : e.isAdminMachine ? 'no other machine yet: this machine is the first of the network\n' : 'peers trusted: none (the admin included none)\n';
-      emit(
-        { ...e, relayUrl: result.posted.relayUrl },
-        '[ok] enrolled "' + e.self.name + '" (' + e.self.uuid + ')\n' + 'admin key pinned: ' + e.adminKeyId + '\n' + peerLines + 'next: the admin installs a policy for this machine, then \x60machine status\x60\n' + startupHint,
-      );
-    }
-    if (args.json && startupHint) io.stderr(startupHint);
-    if (args.autoStartup) {
-      // A failure here never undoes the join: it is reported and the exit code says so.
-      const problem = await enableAfterJoin(ctx, say);
-      if (problem !== undefined) return fail(`joined the relay, but the startup job could not be enabled: ${problem}\nthe join is kept; fix the cause, then run \x60machine startup enable\x60`);
-    }
-    return EXIT.ok;
-  }
+  if (command === 'join' || command === 'setup') return await runJoinCommand(ctx, { setup: command === 'setup', prompt, ask: askLine });
 
   if (command === 'run') {
     // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.

@@ -2,6 +2,8 @@
 
 **Version:** v0.1 draft (2026-11-14). Facts from app-core-owner and dsl-owner (read from their repos, partly unverified as marked). Implements decisions 18, 19, 36, 40, 50.
 
+The page only UNLOCKS the admin key: it applies no length rule to the passphrase (the rule of decision 51, 12 characters minimum, is enforced where the key is created, `machine admin init` and `machine setup`).
+
 ## Facts that shape the design
 
 | Topic | Fact | Source |

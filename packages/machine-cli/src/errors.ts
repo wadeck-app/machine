@@ -22,3 +22,11 @@ export class NoSuchAliasError extends Error {
     this.name = 'NoSuchAliasError';
   }
 }
+
+/** The machine name cannot be derived or normalised: the message names the fix (`--name`). */
+export class MachineNameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineNameError';
+  }
+}

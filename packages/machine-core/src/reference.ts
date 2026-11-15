@@ -74,6 +74,31 @@ export function machineNameProblem(name: string): string | undefined {
   return undefined;
 }
 
+export type NormalizedName = { ok: true; name: string; changed: boolean } | { ok: false; message: string };
+
+/**
+ * Make a typed or derived machine name (a computer name, "Midgard2", "My Laptop") a valid one: lowercase, accents removed,
+ * every other run of characters a single hyphen, trimmed, at most 32 characters, never hexadecimal only (prefixed with
+ * "host-"). `changed` says whether the result differs from the input, so that the caller can announce it. Only an input
+ * with no letter or digit at all fails.
+ */
+export function normalizeMachineName(input: string): NormalizedName {
+  const trim = (text: string) => text.replace(/^-+|-+$/g, '');
+  let name = trim(
+    input
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-'),
+  );
+  if (name.length === 0) {
+    return { ok: false, message: `${JSON.stringify(input)} has no letters or digits to build a machine name from: pass one with --name <name> (letters, digits and hyphens, for example --name desktop)` };
+  }
+  name = trim(name.slice(0, 32));
+  if (HEX_PREFIX.test(name)) name = trim(`host-${name}`.slice(0, 32));
+  return { ok: true, name, changed: name !== input };
+}
+
 /** A UUID of any version, either case, with hyphens. */
 export function isUuid(text: string): boolean {
   return FULL_UUID.test(text.toLowerCase());

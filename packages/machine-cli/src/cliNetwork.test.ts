@@ -98,7 +98,7 @@ describe('admin register input checks', () => {
 
   it('validates --days before telling the user to type the passphrase', async () => {
     await run('init', '--name', 'desktop');
-    await run('admin', 'init');
+    await run('admin', 'init', '--generate');
     writeFileSync(join(dir, 'info.json'), '{}');
     for (const days of ['abc', '0', '99999']) {
       const r = await run('admin', 'register', join(dir, 'info.json'), '--out', join(dir, 'b.json'), '--days', days);
@@ -110,7 +110,7 @@ describe('admin register input checks', () => {
 
   it.each([['null'], ['5'], ['[]']])('reports an input file holding %s by name instead of a TypeError', async (content) => {
     await run('init', '--name', 'desktop');
-    await run('admin', 'init');
+    await run('admin', 'init', '--generate');
     const file = join(dir, 'info.json');
     writeFileSync(file, content);
     const r = await run('admin', 'register', file, '--out', join(dir, 'b.json'));

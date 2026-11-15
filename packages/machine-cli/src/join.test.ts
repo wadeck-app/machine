@@ -58,9 +58,17 @@ describe('machine join', () => {
     expect(r.out).not.toContain(relay.token);
   });
 
-  it('without init: actionable error, exit 1, the code is not spent', async () => {
+  it('without init: the identity is created on the way (decision 52), then the code is claimed', async () => {
     relay = await startFakeRelay();
-    const r = await cli(dir, ['join', '12345678', '--relay', relay.url]);
+    const r = await cli(dir, ['join', '12345678', '--relay', relay.url, '--no-wait'], undefined, { hostname: () => 'Laptop' });
+    expect(r.code, r.err).toBe(0);
+    expect(readMachine(dir).name).toBe('laptop');
+    expect(relay.requests.length).toBeGreaterThan(0);
+  });
+
+  it('--resume without init: actionable error, exit 1, nothing is sent', async () => {
+    relay = await startFakeRelay();
+    const r = await cli(dir, ['join', '--resume']);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/machine init --name/);
     expect(relay.requests).toHaveLength(0);

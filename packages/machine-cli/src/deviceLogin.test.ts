@@ -262,10 +262,10 @@ describe('machine join by device login', () => {
     expect(existsSync(relayFile(dir))).toBe(false);
   });
 
-  it('without init: actionable error before any request', async () => {
+  it('--resume without init: actionable error before any request', async () => {
     const empty = join(root, 'empty');
     mkdirSync(empty);
-    const r = await cli(empty, ['join', '--relay', relay.url]);
+    const r = await cli(empty, ['join', '--resume']);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/machine init --name/);
     expect(relay.requests).toHaveLength(0);

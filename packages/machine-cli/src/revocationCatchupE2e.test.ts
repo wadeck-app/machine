@@ -29,7 +29,7 @@ beforeEach(async () => {
   await ok(a, ['init', '--name', 'desktop']);
   await ok(c, ['init', '--name', 'carol']);
   await ok(d, ['init', '--name', 'dave']);
-  const init = await ok(a, ['admin', 'init']);
+  const init = await ok(a, ['admin', 'init', '--generate']);
   passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
   for (const [dir, name] of [[a, 'a'], [c, 'c'], [d, 'd']] as const) await ok(dir, ['peer', 'info', '--out', join(root, `${name}-info.json`)]);
   await ok(c, ['admin', 'pin', join(a, 'admin.json')]);

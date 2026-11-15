@@ -13,7 +13,7 @@ import { sealTo } from '@wadeck-app/machine-core';
 
 // Test helpers (not shipped logic): drive the CLI in-process, and provision two machines that trust each other.
 
-export async function cli(configDir: string, args: string[], prompt?: () => Promise<string>, extraIo: Partial<CliIo> = {}): Promise<{ code: number; out: string; err: string }> {
+export async function cli(configDir: string, args: string[], prompt?: (label: string) => Promise<string>, extraIo: Partial<CliIo> = {}): Promise<{ code: number; out: string; err: string }> {
   let out = '';
   let err = '';
   // Everything after "--" is the remote command: options must come before it.
@@ -42,7 +42,7 @@ export interface PolicyDraftEntry {
 export async function provision(root: string, a: string, b: string, policy: PolicyDraftEntry[]): Promise<void> {
   await ok(a, ['init', '--name', 'desktop']);
   await ok(b, ['init', '--name', 'laptop']);
-  const init = await ok(a, ['admin', 'init']);
+  const init = await ok(a, ['admin', 'init', '--generate']);
   const passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
   const prompt = async () => passphrase;
 

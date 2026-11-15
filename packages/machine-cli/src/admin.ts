@@ -3,6 +3,10 @@ import { writeFileAtomic } from './fsutil.js';
 import { join } from 'node:path';
 import {
   assertPolicyBody,
+  checkPassphrase,
+  passphraseAdvice,
+  PASSPHRASE_MIN_LENGTH,
+  PASSPHRASE_RECOMMENDED_LENGTH,
   decryptAdminKey,
   encryptAdminKey,
   generatePassphrase,
@@ -14,6 +18,7 @@ import {
   type PolicyEntry,
   type SignedPolicy,
 } from '@wadeck-app/machine-core';
+import { PromptTimeoutError } from './prompt.js';
 import { SECRETS_DIRNAME } from './paths.js';
 
 // Admin signing path of the CLI (decision 36): the admin key is encrypted on disk, the passphrase comes from a prompt
@@ -65,18 +70,12 @@ export function readAdminPin(configDir: string): AdminPin {
  * Create the admin key on THIS machine. Returns the generated passphrase: the caller shows it once and never stores it.
  * Refuses when an admin key exists: a second key would invalidate every signature already issued.
  */
-export function adminInit(configDir: string): AdminPin & { passphrase: string } {
+export function adminInit(configDir: string, chosen?: string): AdminPin & { passphrase: string; generated: boolean } {
   const keyFile = adminKeyFile(configDir);
-  if (existsSync(keyFile)) {
-    throw new Error(`an admin key already exists (${keyFile}): it is kept; replacing it would invalidate every signed registration and policy. To start a new network, re-initialize every machine`);
-  }
-  if (existsSync(adminPinFile(configDir))) {
-    throw new Error(
-      `an admin key is already pinned (${adminPinFile(configDir)}) but its encrypted file is not on this machine: copy ${keyFile} from the machine that holds it. Running init here would replace the network's admin key`,
-    );
-  }
+  assertCanInitAdminKey(configDir);
   const pair = generateSigningKeyPair();
-  const passphrase = generatePassphrase();
+  // A chosen passphrase (decision 51) is checked by encryptAdminKey too: the rule lives in one place (machine-core).
+  const passphrase = chosen ?? generatePassphrase();
   const envelope = encryptAdminKey(pair, passphrase);
   const pin: AdminPin = { adminPublicKey: pair.publicKey, adminKeyId: keyId(pair.publicKey) };
   mkdirSync(join(configDir, SECRETS_DIRNAME), { recursive: true, mode: 0o700 });
@@ -95,7 +94,43 @@ export function adminInit(configDir: string): AdminPin & { passphrase: string } 
     unlinkSync(keyFile);
     throw new Error(`cannot write ${adminPinFile(configDir)}: ${(e as Error).message}; the admin key was not created, nothing changed`);
   }
-  return { ...pin, passphrase };
+  return { ...pin, passphrase, generated: chosen === undefined };
+}
+
+/** Refuses when an admin key exists or is pinned here: checked BEFORE a passphrase is asked, so that nobody types one for nothing. */
+export function assertCanInitAdminKey(configDir: string): void {
+  const keyFile = adminKeyFile(configDir);
+  if (existsSync(keyFile)) {
+    throw new Error(`an admin key already exists (${keyFile}): it is kept; replacing it would invalidate every signed registration and policy. To start a new network, re-initialize every machine`);
+  }
+  if (existsSync(adminPinFile(configDir))) {
+    throw new Error(
+      `an admin key is already pinned (${adminPinFile(configDir)}) but its encrypted file is not on this machine: copy ${keyFile} from the machine that holds it. Running init here would replace the network's admin key`,
+    );
+  }
+}
+
+/**
+ * The passphrase of a new admin key (decision 51): chosen at the hidden prompt (typed twice), or generated (`--generate`, or an
+ * empty answer: the hidden prompt cannot show a typo, and a random 100-bit phrase shown once is never worse than what was meant).
+ * Nothing is created here. `advice` is the single warning line for a valid but short passphrase.
+ */
+export async function askAdminPassphrase(prompt: Prompt, options: { generate: boolean }): Promise<{ chosen: string | undefined; advice: string | undefined }> {
+  if (options.generate) return { chosen: undefined, advice: undefined };
+  let first: string;
+  try {
+    first = await prompt(`Choose the admin passphrase (at least ${PASSPHRASE_MIN_LENGTH} characters, ${PASSPHRASE_RECOMMENDED_LENGTH} or more recommended), or press Enter to generate a random one: `);
+  } catch (e) {
+    if (e instanceof PromptTimeoutError) throw e;
+    const noTerminal = /interactive terminal/.test((e as Error).message);
+    throw new Error(`${(e as Error).message}${noTerminal ? '; in a script or without a terminal use `machine admin init --generate` (a random passphrase, shown once)' : ''}`);
+  }
+  if (first.length === 0) return { chosen: undefined, advice: undefined };
+  const check = checkPassphrase(first);
+  if (!check.ok) throw new Error(`${check.message}. Nothing was created`);
+  const second = await prompt('Type the passphrase again to confirm: ');
+  if (second !== first) throw new Error('the two passphrases do not match: nothing was created, run the command again');
+  return { chosen: first, advice: passphraseAdvice(first) };
 }
 
 function readEnvelope(configDir: string): AdminKeyEnvelope {

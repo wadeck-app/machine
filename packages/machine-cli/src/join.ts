@@ -308,6 +308,11 @@ export interface FlowOptions {
   say: (text: string) => void;
   /** Where the candidacy is announced, with its verification code. */
   onPosted: (info: JoinResult & { resumed: boolean }) => void;
+  /**
+   * Called after the candidacy is posted and before the wait, only when no approval was received yet. The machine that holds the
+   * admin key approves itself there (it returns true when it did): the wait then ends at once and nobody else is asked.
+   */
+  beforeWait?: (state: CandidacyState) => Promise<boolean>;
 }
 
 export interface Enrolled {
@@ -372,6 +377,12 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
   o.onPosted({ ...resultOf(relayUrl, label, state), resumed });
   const posted = resultOf(relayUrl, label, state);
   if (!o.wait) return { status: 'posted', posted };
+  // Self-approval only for a candidacy that is still pending: a resume after an approval (or a rejection, or an expiry) goes to the wait, which handles each.
+  let approvedHere = false;
+  if (state.approval === undefined && o.beforeWait !== undefined) {
+    const current = await client.getCandidacy(state.id).catch(() => undefined);
+    if (current?.status === 'pending') approvedHere = await o.beforeWait(state);
+  }
 
   const stopped = (why: string) =>
     new Error(`${why}: the token is saved and the candidacy ${state.id} stays valid until ${iso(state.expiresAt)}. Run \`machine join --resume\` to keep waiting (verification code ${candidacyCode(state.identityPublicKey, state.random)})`);
@@ -382,7 +393,13 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     const untilExpiry = Math.max(0, state.expiresAt * 1000 - clock().getTime()) + CANDIDACY_EXPIRY_GRACE_MS;
     const cappedByExpiry = untilExpiry < o.timeoutMs;
     const timeoutMs = Math.min(o.timeoutMs, untilExpiry);
-    o.say(`Waiting for the admin to approve (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later)...\n`);
+    if (!approvedHere || attempt > 0) {
+      o.say(
+        `Waiting for the admin (up to ${Math.max(1, Math.round(timeoutMs / 60_000))} min, Ctrl-C to stop; \`machine join --resume\` continues later).\n` +
+          `On the admin machine run: machine admin approve   (it shows this machine; check the verification code above)\n` +
+          'When it is approved, the admin machine prints a final code: compare it with the one shown here.\n',
+      );
+    }
     let outcome = await waitForDecision(client, state.id, { timing: o.timing, timeoutMs, ...(o.timing.signal ? { signal: o.timing.signal } : {}), warn: (t) => o.say(`${t}\n`) });
     if (outcome.kind === 'timeout' && cappedByExpiry) outcome = { kind: 'expired' };
     if (outcome.kind === 'approved') {

@@ -81,13 +81,259 @@ async function diagnose(): Promise<string> {
 /** init, admin init, admin login, join (token and candidacy). Returns the id of the candidacy of the first machine. */
 async function firstMachinePosts(): Promise<string> {
   await ok(a, ['init', '--name', 'desktop']);
-  const init = await ok(a, ['admin', 'init']);
+  const init = await ok(a, ['admin', 'init', '--generate']);
   passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
   expect(passphrase).not.toBe('');
   await ok(a, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
   await ok(a, ['join', MACHINE_CODE, '--relay', relay.url, '--no-wait']);
   return relay.pendingIds()[0] as string;
 }
+
+/** The admin machine before it joins: identity, admin key, admin relay token. No candidacy yet. */
+async function adminMachineReady(): Promise<void> {
+  await ok(a, ['init', '--name', 'desktop']);
+  const init = await ok(a, ['admin', 'init', '--generate']);
+  passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
+  expect(passphrase).not.toBe('');
+  await ok(a, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+}
+const deviceRequests = () => relay.requests.filter((q) => q.path.startsWith('/api/device-login/'));
+
+// One command per machine (decision 53).
+describe('one command per machine', () => {
+  describe('the admin machine: `machine join <relay>` completes the whole enrollment', () => {
+    it('device login, candidacy, self-approval (one passphrase, no id, no y/N) and enrollment, with nothing to compare and nothing left to resume', async () => {
+      await adminMachineReady();
+      const prompts: string[] = [];
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      const r = await cli(a, ['join', relay.url], async (label) => (prompts.push(label), passphrase), { timing, ask: forbidden('a question') });
+      expect(r.code, r.err).toBe(0);
+      expect(prompts).toHaveLength(1);
+      expect(decisions()).toHaveLength(1);
+      expect(r.out).toContain(`[ok] enrolled "desktop" (${readMachine(a).uuid})`);
+      expect(r.out).toMatch(/already pinned/);
+      expect(r.out).not.toMatch(/Is this the code|Final code|On the admin machine run|join --resume|Waiting for the admin/);
+      expect(r.out).toMatch(/no other machine yet: this machine is the first of the network/);
+      expect(r.out).toMatch(/machine join <relay>/);
+      expect(r.out).toMatch(/machine admin allow/);
+      expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
+      expect(r.err).toBe('');
+      expect(existsSync(join(a, '_secrets_', 'candidacy.json'))).toBe(false);
+      expect(peersOf(a)).toEqual([]);
+      expect(JSON.parse((await ok(a, ['status', '--json'])).out)).toMatchObject({ enrolled: true, peers: 0, problems: [] });
+    });
+
+    it('a pairing code works the same way', async () => {
+      await adminMachineReady();
+      const r = await cli(a, ['join', MACHINE_CODE, '--relay', relay.url], async () => passphrase, { timing: fakeTiming(), ask: forbidden('a question') });
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain('[ok] enrolled "desktop"');
+    });
+
+    it('without the admin relay token it says which step is missing and the exact command, before any device login starts', async () => {
+      await ok(a, ['init', '--name', 'desktop']);
+      await ok(a, ['admin', 'init', '--generate']);
+      const r = await cli(a, ['join', relay.url], async () => passphrase, { timing: fakeTiming(), ask: forbidden('a question') });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/holds the admin key/);
+      expect(r.err).toContain(`machine admin login <code> --relay ${relay.url}`);
+      expect(r.err).toMatch(/Add token, WITHOUT "Limited to scopes"/);
+      expect(deviceRequests()).toHaveLength(0);
+      expect(readRelayConfig(a)).toBeUndefined();
+    });
+
+    it('a wrong passphrase leaves the candidacy valid and says `join --resume`; the resume finishes it', async () => {
+      await adminMachineReady();
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      const wrong = await cli(a, ['join', relay.url], async () => 'not the passphrase at all', { timing, ask: forbidden('a question') });
+      expect(wrong.code).toBe(1);
+      expect(wrong.err).toMatch(/wrong passphrase/);
+      expect(wrong.err).toMatch(/machine join --resume/);
+      expect(decisions()).toHaveLength(0);
+      const resumed = await cli(a, ['join', '--resume'], async () => passphrase, { timing: fakeTiming(), ask: forbidden('a question') });
+      expect(resumed.code, resumed.err).toBe(0);
+      expect(resumed.out).toContain('[ok] enrolled "desktop"');
+      expect(decisions()).toHaveLength(1);
+    });
+
+    it('--no-wait keeps the manual path (the candidacy waits for `machine admin approve`)', async () => {
+      await adminMachineReady();
+      const r = await cli(a, ['join', MACHINE_CODE, '--relay', relay.url, '--no-wait'], forbidden('a prompt'), { ask: forbidden('a question') });
+      expect(r.code, r.err).toBe(0);
+      expect(decisions()).toHaveLength(0);
+      expect(r.out).toMatch(/next: on the admin machine run `machine admin approve`/);
+    });
+  });
+
+  describe('the first machine: `machine setup <relay>` is the only command', () => {
+    const chosen = 'correct horse battery staple';
+    /** Hidden prompts answer with `chosen` (typed as many times as asked); visible questions answer in order. */
+    function human(...answers: string[]) {
+      const hidden: string[] = [];
+      const visible: string[] = [];
+      return {
+        hidden,
+        visible,
+        prompt: async (label: string) => (hidden.push(label), chosen),
+        ask: async (label: string) => {
+          visible.push(label);
+          const next = answers.shift();
+          if (next === undefined) throw new Error(`unexpected question "${label}"`);
+          return next;
+        },
+      };
+    }
+
+    it('creates the identity (computer name), the admin key (chosen passphrase, typed twice), takes the full-access code, does the device login, approves itself and enrolls', async () => {
+      const h = human(ADMIN_CODE);
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      const r = await cli(a, ['setup', relay.url], h.prompt, { timing, ask: h.ask, hostname: () => 'Midgard2.local' });
+      expect(r.code, r.err).toBe(0);
+      expect(readMachine(a).name).toBe('midgard2');
+      // The passphrase is typed twice (choice and confirmation) and signs the enrollment without being asked a third time.
+      expect(h.hidden).toHaveLength(2);
+      expect(h.visible).toHaveLength(1);
+      expect(h.visible[0]).toMatch(/Full-access pairing code/);
+      expect(r.out).toMatch(/Add token, WITHOUT "Limited to scopes"/);
+      expect(r.out).toContain('[ok] admin key created');
+      expect(r.out).toContain('[ok] enrolled "midgard2"');
+      expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
+      expect(r.out).toMatch(/another machine: run `machine join <relay>`/);
+      expect(r.out + r.err).not.toContain(chosen);
+      expect(existsSync(join(a, '_secrets_', 'admin.key.json'))).toBe(true);
+      expect(existsSync(join(a, '_secrets_', 'relay-admin.json'))).toBe(true);
+      expect(decisions()).toHaveLength(1);
+      expect(JSON.parse((await ok(a, ['status', '--json'])).out)).toMatchObject({ enrolled: true, peers: 0, problems: [] });
+      // The chosen passphrase really is the admin passphrase.
+      const again = await cli(a, ['admin', 'distribute', 'midgard2'], async () => chosen);
+      expect(again.err).not.toMatch(/wrong passphrase/);
+    });
+
+    it('--generate shows the random passphrase once on stderr, never asks for one, and the whole enrollment still needs the human only for the relay code', async () => {
+      const h = human(ADMIN_CODE);
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      const r = await cli(a, ['setup', relay.url, '--generate'], forbidden('a hidden prompt'), { timing, ask: h.ask, hostname: () => 'desktop' });
+      expect(r.code, r.err).toBe(0);
+      expect(r.err).toMatch(/shown only once/i);
+      expect(r.out).toContain('[ok] enrolled "desktop"');
+      expect(h.visible).toHaveLength(1);
+    });
+
+    it('a wrong relay code stops with the relay reason; what was created is kept and the re-run asks only what is missing', async () => {
+      const h = human('00000000');
+      const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceApprove());
+      const failed = await cli(a, ['setup', relay.url], h.prompt, { timing, ask: h.ask, hostname: () => 'desktop' });
+      expect(failed.code).toBe(1);
+      expect(failed.err).toMatch(/machine setup/);
+      expect(existsSync(join(a, '_secrets_', 'admin.key.json'))).toBe(true);
+      expect(existsSync(join(a, '_secrets_', 'relay-admin.json'))).toBe(false);
+      expect(deviceRequests()).toHaveLength(0);
+
+      const h2 = human(ADMIN_CODE);
+      const again = await cli(a, ['setup', relay.url], h2.prompt, { timing: fakeTiming((_ms, n) => n === 1 && relay.deviceApprove()), ask: h2.ask, hostname: () => 'desktop' });
+      expect(again.code, again.err).toBe(0);
+      expect(again.out).toMatch(/already holds the admin key/);
+      // The key already exists: the passphrase is asked once, to sign (no choice, no confirmation).
+      expect(h2.hidden).toHaveLength(1);
+      expect(again.out).toContain('[ok] enrolled "desktop"');
+    });
+
+    it('with the admin token already there, no relay code is asked', async () => {
+      await adminMachineReady();
+      const h = human();
+      const r = await cli(a, ['setup', relay.url], async () => passphrase, { timing: fakeTiming((_ms, n) => n === 1 && relay.deviceApprove()), ask: h.ask });
+      expect(r.code, r.err).toBe(0);
+      expect(h.visible).toHaveLength(0);
+    });
+
+    it.each([
+      [['setup', '--resume'], /no --resume/],
+      [['setup', 'x.example.test', '--no-wait'], /--no-wait does not apply/],
+      [['setup', '12345678'], /takes the relay, not a pairing code/],
+      [['setup', 'x.example.test', '--yes-final-code', 'AAAA'], /--yes-final-code does not apply/],
+    ])('refuses %j', async (args, message) => {
+      const r = await cli(a, args, forbidden('a prompt'), { ask: forbidden('a question') });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(message);
+      expect(existsSync(join(a, '_secrets_', 'identity.json'))).toBe(false);
+    });
+
+    it('without a relay it says how to name it, before creating anything', async () => {
+      const r = await cli(a, ['setup'], forbidden('a prompt'), { ask: forbidden('a question') });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/machine setup needs the relay: `machine setup <host>`/);
+      expect(existsSync(join(a, '_secrets_'))).toBe(false);
+    });
+  });
+
+  describe('`machine admin approve` without an id', () => {
+    it('zero pending: says so and names the command of the new machine', async () => {
+      await adminMachineReady();
+      const r = await cli(a, ['admin', 'approve', '--relay', relay.url], forbidden('a prompt'), { ask: forbidden('a question') });
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toMatch(/no pending candidacy.*machine join <relay>/);
+    });
+
+    it('exactly one pending goes straight to the details, the y/N, the passphrase and the final code', async () => {
+      const id = await firstMachinePosts();
+      const asked: string[] = [];
+      const r = await cli(a, ['admin', 'approve', '--relay', relay.url], async () => passphrase, { ask: async (l) => (asked.push(l), 'y') });
+      expect(r.code, r.err).toBe(0);
+      expect(asked).toHaveLength(1);
+      expect(r.out).toContain(`Candidacy ${id}`);
+      expect(r.out).toMatch(/One pending candidacy/);
+      expect(r.out).toMatch(/Final code/);
+      expect(decisions()).toHaveLength(1);
+    });
+
+    it('several pending: lists them, says to pass the id, asks nothing', async () => {
+      await firstMachinePosts();
+      await ok(b, ['init', '--name', 'laptop']);
+      await ok(b, ['join', SECOND_CODE, '--relay', relay.url, '--no-wait']);
+      const r = await cli(a, ['admin', 'approve', '--relay', relay.url], forbidden('a prompt'), { ask: forbidden('a question') });
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toMatch(/2 pending candidacy\(ies\); approve one with `machine admin approve <id>`/);
+      expect(decisions()).toHaveLength(0);
+    });
+  });
+
+  describe('another machine: `machine join <relay>` waits and finishes by itself', () => {
+    it('tells at the start what the admin runs, and at the end which code to compare; creates its identity from the computer name', async () => {
+      await adminMachineReady();
+      const first = await cli(a, ['join', relay.url], async () => passphrase, { timing: fakeTiming((_ms, n) => n === 1 && relay.deviceApprove()), ask: forbidden('a question') });
+      expect(first.code, first.err).toBe(0);
+
+      // The admin machine approves while the new machine waits (the approval happens inside the first sleep of its wait).
+      let approvedOnce = false;
+      const timing = {
+        ...fakeTiming((_ms, n) => n === 1 && relay.deviceApprove()),
+        sleep: async () => {
+          if (relay.pendingIds().length > 0 && !approvedOnce) {
+            approvedOnce = true;
+            const id = relay.pendingIds()[0] as string;
+            const approved = await approve(a, id);
+            expect(approved.code, approved.err).toBe(0);
+          } else if (relay.deviceLogins.size > 0 && !approvedOnce) {
+            relay.deviceApprove();
+          }
+        },
+      };
+      const asked: string[] = [];
+      const r = await cli(b, ['join', relay.url], forbidden('a prompt'), { timing, ask: async (l) => (asked.push(l), 'y'), hostname: () => 'Laptop' });
+      expect(r.code, r.err).toBe(0);
+      expect(readMachine(b).name).toBe('laptop');
+      // At the start: what to run on the admin machine; at the end: the code to compare, asked once.
+      expect(r.out.indexOf('machine admin approve')).toBeGreaterThan(-1);
+      expect(r.out).toMatch(/On the admin machine run: machine admin approve/);
+      expect(r.out).toMatch(/final code.*compare it with the one shown here/is);
+      expect(r.out).toMatch(/Final code, it must be exactly the one the admin sees/);
+      expect(asked).toHaveLength(1);
+      expect(r.out).toContain('[ok] enrolled "laptop"');
+      expect(r.out).toMatch(/machine admin allow <this machine> <command>/);
+      expect(peersOf(b)).toHaveLength(1);
+    });
+  });
+});
 
 // The fake relay models the deployed relay: ownership bound at approval (the legacy first-writer relay is gone).
 describe('relay with ownership bound at approval', () => {

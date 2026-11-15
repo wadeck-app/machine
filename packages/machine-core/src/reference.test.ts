@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUuid, machineNameProblem, resolveMachineRef, type MachineEntry } from './reference.js';
+import { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry } from './reference.js';
 
 const DESKTOP = '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab';
 const LAPTOP = '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345';
@@ -93,6 +93,51 @@ describe('machineNameProblem', () => {
     ['caf\u00e9', /letters, digits/],
   ])('refuses %j', (name, message) => {
     expect(machineNameProblem(name)).toMatch(message);
+  });
+});
+
+describe('normalizeMachineName (decision 52: a typed or derived name is made valid, never refused for its case)', () => {
+  it.each([
+    ['desktop', 'desktop', false],
+    ['Midgard2', 'midgard2', true],
+    ['DESKTOP-ABC123', 'desktop-abc123', true],
+    ['My Laptop', 'my-laptop', true],
+    ['  Work_PC  ', 'work-pc', true],
+    [`caf${String.fromCharCode(0xe9)} box`, 'cafe-box', true],
+    ['--a--b--', 'a-b', true],
+    ['LAPTOP.local', 'laptop-local', true],
+  ])('%j becomes %j (changed: %s)', (input, name, changed) => {
+    expect(normalizeMachineName(input)).toEqual({ ok: true, name, changed });
+  });
+
+  it('cuts to 32 characters without a trailing hyphen', () => {
+    const r = normalizeMachineName(`${'a'.repeat(31)} ${'b'.repeat(10)}`);
+    expect(r).toMatchObject({ ok: true, changed: true });
+    if (r.ok) {
+      expect(r.name.length).toBeLessThanOrEqual(32);
+      expect(r.name.endsWith('-')).toBe(false);
+    }
+  });
+
+  it('never returns a hexadecimal-only name (it would look like a UUID prefix): it is prefixed', () => {
+    expect(normalizeMachineName('BEEF')).toEqual({ ok: true, name: 'host-beef', changed: true });
+    expect(normalizeMachineName('1b4e28ba')).toEqual({ ok: true, name: 'host-1b4e28ba', changed: true });
+    const long = normalizeMachineName('f'.repeat(40));
+    expect(long).toMatchObject({ ok: true });
+    if (long.ok) expect(machineNameProblem(long.name)).toBeUndefined();
+  });
+
+  it.each(['', '   ', '---', String.fromCharCode(0x65e5, 0x672c), '...'])('fails on %j with the way out', (input) => {
+    const r = normalizeMachineName(input);
+    expect(r).toMatchObject({ ok: false });
+    if (!r.ok) expect(r.message).toMatch(/letters or digits.*--name/s);
+  });
+
+  it('whatever it returns passes machineNameProblem', () => {
+    for (const input of ['Midgard2', 'Zz', 'A', '9', 'ab', 'abc', 'DEAD', 'a-b-c-d', 'X'.repeat(80)]) {
+      const r = normalizeMachineName(input);
+      expect(r.ok && machineNameProblem(r.name), input).toBeFalsy();
+    }
   });
 });
 
