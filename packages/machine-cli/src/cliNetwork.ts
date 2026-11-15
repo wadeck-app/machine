@@ -1,4 +1,3 @@
-import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_PARAGRAPH, FULL_ACCESS_WHY } from './fullAccess.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
@@ -9,6 +8,7 @@ import { createAdminKey, runJoinCommand } from './cliJoin.js';
 import { recordSignedPolicy, runAllow } from './adminAllow.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
+import { adminLoginByConsole, AdminLoginInputError, adminLoginName } from './adminDeviceLogin.js';
 import { runDistribute } from './adminDistribute.js';
 import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';
@@ -192,7 +192,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       const access = adminRelayAccess(configDir);
       if (access === undefined) {
         const how = args.out ? `machine admin distribute --policy ${args.out}` : 'save it with --out <file>, then run `machine admin distribute --policy <file>`';
-        io.stderr(`[warn] policy NOT distributed to the relay: this machine has no admin relay token. Run \`machine admin login <code>\`, then \`${how}\`; or install the file on the target with \`machine policy install\`\n`);
+        io.stderr(`[warn] policy NOT distributed to the relay: this machine has no admin relay token. Run \`machine admin login\` (confirm the request in the relay console), then \`${how}\`; or install the file on the target with \`machine policy install\`\n`);
         return EXIT.ok;
       }
       const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: epochSeconds });
@@ -262,26 +262,40 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force]', EXIT.usage);
       // No default relay: given with --relay, or the one of the saved admin token. Checked before a code is asked for.
       const adminRelay = args.relay ?? readRelayAdminConfig(configDir)?.relayUrl;
-      if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login <code> --relay <host-or-url>`, for example --relay https://relay.example.com', EXIT.usage);
-      let code = first;
-      if (code === undefined) {
-        try {
-          // The why and the click path, as a paragraph of their own above the question.
-          io.stderr(`\n${FULL_ACCESS_PARAGRAPH}\n\n`);
-          code = await prompt('Full-access pairing code (8 digits): ');
-        } catch (e) {
-          if (e instanceof PromptTimeoutError) throw e;
-          return fail('no pairing code given and no terminal to ask for it: pass it as `machine admin login <code>`. ' + capitalized(FULL_ACCESS_CLICK_PATH) + ` (${FULL_ACCESS_WHY})`, EXIT.usage);
-        }
-      }
-      code = code.trim();
-      if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
-      try {
-        const r = await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force });
+      if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login --relay <host-or-url>`, for example --relay https://relay.example.com (the relay is named once, then the stored one is reused)', EXIT.usage);
+      const finish = (r: { relayUrl: string; label: string }): number => {
         if (!existsSync(adminKeyFile(configDir))) io.stderr('[warn] this machine has no admin key yet: run `machine admin init` before `machine admin approve`\n');
         emit({ relayUrl: r.relayUrl, label: r.label }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}; next: \`machine admin approve\` lists the pending candidacies\n`);
         return EXIT.ok;
+      };
+      try {
+        if (first !== undefined) {
+          // A code: the pairing path, kept for scripts and for relays that predate the confirm-only login.
+          const code = first.trim();
+          if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
+          return finish(await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force }));
+        }
+        // No code: the admin confirms a request in the relay console (decision 58). Ctrl-C stops the wait cleanly.
+        const controller = new AbortController();
+        const onSigint = () => controller.abort();
+        if (io.timing === undefined) process.once('SIGINT', onSigint);
+        try {
+          const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
+          const r = await adminLoginByConsole(configDir, {
+            relayUrl: adminRelay,
+            force: args.force,
+            name: adminLoginName(configDir, io.hostname),
+            timing,
+            say: args.json ? io.stderr : io.stdout,
+            askPairingCode: () => prompt('Full-access pairing code (8 digits): '),
+            ...(io.now ? { now: io.now } : {}),
+          });
+          return finish(r);
+        } finally {
+          process.removeListener('SIGINT', onSigint);
+        }
       } catch (e) {
+        if (e instanceof AdminLoginInputError) return fail(e.message, EXIT.usage);
         if (e instanceof RelayError) return fail(e.message);
         throw e;
       }

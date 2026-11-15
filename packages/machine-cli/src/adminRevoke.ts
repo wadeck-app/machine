@@ -83,7 +83,7 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
   if (access === undefined) {
     o.say(
       `[warn] the revocation was NOT distributed: this machine has no admin relay token, so the other peers keep trusting "${peer.name}" until they receive it. ` +
-        `Run \`machine admin login <code>\`, then \`${retryDistribution(peer.peerId)}\`\n`,
+        `Run \`machine admin login\` (confirm the request in the relay console), then \`${retryDistribution(peer.peerId)}\`\n`,
     );
     return { uuid: peer.peerId, name: peer.name, serial, distribution: undefined };
   }

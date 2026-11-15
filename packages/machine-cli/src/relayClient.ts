@@ -1,4 +1,4 @@
-import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
+import { adminLoginFix, FULL_ACCESS_WHY, pairingLoginFix } from './fullAccess.js';
 // Client of the relay API (relay-api.md v0.2 + pairing claim). The relay is untrusted: this client only moves opaque
 // documents. The token is held in a closure and is never part of an error message, a log line or a returned value.
 
@@ -34,6 +34,19 @@ export class RelayError extends Error {
   }
 }
 
+/**
+ * The relay does not support the full-access device login (a version older than poc-node 754a4c5): nothing was stored. The caller falls back to a
+ * pairing code, loudly. `pendingRequest` is true when the relay started a MACHINE login instead (it ignored the field): that request waits in the console.
+ */
+export class FullAccessLoginUnsupportedError extends RelayError {
+  readonly pendingRequest: boolean;
+  constructor(init: RelayErrorInit & { pendingRequest?: boolean }) {
+    super(init);
+    this.name = 'FullAccessLoginUnsupportedError';
+    this.pendingRequest = init.pendingRequest === true;
+  }
+}
+
 export interface RelayClientOptions {
   baseUrl: string;
   token?: string;
@@ -64,6 +77,8 @@ export interface DeviceLoginStarted {
   expiresIn: number;
   pollIntervalSeconds: number;
   verificationUrl: string;
+  /** What the relay says it started: always "full" for a full-access request (anything else is refused by the client). Absent for a machine login of an older relay. */
+  access?: 'machine' | 'full';
 }
 
 export type DeviceLoginPoll =
@@ -72,8 +87,8 @@ export type DeviceLoginPoll =
   | { status: 'expired' }
   /** The relay asks for fewer polls: wait `retryAfterSeconds` (absent: the caller picks a longer interval). */
   | { status: 'slow_down'; retryAfterSeconds?: number }
-  /** Delivered once. `scopes` is always exactly ["machine"]: anything else is refused by the client. */
-  | { status: 'approved'; token: string; label: string; scopes: string[] };
+  /** Delivered once. `scopes` is exactly ["machine"] for a machine login and `null` (full access) for a full-access one: anything else is refused by the client. */
+  | { status: 'approved'; token: string; label: string; scopes: string[] | null };
 
 export interface CandidacyPosted {
   id: string;
@@ -174,9 +189,12 @@ export interface RelayClient {
   /** `access` is the kind of token the caller agrees to store: a machine token (default, `join`) or a full-access one (`admin login`). The other kind is refused and never returned. */
   claimPairing(code: string, access?: 'machine' | 'full'): Promise<ClaimAnswer>;
   /** Public route (no Authorization header): asks the relay for a code the user approves in the console. */
-  deviceLoginStart(label: string): Promise<DeviceLoginStarted>;
-  /** Public route (no Authorization header). The deviceCode is sent in the body only, never put in an error. */
-  deviceLoginPoll(deviceCode: string): Promise<DeviceLoginPoll>;
+  deviceLoginStart(label: string, access?: 'machine' | 'full'): Promise<DeviceLoginStarted>;
+  /**
+   * Public route (no Authorization header). The deviceCode is sent in the body only, never put in an error. `access` is the kind of token the caller
+   * agrees to store: the other kind is refused and never returned.
+   */
+  deviceLoginPoll(deviceCode: string, access?: 'machine' | 'full'): Promise<DeviceLoginPoll>;
   postCandidacy(candidacy: CandidacyPost): Promise<CandidacyPosted>;
   getCandidacy(id: string): Promise<CandidacyStatus>;
   putRecord(uuid: string, record: SignedAddressRecord, etag?: string): Promise<{ etag: string }>;
@@ -304,10 +322,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     let message: string;
     if (c.pairing && (status === 400 || status === 401)) {
       message = c.forAdmin
-        ? `the pairing code was refused${detail}: ${capitalized(FULL_ACCESS_CLICK_PATH)} for a new code (${FULL_ACCESS_WHY}), then run \`machine admin login <code>\` again`
+        ? `the pairing code was refused${detail}: ${adminLoginFix()} (${FULL_ACCESS_WHY})`
         : `the pairing code was refused${detail}: ask the admin for a new code (Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\` again`;
     } else if (c.pairing && status === 409) {
-      message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? 'open a new pairing in the relay console and run `machine admin login <code>` again' : 'ask the admin for a new code and run `machine join <code>` again'}`;
+      message = `the pairing code was valid but is now used up${detail}: ${c.forAdmin ? adminLoginFix() : 'ask the admin for a new code and run `machine join <code>` again'}`;
     } else if (status === 403 && code === 'not_registered') {
       // The relay binds a uuid to a machine token only when the admin approves the candidacy (relay-api.md, ownership bound at approval).
       // The relay's own text comes first (in `detail`), then the client hint.
@@ -388,7 +406,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         if (scopes !== null) {
           throw new RelayError({
             status: r.status,
-            message: `the pairing code gives a token limited to scopes (${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}): it could not list or decide candidacies (${FULL_ACCESS_WHY}), and the token was NOT saved. ${capitalized(FULL_ACCESS_CLICK_PATH)} for a new code (this one is now used up), then run \`machine admin login <code>\` again`,
+            message: `the pairing code gives a token limited to scopes (${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}): it could not list or decide candidacies (${FULL_ACCESS_WHY}), and the token was NOT saved. This code is now used up: ${adminLoginFix()}`,
           });
         }
         return { token: claimed, label: typeof label === 'string' ? label : '', scopes: null };
@@ -402,11 +420,20 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       return { token: claimed, label: typeof label === 'string' ? label : '', scopes: scopes.filter((s): s is string => typeof s === 'string') };
     },
 
-    async deviceLoginStart(label) {
+    async deviceLoginStart(label, access = 'machine') {
       let r;
       try {
-        r = (await call({ method: 'POST', path: '/api/device-login/start', body: { label }, publicRoute: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+        // A machine login sends the label only: it is the request every relay understands.
+        r = (await call({ method: 'POST', path: '/api/device-login/start', body: access === 'full' ? { label, access } : { label }, publicRoute: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       } catch (e) {
+        if (access === 'full' && e instanceof RelayError && e.status === 400 && e.code === 'invalid_body') {
+          throw new FullAccessLoginUnsupportedError({
+            status: 400,
+            code: 'invalid_body',
+            ...(e.humanText !== undefined ? { humanText: e.humanText } : {}),
+            message: `the relay ${baseUrl} does not support the full-access login yet (it refused the "access" field with 400 invalid_body${e.humanText ? `: ${e.humanText}` : ''}): it is an older version, tell the relay owner to update it. Meanwhile use a pairing code: ${pairingLoginFix()}`,
+          });
+        }
         if (e instanceof RelayError && (e.status === 404 || e.status === 405)) {
           throw new RelayError({ status: e.status, message: `the relay ${baseUrl} does not offer device login (it may not be updated yet): ask the admin for a pairing code (relay console: Tokens, Add token, "Limited to scopes", machine) and run \`machine join <code>\`` });
         }
@@ -415,10 +442,18 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       const { deviceCode, userCode, expiresIn, pollIntervalSeconds, verificationUrl } = r.body;
       if (typeof deviceCode !== 'string' || deviceCode.length === 0 || typeof userCode !== 'string' || userCode.length === 0) throw malformed('the device login start');
       if (typeof expiresIn !== 'number' || !(expiresIn > 0) || typeof pollIntervalSeconds !== 'number' || !(pollIntervalSeconds > 0) || typeof verificationUrl !== 'string') throw malformed('the device login start');
-      return { deviceCode, userCode, expiresIn, pollIntervalSeconds, verificationUrl };
+      const said = r.body.access;
+      if (access === 'full' && said !== 'full') {
+        throw new FullAccessLoginUnsupportedError({
+          status: r.status,
+          pendingRequest: true,
+          message: `the relay ${baseUrl} does not support the full-access login yet: it answered ${said === undefined ? 'without saying which access' : `with access ${JSON.stringify(said)}`} and started a MACHINE login instead (it is an older version, tell the relay owner to update it). Nothing was stored; deny the request "${label}" in the relay console (Tokens). Meanwhile use a pairing code: ${pairingLoginFix()}`,
+        });
+      }
+      return { deviceCode, userCode, expiresIn, pollIntervalSeconds, verificationUrl, ...(said === 'machine' || said === 'full' ? { access: said } : {}) };
     },
 
-    async deviceLoginPoll(deviceCode) {
+    async deviceLoginPoll(deviceCode, access = 'machine') {
       let r;
       try {
         r = (await call({ method: 'POST', path: '/api/device-login/poll', body: { deviceCode }, publicRoute: true })) as NonNullable<Awaited<ReturnType<typeof call>>>;
@@ -432,8 +467,18 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       if (status === 'slow_down') return { status, ...(typeof r.body.retryAfterSeconds === 'number' ? { retryAfterSeconds: r.body.retryAfterSeconds } : {}) };
       if (status === 'approved') {
         if (typeof delivered !== 'string' || delivered.length === 0 || typeof label !== 'string' || label.length === 0) throw malformed('the device login poll');
+        if (access === 'full') {
+          // Same rule as the pairing claim for `admin login`: only a full-access token is stored, and only when the relay says so.
+          if (r.body.access !== 'full' || scopes !== null) {
+            throw new RelayError({
+              status: r.status,
+              message: `the full-access login was approved but the relay ${baseUrl} delivered ${r.body.access === undefined ? 'a token without saying its access' : `a token with access ${JSON.stringify(r.body.access)} and scopes ${JSON.stringify(scopes ?? null)}`}: it is an older version that does not support the full-access login, tell the relay owner. The token was NOT saved: revoke "${label}" in the relay console (Tokens), then use a pairing code: ${pairingLoginFix()}`,
+            });
+          }
+          return { status, token: delivered, label, scopes: null };
+        }
         // Same rule as the pairing claim: a machine never stores anything but a machine-scoped token. The token is dropped here.
-        if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== 'machine') {
+        if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== 'machine' || r.body.access === 'full') {
           throw new RelayError({
             status: r.status,
             message: `the device login gave ${scopes === null ? 'a full-access token' : `a token whose scopes are ${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'} instead of exactly ["machine"]`}: a machine must never store it, and the token was NOT saved. Revoke it in the relay console (Tokens), tell the relay owner, then run \`machine join\` again`,

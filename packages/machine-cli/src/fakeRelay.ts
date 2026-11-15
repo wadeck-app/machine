@@ -22,6 +22,14 @@ export interface FakeRelayOptions {
   deviceExpiresIn?: number;
   /** Scopes of the token delivered by an approved device login (default ["machine"]). */
   deviceScopes?: string[] | null;
+  /** User code of a FULL-ACCESS device login (access "full"; default KLMN-PQ23: it differs from `deviceUserCode`, both may be pending together). */
+  deviceFullUserCode?: string;
+  /**
+   * How the relay treats `access: "full"` on the device login start. "supported" (default): poc-node 754a4c5 (the answer carries access, the poll
+   * delivers the full-access token with scopes null). "rejects": an OLDER relay, the unknown field is `400 invalid_body`. "ignores": a relay that drops
+   * the field and starts a machine login (the answer has no access). "delivers-machine": the start says full, the poll delivers a machine token.
+   */
+  fullLogin?: 'supported' | 'rejects' | 'ignores' | 'delivers-machine';
   /** Inbox limits of distribution.md (defaults: 256 documents per inbox, 64 MiB for all inboxes). */
   inboxLimits?: { perInbox?: number; globalBytes?: number };
   /** Documents per page of the inbox listing (default 32, as the contract says). */
@@ -51,6 +59,8 @@ export interface FakeDeviceLogin {
   userCode: string;
   label: string;
   status: 'pending' | 'approved' | 'denied' | 'expired';
+  /** Kind of token asked at the start (what the relay recorded). */
+  access: 'machine' | 'full';
   /** Label delivered on approval (the relay may add a suffix). */
   deliveredLabel?: string;
 }
@@ -65,8 +75,11 @@ export interface FakeRelay {
   candidacies: Map<string, Record<string, unknown> & { status: string }>;
   /** Device logins by deviceCode (a secret in real life: tests read it here to check that it is never printed). */
   deviceLogins: Map<string, FakeDeviceLogin>;
-  /** The console approves the oldest pending device login; `label` is what the relay delivers (it may carry a "-2" suffix). */
-  deviceApprove: (options?: { label?: string }) => void;
+  /**
+   * The console approves the oldest pending device login (the one whose request label is `request`, when given); `label` is what the relay
+   * delivers (it may carry a "-2" suffix).
+   */
+  deviceApprove: (options?: { label?: string; request?: string }) => void;
   deviceDeny: () => void;
   deviceExpire: () => void;
   /** Next answer forced on a path prefix (one shot), optionally only for one HTTP method. */
@@ -134,9 +147,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const inboxBytes = () => [...inboxes.values()].reduce((sum, box) => sum + [...box.values()].reduce((s, d) => s + d.text.length, 0), 0);
   const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
   const deviceScopes = options.deviceScopes === undefined ? ['machine'] : options.deviceScopes;
-  const pendingDevice = (): FakeDeviceLogin => {
-    const entry = [...deviceLogins.values()].find((d) => d.status === 'pending');
-    if (!entry) throw new Error('fake relay: no pending device login');
+  const fullLogin = options.fullLogin ?? 'supported';
+  const pendingDevice = (request?: string): FakeDeviceLogin => {
+    const entry = [...deviceLogins.values()].find((d) => d.status === 'pending' && (request === undefined || d.label === request));
+    if (!entry) throw new Error(`fake relay: no pending device login${request !== undefined ? ` with the label "${request}"` : ''}`);
     return entry;
   };
 
@@ -209,11 +223,18 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     // Device login: public routes, the Authorization header is ignored.
     if (method === 'POST' && path === '/api/device-login/start') {
       const label = (body as { label?: unknown } | undefined)?.label;
+      const asked = (body as { access?: unknown } | undefined)?.access;
+      // The real relay accepts `label` and `access` ("machine" or "full") only; an older one knows `label` only.
+      if (Object.keys(body ?? {}).some((k) => k !== 'label' && !(k === 'access' && fullLogin !== 'rejects'))) return err(res, 400, 'invalid_body', 'unexpected field');
+      if (asked !== undefined && asked !== 'machine' && asked !== 'full') return err(res, 400, 'invalid_body', 'access: machine or full');
       if (typeof label !== 'string' || !/^[A-Za-z0-9 _.-]{1,64}$/.test(label)) return err(res, 400, 'invalid_body', 'label: 1-64 characters, letters, digits, space, _ . -');
       const deviceCode = randomBytes(32).toString('base64url');
-      const userCode = options.deviceUserCode ?? 'BCDF-GH23';
-      deviceLogins.set(deviceCode, { userCode, label, status: 'pending' });
-      return send(res, 201, { success: true, serverTime: 1, deviceCode, userCode, expiresIn: options.deviceExpiresIn ?? 300, pollIntervalSeconds: 3, verificationUrl: `https://relay.example/device?code=${userCode}` });
+      // "ignores": the field is dropped, a machine login starts and the answer carries no access.
+      const access = asked === 'full' && fullLogin !== 'ignores' ? 'full' : 'machine';
+      const userCode = access === 'full' ? (options.deviceFullUserCode ?? 'KLMN-PQ23') : (options.deviceUserCode ?? 'BCDF-GH23');
+      deviceLogins.set(deviceCode, { userCode, label, status: 'pending', access });
+      const answered = asked === undefined || (asked === 'full' && fullLogin === 'ignores') ? {} : { access };
+      return send(res, 201, { success: true, serverTime: 1, ...answered, deviceCode, userCode, expiresIn: options.deviceExpiresIn ?? 300, pollIntervalSeconds: 3, verificationUrl: `https://relay.example/device?code=${userCode}` });
     }
     if (method === 'POST' && path === '/api/device-login/poll') {
       const entry = deviceLogins.get(String((body as { deviceCode?: unknown } | undefined)?.deviceCode ?? ''));
@@ -222,7 +243,9 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (entry.status === 'pending' || entry.status === 'denied') return send(res, 200, { success: true, serverTime: 1, status: entry.status });
       // Approved: delivered once, the next poll says expired.
       entry.status = 'expired';
-      return send(res, 200, { success: true, serverTime: 1, status: 'approved', token, label: entry.deliveredLabel ?? entry.label, scopes: deviceScopes });
+      const delivered = entry.deliveredLabel ?? entry.label;
+      if (entry.access === 'full' && fullLogin !== 'delivers-machine') return send(res, 200, { success: true, serverTime: 1, status: 'approved', token: adminToken, label: delivered, access: 'full', scopes: null });
+      return send(res, 200, { success: true, serverTime: 1, status: 'approved', token, label: delivered, access: 'machine', scopes: deviceScopes });
     }
 
     if (!path.startsWith('/api/machines')) return err(res, 404, 'not_found', 'no such route');
@@ -398,7 +421,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     candidacies,
     deviceLogins,
     deviceApprove: (o = {}) => {
-      const entry = pendingDevice();
+      const entry = pendingDevice(o.request);
       entry.status = 'approved';
       entry.deliveredLabel = o.label ?? entry.label;
     },

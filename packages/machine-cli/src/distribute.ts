@@ -1,4 +1,4 @@
-import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, FULL_ACCESS_WHY } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import {
   DOCUMENT_RETENTION_SECONDS,
@@ -249,7 +249,7 @@ export function adminRelayAccess(configDir: string, injected?: RelayClient): Adm
 }
 
 export const noAdminRelayTokenMessage = (configDir: string): string =>
-  `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(FULL_ACCESS_CLICK_PATH)}, then run \`machine admin login <code>\``;
+  `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(adminLoginFix())}`;
 
 export function requireAdminKeyFile(configDir: string): void {
   if (!existsSync(adminKeyFile(configDir))) {

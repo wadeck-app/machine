@@ -13,7 +13,7 @@ export interface TestRelay {
   dir: string;
   adminPairingCode: () => Promise<string>;
   machinePairingCode: () => Promise<string>;
-  approveDeviceCode: (userCode: string, options?: { label?: string }) => Promise<{ approved: boolean; label: string; id: string }>;
+  approveDeviceCode: (userCode: string, options?: { label?: string }) => Promise<{ approved: boolean; label: string; id: string; access?: string }>;
   close: () => Promise<void>;
 }
 

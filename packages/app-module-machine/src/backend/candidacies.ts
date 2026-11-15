@@ -15,8 +15,9 @@ const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 1024 * 1024;
 // Same sentences as machine-cli fullAccess.ts (the two packages do not import each other).
 const FULL_ACCESS_WHY = 'approving a machine needs a full-access relay token (the machines themselves only get a limited one)';
-const FULL_ACCESS_CLICK_PATH = 'In the relay console open Tokens, Add token, WITHOUT "Limited to scopes"';
-const LOGIN_ADVICE = 'run `machine admin login <code> --force` with the new code';
+const FULL_ACCESS_CLICK_PATH = 'in the relay console open Tokens, Add token, WITHOUT "Limited to scopes"';
+// The confirm-only login first (decision 58), the pairing code as the alternative.
+const LOGIN_ADVICE = `run \`machine admin login --force\` and type the code it shows in the relay console (Tokens page, the request marked FULL ACCESS); or with a pairing code: ${FULL_ACCESS_CLICK_PATH}, then run \`machine admin login <code> --force\``;
 
 /** There is no usable admin token on this machine: absent file, corrupt file, relay URL not acceptable. Status 503 for the page. */
 export class RelayNotConfiguredError extends Error {
@@ -75,7 +76,7 @@ function readAdminConfig(configDir: string): AdminConfig {
     text = readFileSync(file, 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new RelayNotConfiguredError(`this machine holds no admin relay token (no ${file}): ${FULL_ACCESS_WHY}. ${FULL_ACCESS_CLICK_PATH}, then run \`machine admin login <code>\``);
+      throw new RelayNotConfiguredError(`this machine holds no admin relay token (no ${file}): ${FULL_ACCESS_WHY}. Run \`machine admin login\` and type the code it shows in the relay console (Tokens page, the request marked FULL ACCESS); or with a pairing code: ${FULL_ACCESS_CLICK_PATH}, then run \`machine admin login <code>\``);
     }
     throw new RelayNotConfiguredError(`cannot read ${file}: ${(e as Error).message}`);
   }
@@ -241,7 +242,7 @@ export async function listCandidacies(configDir: string, nowSeconds: number, doF
   if (res.status !== 200) {
     const o = asObject(body);
     if (o['error'] === 'full_access_required') {
-      throw new RelayRequestError(res.status, `the token saved by \`machine admin login\` is not a full-access token, so it cannot list candidacies (${FULL_ACCESS_WHY}). ${FULL_ACCESS_CLICK_PATH}, then ${LOGIN_ADVICE}`);
+      throw new RelayRequestError(res.status, `the token saved by \`machine admin login\` is not a full-access token, so it cannot list candidacies (${FULL_ACCESS_WHY}). ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
     }
     const why = typeof o['message'] === 'string' ? o['message'] : typeof o['error'] === 'string' ? o['error'] : 'no detail';
     throw new RelayRequestError(res.status, `the relay answered ${res.status} to the candidacy list (${printable(why)})`);

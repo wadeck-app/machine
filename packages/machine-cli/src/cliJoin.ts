@@ -1,7 +1,8 @@
-import { FULL_ACCESS_PARAGRAPH } from './fullAccess.js';
+import { AdminLoginInputError, adminLoginByConsole } from './adminDeviceLogin.js';
+import { adminLoginFix } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import { adminInit, adminKeyFile, askAdminPassphrase, assertCanInitAdminKey, type Prompt } from './admin.js';
-import { adminLogin, missingAdminTokenMessage, runApprove } from './adminApprove.js';
+import { missingAdminTokenMessage, runApprove } from './adminApprove.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { expiryText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
@@ -63,7 +64,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     if (args.yesFinalCode !== undefined) return fail('--yes-final-code does not apply to `machine setup`: this machine created the admin key, there is no code to compare', EXIT.usage);
     if (rest[0] !== undefined) {
       const given = classifyJoinArgument(rest[0]);
-      if (given.kind === 'code') return fail('`machine setup` takes the relay, not a pairing code: it asks for the full-access pairing code itself when it needs it (`machine setup <relay-host>`)', EXIT.usage);
+      if (given.kind === 'code') return fail('`machine setup` takes the relay, not a pairing code: it asks for the full-access login itself when it needs it (a request you confirm in the relay console) (`machine setup <relay-host>`)', EXIT.usage);
       if (args.relay !== undefined) return fail(`the relay is given twice ("${rest[0]}" and --relay ${args.relay}): give it once`, EXIT.usage);
       relayUrl = given.relayUrl;
     }
@@ -115,6 +116,10 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
 
   const effectiveRelay = args.resume ? readRelayConfig(configDir)?.relayUrl : relayUrl === undefined ? undefined : normalizeRelayUrl(relayUrl);
   let passphrase: string | undefined;
+  // Ctrl-C stops a wait cleanly (token and candidacy kept) instead of killing the process mid-write.
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
 
   // `setup`: the admin key and the full-access relay token, when this machine has none yet. Both are kept on a re-run.
   if (o.setup) {
@@ -128,20 +133,26 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         if (args.hint !== undefined) io.stderr('[warn] --hint ignored: the admin key already exists on this machine, its hint cannot change here\n\n');
       }
       if (readRelayAdminConfig(configDir) === undefined) {
-        // The why and the click path, as a paragraph of their own (the relay owner may offer a confirm-only login later).
-        say(`${FULL_ACCESS_PARAGRAPH}\n\n`);
-        let pairing: string;
+        // The full-access login: confirmed in the relay console by typing the code shown here (decision 58). A relay that predates it falls back, loudly, to a pairing code.
+        if (io.timing === undefined) process.once('SIGINT', onSigint);
         try {
-          pairing = (await o.ask('Full-access pairing code (8 digits): ')).trim();
-        } catch (e) {
-          if (e instanceof PromptTimeoutError) throw e;
-          return fail(`no pairing code could be asked (${(e as Error).message}): get the code in the relay console, then run \`machine admin login <code> --relay ${effectiveRelay ?? '<relay-host>'}\` and \`machine setup\` again`, EXIT.usage);
+          const login = await adminLoginByConsole(configDir, {
+            relayUrl: effectiveRelay as string,
+            force: false,
+            name: readMachine(configDir).name,
+            timing,
+            say,
+            restart: 'run `machine setup` again (what was created is kept)',
+            askPairingCode: () => o.ask('Full-access pairing code (8 digits): '),
+            ...(io.now ? { now: io.now } : {}),
+          });
+          say(`[ok] admin token "${login.label}" saved for ${login.relayUrl}\n\n`);
+        } finally {
+          process.removeListener('SIGINT', onSigint);
         }
-        if (pairing.length === 0 || pairing.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console, then run `machine setup` again', EXIT.usage);
-        const login = await adminLogin(configDir, { code: pairing, relayUrl: effectiveRelay as string, force: false });
-        say(`[ok] admin token "${login.label}" saved for ${login.relayUrl}\n\n`);
       }
     } catch (e) {
+      if (e instanceof AdminLoginInputError) return fail(e.message, EXIT.usage);
       if (e instanceof RelayError) return fail(`${e.message}. Nothing else was done; run \`machine setup\` again (what was created is kept)`);
       throw e;
     }
@@ -156,15 +167,11 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       return fail(`this machine holds the admin key, so it approves its own enrollment, but one step is missing. ${missingAdminTokenMessage(configDir, effectiveRelay)}; then run \`machine ${args.resume ? 'join --resume' : `join${effectiveRelay !== undefined ? ` ${effectiveRelay}` : ''}`}\` again`);
     }
     if (effectiveRelay !== undefined && adminToken.relayUrl !== effectiveRelay) {
-      return fail(`the admin token of this machine belongs to ${adminToken.relayUrl}, not ${effectiveRelay}: join that relay, or run \`machine admin login <code> --relay ${effectiveRelay} --force\` with a full-access pairing code of ${effectiveRelay}`);
+      return fail(`the admin token of this machine belongs to ${adminToken.relayUrl}, not ${effectiveRelay}: join that relay, or ${adminLoginFix({ relay: effectiveRelay, force: true })} (a full-access login of ${effectiveRelay})`);
     }
   }
 
-  // Ctrl-C stops the wait cleanly (token and candidacy kept) instead of killing the process mid-write.
-  const controller = new AbortController();
-  const onSigint = () => controller.abort();
   if (io.timing === undefined) process.once('SIGINT', onSigint);
-  const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
   let distributionFailed = false;
   let result;
   try {

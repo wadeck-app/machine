@@ -25,8 +25,8 @@ Usage: machine <command> [options]
 
 Getting started (one command per machine; the name of a machine is the computer name, lowercase):
   first machine (it also becomes the admin machine):
-    machine setup <relay>            creates the admin key (you choose its passphrase), asks the full-access code of the
-                                     relay console, does the device login, approves itself and enrolls
+    machine setup <relay>            creates the admin key (you choose its passphrase), does the full-access login and the
+                                     device login (you type each code in the relay console), approves itself and enrolls
   every other machine:
     machine join <relay>             on the new machine: waits for the admin and finishes by itself; shows the
                                      security code to compare with the admin machine
@@ -35,15 +35,15 @@ Getting started (one command per machine; the name of a machine is the computer 
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
   then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
-  Stays manual: the passphrase, the relay console codes (pairing code, relay login code) and the security-code comparison (the human steps).
-  Three kinds of code, never mixed: the relay login code (XXXX-XXXX, typed on the relay page), the pairing code (8 digits, from
-  the relay console) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
+  Stays manual: the passphrase, the codes typed in the relay console (full-access login code, relay login code) and the security-code comparison (the human steps).
+  Three kinds of code, never mixed: the relay login codes (XXXX-XXXX, shown here, typed in the relay console), the pairing code (8
+  digits, shown by the relay console: scripts, or a relay without the full-access login) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
 
 Commands:
   setup <relay> [--generate] [--hint <text>] [--name <name>] [--auto-startup]
                                      the first machine in one command: identity (name from the computer name), admin key
-                                     (passphrase typed twice, or --generate for a random one), the full-access pairing
-                                     code of the relay console (asked here, kept for next time), device login, self-approval
+                                     (passphrase typed twice, or --generate for a random one), the full-access login
+                                     (a request you confirm in the relay console, kept for next time), device login, self-approval
                                      (the passphrase just chosen signs it) and enrollment. Run it again after an interruption:
                                      what exists is kept. Other machines never create an admin key: they use join
   init [--name <name>]               create this machine's UUID and identity key only (optional: setup and join do it). The
@@ -120,8 +120,10 @@ Commands:
 
 Administration (enrollment through the relay, or by files):
   admin login [<code>] [--relay <url>] [--force]
-                                     claim a FULL-ACCESS pairing code of the relay console and keep the token in
-                                     _secrets_/relay-admin.json (a machine-scoped token is refused)
+                                     without a code: FULL-ACCESS login, shows a code to type in the relay console (Tokens page)
+                                     and keeps the token in _secrets_/relay-admin.json; a relay that predates it falls back
+                                     to a pairing code, with a [warn] line. With a code: claims a FULL-ACCESS pairing code
+                                     of the relay console (scripts). A machine-scoped token is refused either way
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
                                      without id: no pending candidacy says so; exactly ONE goes straight to its details; several are listed
                                      (id, name, host, address, age) and you pass the id;

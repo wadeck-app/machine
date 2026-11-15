@@ -190,14 +190,20 @@ describe('admin commands: nothing is done when the person does not answer', () =
     expect(existsSync(out)).toBe(false);
   });
 
-  it('admin login without a code, prompt open: nothing is claimed or stored', async () => {
-    const t = fakePromptTimer();
-    const run = cli(a, ['admin', 'login', '--relay', 'https://relay.example.test'], hang, { promptTimer: t.timer });
-    await vi.waitFor(() => expect(t.pending()).toBe(1));
-    t.fire();
-    const r = await run;
-    expect(r.code).toBe(1);
-    expect(r.err).toMatch(/Nothing was claimed or stored/);
+  it('admin login without a code on a relay that predates the full-access login, pairing prompt open: nothing is claimed or stored', async () => {
+    const old = await startFakeRelay({ fullLogin: 'rejects' });
+    try {
+      const t = fakePromptTimer();
+      const run = cli(a, ['admin', 'login', '--relay', old.url], hang, { promptTimer: t.timer });
+      await vi.waitFor(() => expect(t.pending()).toBe(1));
+      t.fire();
+      const r = await run;
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/Nothing was claimed or stored/);
+      expect(old.requests.some((q) => q.path === '/api/pairings/claim')).toBe(false);
+    } finally {
+      await old.close();
+    }
   });
 });
 

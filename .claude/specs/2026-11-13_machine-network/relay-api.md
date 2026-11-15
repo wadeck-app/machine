@@ -69,7 +69,7 @@ Candidate behaviour (`machine join [<relay-host-or-url> | <code>]`, `machine joi
 
 **Candidacy uuid:** the CLI always sends `uuid` (canonical lower-case, from the identity), because the admin signs the registration for it. The relay side is committed by poc-owner (76b2b5c) but not deployed: the currently deployed relay refuses the unknown field (400), so `join` fails there until the deployment. `--resume` posts a new candidacy when the saved one has no uuid.
 
-**Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a pairing opened WITHOUT "Limited to scopes" (`scopes: null`); the client refuses a scoped one. The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
+**Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a full-access device login confirmed in the console (`machine admin login`, see "Full-access device login"), or from a pairing opened WITHOUT "Limited to scopes" (`scopes: null`, `machine admin login <code>`); the client refuses a scoped one. The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
 
 ## Machines resource: address and presence (decision 34)
 
@@ -133,6 +133,14 @@ Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<co
 - `POST /api/device-login/poll` body `{ "deviceCode" }` -> `{ status: "pending" | "denied" | "expired" }` or `{ status: "approved", token, label, scopes: ["machine"] }` delivered once (the next poll says `expired`). Not faster than every 3 s (the relay answers `slow_down` below 2.5 s) (`slow_down`); 30 polls with an unknown code per 10 minutes per address (`too_many_attempts`). Use the returned `label` (it may carry a "-2" suffix (for example "laptop-2")).
 - Console (full access only): the Tokens page lists waiting requests (user code, label, observed address, age). The approver TYPES the user code shown by the CLI; 5 wrong codes deny the request. The token is scope `machine` only. An approved token not collected within 5 minutes is revoked.
 - The pairing claim stays as the fallback.
+
+### Full-access device login (poc-node 754a4c5, decision 58)
+
+- `POST /api/device-login/start` body `{ "label": "machine admin on <host>", "access": "full" }`; `access` is optional, `"machine"` by default, any other value or any other field is `400 invalid_body`. `201` adds `access` to the answer. Same limits, same 5 minutes, same 5 wrong codes deny. The console marks the row FULL ACCESS (red).
+- Poll `approved`: `{ status, token, label, access: "full", scopes: null }` (a machine login: `access: "machine"`, `scopes: ["machine"]`).
+- A relay without the feature answers `400 invalid_body` to the unknown field `access` (expected, not observed: no such relay was available to test).
+- The label of the admin request differs from the machine request of the same computer (`machine admin on <name>` and `<name>`), so both can be waiting together.
+- Client (`admin login`, `setup`): sends `access: "full"` only for the admin login (a machine login sends the label only). The token is stored only for `access: "full"` with `scopes: null`. Refused, nothing stored: a start answer whose `access` is not `"full"` (the relay started a machine login: the client says to deny that request), a poll that delivers a machine token or no `access`. `400 invalid_body` on start: `[warn] this relay does not support the full-access login yet; falling back to a pairing code`, then the pairing claim path. Waits like the machine login (3 s minimum, `min(expiresIn, 900 s)` + 5 s, Ctrl-C stores nothing).
 
 ## Enrollment screens (UX requirement, user 2026-11-14)
 

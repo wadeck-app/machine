@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
-import { createRelayClient, normalizeRelayUrl, RelayError } from './relayClient.js';
+import { createRelayClient, FullAccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -383,6 +383,65 @@ describe('device login', () => {
 
   it('a malformed start answer is refused', async () => {
     expect((await failure(clientWith(() => json(201, { success: true })).deviceLoginStart('laptop'))).message).toMatch(/unexpected answer/);
+  });
+});
+
+describe('device login, full access (machine admin login)', () => {
+  const startedFull = { success: true, access: 'full', deviceCode: 'D'.repeat(43), userCode: 'KLMN-PQ23', expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: 'https://relay.example/device' };
+
+  it('start asks for access "full" in the body; a machine start sends the label only (unchanged for every relay)', async () => {
+    const bodies: unknown[] = [];
+    const client = createRelayClient({
+      baseUrl: 'https://relay.example',
+      fetch: (async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(init.body as string));
+        return json(201, startedFull);
+      }) as unknown as typeof fetch,
+    });
+    expect((await client.deviceLoginStart('machine admin on desk', 'full')).access).toBe('full');
+    await client.deviceLoginStart('desk');
+    expect(bodies).toEqual([{ label: 'machine admin on desk', access: 'full' }, { label: 'desk' }]);
+  });
+
+  it('an older relay answering 400 invalid_body to the access field: a dedicated error that says what to do', async () => {
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'unexpected field' })).deviceLoginStart('machine admin on desk', 'full'));
+    expect(e).toBeInstanceOf(FullAccessLoginUnsupportedError);
+    expect(e.message).toMatch(/does not support the full-access login yet/);
+    expect(e.message).toMatch(/pairing code/);
+  });
+
+  it('a 400 of another kind stays a plain error', async () => {
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'something_else', message: 'x' })).deviceLoginStart('machine admin on desk', 'full'));
+    expect(e).not.toBeInstanceOf(FullAccessLoginUnsupportedError);
+  });
+
+  it.each([[{ ...startedFull, access: 'machine' }], [{ ...startedFull, access: undefined }]])('a start answer that does not say access "full" is an older relay: refused, and the pending request is named', async (answer) => {
+    const e = await failure(clientWith(() => json(201, answer)).deviceLoginStart('machine admin on desk', 'full'));
+    expect(e).toBeInstanceOf(FullAccessLoginUnsupportedError);
+    expect(e.message).toMatch(/MACHINE login|machine login/);
+    expect(e.message).toMatch(/deny|Deny/);
+  });
+
+  it('poll for full access: accepts access "full" with scopes null', async () => {
+    const r = await clientWith(() => json(200, { status: 'approved', token: 'T', label: 'machine admin on desk', access: 'full', scopes: null })).deviceLoginPoll('x', 'full');
+    expect(r).toEqual({ status: 'approved', token: 'T', label: 'machine admin on desk', scopes: null });
+  });
+
+  it.each([
+    ['a machine token', { access: 'machine', scopes: ['machine'] }],
+    ['no access field', { scopes: null }],
+    ['access full with scopes', { access: 'full', scopes: ['machine'] }],
+  ])('poll for full access: refuses %s, never shows it, says the relay is older', async (_name, extra) => {
+    const e = await failure(clientWith(() => json(200, { status: 'approved', token: 'SECRET-DELIVERED', label: 'x', ...extra })).deviceLoginPoll('DEVICE-SECRET', 'full'));
+    expect(e.message).toMatch(/NOT saved/);
+    expect(e.message).toMatch(/older|not support/);
+    expect(e.message).not.toContain('SECRET-DELIVERED');
+    expect(e.message).not.toContain('DEVICE-SECRET');
+  });
+
+  it('poll for a machine login refuses a full-access token even when it says access "machine"', async () => {
+    const e = await failure(clientWith(() => json(200, { status: 'approved', token: 'T', label: 'x', access: 'machine', scopes: null })).deviceLoginPoll('x'));
+    expect(e.message).toMatch(/NOT saved/);
   });
 });
 

@@ -30,7 +30,7 @@ export interface RunOptions {
   visible?: string[];
   /** What the person does while the command waits (each pause of a wait): `n` counts from 1, `out` is what was printed so far. */
   onWait?: (n: number, out: string) => Promise<void>;
-  /** Approve the device login in the relay console as soon as its code is printed (default true). */
+  /** Approve every device login (machine or full access) in the relay console as soon as its code is printed (default true). */
   approveDevice?: boolean;
   hostname?: string;
   /** Wait times are fake: this is how far the CLI believes time went when it decides about timeouts. Default: nothing. */
@@ -107,7 +107,8 @@ export async function startWorld(name: string, relayOptions: { maxMachinesPerTok
     let err = '';
     const asked: string[] = [];
     const visible = [...(o.visible ?? [])];
-    let approved = false;
+    // The codes the person already typed in the console (setup shows two, one after the other: the admin login, then the machine login).
+    const approvedCodes = new Set<string>();
     let slept = 0;
     let t = Date.now();
     const timing: Timing = {
@@ -117,10 +118,13 @@ export async function startWorld(name: string, relayOptions: { maxMachinesPerTok
         t += ms;
         slept++;
         // The relay console: the person types the code shown on the machine.
-        const code = /^\s*([A-Z0-9]{4}-[A-Z0-9]{4})\s*$/m.exec(out)?.[1];
-        if (o.approveDevice !== false && !approved && code !== undefined) {
-          approved = true;
-          await relay.approveDeviceCode(code);
+        if (o.approveDevice !== false) {
+          for (const match of out.matchAll(/^\s*([A-Z0-9]{4}-[A-Z0-9]{4})\s*$/gm)) {
+            const code = match[1] as string;
+            if (approvedCodes.has(code)) continue;
+            approvedCodes.add(code);
+            await relay.approveDeviceCode(code);
+          }
         }
         await o.onWait?.(slept, out);
       },

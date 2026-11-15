@@ -18,14 +18,14 @@ export const relayFile = (configDir: string): string => join(configDir, SECRETS_
 export const relayAdminFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay-admin.json');
 
 export function readRelayConfig(configDir: string): RelayConfig | undefined {
-  return readConfigAt(relayFile(configDir), 'machine join <code>', 'a new code from the admin');
+  return readConfigAt(relayFile(configDir), 'run `machine join <code>` again with a new code from the admin');
 }
 
 export function readRelayAdminConfig(configDir: string): RelayConfig | undefined {
-  return readConfigAt(relayAdminFile(configDir), 'machine admin login <code>', 'a new pairing opened in the relay console');
+  return readConfigAt(relayAdminFile(configDir), 'run `machine admin login` again (confirm the request in the relay console), or `machine admin login <code>` with a new pairing code');
 }
 
-function readConfigAt(path: string, command: string, codeSource: string): RelayConfig | undefined {
+function readConfigAt(path: string, again: string): RelayConfig | undefined {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
@@ -33,7 +33,7 @@ function readConfigAt(path: string, command: string, codeSource: string): RelayC
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw new Error(`cannot read ${path}: ${(e as Error).message}`);
   }
-  const corrupt = (why: string) => new Error(`${path} is corrupt or invalid (${why}): delete it and run \`${command}\` again with ${codeSource}`);
+  const corrupt = (why: string) => new Error(`${path} is corrupt or invalid (${why}): delete it and ${again}`);
   let raw: unknown;
   try {
     raw = JSON.parse(text);

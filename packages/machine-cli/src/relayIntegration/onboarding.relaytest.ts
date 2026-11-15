@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readMachine } from '../identity.js';
 import type { RunningDaemon } from '../daemonEntry.js';
@@ -47,14 +49,17 @@ describe('onboarding with the real relay', () => {
     expect(r.err).toMatch(/machine init|machine setup|machine join/);
   });
 
-  it('setup of the first machine: admin key, full-access code, device login approved in the relay console, self-approval, enrollment', async () => {
-    const code = await w.relay.adminPairingCode();
-    const r = await w.run('desktop', a, ['setup', w.relay.url], { hostname: 'Desktop', visible: ['', code] });
+  it('setup of the first machine: admin key, full-access login and machine login both confirmed in the relay console (no code copied), self-approval, enrollment', async () => {
+    const r = await w.run('desktop', a, ['setup', w.relay.url], { hostname: 'Desktop', visible: [''] });
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('[ok] admin key created');
-    expect(r.out).toMatch(/\[ok\] admin token "[^"]+" saved for /);
+    expect(r.out).toContain('FULL ACCESS');
+    expect(r.out).toMatch(/the request "machine admin on desktop" is listed there, marked FULL ACCESS/);
+    expect(r.out).toContain('[ok] full access approved');
+    expect(r.out).toMatch(/\[ok\] admin token "machine admin on desktop" saved for /);
     expect(r.out).toMatch(/\[ok\] relay access approved/);
     expect(r.out).toContain('[ok] enrolled "desktop"');
+    expect(r.out + r.err).not.toMatch(/\[warn\] this relay does not support/);
     expect(r.out + r.err).not.toContain('correct horse');
     // The relay holds no pending candidacy any more, and the machine is bound to the machine token it got from the device login.
     const pending = await relayGet('/api/machines/candidacies', w.relay.adminToken);
@@ -62,6 +67,29 @@ describe('onboarding with the real relay', () => {
     expect(pending.body.candidacies).toEqual([]);
   });
 
+  it('the token saved by the full-access login is a full-access one for the real relay (it lists candidacies) and differs from the machine token', async () => {
+    const admin = JSON.parse(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')) as { token: string; label: string };
+    const machine = JSON.parse(readFileSync(join(a, '_secrets_', 'relay.json'), 'utf8')) as { token: string; label: string };
+    expect(admin.token).not.toBe(machine.token);
+    expect(admin.label).toBe('machine admin on desktop');
+    expect(machine.label).not.toBe(admin.label);
+    expect((await relayGet('/api/machines/candidacies', admin.token)).status).toBe(200);
+    // The machine token cannot list candidacies.
+    expect((await relayGet('/api/machines/candidacies', machine.token)).status).toBe(403);
+  });
+
+  it('admin login with --force on the real relay: a second full-access request, the token is replaced', async () => {
+    const before = readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8');
+    const refused = await w.run('desktop', a, ['admin', 'login']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toMatch(/already holds an admin relay token/);
+    const r = await w.run('desktop', a, ['admin', 'login', '--force']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('FULL ACCESS');
+    expect(r.out).toMatch(/\[ok\] admin token "machine admin on desktop[^"]*" saved for /);
+    expect(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')).not.toBe(before);
+    expect((await relayGet('/api/machines/candidacies', (JSON.parse(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')) as { token: string }).token)).status).toBe(200);
+  });
   it('status and list of the first machine: enrolled, no peer, itself in the list', async () => {
     const status = JSON.parse((await w.run('desktop', a, ['status', '--json'])).out) as { enrolled: boolean; peers: number; problems: unknown[] };
     expect(status).toMatchObject({ enrolled: true, peers: 0, problems: [] });

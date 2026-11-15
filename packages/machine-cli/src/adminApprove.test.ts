@@ -133,12 +133,16 @@ describe('machine admin login', () => {
     expect(existsSync(join(cand, '_secrets_', 'relay.json'))).toBe(false);
   });
 
-  it('no code and no terminal: usage error naming the fix', async () => {
+  it('a relay that predates the full-access login and no terminal: usage error naming both ways', async () => {
+    await relay.close();
+    relay = await startFakeRelay({ fullLogin: 'rejects' });
     const r = await cli(adminDir, ['admin', 'login', '--relay', relay.url], async () => {
       throw new Error('no tty');
     });
     expect(r.code).toBe(2);
+    expect(r.err + r.out).toContain("[warn] this relay does not support the full-access login yet");
     expect(r.err).toMatch(/machine admin login <code>/);
+    expect(r.err).toMatch(/WITHOUT "Limited to scopes"/);
   });
 });
 

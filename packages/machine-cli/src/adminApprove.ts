@@ -1,4 +1,4 @@
-import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, FULL_ACCESS_WHY } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
@@ -24,8 +24,7 @@ const MAX_APPROVAL_BYTES = 16 * 1024;
 
 /** The one missing step, with the exact command: the admin token is a human step in the relay console (decision 50). */
 export function missingAdminTokenMessage(configDir: string, relayUrl?: string): string {
-  const relay = relayUrl !== undefined ? ` --relay ${relayUrl}` : ' --relay <relay-host>';
-  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(FULL_ACCESS_CLICK_PATH)}, then run \`machine admin login <code>${relay}\``;
+  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(adminLoginFix({ relay: relayUrl ?? '<relay-host>' }))}`;
 }
 
 export interface AdminLoginOptions {
@@ -277,7 +276,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     throw new Error(missingAdminTokenMessage(configDir, o.relayUrl ?? readRelayConfig(configDir)?.relayUrl));
   }
   if (o.relayUrl !== undefined && normalizeRelayUrl(o.relayUrl) !== config.relayUrl) {
-    throw new Error(`the saved admin token belongs to ${config.relayUrl}, not ${normalizeRelayUrl(o.relayUrl)}: drop --relay, or run \`machine admin login <code> --relay <url> --force\``);
+    throw new Error(`the saved admin token belongs to ${config.relayUrl}, not ${normalizeRelayUrl(o.relayUrl)}: drop --relay, or replace the token: ${adminLoginFix({ relay: '<url>', force: true })}`);
   }
   const client = o.client ?? createRelayClient({ baseUrl: config.relayUrl, token: config.token });
 

@@ -1,4 +1,4 @@
-import { capitalized, FULL_ACCESS_CLICK_PATH, FULL_ACCESS_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, FULL_ACCESS_WHY } from './fullAccess.js';
 import { RelayError } from './relayClient.js';
 
 // Calls made with the full-access token of `machine admin login` (relay-admin.json): a refusal of that token has its own advice.
@@ -7,10 +7,10 @@ import { RelayError } from './relayClient.js';
 export function adminRelayError(e: unknown): unknown {
   if (!(e instanceof RelayError)) return e;
   if (e.status === 401) {
-    return new Error(`the relay refused the admin token (invalid or revoked)${e.humanText ? `: ${e.humanText}` : ''}: open a new full-access pairing in the relay console and run \`machine admin login <code> --force\``);
+    return new Error(`the relay refused the admin token (invalid or revoked)${e.humanText ? `: ${e.humanText}` : ''}: ${adminLoginFix({ force: true })}`);
   }
   if (e.code === 'full_access_required') {
-    return new Error(`the token saved by \`machine admin login\` is not a full-access token, so it cannot list or decide candidacies (${FULL_ACCESS_WHY}). ${capitalized(FULL_ACCESS_CLICK_PATH)}, then run \`machine admin login <code> --force\``);
+    return new Error(`the token saved by \`machine admin login\` is not a full-access token, so it cannot list or decide candidacies (${FULL_ACCESS_WHY}). ${capitalized(adminLoginFix({ force: true }))}`);
   }
   return e;
 }

@@ -6,7 +6,7 @@ import { readMachine } from './identity.js';
 import { expiryText } from './humanTime.js';
 import { exportMachineInfo, type MachineInfo } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
-import { createRelayClient, normalizeRelayUrl, RelayError, type RelayClient } from './relayClient.js';
+import { createRelayClient, normalizeRelayUrl, RelayError, type DeviceLoginPoll, type DeviceLoginStarted, type RelayClient } from './relayClient.js';
 import { deleteCandidacy, readCandidacy, readRelayConfig, relayFile, writeCandidacy, writeRelayConfig, candidacyFile, type CandidacyState } from './relayStore.js';
 
 export const DEFAULT_TIMEOUT_SECONDS = 15 * 60;
@@ -137,7 +137,7 @@ export function classifyJoinArgument(argument: string): JoinArgument {
 }
 
 /** Text from the relay shown on a terminal: printable ASCII only, no escape sequence gets through. */
-const printable = (text: string): string => text.replace(/[^\x20-\x7e]/g, '?');
+export const printable = (text: string): string => text.replace(/[^\x20-\x7e]/g, '?');
 
 export interface DeviceLoginOptions {
   relayUrl: string;
@@ -163,19 +163,58 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   const publicClient = options.client ?? createRelayClient({ baseUrl: relayUrl });
 
   const started = await publicClient.deviceLoginStart(deviceLabel(info.name));
-  const { deviceCode, userCode, verificationUrl } = started;
+  const { userCode, verificationUrl } = started;
   say(
-    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page (it only gives this machine access to the relay, it is not the security code):\n\n` +
-      `  ${printable(userCode)}\n\n` +
-      `Relay page: ${printable(verificationUrl)}\n` +
-      `Open it (any browser), check that the address and the label match this machine, and type the code there.\n\n` +
-      `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).\n`,
+    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page (it only gives this machine access to the relay, it is not the security code):
+
+` +
+      `  ${printable(userCode)}
+
+` +
+      `Relay page: ${printable(verificationUrl)}
+` +
+      `Open it (any browser), check that the address and the label match this machine, and type the code there.
+
+` +
+      `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).
+`,
   );
 
+  const restart = 'run `machine join <relay-host-or-url>` again for a new code';
+  const polled = await awaitDeviceApproval({ client: publicClient, started, access: 'machine', timing, say, restart });
+  say('[ok] relay access approved\n');
+  // The token is delivered once: a failed write loses it, which is said plainly.
+  const claimed = { token: polled.token, label: polled.label };
+  try {
+    return await storeTokenAndPost(configDir, relayUrl, claimed, info, options);
+  } catch (e) {
+    if (readRelayConfig(configDir)?.token === polled.token) throw e;
+    throw new Error(`the relay delivered a token but it could not be saved (${(e as Error).message}): the token is lost. Revoke "${printable(polled.label)}" in the relay console (Tokens), then ${restart}`);
+  }
+}
+
+export interface AwaitDeviceApprovalOptions {
+  client: RelayClient;
+  started: DeviceLoginStarted;
+  /** The kind of token the caller agrees to store (the client refuses the other one). */
+  access: 'machine' | 'full';
+  timing: Timing;
+  say: (text: string) => void;
+  /** What to run to start over, for the end of every error ("run `machine join <relay>` again for a new code"). */
+  restart: string;
+}
+
+/**
+ * Polls a device login until the relay delivers its token (returned, not stored: the caller stores it) or the login ends. Never polls faster
+ * than `MIN_DEVICE_POLL_MS` (the first poll included), obeys `slow_down` and rate limits, retries a relay that fails, stops at Ctrl-C and at
+ * the lifetime of the code. Every end that is not an approval is an error that says nothing was stored and how to start over.
+ */
+export async function awaitDeviceApproval(o: AwaitDeviceApprovalOptions): Promise<Extract<DeviceLoginPoll, { status: 'approved' }>> {
+  const { client, started, timing, say, restart } = o;
+  const { deviceCode, userCode } = started;
   let intervalMs = Math.max(MIN_DEVICE_POLL_MS, Math.ceil(started.pollIntervalSeconds * 1000));
   const lifetimeSeconds = Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS);
   const deadline = timing.nowMs() + lifetimeSeconds * 1000;
-  const restart = 'run `machine join <relay-host-or-url>` again for a new code';
   // Slept before every poll, the first one included: never faster than the interval.
   let wait = intervalMs;
   for (;;) {
@@ -188,18 +227,8 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
       throw new Error(`the code ${printable(userCode)} expired before it was approved (it lives ${Math.round(lifetimeSeconds / 60)} min) and nothing was stored: ${restart}`);
     }
     try {
-      const polled = await publicClient.deviceLoginPoll(deviceCode);
-      if (polled.status === 'approved') {
-        say('[ok] relay access approved\n');
-        // The token is delivered once: a failed write loses it, which is said plainly.
-        const claimed = { token: polled.token, label: polled.label };
-        try {
-          return await storeTokenAndPost(configDir, relayUrl, claimed, info, options);
-        } catch (e) {
-          if (readRelayConfig(configDir)?.token === polled.token) throw e;
-          throw new Error(`the relay delivered a token but it could not be saved (${(e as Error).message}): the token is lost. Revoke "${printable(polled.label)}" in the relay console (Tokens), then ${restart}`);
-        }
-      }
+      const polled = await client.deviceLoginPoll(deviceCode, o.access);
+      if (polled.status === 'approved') return polled;
       if (polled.status === 'denied') {
         throw new Error(`the request was denied in the relay console: nothing was stored. If it was a mistake, ${restart}`);
       }
@@ -210,15 +239,18 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
         wait = Math.max(polled.retryAfterSeconds !== undefined ? polled.retryAfterSeconds * 1000 : intervalMs * 2, intervalMs);
         // Stay slower from now on.
         intervalMs = wait;
-        say(`[warn] the relay asks for fewer checks: next check in ${Math.ceil(wait / 1000)} s\n`);
+        say(`[warn] the relay asks for fewer checks: next check in ${Math.ceil(wait / 1000)} s
+`);
       }
     } catch (e) {
       if (!(e instanceof RelayError)) throw e;
       if (e.status === 429) {
         wait = Math.max(e.retryAfterSeconds !== undefined ? e.retryAfterSeconds * 1000 : DEFAULT_DEVICE_RETRY_MS, intervalMs);
-        say(`[warn] the relay is rate limiting: next check in ${Math.ceil(wait / 1000)} s\n`);
+        say(`[warn] the relay is rate limiting: next check in ${Math.ceil(wait / 1000)} s
+`);
       } else if (e.status === 0 || e.status >= 500) {
-        say(`[warn] ${e.message} (still waiting, retrying)\n`);
+        say(`[warn] ${e.message} (still waiting, retrying)
+`);
       } else {
         throw e;
       }
