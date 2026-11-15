@@ -143,7 +143,7 @@ Administration (enrollment through the relay, or by files):
   admin forget-relay-record <machine|uuid>
                                      remove the record, the binding of the uuid to a token and the inbox of a machine on
                                      the relay (y/N, needs the admin relay token, no passphrase): the way to make room when
-                                     the relay answers \`too_many_machines\` (50 machines per token) at \`admin approve\`, for
+                                     the relay answers \`too_many_machines\` (the relay limit: 10 per token by default, configurable on the relay) at \`admin approve\`, for
                                      machines that are gone. A machine that comes back must run \`join --resume\` and be
                                      approved again; what waited in its inbox is gone (admin distribute sends it again).
                                      After a token change it is not needed: a new join and an approval rebind the uuid

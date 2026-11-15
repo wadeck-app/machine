@@ -139,10 +139,19 @@ describe('address record errors (injected fetch)', () => {
     expect(e.message).not.toContain('SECRET-TOKEN');
   });
 
-  it('too_many_machines (429) says the token holds too many records', async () => {
-    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', message: 'at most 50' })).putRecord(UUID, record));
+  it('too_many_machines (429) on a record quotes the limit of the relay and the forget-relay-record command', async () => {
+    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', limit: 7, message: 'This token already owns the maximum number of machines (7).' })).putRecord(UUID, record));
     expect(e.code).toBe('too_many_machines');
-    expect(e.message).toMatch(/too many machine records/);
+    expect(e.message).toContain('this token already owns the maximum (7) machines');
+    expect(e.message).toContain('machine admin forget-relay-record <machine|uuid>');
+    expect(e.message).not.toMatch(/\b50\b/);
+  });
+
+  it('too_many_machines (429) on a record, relay-wide cap: the relay itself is full, tell the relay operator', async () => {
+    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', limit: 1000, message: 'The relay holds 1000 machines already: ask its operator.' })).putRecord(UUID, record));
+    expect(e.message).toContain('the relay itself is full (1000 machines)');
+    expect(e.message).toContain('relay operator');
+    expect(e.message).not.toContain('already owns the maximum');
   });
 
   it('invalid_body (400) says the record was refused and to update machine', async () => {
@@ -165,14 +174,41 @@ describe('candidacy errors (injected fetch)', () => {
     expect(e.message).not.toContain('no longer pending');
   });
 
-  it('429 too_many_machines on the decision: the candidacy is still pending, the machines that are gone are removed with forget-relay-record (DELETE /api/machines/<uuid>)', async () => {
-    const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_machines', message: 'at most 50' })).decideCandidacy('id', { decision: 'approve', approval: {} }));
+  const decide = (body: unknown) => failure(clientWith(() => json(429, body)).decideCandidacy('id', { decision: 'approve', approval: {} }));
+
+  it('429 too_many_machines on the decision: the candidacy is still pending, the limit of the relay is quoted, machines that are gone are freed with forget-relay-record', async () => {
+    const e = await decide({ success: false, error: 'too_many_machines', limit: 2, message: 'This token already owns the maximum number of machines (2).' });
     expect(e.status).toBe(429);
     expect(e.code).toBe('too_many_machines');
     expect(e.message).toMatch(/still pending/);
-    expect(e.message).toContain('DELETE /api/machines/<uuid>');
-    expect(e.message).toContain('machine admin forget-relay-record <machine>');
+    expect(e.message).toContain('this token already owns the maximum (2) machines');
+    expect(e.message).toContain('machine admin forget-relay-record <machine|uuid>');
+    expect(e.message).toContain('machine admin approve <id>');
     expect(e.message).not.toMatch(/rate limiting/);
+    expect(e.message).not.toMatch(/\b50\b/);
+  });
+
+  it('429 too_many_machines on the decision, relay-wide cap (message prefix "The relay holds"): the relay itself is full, tell the relay operator; still pending', async () => {
+    const e = await decide({ success: false, error: 'too_many_machines', limit: 1000, message: 'The relay holds 1000 machines already: ask its operator.' });
+    expect(e.message).toContain('the relay itself is full (1000 machines)');
+    expect(e.message).toContain('relay operator');
+    expect(e.message).toMatch(/still pending/);
+    expect(e.message).not.toContain('already owns the maximum');
+  });
+
+  it('429 too_many_machines without a limit (an older relay): says the relay did not state it, never guesses a number', async () => {
+    const e = await decide({ success: false, error: 'too_many_machines', message: 'at most some' });
+    expect(e.message).toContain('did not state its limit');
+    expect(e.message).toContain('machine admin forget-relay-record <machine|uuid>');
+    expect(e.message).not.toMatch(/\b50\b/);
+  });
+
+  it.each([['ten'], [2.5], [0], [-3], [null], [[2]]])('429 too_many_machines with a garbage limit (%j): loud, names the invalid value', async (limit) => {
+    const e = await decide({ success: false, error: 'too_many_machines', limit, message: 'x' });
+    expect(e.code).toBe('too_many_machines');
+    expect(e.message).toContain('invalid limit');
+    expect(e.message).toContain(JSON.stringify(limit));
+    expect(e.message).toMatch(/still pending/);
   });
 });
 

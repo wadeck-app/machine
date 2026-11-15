@@ -224,6 +224,8 @@ describe('fake relay: ownership bound at approval (deployed, poc-owner 719f36f)'
     await approveWith(ids[1] as string);
     const e = await failure(approveWith(ids[2] as string));
     expect([e.status, e.code]).toEqual([429, 'too_many_machines']);
+    // The body quotes the limit (the client turns it into the message) and says which case it is.
+    expect(e.message).toContain('this token already owns the maximum (2) machines');
     expect(relay.pendingIds()).toEqual([ids[2]]);
     // Approving a uuid the token already holds is not a new machine.
     const again = (await post(relay.token, uuidN(1), 'z'.repeat(43))).id;
@@ -231,6 +233,44 @@ describe('fake relay: ownership bound at approval (deployed, poc-owner 719f36f)'
     // The admin forgets a machine that is gone (DELETE): room again.
     await admin().deleteMachine(uuidN(1));
     await approveWith(ids[2] as string);
+  });
+
+  it('the default limit is 10 machines per token: the 11th approval is refused with limit 10 (as the real relay without machines-config.json)', async () => {
+    relay = await startFakeRelay();
+    const ids: string[] = [];
+    for (let n = 1; n <= 11; n++) ids.push((await post(relay.token, uuidN(n), String.fromCharCode(96 + n).repeat(43))).id);
+    for (const id of ids.slice(0, 10)) await approveWith(id);
+    const e = await failure(approveWith(ids[10] as string));
+    expect([e.status, e.code]).toEqual([429, 'too_many_machines']);
+    expect(e.message).toContain('(10)');
+    expect(e.message).not.toMatch(/\b50\b/);
+  });
+
+  it('only NEW bindings are counted: a token above the limit keeps its machines, re-approving an owned uuid works, a new uuid is refused until under the limit', async () => {
+    relay = await startFakeRelay({ maxMachinesPerToken: 2 });
+    for (const n of [1, 2, 3, 4]) relay.setOwner(uuidN(n), relay.token);
+    const owned = (await post(relay.token, uuidN(2), 'a'.repeat(43))).id;
+    await approveWith(owned);
+    const fresh = (await post(relay.token, uuidN(9), 'b'.repeat(43))).id;
+    expect((await failure(approveWith(fresh))).code).toBe('too_many_machines');
+    // Still 4 machines, none lost.
+    await admin().deleteMachine(uuidN(1));
+    await admin().deleteMachine(uuidN(2));
+    expect((await failure(approveWith(fresh))).code).toBe('too_many_machines');
+    await admin().deleteMachine(uuidN(3));
+    await approveWith(fresh);
+  });
+
+  it('the relay-wide cap uses the same code with its own message prefix and limit, whoever the token is', async () => {
+    relay = await startFakeRelay({ maxMachinesOnRelay: 2 });
+    const other = relay.addMachineToken();
+    const ids = [(await post(relay.token, uuidN(1), '1'.repeat(43))).id, (await post(other, uuidN(2), '2'.repeat(43))).id, (await post(other, uuidN(3), '3'.repeat(43))).id];
+    await approveWith(ids[0] as string);
+    await approveWith(ids[1] as string);
+    const e = await failure(approveWith(ids[2] as string));
+    expect([e.status, e.code]).toEqual([429, 'too_many_machines']);
+    expect(e.message).toContain('the relay itself is full (2 machines)');
+    expect(e.humanText).toMatch(/^The relay holds 2 machines already/);
   });
 
   it('posting the same identity key with another uuid while the first candidacy is pending is 409 candidacy_uuid_changed; the same uuid is fine', async () => {

@@ -15,7 +15,7 @@ The `machine` scope opens only: `POST` candidacy, `GET` own candidacy, `GET /api
 
 JSON bodies, `Content-Type: application/json`. Every route lives under `/api` (token gate, scope check and audit apply there). Unknown JSON fields: 400.
 
-Errors: `{ "success": false, "error": "<code>", "message": "<what happened and the fix>", "serverTime": <epoch seconds> }`. Codes: `invalid_body`, `invalid_json`, `invalid_uuid`, `invalid_if_match`, `identity_key_in_use` (409: a pending key re-posted by ANOTHER token; the same token replaces its entry), `too_many_candidacies` (429), `not_found` (404), `not_pending` (409), `not_owner` (403), `precondition_failed` (412, with `currentEtag`), `full_access_required` (403), `too_many_machines` (429, 1000 max), `store_unavailable` (503). A record `PUT` answers `{ "success": true, "etag" }` plus an `ETag` header; `GET /api/machines/{uuid}` adds `etag`.
+Errors: `{ "success": false, "error": "<code>", "message": "<what happened and the fix>", "serverTime": <epoch seconds> }`. Codes: `invalid_body`, `invalid_json`, `invalid_uuid`, `invalid_if_match`, `identity_key_in_use` (409: a pending key re-posted by ANOTHER token; the same token replaces its entry), `too_many_candidacies` (429), `not_found` (404), `not_pending` (409), `not_owner` (403), `precondition_failed` (412, with `currentEtag`), `full_access_required` (403), `too_many_machines` (429, with `limit`), `store_unavailable` (503). A record `PUT` answers `{ "success": true, "etag" }` plus an `ETag` header; `GET /api/machines/{uuid}` adds `etag`.
 
 ## Candidacy (enrollment, decisions 35, 35a, 37)
 
@@ -111,7 +111,9 @@ Distribution of registrations, revocation lists and policies through the relay (
 
 ## Deployed limits (relay 2026.11.14-140, reported by poc-owner)
 
-- At most 50 machine records per token (`429 too_many_machines`); the global cap stays 1000.
+- Machines per token: the relay limit (10 by default, configurable on the relay by `machines-config.json` `{"maxMachinesPerToken": N}`, 1..1000; poc-node 6edc6f7, a relay deployed before it still enforces 50). Relay-wide cap: 1000.
+- `429 too_many_machines` body: `{ success:false, error, limit, message }`. Per-token case: message "This token already owns the maximum number of machines (N)..."; relay-wide case: same code, `limit` 1000, message starting "The relay holds 1000 machines already". The client tells them apart by that prefix and quotes `limit`; a missing `limit` is said as not stated, an invalid one is an error naming the value (never a guess).
+- The check runs only for a NEW binding at approval: a token already above the limit keeps its machines, re-approving an owned uuid works, `DELETE /api/machines/<uuid>` frees places.
 - Re-`PUT` of an identical record only refreshes presence.
 - Superseded by "Ownership bound at approval": the binding is made by the approval, and `DELETE /api/machines/{uuid}` exists.
 - Malformed ids or uuids (upper-case, trailing slash) are refused by the scope gate with `403`, not `400`: the client must send canonical lower-case uuids and no trailing slash.
@@ -173,7 +175,7 @@ Deployed details beyond the table:
 - `uuid` in a candidacy never changes for the same identity key: re-posting with another uuid answers 409 `candidacy_uuid_changed`.
 - Approve binds in ONE step with the decision (if the binding cannot be saved the candidacy stays pending; an expired candidacy undoes it). A bound uuid without a record is not listed by `GET /api/machines` until the record exists.
 - Admin candidacy list adds `boundToCandidateToken` (true = re-approval for the same token, not a rebind). Warn loudly only when `uuidBound && !boundToCandidateToken`. `boundTokenLabel` is `(revoked token)` when the token is gone.
-- Limits now apply at approval: 50 machines per token and 1000 in total, `429 too_many_machines` on the decision (the candidacy stays pending; the message names `DELETE /api/machines/<uuid>` for machines that are gone).
+- Limits now apply at approval: the relay limit per token (see Deployed limits) and 1000 in total, `429 too_many_machines` on the decision (the candidacy stays pending; the message quotes the limit and names `machine admin forget-relay-record <machine|uuid>` for machines that are gone).
 - `DELETE /api/machines/{uuid}` also forgets the binding: a machine that comes back must post a new candidacy and be approved again. A token rotation does not need it any more: a new candidacy plus approval rebinds.
 - `not_registered` message (403): "This machine is not registered on the relay: approve this machine first (the admin approves its candidacy, `machine admin approve`), then retry."
 - Residual unchanged: the relay cannot verify the machine key; a squatter whose candidacy the admin approves by mistake owns the uuid (the admin check is the barrier). Not tested on production with a machine token.

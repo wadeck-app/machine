@@ -674,14 +674,14 @@ describe('machine admin approve: a uuid already bound to a token (deployed relay
     expect(r.err).toMatch(/invalid "boundToCandidateToken"/);
   });
 
-  it('429 too_many_machines at the decision: nothing approved, the candidacy is still pending, the message names DELETE through forget-relay-record', async () => {
-    relay.force('/api/machines/candidacies', 429, { success: false, error: 'too_many_machines', message: 'This token already holds 50 machines.' }, {}, 'PUT');
+  it('429 too_many_machines at the decision: nothing approved, the candidacy is still pending, the limit is quoted and forget-relay-record is named', async () => {
+    relay.force('/api/machines/candidacies', 429, { success: false, error: 'too_many_machines', limit: 10, message: 'This token already owns the maximum number of machines (10).' }, {}, 'PUT');
     const r = await approve([firstId]);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/still pending/);
-    expect(r.err).toContain('DELETE /api/machines/<uuid>');
-    expect(r.err).toContain('machine admin forget-relay-record <machine>');
-    expect(r.err).toContain('This token already holds 50 machines.');
+    expect(r.err).toContain('this token already owns the maximum (10) machines');
+    expect(r.err).toContain('machine admin forget-relay-record <machine|uuid>');
+    expect(r.err).toContain('This token already owns the maximum number of machines (10).');
     expect(relay.pendingIds()).toContain(firstId);
     // After the room is made, the same command goes through.
     expect((await approve([firstId])).code).toBe(0);

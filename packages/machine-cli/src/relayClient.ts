@@ -270,6 +270,26 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     throw mapError(c, res.status, body, res.headers);
   }
 
+  /**
+   * The advice for a `429 too_many_machines`: the relay states its limit in `limit`, and tells the per-token case from the relay-wide cap by the
+   * start of its message ("The relay holds ..."). The limit is configurable on the relay, so it is quoted, never assumed.
+   */
+  function tooManyMachines(limit: unknown, relayMessage: string | undefined): string {
+    const free = 'free places with `machine admin forget-relay-record <machine|uuid>` for machines that are gone';
+    const relayWide = relayMessage?.startsWith('The relay holds') === true;
+    if (limit === undefined) {
+      return relayWide
+        ? 'the relay itself is full (it did not state its limit): tell the relay operator'
+        : `this token already owns the maximum number of machines (the relay did not state its limit): ${free}`;
+    }
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+      return `the relay sent an invalid limit (${JSON.stringify(limit)}) with too_many_machines: tell the relay operator (the relay and this machine disagree on the format); ${free}`;
+    }
+    return relayWide
+      ? `the relay itself is full (${limit} machines): tell the relay operator, who can raise its limit or remove machines`
+      : `this token already owns the maximum (${limit}) machines; ${free}`;
+  }
+
   function mapError(c: Call, status: number, body: Record<string, unknown>, headers: Headers): RelayError {
     const error = typeof body.error === 'string' ? body.error : undefined;
     const relayMessage = typeof body.message === 'string' ? body.message : undefined;
@@ -294,9 +314,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     } else if (c.record && status === 403 && code === 'not_owner') {
       message = `the relay ${baseUrl} refused the address record of this machine ${c.record.uuid} (not_owner)${detail}: another token is bound to this uuid (a uuid is bound to the token of the candidacy the admin approved): either the token of this machine was replaced, or the admin approved a candidacy of ANOTHER token for this uuid, which also withholds the inbox of this machine. Run \`machine join --resume\` (same token) or \`machine join <code> --force\` (new token) and ask the admin to approve the new candidacy: approving replaces the binding with the token of this machine (the admin is warned that it is a rebind); this daemon then publishes again by itself`;
     } else if (c.decision && status === 429 && code === 'too_many_machines') {
-      message = `the relay ${baseUrl} refused to approve this machine (too_many_machines)${detail}: this token already holds the maximum number of machines (50 per token, 1000 on the relay). The candidacy is still pending and nothing was approved. Remove the machines that are gone (\`DELETE /api/machines/<uuid>\`, which \`machine admin forget-relay-record <machine>\` sends), then run \`machine admin approve <id>\` again`;
+      // The relay's own text goes last: it ends with advice of its own and would break the sentence of ours.
+      message = `the relay ${baseUrl} refused to approve this machine (too_many_machines): ${tooManyMachines(body.limit, relayMessage)}. The candidacy is still pending and nothing was approved: once there is room, run \`machine admin approve <id>\` again${relayMessage ? `. The relay said: ${relayMessage}` : ''}`;
     } else if (c.record && status === 429 && code === 'too_many_machines') {
-      message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (too_many_machines)${detail}: this token already holds too many machine records (50 at most per token, 1000 on the relay); tell the relay owner`;
+      message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (too_many_machines): ${tooManyMachines(body.limit, relayMessage)}${relayMessage ? `. The relay said: ${relayMessage}` : ''}`;
     } else if (c.record && status === 400) {
       message = `the relay ${baseUrl} refused the address record of machine ${c.record.uuid} (${code ?? '400'})${detail}: the relay and this machine disagree on the record format, tell the relay owner and update machine`;
     } else if (c.inbox && status === 409 && code === 'id_conflict') {

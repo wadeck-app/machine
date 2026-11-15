@@ -28,8 +28,13 @@ export interface FakeRelayOptions {
   inboxPageSize?: number;
   /** More pairing codes, each claimed once and giving its OWN machine token, labelled "<label>-2", "<label>-3", ... (two machines on one relay). */
   moreCodes?: string[];
-  /** Machines one token may hold (approved uuids bound to it); the 51st approval is `429 too_many_machines`. Default 50, as the deployed relay. */
+  /**
+   * Machines one token may hold (approved uuids bound to it); a NEW binding past it is `429 too_many_machines` with `limit`. Default 10, the default of
+   * the relay without `machines-config.json` (1..1000 there). Only new bindings are counted: a token above the limit keeps its machines.
+   */
   maxMachinesPerToken?: number;
+  /** Machines the whole relay may hold (default 1000): the same code, `limit` 1000 and a message starting with "The relay holds". */
+  maxMachinesOnRelay?: number;
 }
 
 // Models the DEPLOYED relay (relay-api.md, "Ownership bound at approval", poc-owner 719f36f): a machine token can write records, heartbeat and
@@ -110,7 +115,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   const baseLabel = options.label ?? 'machine-pairing';
   // Token -> label, for every machine token of this relay.
   const machineTokens = new Map<string, string>([[token, baseLabel]]);
-  const maxMachinesPerToken = options.maxMachinesPerToken ?? 50;
+  const maxMachinesPerToken = options.maxMachinesPerToken ?? 10;
+  const maxMachinesOnRelay = options.maxMachinesOnRelay ?? 1000;
   const extraCodes = (options.moreCodes ?? []).map((c, i) => ({ code: c, used: false, token: `tok_${randomBytes(12).toString('hex')}`, label: `${baseLabel}-${i + 2}` }));
   // The token that posted each candidacy: what an approval binds the uuid to (never served).
   const postedBy = new Map<string, string>();
@@ -135,11 +141,20 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
   };
 
   // The limit applies at approval: a token already holding the maximum of OTHER uuids cannot get one more (the candidacy stays pending).
-  const overLimit = (id: string): boolean => {
+  // Only a NEW binding is checked (the real relay, poc-node 6edc6f7): re-approving a uuid the token already owns always works, and a token
+  // above the limit keeps every machine. Returns the refusal (body of the 429), or undefined.
+  const overLimit = (id: string): { limit: number; message: string } | undefined => {
     const entry = candidacies.get(id);
     const poster = postedBy.get(id);
-    if (entry === undefined || typeof entry.uuid !== 'string' || poster === undefined) return false;
-    return [...owners.entries()].filter(([uuid, owner]) => owner === poster && uuid !== entry.uuid).length >= maxMachinesPerToken;
+    if (entry === undefined || typeof entry.uuid !== 'string' || poster === undefined) return undefined;
+    if (owners.get(entry.uuid) === poster) return undefined;
+    if (owners.size >= maxMachinesOnRelay) {
+      return { limit: maxMachinesOnRelay, message: `The relay holds ${maxMachinesOnRelay} machines already: no new machine can be approved until some are removed (DELETE /api/machines/<uuid>) or the operator raises the limit.` };
+    }
+    if ([...owners.values()].filter((owner) => owner === poster).length >= maxMachinesPerToken) {
+      return { limit: maxMachinesPerToken, message: `This token already owns the maximum number of machines (${maxMachinesPerToken}), possibly machines that are gone. Free places with DELETE /api/machines/<uuid>, then approve again.` };
+    }
+    return undefined;
   };
   // The approval binds the uuid of the candidacy to the token that posted it, replacing any earlier binding.
   const bindAtApproval = (id: string) => {
@@ -267,9 +282,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
         if (entry.status !== 'pending') return err(res, 409, 'not_pending', 'already decided');
         const b = body as { decision?: string; approval?: unknown };
         // The binding is saved in one step with the decision: over the limit, the candidacy stays pending.
-        if (b.decision === 'approve' && overLimit(decodeURIComponent(cand[1] as string))) {
-          return err(res, 429, 'too_many_machines', 'This token already holds the maximum number of machines (50). Remove the machines that are gone with DELETE /api/machines/<uuid>, then approve again.');
-        }
+        const refusal = b.decision === 'approve' ? overLimit(decodeURIComponent(cand[1] as string)) : undefined;
+        if (refusal !== undefined) return err(res, 429, 'too_many_machines', refusal.message, { limit: refusal.limit });
         entry.status = b.decision === 'approve' ? 'approved' : 'rejected';
         if (b.decision === 'approve') {
           entry.approval = b.approval;
@@ -394,7 +408,8 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     approve: (id, approval, options = {}) => {
       const entry = candidacies.get(id);
       if (!entry || entry.status !== 'pending') throw new Error(`fake relay: no pending candidacy ${id}`);
-      if (overLimit(id)) throw new Error(`fake relay: approving ${id} is over the limit of ${maxMachinesPerToken} machines per token (the real relay answers 429 too_many_machines)`);
+      const refusal = overLimit(id);
+      if (refusal !== undefined) throw new Error(`fake relay: approving ${id} is refused (the real relay answers 429 too_many_machines, limit ${refusal.limit}): ${refusal.message}`);
       entry.status = 'approved';
       // An approval built by buildApproval is sealed now that the random it answers is known.
       completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));

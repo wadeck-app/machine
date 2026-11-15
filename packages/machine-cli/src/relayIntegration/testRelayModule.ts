@@ -17,7 +17,8 @@ export interface TestRelay {
   close: () => Promise<void>;
 }
 
-export type CreateTestRelay = (options?: { port?: number }) => Promise<TestRelay>;
+/** `maxMachinesPerToken`: the per-token machine limit written in the relay's `machines-config.json` (1..1000); absent: the relay's own default (10). */
+export type CreateTestRelay = (options?: { port?: number; maxMachinesPerToken?: number }) => Promise<TestRelay>;
 
 const FIX = `set ${RELAY_MODULE_ENV} to the file tests/helpers/test-relay.mjs of the poc-node repository (run \`npm ci\` once in that repository), for example: ${RELAY_MODULE_ENV}=<path to poc-node>/tests/helpers/test-relay.mjs npm run test:relay`;
 
