@@ -1,3 +1,5 @@
+import { bundleLinkLine, type BundleLinkReport } from './bundleLink.js';
+
 // `machine cli post-update`: what follows an update or a rollback, run by the NEW install (packaging.md 3.5 step 4). Injectable: no orch, no daemon here.
 
 export interface PostUpdateDeps {
@@ -6,7 +8,7 @@ export interface PostUpdateDeps {
   startup: {
     status: () => Promise<{ exists: boolean }>;
     /** `machine startup enable`: stages the new launcher when the stamp changed and refreshes the job (`orch ensure --restart-if-changed`). */
-    enable: () => Promise<{ action: string }>;
+    enable: () => Promise<{ action: string; bundleLink?: BundleLinkReport }>;
   };
   daemon: {
     /** Version the running daemon reports, undefined when no daemon runs. */
@@ -44,6 +46,7 @@ export async function postUpdate(deps: PostUpdateDeps): Promise<PostUpdateResult
   try {
     const r = await deps.startup.enable();
     say(`[ok] startup job ${r.action}\n`);
+    if (r.bundleLink !== undefined) say(`${bundleLinkLine(r.bundleLink)}\n`);
   } catch (e) {
     throw new Error(`startup enable failed: ${(e as Error).message}. The daemon was not touched. Run \`machine startup enable\` yourself once the cause is fixed`);
   }

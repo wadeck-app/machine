@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { planBundleLink, syncBundleLink, type BundleLinkPlan } from './bundleLink.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // The Go launcher of machine (ci/): the template logic is tested with `go test` on the rendered template, the real exe is
@@ -252,5 +253,57 @@ describe('node missing from PATH', () => {
     const logFile = readdirSync(join(dir, 'logs')).find(f => f.endsWith('-launcher.log'));
     expect(logFile).toBeDefined();
     expect(readFileSync(join(dir, 'logs', logFile as string), 'utf8')).toContain('Node.js 22 or newer');
+  });
+});
+
+// Windows: the launcher STAGED out of node_modules (<configDir>/bin/<stamp>/machine.exe) with the global modules elsewhere (%APPDATA%\npm) and no
+// node_modules next to node. Reproduces the field failure, then the fix (junction <staged>\node_modules, bundleLink.ts). Fake node (a copy of this
+// node, alone in its folder), fake bundle (the argv stub); temp folders only, no network, no daemon.
+describe.runIf(process.platform === 'win32')('the staged launcher finds the bundle through the junction (Windows)', () => {
+  const spec = '@wadeck-app/machine-cli/machine.cjs';
+  let staged: string;
+  let stageDir: string;
+  let modules: string;
+  let nodeDir: string;
+  let cfg: string;
+
+  beforeAll(() => {
+    const base = join(root, 'junction');
+    modules = join(base, 'npm', 'node_modules');
+    const globalBundle = join(modules, ...spec.split('/'));
+    mkdirSync(dirname(globalBundle), { recursive: true });
+    copyFileSync(stub, globalBundle);
+    nodeDir = join(base, 'nodejs');
+    mkdirSync(nodeDir);
+    copyFileSync(process.execPath, join(nodeDir, 'node.exe'));
+    stageDir = join(base, 'config', 'bin', '1.0.0');
+    mkdirSync(stageDir, { recursive: true });
+    staged = join(stageDir, 'machine.exe');
+    copyFileSync(exe, staged);
+    cfg = join(base, 'config');
+  }, 60_000);
+
+  const stagedEnv = (): NodeJS.ProcessEnv => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(env)) if (key.toLowerCase() === 'path' || key === 'LAUNCHER_BUNDLE_OVERRIDE') delete env[key];
+    env.PATH = nodeDir;
+    return env;
+  };
+
+  it('without the junction: "cannot find the bundle", exit 1 (the reproduction)', async () => {
+    const r = await launch(staged, ['x', '--config-dir', cfg], { env: stagedEnv() });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('cannot find the bundle');
+    expect(r.stderr).toContain('not next to the launcher');
+  });
+
+  it('with the junction: the bundle runs, exit 0, and the argv reaches it', async () => {
+    const plan = planBundleLink({ platform: 'win32', bundle: join(modules, ...spec.split('/')), spec, stageDir });
+    expect(plan).not.toBeNull();
+    expect(syncBundleLink(plan as BundleLinkPlan).state).toBe('created');
+    const r = await launch(staged, ['x', '--config-dir', cfg], { env: stagedEnv() });
+    expect(r.stderr).not.toContain('cannot find the bundle');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout).argv).toEqual(['x', '--config-dir', cfg]);
   });
 });

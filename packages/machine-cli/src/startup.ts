@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, join, resolve, win32 } from 'node:path';
 import { ConfigDir } from '@wadeck-app/shared-cli/ConfigDir';
+import { planBundleLink, syncBundleLink, type BundleLinkFs, type BundleLinkPlan, type BundleLinkReport } from './bundleLink.js';
 import { daemonPortFile } from './daemonPortFile.js';
 import { pruneStaged, stagedLauncher, stageWrapper, WRAPPER_NAME, wrapperScript, wrapperState, type BinaryDeps, type PruneResult } from './platformBinary.js';
 
@@ -76,6 +77,8 @@ export interface StartupContext {
   bundlePath?: string;
   /** Platform, resolver and fs of the launcher lookup (tests). */
   binary?: BinaryDeps;
+  /** Tests: the fs of the Windows node_modules junction (bundleLink.ts). */
+  bundleLinkFs?: BundleLinkFs;
 }
 
 /** Windows: double quotes (cmd.exe). Elsewhere: single quotes, a quote inside becomes '\'' . */
@@ -167,6 +170,8 @@ interface DaemonPlan {
   wrapper?: WrapperPlan;
   /** Launcher form built from the real package: the stamp to keep when pruning. */
   keepStamp?: string;
+  /** Windows, launcher that cannot find the bundle itself, bundle under a node_modules: the junction to keep in the staged folder. */
+  bundleLink?: BundleLinkPlan;
 }
 
 function planDaemon(ctx: StartupContext, stage: boolean): DaemonPlan {
@@ -189,11 +194,13 @@ function planDaemon(ctx: StartupContext, stage: boolean): DaemonPlan {
   const nodeFound = findOnPath('node', env, platform);
   const bundleOverride = launcherBundleOverride({ bundle, spec: LAUNCHER_BUNDLE_SPEC, nodeDir: nodeFound === undefined ? null : dirname(nodeFound) });
   const wrapper = platform === 'win32' && bundleOverride !== undefined ? windowsWrapper(ctx, staged.exe, bundleOverride, env, stage) : undefined;
+  const bundleLink = bundleOverride === undefined ? null : planBundleLink({ platform, bundle, spec: LAUNCHER_BUNDLE_SPEC, stageDir: win32.dirname(staged.exe) });
   return {
     source: { ...base, launcher: { exe: staged.exe, ...(bundleOverride === undefined ? {} : { bundleOverride }), ...(wrapper === undefined ? {} : { wrapper }) } },
     form: wrapper === undefined ? 'launcher' : 'launcher-wrapper',
     ...(wrapper === undefined ? {} : { wrapper }),
     keepStamp: staged.stamp,
+    ...(bundleLink === null ? {} : { bundleLink }),
   };
 }
 
@@ -368,12 +375,15 @@ export interface EnableResult {
   formNote?: string;
   /** Older staged launcher folders removed after orch accepted the job (launcher form built from the real package only). */
   pruned?: PruneResult;
+  /** Windows: the junction that lets the staged launcher find the bundle by itself (absent when none is needed). A failure is reported here, not thrown: the wrapper still carries the job. */
+  bundleLink?: BundleLinkReport;
 }
 
 export async function enableStartup(ctx: StartupContext): Promise<EnableResult> {
   // The new launcher is staged BEFORE orch is called and the old ones are pruned only AFTER orch returned 0: the stored job may still name an old folder until then (orch-owner rule).
   const plan = planDaemon(ctx, true);
   const command = expectedCommand(ctx, plan);
+  const bundleLink = plan.bundleLink === undefined ? undefined : syncBundleLink(plan.bundleLink, ctx.bundleLinkFs);
   const portFile = daemonPortFile(resolve(ctx.configDir));
   const id = ctx.id ?? STARTUP_JOB_ID;
   const restart = ctx.restartOnExit === false ? [] : ['--restart-on-exit'];
@@ -382,7 +392,7 @@ export async function enableStartup(ctx: StartupContext): Promise<EnableResult> 
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup enable');
   const action = parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged');
   const pruned = plan.keepStamp === undefined ? undefined : pruneStaged(resolve(ctx.configDir), plan.keepStamp, ctx.binary?.fs);
-  return { action, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }) };
+  return { action, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }), ...(bundleLink === undefined ? {} : { bundleLink }) };
 }
 
 /**
@@ -453,6 +463,8 @@ export interface StatusResult {
   registeredForm?: DaemonForm | 'unknown';
   /** Wrapper form only: whether the staged script is the one `enable` would write now. */
   wrapper?: 'current' | 'missing' | 'different';
+  /** Windows: the junction of the staged folder, checked and repaired when missing or stale (the only thing status writes). */
+  bundleLink?: BundleLinkReport;
   /** Other orch jobs whose liveness port file is this daemon's: two supervisors on one daemon fight over it. */
   conflicts: { id: string; command: string }[];
 }
@@ -497,8 +509,9 @@ export async function startupStatus(ctx: StartupContext): Promise<StatusResult> 
       throw new StartupError((e as Error).message);
     }
   }
+  const bundleLink = plan.bundleLink === undefined ? undefined : syncBundleLink(plan.bundleLink, ctx.bundleLinkFs);
   const upToDate = command === expected && (wrapper === undefined || wrapper === 'current');
-  return { exists: true, ...base, conflicts: await portFileConflicts(ctx, id), command, upToDate, registeredForm: registeredForm(command), ...(wrapper === undefined ? {} : { wrapper }) };
+  return { exists: true, ...base, conflicts: await portFileConflicts(ctx, id), command, upToDate, registeredForm: registeredForm(command), ...(wrapper === undefined ? {} : { wrapper }), ...(bundleLink === undefined ? {} : { bundleLink }) };
 }
 
 /** The `command` string at the top of the answer or inside a `job` object. */

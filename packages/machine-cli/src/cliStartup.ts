@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { daemonPortFile } from './daemonPortFile.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
+import { bundleLinkLine } from './bundleLink.js';
 import { disableStartup, enableStartup, startupStatus, StartupError, type DaemonForm, type EnableResult, type StartupContext } from './startup.js';
 
 // `machine startup enable | disable | status`: thin front-end over startup.ts.
@@ -25,7 +26,8 @@ function enableText(r: EnableResult): string {
   const removed = r.pruned && r.pruned.removed.length > 0 ? `removed older staged launchers: ${r.pruned.removed.join(', ')}\n` : '';
   const skipped = r.pruned && r.pruned.skipped.length > 0 ? `older staged launchers still in use, kept until the next run: ${r.pruned.skipped.join(', ')}\n` : '';
   const note = r.formNote === undefined ? '' : `${r.formNote}\n`;
-  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}port file: ${r.portFile}\n`;
+  const link = r.bundleLink === undefined ? '' : `${bundleLinkLine(r.bundleLink)}\n`;
+  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}${link}port file: ${r.portFile}\n`;
 }
 
 /**
@@ -69,7 +71,7 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
     } else {
       const note = s.formNote === undefined ? '' : `${s.formNote}\n`;
       const wrapper = s.wrapper === undefined ? '' : `wrapper script: ${s.wrapper}\n`;
-      const forms = `registered form: ${FORM_TEXT[s.registeredForm ?? 'unknown']}\nexpected form: ${FORM_TEXT[s.expectedForm]}\n${wrapper}${note}`;
+      const forms = `registered form: ${FORM_TEXT[s.registeredForm ?? 'unknown']}\nexpected form: ${FORM_TEXT[s.expectedForm]}\n${wrapper}${note}${s.bundleLink === undefined ? '' : `${bundleLinkLine(s.bundleLink)}\n`}`;
       emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${forms}${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n`);
     }
     // Loud but not an error: stderr in both modes, so --json stays one document on stdout (it also lists the conflicts).
