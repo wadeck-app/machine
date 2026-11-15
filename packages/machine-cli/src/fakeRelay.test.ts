@@ -116,7 +116,7 @@ describe('fake relay: address records', () => {
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
     await machine.putRecord(uuidN(1), recordFor(uuidN(1)));
-    expect((await failure(machine.deleteMachine(uuidN(1)))).code).toBe('scope_denied');
+    expect((await failure(machine.deleteMachine(uuidN(1)))).code).toBe('full_access_required');
     await admin.deleteMachine(uuidN(1));
     expect(await machine.getMachine(uuidN(1))).toBeUndefined();
     // The binding is gone too: the machine must post a new candidacy and be approved again.
@@ -339,5 +339,170 @@ describe('fake relay: presence and inbox as the real relay answers', () => {
     const page = await get(`/api/machines/${uuidN(1)}/inbox`, relay.token);
     expect(page.body).toMatchObject({ success: true, more: false, next: null });
     expect(((page.body.documents as { storedAt: unknown }[])[0] as { storedAt: unknown }).storedAt).toMatch(isoPattern);
+  });
+});
+
+// The machine-admin scope of the relay (poc-node 78fe5b2, relay-api.md): the machine calls plus the admin calls of the machine network, nothing on tokens.
+describe('fake relay: the machine-admin scope', () => {
+  const post = async (url: string, path: string, body: unknown, token?: string) => {
+    const r = await fetch(`${url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const call = async (method: string, url: string, path: string, token: string, body?: unknown) => {
+    const r = await fetch(`${url}${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  /** A machine-admin token obtained the way the CLI does: start, console approval, poll. */
+  const machineAdminToken = async (r: FakeRelay): Promise<string> => {
+    const started = await post(r.url, '/api/device-login/start', { label: 'desk admin', access: 'machine-admin' });
+    expect(started.status).toBe(201);
+    expect(started.body.access).toBe('machine-admin');
+    r.deviceApprove();
+    const polled = await post(r.url, '/api/device-login/poll', { deviceCode: started.body.deviceCode });
+    expect(polled.body).toMatchObject({ status: 'approved', access: 'machine-admin', scopes: ['machine-admin'], label: 'desk admin' });
+    return polled.body.token as string;
+  };
+
+  it('the device login delivers a token with scopes ["machine-admin"] (a distinct token per login)', async () => {
+    relay = await startFakeRelay();
+    const first = await machineAdminToken(relay);
+    const second = await machineAdminToken(relay);
+    expect(first).not.toBe(second);
+    expect(relay.machineAdminTokens).toEqual([first, second]);
+    expect(relay.machineAdminToken).toBe(first);
+  });
+
+  it('it lists and decides candidacies, reads any candidacy, reads and writes any inbox, deletes a machine', async () => {
+    relay = await startFakeRelay();
+    const token = await machineAdminToken(relay);
+    const posted = await post(relay.url, '/api/machines/candidacies', { name: 'laptop', hostname: 'h', identityPublicKey: 'K'.repeat(43), random: 'R'.repeat(22), uuid: uuidN(7) }, relay.token);
+    const id = posted.body.id as string;
+    expect((await call('GET', relay.url, '/api/machines/candidacies', token)).status).toBe(200);
+    expect((await call('GET', relay.url, `/api/machines/candidacies/${id}`, token)).status).toBe(200);
+    // A machine token reads only its own candidacy.
+    const other = relay.addMachineToken();
+    expect((await call('GET', relay.url, `/api/machines/candidacies/${id}`, other)).status).toBe(404);
+    expect((await call('PUT', relay.url, `/api/machines/candidacies/${id}/decision`, token, { decision: 'reject' })).status).toBe(204);
+    const docId = 'b'.repeat(22);
+    relay.setOwner(uuidN(7), relay.token);
+    expect((await call('PUT', relay.url, `/api/machines/${uuidN(7)}/inbox/${docId}`, token, { body: { id: docId, to: uuidN(7) } })).status).toBe(204);
+    expect((await call('GET', relay.url, `/api/machines/${uuidN(7)}/inbox`, token)).status).toBe(200);
+    expect((await call('DELETE', relay.url, `/api/machines/${uuidN(7)}/inbox/${docId}`, token)).status).toBe(204);
+    expect((await call('DELETE', relay.url, `/api/machines/${uuidN(7)}`, token)).status).toBe(204);
+  });
+
+  it('it never writes or heartbeats for another machine (not_owner), unlike a full-access token', async () => {
+    relay = await startFakeRelay();
+    const token = await machineAdminToken(relay);
+    relay.setOwner(uuidN(1), relay.token);
+    const e = await failure(createRelayClient({ baseUrl: relay.url, token }).putRecord(uuidN(1), recordFor(uuidN(1))));
+    expect([e.status, e.code]).toEqual([403, 'not_owner']);
+    expect((await call('POST', relay.url, `/api/machines/${uuidN(1)}/heartbeat`, token)).status).toBe(403);
+  });
+
+  it('it does its own machine calls for a uuid bound to it (record, heartbeat)', async () => {
+    relay = await startFakeRelay();
+    const token = await machineAdminToken(relay);
+    relay.setOwner(uuidN(1), token);
+    await createRelayClient({ baseUrl: relay.url, token }).putRecord(uuidN(1), recordFor(uuidN(1)));
+    expect((await call('POST', relay.url, `/api/machines/${uuidN(1)}/heartbeat`, token)).status).toBe(200);
+  });
+
+  it('token management is 403 full_access_required for a machine and a machine-admin token, 200 for a full-access one', async () => {
+    relay = await startFakeRelay();
+    const token = await machineAdminToken(relay);
+    for (const who of [token, relay.token]) {
+      const r = await call('GET', relay.url, '/api/tokens', who);
+      expect([r.status, r.body.error]).toEqual([403, 'full_access_required']);
+    }
+    expect((await call('GET', relay.url, '/api/tokens', relay.adminToken)).status).toBe(200);
+    expect((await call('GET', relay.url, '/api/whoami', token)).body.scopes).toEqual(['machine-admin']);
+    expect((await call('GET', relay.url, '/api/whoami', relay.adminToken)).body.scopes).toBeNull();
+  });
+
+  it('a plain machine token gets 403 full_access_required on every admin call', async () => {
+    relay = await startFakeRelay();
+    const id = 'c'.repeat(22);
+    for (const [method, path, body] of [
+      ['GET', '/api/machines/candidacies', undefined],
+      ['PUT', '/api/machines/candidacies/x/decision', { decision: 'reject' }],
+      ['PUT', `/api/machines/${uuidN(1)}/inbox/${id}`, { body: { id, to: uuidN(1) } }],
+      ['DELETE', `/api/machines/${uuidN(1)}`, undefined],
+    ] as const) {
+      const r = await call(method, relay.url, path, relay.token, body);
+      expect([r.status, r.body.error], `${method} ${path}`).toEqual([403, 'full_access_required']);
+    }
+  });
+
+  it('an older relay (machineAdminLogin "rejects"): 400 invalid_body to access machine-admin, full and machine still work', async () => {
+    relay = await startFakeRelay({ machineAdminLogin: 'rejects' });
+    const refused = await post(relay.url, '/api/device-login/start', { label: 'desk admin', access: 'machine-admin' });
+    expect([refused.status, refused.body.error]).toEqual([400, 'invalid_body']);
+    expect((await post(relay.url, '/api/device-login/start', { label: 'desk admin', access: 'full' })).status).toBe(201);
+    expect((await post(relay.url, '/api/device-login/start', { label: 'desk' })).status).toBe(201);
+  });
+
+  it('an unknown access value is 400 invalid_body', async () => {
+    relay = await startFakeRelay();
+    expect((await post(relay.url, '/api/device-login/start', { label: 'x', access: 'admin' })).status).toBe(400);
+  });
+});
+
+// The console of the relay (poc-node 7e0b586) offers six codes per machine / machine-admin request: the real one among five decoys.
+describe('fake relay: the console choices of a device login', () => {
+  const api = async (method: string, url: string, path: string, token: string, body?: unknown) => {
+    const r = await fetch(`${url}${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const startLogin = async (url: string, access?: string) => {
+    const r = await fetch(`${url}/api/device-login/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label: 'desk', ...(access ? { access } : {}) }) });
+    return (await r.json()) as { deviceCode: string; userCode: string };
+  };
+  const poll = async (url: string, deviceCode: string) => {
+    const r = await fetch(`${url}/api/device-login/poll`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceCode }) });
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+
+  it('the console list carries six choices (the real code among five decoys) for a machine and a machine-admin request, none for a full-access one', async () => {
+    relay = await startFakeRelay();
+    const machine = await startLogin(relay.url);
+    const admin = await startLogin(relay.url, 'machine-admin');
+    const full = await startLogin(relay.url, 'full');
+    const list = (await api('GET', relay.url, '/api/device-login', relay.adminToken)).body.requests as { label: string; access: string; choices: string[] }[];
+    expect(list).toHaveLength(3);
+    const byAccess = (a: string) => list.find((r) => r.access === a) as { choices: string[] };
+    expect(byAccess('machine').choices).toHaveLength(6);
+    expect(byAccess('machine').choices).toContain(machine.userCode);
+    expect(byAccess('machine-admin').choices).toContain(admin.userCode);
+    expect(new Set(byAccess('machine-admin').choices).size).toBe(6);
+    expect(byAccess('full').choices).toEqual([]);
+    expect(full.userCode).toBe('KLMN-PQ23');
+    // The list is for the console only.
+    expect((await api('GET', relay.url, '/api/device-login', relay.token)).status).toBe(403);
+  });
+
+  it('clicking the right code approves; the poll then delivers the token', async () => {
+    relay = await startFakeRelay();
+    const started = await startLogin(relay.url, 'machine-admin');
+    expect(relay.deviceClick(started.userCode)).toEqual({ status: 200 });
+    expect((await poll(relay.url, started.deviceCode)).body.status).toBe('approved');
+  });
+
+  it('clicking a decoy denies the request at once (409 request_denied from the console); the poll answers denied, no second try', async () => {
+    relay = await startFakeRelay();
+    const started = await startLogin(relay.url);
+    const decoy = relay.deviceChoices().find((c) => c !== started.userCode) as string;
+    expect(relay.deviceClick(decoy)).toEqual({ status: 409, error: 'request_denied' });
+    expect((await poll(relay.url, started.deviceCode)).body.status).toBe('denied');
+    expect(relay.deviceClick(started.userCode)).toEqual({ status: 409, error: 'not_pending' });
+  });
+
+  it('deniedPoll "conflict": the poll of a denied request answers 409 request_denied (as the coordinator reported)', async () => {
+    await relay?.close();
+    relay = await startFakeRelay({ deniedPoll: 'conflict' });
+    const started = await startLogin(relay.url);
+    relay.deviceClick(relay.deviceChoices().find((c) => c !== started.userCode) as string);
+    const p = await poll(relay.url, started.deviceCode);
+    expect([p.status, p.body.error]).toEqual([409, 'request_denied']);
   });
 });

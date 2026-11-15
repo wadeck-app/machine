@@ -14,7 +14,7 @@ export interface RelayConfig {
 }
 
 export const relayFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay.json');
-/** The full-access token of the admin console (`machine admin login`): kept apart from the machine token, same format and protection. */
+/** The admin token (`machine admin login`, scope machine-admin; after `machine setup` the same token as relay.json): same format and protection as the machine token. */
 export const relayAdminFile = (configDir: string): string => join(configDir, SECRETS_DIRNAME, 'relay-admin.json');
 
 export function readRelayConfig(configDir: string): RelayConfig | undefined {

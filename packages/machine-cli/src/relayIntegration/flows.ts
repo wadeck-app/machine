@@ -3,7 +3,7 @@ import { SHELL, type World } from './world.js';
 
 // The enrollment steps shared by the suites: the first machine (setup) and a second machine (join + admin approve), against the real relay.
 
-// The only question is the passphrase hint (Enter = none): the full-access login and the machine login are both confirmed in the relay console.
+// The only question is the passphrase hint (Enter = none): the one relay login (machine-admin) is confirmed in the relay console.
 export async function setupFirst(w: World, dir: string, hostname = 'Desktop'): Promise<void> {
   const r = await w.run('desktop', dir, ['setup', w.relay.url], { hostname, visible: [''] });
   expect(r.code, r.err).toBe(0);

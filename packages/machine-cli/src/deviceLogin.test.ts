@@ -105,9 +105,9 @@ describe('machine join by device login', () => {
     const lines = r.out.split('\n');
     // The relay login code: named, alone on its line, said to be typed on the relay page (decision 55).
     expect(lines).toContain('  BCDF-GH23');
-    expect(r.out).toMatch(/Relay login code for "laptop" on .*Type it on the relay page/);
+    expect(r.out).toMatch(/Relay login code for "laptop" on [\s\S]*Click the code BCDF-GH23 in the relay console/);
     expect(lines).toContain('Relay page: https://relay.example/device?code=BCDF-GH23');
-    expect(lines).toContain('Open it (any browser), check that the address and the label match this machine, and type the code there.');
+    expect(r.out).toContain("it must be the same as this one. A different code denies the request.");
     expect(timing.sleeps).toHaveLength(3);
     for (const ms of timing.sleeps) expect(ms).toBeGreaterThanOrEqual(MIN_DEVICE_POLL_MS);
 
@@ -159,6 +159,17 @@ describe('machine join by device login', () => {
     expect(first.out).toMatch(/enrolled "laptop"/);
     expect(existsSync(candidacyFile(dir))).toBe(false);
     noSecrets(first.out, first.err);
+  });
+
+  it('a wrong click (a decoy of the six codes) denies the request: actionable error, nothing stored', async () => {
+    const timing = fakeTiming((_ms, n) => n === 1 && relay.deviceClick(relay.deviceChoices().find((c) => c !== 'BCDF-GH23') as string));
+    const r = await join_([], { timing });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/a different code was clicked/);
+    expect(r.err).toMatch(/machine join/);
+    expect(r.err).toMatch(/click the code it shows/);
+    expect(existsSync(relayFile(dir))).toBe(false);
+    expect(existsSync(candidacyFile(dir))).toBe(false);
   });
 
   it('denied: exit 1, says it was denied in the console, nothing stored, no further poll', async () => {

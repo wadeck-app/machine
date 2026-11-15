@@ -9,9 +9,18 @@ The relay is untrusted (threat model A-1): it stores and serves opaque signed do
 | Caller | Token | May do |
 |---|---|---|
 | A machine (daemon, CLI) | `machine` scope, Bearer | calls marked **M** |
-| The admin console (local app-module) | full access | calls marked **A** |
+| The admin (`machine admin login`; the first machine, whose daemon holds the same token) | `machine-admin` scope (poc-node 78fe5b2, decision 59) | calls marked **M** and **A**, nothing on tokens |
+| Opt-in only (`machine admin login --full-access`, a legacy admin file, the relay console itself) | full access (`scopes: null`) | everything, including tokens |
 
-The `machine` scope opens only: `POST` candidacy, `GET` own candidacy, `GET /api/machines`, `GET|PUT /api/machines/{uuid}`, `POST /api/machines/{uuid}/heartbeat`. Listing candidacies and deciding one need a full-access token (`full_access_required`, 403 otherwise).
+| Call | `machine` | `machine-admin` | full access |
+|---|---|---|---|
+| `POST` candidacy, `GET` own candidacy, own record, own heartbeat, own inbox read and ack, `GET /api/machines` | yes | yes | yes |
+| `GET /api/machines/candidacies`, `PUT .../candidacies/{id}/decision`, `PUT /api/machines/{uuid}/inbox/{id}`, `DELETE /api/machines/{uuid}` | 403 `full_access_required` | yes | yes |
+| `GET` ANY candidacy by id, read and ack ANY inbox | no | yes | yes |
+| Write another machine's record or heartbeat for it | no | **no** | yes |
+| Tokens, pairings, device-login list and approve, key-value, audit log, webhooks | 403 | 403 | yes |
+
+A `machine-admin` token does the machine's own calls AND the admin calls, so one token serves the first machine.
 
 JSON bodies, `Content-Type: application/json`. Every route lives under `/api` (token gate, scope check and audit apply there). Unknown JSON fields: 400.
 
@@ -69,7 +78,7 @@ Candidate behaviour (`machine join [<relay-host-or-url> | <code>]`, `machine joi
 
 **Candidacy uuid:** the CLI always sends `uuid` (canonical lower-case, from the identity), because the admin signs the registration for it. The relay side is committed by poc-owner (76b2b5c) but not deployed: the currently deployed relay refuses the unknown field (400), so `join` fails there until the deployment. `--resume` posts a new candidacy when the saved one has no uuid.
 
-**Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a full-access device login confirmed in the console (`machine admin login`, see "Full-access device login"), or from a pairing opened WITHOUT "Limited to scopes" (`scopes: null`, `machine admin login <code>`); the client refuses a scoped one. The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
+**Admin side (CLI, `machine admin login` / `machine admin approve`):** the admin token comes from a `machine-admin` device login confirmed in the console (`machine admin login`, see "Machine-admin device login"), or from a pairing opened with "Limited to scopes", machine-admin (`machine admin login <code>`). Admin commands accept scopes `["machine-admin"]` (preferred) or `null` (legacy file, a [warn] says it can manage tokens) and refuse a plain machine token (`full_access_required`, the message names `machine admin login`). The CLI recomputes the candidacy code from `identityPublicKey` and `random`, and refuses to approve when a code field sent by the relay differs. `approve` refuses a candidacy without `uuid`. `approval.peers` holds the admin machine itself (same pair secret as `self`, which the admin imports); the admin's pair secrets with its other peers are never handed to a third machine.
 
 ## Machines resource: address and presence (decision 34)
 
@@ -121,7 +130,7 @@ Distribution of registrations, revocation lists and policies through the relay (
 
 ## Pairing claim (token for `machine join`, decision 28)
 
-`POST /api/pairings/claim` is PUBLIC (no Authorization, no cookie), JSON body `{ "code": "12345678" }` (spaces and hyphens accepted, 32 characters max). `200 { success: true, serverTime, token, label, scopes }`: `token` is shown once, `scopes` is `["machine"]` for a pairing opened with scope machine (`null` means full access: the client must refuse it). The pairing is opened in the console (Tokens, Add token, "Limited to scopes", machine). The claimed token can call `POST /api/machines/candidacies` at once.
+`POST /api/pairings/claim` is PUBLIC (no Authorization, no cookie), JSON body `{ "code": "12345678" }` (spaces and hyphens accepted, 32 characters max). `200 { success: true, serverTime, token, label, scopes }`: `token` is shown once, `scopes` is `["machine"]` for a pairing opened with scope machine (`join` refuses `null` and `machine-admin`); `machine admin login <code>` accepts `["machine-admin"]` or `null` and refuses anything else. The pairing is opened in the console (Tokens, Add token, "Limited to scopes", machine). The claimed token can call `POST /api/machines/candidacies` at once.
 
 Errors (`{ success: false, error: "<human text>", serverTime }`; here `error` is text, not a code): 400 and 401 `Invalid or expired code.` (wrong, malformed, used or expired: same answer on purpose), 429 with `Retry-After` and `retryAfterSeconds`, 409 or 5xx `The code was valid but is now used up ...` (ask the admin for a new code). A code is valid 5 minutes and works once; 5 failed attempts per 10 minutes per IP lock that IP, and 5 wrong codes cancel the open code.
 
@@ -134,13 +143,21 @@ Public routes, answers `{ success, ... }`, errors `{ success: false, error: "<co
 - Console (full access only): the Tokens page lists waiting requests (user code, label, observed address, age). The approver TYPES the user code shown by the CLI; 5 wrong codes deny the request. The token is scope `machine` only. An approved token not collected within 5 minutes is revoked.
 - The pairing claim stays as the fallback.
 
-### Full-access device login (poc-node 754a4c5, decision 58)
+### Machine-admin device login (poc-node 78fe5b2, decision 59)
+
+- `POST /api/device-login/start` body `{ "label", "access" }`; `access` is `machine` (default), `machine-admin` or `full`, anything else `400 invalid_body`. The label matches `[A-Za-z0-9 _.-]{1,64}`. The console shows an amber MACHINE ADMIN chip; the approver does not type: since poc-node 7e0b586 the console shows 6 codes per `machine` / `machine-admin` request (the real one among 5 decoys, fixed per request, none marked) and the person CLICKS the one the CLI prints. A decoy denies the request at once (the console call answers `409 request_denied`; the poll then answers `{ status: "denied" }`, the client also reads a `409 request_denied` on the poll as denied); the machine must start again. `full` requests are still typed. `verificationUrl` keeps the relay port. CLI wording: "click the code XXXX-XXXX in the relay console, it must be the same as this one"; a denied or expired request stores nothing and says which command to run again and to click the code shown.
+- Poll `approved`: `{ status, token, label, access: "machine-admin", scopes: ["machine-admin"] }`.
+- A relay older than 78fe5b2 answers `400 invalid_body` to `machine-admin`.
+- Client: `machine setup` does ONE login with label = the machine name; the token is saved as `relay.json` AND `relay-admin.json` (same token, never printed). `machine admin login` uses the label `<name> admin` (distinct from the machine's own token) and writes `relay-admin.json` only. The poll is accepted only when `access` equals what was asked AND the scopes match exactly (`machine-admin`: `["machine-admin"]`, `full`: `null`, `machine`: `["machine"]`; a machine poll from a relay that predates the `access` field may omit it); anything else is refused, nothing saved, the message names the token to revoke. A start answer with another `access` is refused too (the pending request is named for denial).
+- Old relay: the CLI fails loudly (names the scope and 78fe5b2, says update and redeploy) and NEVER falls back to full access. Explicit choices: `machine admin login --full-access` (access `full`, a [warn] that the token can manage tokens) or `machine admin login <code>`. After `--full-access`, `machine setup` again keeps the admin token and asks for the machine login separately.
+
+### Full-access device login (poc-node 754a4c5, decision 58; an explicit opt-in since decision 59)
 
 - `POST /api/device-login/start` body `{ "label": "machine admin on <host>", "access": "full" }`; `access` is optional, `"machine"` by default, any other value or any other field is `400 invalid_body`. `201` adds `access` to the answer. Same limits, same 5 minutes, same 5 wrong codes deny. The console marks the row FULL ACCESS (red).
 - Poll `approved`: `{ status, token, label, access: "full", scopes: null }` (a machine login: `access: "machine"`, `scopes: ["machine"]`).
 - A relay without the feature answers `400 invalid_body` to the unknown field `access` (expected, not observed: no such relay was available to test).
 - The label of the admin request differs from the machine request of the same computer (`machine admin on <name>` and `<name>`), so both can be waiting together.
-- Client (`admin login`, `setup`): sends `access: "full"` only for the admin login (a machine login sends the label only). The token is stored only for `access: "full"` with `scopes: null`. Refused, nothing stored: a start answer whose `access` is not `"full"` (the relay started a machine login: the client says to deny that request), a poll that delivers a machine token or no `access`. `400 invalid_body` on start: `[warn] this relay does not support the full-access login yet; falling back to a pairing code`, then the pairing claim path. Waits like the machine login (3 s minimum, `min(expiresIn, 900 s)` + 5 s, Ctrl-C stores nothing).
+- Client (`admin login --full-access` only): sends `access: "full"` (a machine login sends the label only). The token is stored only for `access: "full"` with `scopes: null`. Refused, nothing stored: a start answer whose `access` is not `"full"` (the relay started a machine login: the client says to deny that request), a poll that delivers a machine token or no `access`. `400 invalid_body` on start (with `--full-access`): `[warn] this relay does not support the full-access login yet; falling back to a pairing code`, then the pairing claim path. Waits like the machine login (3 s minimum, `min(expiresIn, 900 s)` + 5 s, Ctrl-C stores nothing).
 
 ## Enrollment screens (UX requirement, user 2026-11-14)
 

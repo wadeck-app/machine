@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readMachine } from '../identity.js';
@@ -49,47 +49,129 @@ describe('onboarding with the real relay', () => {
     expect(r.err).toMatch(/machine init|machine setup|machine join/);
   });
 
-  it('setup of the first machine: admin key, full-access login and machine login both confirmed in the relay console (no code copied), self-approval, enrollment', async () => {
+  it('setup of the first machine: admin key, ONE machine-admin login confirmed in the relay console (no code copied, no second request), self-approval, enrollment', async () => {
     const r = await w.run('desktop', a, ['setup', w.relay.url], { hostname: 'Desktop', visible: [''] });
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('[ok] admin key created');
-    expect(r.out).toContain('FULL ACCESS');
-    expect(r.out).toMatch(/the request "machine admin on desktop" is listed there, marked FULL ACCESS/);
-    expect(r.out).toContain('[ok] full access approved');
-    expect(r.out).toMatch(/\[ok\] admin token "machine admin on desktop" saved for /);
-    expect(r.out).toMatch(/\[ok\] relay access approved/);
+    expect(r.out).toContain('MACHINE ADMIN: can approve machines, cannot manage tokens');
+    expect(r.out).toMatch(/Click the code [A-Z0-9]{4}-[A-Z0-9]{4} in the relay console \(the Tokens page lists the request "desktop", marked MACHINE ADMIN\): it must be the same as this one/);
+    expect(r.out).toContain('[ok] machine admin access approved');
+    expect(r.out).toMatch(/\[ok\] relay token "desktop" saved for \S+: it is the token of this machine and its admin token/);
     expect(r.out).toContain('[ok] enrolled "desktop"');
-    expect(r.out + r.err).not.toMatch(/\[warn\] this relay does not support/);
+    // One code shown, one confirmation: no second login request, no full access, no old-relay fallback.
+    expect(r.out.match(/^\s*[A-Z0-9]{4}-[A-Z0-9]{4}\s*$/gm)).toHaveLength(1);
+    expect(r.out + r.err).not.toMatch(/FULL ACCESS|pairing code|\[warn\]/i);
     expect(r.out + r.err).not.toContain('correct horse');
-    // The relay holds no pending candidacy any more, and the machine is bound to the machine token it got from the device login.
+    // The relay holds no pending candidacy any more.
     const pending = await relayGet('/api/machines/candidacies', w.relay.adminToken);
     expect(pending.status).toBe(200);
     expect(pending.body.candidacies).toEqual([]);
   });
 
-  it('the token saved by the full-access login is a full-access one for the real relay (it lists candidacies) and differs from the machine token', async () => {
+  it('the saved token is ONE token for relay.json and relay-admin.json, scoped ["machine-admin"] on the real relay: it lists candidacies, and it gets 403 on token management', async () => {
     const admin = JSON.parse(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')) as { token: string; label: string };
     const machine = JSON.parse(readFileSync(join(a, '_secrets_', 'relay.json'), 'utf8')) as { token: string; label: string };
-    expect(admin.token).not.toBe(machine.token);
-    expect(admin.label).toBe('machine admin on desktop');
-    expect(machine.label).not.toBe(admin.label);
+    expect(admin.token).toBe(machine.token);
+    expect(admin.label).toBe('desktop');
+    const whoami = await relayGet('/api/whoami', admin.token);
+    expect(whoami.body.scopes).toEqual(['machine-admin']);
+    // The admin calls of the machine network...
     expect((await relayGet('/api/machines/candidacies', admin.token)).status).toBe(200);
-    // The machine token cannot list candidacies.
-    expect((await relayGet('/api/machines/candidacies', machine.token)).status).toBe(403);
+    // ...and nothing on the management of tokens, pairings, device logins, key-value, audit (the scope is machine rights only).
+    for (const path of ['/api/tokens', '/api/device-login', '/api/key-value', '/api/audit-log']) {
+      const refused = await relayGet(path, admin.token);
+      expect(refused.status, path).toBe(403);
+    }
+    // The token never appears in what setup printed (checked above with the output) nor in a log file of this machine.
+    for (const file of ['logs']) {
+      if (existsSync(join(a, file))) for (const entry of readdirSync(join(a, file))) expect(readFileSync(join(a, file, entry), 'utf8')).not.toContain(admin.token);
+    }
   });
 
-  it('admin login with --force on the real relay: a second full-access request, the token is replaced', async () => {
+  it('admin login with --force on the real relay: a second machine-admin request ("desktop admin"), the admin token is replaced, the machine token stays', async () => {
     const before = readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8');
+    const machineBefore = readFileSync(join(a, '_secrets_', 'relay.json'), 'utf8');
     const refused = await w.run('desktop', a, ['admin', 'login']);
     expect(refused.code).toBe(1);
     expect(refused.err).toMatch(/already holds an admin relay token/);
     const r = await w.run('desktop', a, ['admin', 'login', '--force']);
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toContain('FULL ACCESS');
-    expect(r.out).toMatch(/\[ok\] admin token "machine admin on desktop[^"]*" saved for /);
+    expect(r.out).toContain('MACHINE ADMIN');
+    expect(r.out).not.toContain('FULL ACCESS');
+    expect(r.out).toMatch(/marked MACHINE ADMIN/);
+    expect(r.out).toMatch(/\[ok\] admin token "desktop admin[^"]*" saved for /);
+    const after = JSON.parse(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')) as { token: string; label: string };
     expect(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')).not.toBe(before);
-    expect((await relayGet('/api/machines/candidacies', (JSON.parse(readFileSync(join(a, '_secrets_', 'relay-admin.json'), 'utf8')) as { token: string }).token)).status).toBe(200);
+    expect(readFileSync(join(a, '_secrets_', 'relay.json'), 'utf8')).toBe(machineBefore);
+    expect(after.label).toMatch(/^desktop admin/);
+    expect((await relayGet('/api/whoami', after.token)).body.scopes).toEqual(['machine-admin']);
+    expect((await relayGet('/api/machines/candidacies', after.token)).status).toBe(200);
   });
+
+  it('admin login --full-access on the real relay is the explicit opt-in: FULL ACCESS shown, a [warn], a full-access token (scopes null) that can manage tokens', async () => {
+    const adminFile = join(a, '_secrets_', 'relay-admin.json');
+    const keep = readFileSync(adminFile, 'utf8');
+    const r = await w.run('desktop', a, ['admin', 'login', '--full-access', '--force']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('FULL ACCESS');
+    expect(r.out).toMatch(/\[warn\] this admin token has FULL ACCESS: it can also manage tokens/);
+    const full = JSON.parse(readFileSync(adminFile, 'utf8')) as { token: string };
+    expect((await relayGet('/api/whoami', full.token)).body.scopes).toBeNull();
+    expect((await relayGet('/api/tokens', full.token)).status).toBe(200);
+    // Back to the machine-admin token for the rest of the story: the opt-in must not leak into it.
+    writeFileSync(adminFile, keep);
+  });
+
+  it('a decoy clicked in the console (one of the six codes, not the one the machine shows) denies the request on the real relay: join says so, nothing is saved; the same for the admin login of setup', async () => {
+    const decoyClick = async (out: string): Promise<void> => {
+      const shown = /^\s*([A-Z0-9]{4}-[A-Z0-9]{4})\s*$/m.exec(out)?.[1];
+      if (shown === undefined) throw new Error(`no code in:\n${out}`);
+      const list = await relayGet('/api/device-login', w.relay.adminToken);
+      const request = (list.body.requests as { id: string; choices: string[] }[]).find((r) => r.choices.includes(shown));
+      if (request === undefined) throw new Error(`the console does not list a request offering ${shown}: ${JSON.stringify(list.body)}`);
+      expect(request.choices).toHaveLength(6);
+      const decoy = request.choices.find((c) => c !== shown) as string;
+      const clicked = await fetch(`${w.relay.url}/api/device-login/${request.id}/approve`, { method: 'POST', headers: { authorization: `Bearer ${w.relay.adminToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ userCode: decoy }) });
+      expect([clicked.status, ((await clicked.json()) as { error: string }).error]).toEqual([409, 'request_denied']);
+    };
+    const joiner = w.machineDir('decoy-join');
+    let clicked = false;
+    const joined = await w.run('decoy', joiner, ['join', w.relay.url], {
+      hostname: 'Decoy',
+      approveDevice: false,
+      onWait: async (_n, out) => {
+        if (!clicked && /^\s*[A-Z0-9]{4}-[A-Z0-9]{4}\s*$/m.test(out)) {
+          clicked = true;
+          await decoyClick(out);
+        }
+      },
+    });
+    expect(joined.code).toBe(1);
+    expect(joined.err).toMatch(/the request was denied in the relay console \(a different code was clicked/);
+    expect(joined.err).toMatch(/click the code it shows/);
+    expect(existsSync(join(joiner, '_secrets_', 'relay.json'))).toBe(false);
+
+    const admin = w.machineDir('decoy-setup');
+    clicked = false;
+    const setup = await w.run('decoy2', admin, ['setup', w.relay.url], {
+      hostname: 'Decoy2',
+      visible: [''],
+      approveDevice: false,
+      onWait: async (_n, out) => {
+        if (!clicked && /^\s*[A-Z0-9]{4}-[A-Z0-9]{4}\s*$/m.test(out)) {
+          clicked = true;
+          await decoyClick(out);
+        }
+      },
+    });
+    expect(setup.code).toBe(1);
+    expect(setup.err).toMatch(/a different code was clicked/);
+    expect(setup.err).toMatch(/run `machine setup` again/);
+    for (const file of ['relay.json', 'relay-admin.json']) expect(existsSync(join(admin, '_secrets_', file))).toBe(false);
+    const pending = await relayGet('/api/machines/candidacies', w.relay.adminToken);
+    expect(pending.body.candidacies).toEqual([]);
+  });
+
   it('status and list of the first machine: enrolled, no peer, itself in the list', async () => {
     const status = JSON.parse((await w.run('desktop', a, ['status', '--json'])).out) as { enrolled: boolean; peers: number; problems: unknown[] };
     expect(status).toMatchObject({ enrolled: true, peers: 0, problems: [] });
@@ -176,5 +258,16 @@ describe('onboarding with the real relay', () => {
     expect(r.out).toContain('laptop');
     expect(r.out).toMatch(/127\.0\.0\.1:\d+/);
     expect(r.out).toMatch(/online/);
+  });
+
+  it('the machine-admin token held by the first machine (and read by its daemon) sits in relay.json only: not in any other file, daemon log line, command output or error', async () => {
+    const token = (JSON.parse(readFileSync(join(a, '_secrets_', 'relay.json'), 'utf8')) as { token: string }).token;
+    const filesUnder = (from: string): string[] => readdirSync(from, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(from, e.name)) : [join(from, e.name)]));
+    const holders = filesUnder(a).filter((file) => readFileSync(file, 'utf8').includes(token));
+    // relay-admin.json holds the token of the later `admin login --force`, a different one: only relay.json may hold this token.
+    expect(holders.map((f) => f.slice(a.length + 1).replace(/\\/g, '/'))).toEqual(['_secrets_/relay.json']);
+    expect(w.daemonLog.length).toBeGreaterThan(0);
+    expect(w.daemonLog.join('\n')).not.toContain(token);
+    for (const entry of w.transcript) expect(`${entry.out}\n${entry.err}\n${entry.asked.join('\n')}`, entry.command).not.toContain(token);
   });
 });

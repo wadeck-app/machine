@@ -1,25 +1,25 @@
 # Getting started
 
-**Version:** v0.4 (2026-11-15). Implements decisions 51 to 58. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
+**Version:** v0.5 (2026-11-15). Implements decisions 51 to 59. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
 
 ## Commands per case
 
 | Case | Commands | Human steps |
 |---|---|---|
-| First machine (also the admin) | `machine setup <relay>` | choose the admin passphrase (typed twice, asked again after a typo, 3 attempts) and an optional hint; type the full-access login code in the relay console (step 1, FULL ACCESS); type the relay login code in the relay console (step 2) |
+| First machine (also the admin) | `machine setup <relay>` | choose the admin passphrase (typed twice, asked again after a typo, 3 attempts) and an optional hint; confirm the relay login code in the relay console, once (MACHINE ADMIN: can approve machines, cannot manage tokens) |
 | Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | type the relay login code on the relay page; on the admin machine: y/N and the passphrase; on both machines: compare the security code |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
 | Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
 
-The relay is named once (`<relay>` is a host or URL), then stored. A machine that holds the admin key and runs `machine join <relay>` approves itself (needs `machine admin login` first, or use `setup`).
+The relay is named once (`<relay>` is a host or URL), then stored. A machine that holds the admin key and runs `machine join <relay>` approves itself (needs `machine admin login` first, or use `setup`). The token of `setup` is the machine token AND the admin token of the first machine (one file content in `relay.json` and `relay-admin.json`); `machine admin login` on another machine adds `<name> admin`. A relay without the `machine-admin` scope fails loudly: update it; `machine admin login --full-access` (a full-access token that can also manage tokens) is the explicit opt-in.
 
 ## The codes (decision 55)
 
 | Code | Looks like | Where it comes from | What you do with it |
 |---|---|---|---|
-| Full-access login code | `KLMN-PQ23` | printed by `setup` and `machine admin login` with the words FULL ACCESS (approving a machine needs a full-access relay token; machines themselves only get a limited one) | type it in the relay console (Tokens page lists the request "machine admin on <name>"): nothing to copy |
-| Relay login code | `X35M-M87M` | printed by `join` and `setup` | type it in the relay console: it only gives this machine access to the relay |
-| Pairing code | 8 digits | relay console, Tokens, Add token, WITHOUT "Limited to scopes" | only for scripts (`machine admin login <code>`) and for a relay that predates the full-access login (`[warn]` line, then it is asked) |
+| Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | click the same code among the six the relay console shows (Tokens page lists the request "<name>" or "<name> admin"; a different code denies the request and you run the command again): nothing to copy |
+| Relay login code (machine) | `X35M-M87M` | printed by `join` | type it in the relay console: it only gives this machine access to the relay |
+| Pairing code | 8 digits | relay console, Tokens, Add token, "Limited to scopes", machine-admin | only for scripts (`machine admin login <code>`); with `--full-access` on a relay that predates the full-access login (`[warn]` line, then it is asked, WITHOUT "Limited to scopes") |
 | Security code | `31447 56532 70010 53274 49389` | printed on the admin machine after it signs, and on the new machine | compare the two: it must read exactly the same on both. If not, `machine admin revoke <name>` |
 
 The candidacy code (base32, `XXXX-XXXX-XXXX-XXXX`) is internal: the admin machine recomputes and checks it, nothing to compare. `--verbose` (join, setup, admin approve) and `--json` show it.

@@ -77,9 +77,10 @@ afterEach(async () => {
 });
 
 describe('machine admin login', () => {
-  it('claims a full-access pairing, stores the token privately, never prints it', async () => {
+  it('claims a pairing (here a full-access one, legacy), stores the token privately, never prints it, warns that it can manage tokens', async () => {
     const r = await login();
     expect(r.code, r.err).toBe(0);
+    expect(r.err).toContain('[warn] this admin token has FULL ACCESS');
     const stored = readRelayAdminConfig(adminDir);
     expect(stored?.token).toBe(relay.adminToken);
     expect(stored?.relayUrl).toBe(relay.url);
@@ -97,10 +98,11 @@ describe('machine admin login', () => {
     relay = await startFakeRelay({ adminScopes: ['machine'] });
     const r = await login();
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/limited to scopes/);
-    expect(r.err).toMatch(/WITHOUT "Limited to scopes"/);
-    // The reason comes with the click path: the admin is told WHY a full-access token is needed.
-    expect(r.err).toMatch(/approving a machine needs a full-access relay token \(the machines themselves only get a limited one\)/);
+    expect(r.err).toMatch(/whose scopes are \["machine"\]/);
+    expect(r.err).toMatch(/Add token, "Limited to scopes", machine-admin/);
+    // The reason comes with the click path: the admin is told WHICH scope is needed.
+    expect(r.err).toMatch(/needs exactly \["machine-admin"\], or full access/);
+    expect(r.err).not.toMatch(/WITHOUT/);
     expect(r.err).toMatch(/NOT saved/);
     expect(existsSync(relayAdminFile(adminDir))).toBe(false);
     noToken(r.out, r.err);
@@ -133,10 +135,10 @@ describe('machine admin login', () => {
     expect(existsSync(join(cand, '_secrets_', 'relay.json'))).toBe(false);
   });
 
-  it('a relay that predates the full-access login and no terminal: usage error naming both ways', async () => {
+  it('--full-access on a relay that predates the full-access login and no terminal: usage error naming both ways', async () => {
     await relay.close();
     relay = await startFakeRelay({ fullLogin: 'rejects' });
-    const r = await cli(adminDir, ['admin', 'login', '--relay', relay.url], async () => {
+    const r = await cli(adminDir, ['admin', 'login', '--full-access', '--relay', relay.url], async () => {
       throw new Error('no tty');
     });
     expect(r.code).toBe(2);
@@ -166,8 +168,10 @@ describe('machine admin approve: preconditions', () => {
     writeRelayAdminConfig(adminDir, { relayUrl: relay.url, token: relay.token, label: 'x', claimedAt: new Date().toISOString() }, false);
     const r = await approve();
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/not a full-access token/);
+    expect(r.err).toMatch(/is a plain machine token/);
+    expect(r.err).toMatch(/machine admin login --force/);
     expect(r.err).toMatch(/machine admin login <code> --force/);
+    expect(r.err).toMatch(/MACHINE ADMIN/);
     noToken(r.out, r.err);
   });
 

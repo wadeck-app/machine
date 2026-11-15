@@ -1,4 +1,4 @@
-import { adminLoginFix, capitalized, FULL_ACCESS_WHY } from './fullAccess.js';
+import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './fullAccess.js';
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
@@ -20,11 +20,11 @@ import { readRelayAdminConfig, readRelayConfig, relayAdminFile, writeRelayAdminC
 
 const MAX_APPROVAL_BYTES = 16 * 1024;
 
-// ---- admin login: the full-access token of the relay console ----
+// ---- admin login: the admin token of the relay (machine-admin scope) ----
 
 /** The one missing step, with the exact command: the admin token is a human step in the relay console (decision 50). */
 export function missingAdminTokenMessage(configDir: string, relayUrl?: string): string {
-  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${FULL_ACCESS_WHY}. ${capitalized(adminLoginFix({ relay: relayUrl ?? '<relay-host>' }))}`;
+  return `no admin relay token on this machine (${relayAdminFile(configDir)} does not exist): ${ADMIN_TOKEN_WHY}. ${capitalized(adminLoginFix({ relay: relayUrl ?? '<relay-host>' }))}`;
 }
 
 export interface AdminLoginOptions {
@@ -37,24 +37,25 @@ export interface AdminLoginOptions {
 }
 
 /**
- * Claim a pairing code that gives a FULL-ACCESS token (the opposite of `join`, which refuses one) and store it in
- * `_secrets_/relay-admin.json`. A machine-scoped token is refused by the client: it could neither list nor decide.
+ * Claim a pairing code that gives an admin token (scopes ["machine-admin"], or full access: the opposite of `join`, which refuses both) and store
+ * it in `_secrets_/relay-admin.json`. A plain machine token is refused by the client: it could neither list nor decide. `scopes` is null for a
+ * full-access token, which the caller must warn about.
  */
-export async function adminLogin(configDir: string, options: AdminLoginOptions): Promise<{ relayUrl: string; label: string }> {
+export async function adminLogin(configDir: string, options: AdminLoginOptions): Promise<{ relayUrl: string; label: string; scopes: string[] | null }> {
   const relayUrl = normalizeRelayUrl(options.relayUrl);
   // Before the one-shot code is spent.
   if (readRelayAdminConfig(configDir) !== undefined && !options.force) {
     throw new Error(`this machine already holds an admin relay token (${relayAdminFile(configDir)}): pass --force with a new pairing code to replace it (the old token is then forgotten, not revoked: revoke it in the relay console)`);
   }
   const client = options.client ?? createRelayClient({ baseUrl: relayUrl });
-  const claimed = await client.claimPairing(options.code, 'full');
+  const claimed = await client.claimPairing(options.code, 'admin');
   const claimedAt = (options.now?.() ?? new Date()).toISOString();
   try {
     writeRelayAdminConfig(configDir, { relayUrl, token: claimed.token, label: claimed.label, claimedAt }, options.force);
   } catch (e) {
     throw new Error(`the pairing code was claimed but the token could not be saved (${(e as Error).message}): the code is used up and the token is lost; revoke it in the relay console and open a new pairing`);
   }
-  return { relayUrl, label: claimed.label };
+  return { relayUrl, label: claimed.label, scopes: claimed.scopes };
 }
 
 // ---- reviewing what the relay lists ----

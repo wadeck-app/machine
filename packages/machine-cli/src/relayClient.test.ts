@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
-import { createRelayClient, FullAccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
+import { createRelayClient, AccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -386,62 +386,155 @@ describe('device login', () => {
   });
 });
 
-describe('device login, full access (machine admin login)', () => {
-  const startedFull = { success: true, access: 'full', deviceCode: 'D'.repeat(43), userCode: 'KLMN-PQ23', expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: 'https://relay.example/device' };
+describe('device login with an admin access (machine setup, machine admin login)', () => {
+  const startedAs = (access: string | undefined) => ({ success: true, access, deviceCode: 'D'.repeat(43), userCode: 'ADMN-7K42', expiresIn: 300, pollIntervalSeconds: 3, verificationUrl: 'https://relay.example/device' });
+  const delivered = (extra: Record<string, unknown>) => ({ status: 'approved', token: 'SECRET-DELIVERED', label: 'desk admin', ...extra });
+  const refused = (what: string, e: RelayError) => {
+    expect(e.message, what).toMatch(/NOT saved/);
+    expect(e.message, what).not.toContain('SECRET-DELIVERED');
+    expect(e.message, what).not.toContain('DEVICE-SECRET');
+    // The token already exists on the relay: the admin is told which one to revoke.
+    expect(e.message, what).toMatch(/revoke "desk admin"/i);
+  };
 
-  it('start asks for access "full" in the body; a machine start sends the label only (unchanged for every relay)', async () => {
+  it('start puts the asked access in the body (machine-admin, full); a machine start sends the label only (unchanged for every relay)', async () => {
     const bodies: unknown[] = [];
     const client = createRelayClient({
       baseUrl: 'https://relay.example',
       fetch: (async (_url: string, init: RequestInit) => {
-        bodies.push(JSON.parse(init.body as string));
-        return json(201, startedFull);
+        const body = JSON.parse(init.body as string) as { access?: string };
+        bodies.push(body);
+        return json(201, startedAs(body.access));
       }) as unknown as typeof fetch,
     });
-    expect((await client.deviceLoginStart('machine admin on desk', 'full')).access).toBe('full');
+    expect((await client.deviceLoginStart('desk admin', 'machine-admin')).access).toBe('machine-admin');
+    expect((await client.deviceLoginStart('desk admin', 'full')).access).toBe('full');
     await client.deviceLoginStart('desk');
-    expect(bodies).toEqual([{ label: 'machine admin on desk', access: 'full' }, { label: 'desk' }]);
+    expect(bodies).toEqual([{ label: 'desk admin', access: 'machine-admin' }, { label: 'desk admin', access: 'full' }, { label: 'desk' }]);
   });
 
-  it('an older relay answering 400 invalid_body to the access field: a dedicated error that says what to do', async () => {
-    const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'unexpected field' })).deviceLoginStart('machine admin on desk', 'full'));
-    expect(e).toBeInstanceOf(FullAccessLoginUnsupportedError);
+  it('a relay older than the machine-admin scope (400 invalid_body): a dedicated error naming the scope, the relay commit, the fix; nothing falls back to full access', async () => {
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'access must be "machine" (default) or "full"' })).deviceLoginStart('desk admin', 'machine-admin'));
+    expect(e).toBeInstanceOf(AccessLoginUnsupportedError);
+    expect((e as AccessLoginUnsupportedError).access).toBe('machine-admin');
+    expect((e as AccessLoginUnsupportedError).pendingRequest).toBe(false);
+    expect(e.message).toMatch(/predates the `machine-admin` scope \(poc-node 78fe5b2\)/);
+    expect(e.message).toMatch(/update and redeploy it/);
+    expect(e.message).toMatch(/nothing was stored/i);
+    expect(e.message).toMatch(/no full-access token was requested/);
+  });
+
+  it('a relay older than the full-access login (400 invalid_body): the same error type for access full, pointing at the pairing code', async () => {
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'invalid_body', message: 'unexpected field' })).deviceLoginStart('desk admin', 'full'));
+    expect(e).toBeInstanceOf(AccessLoginUnsupportedError);
+    expect((e as AccessLoginUnsupportedError).access).toBe('full');
     expect(e.message).toMatch(/does not support the full-access login yet/);
     expect(e.message).toMatch(/pairing code/);
   });
 
   it('a 400 of another kind stays a plain error', async () => {
-    const e = await failure(clientWith(() => json(400, { success: false, error: 'something_else', message: 'x' })).deviceLoginStart('machine admin on desk', 'full'));
-    expect(e).not.toBeInstanceOf(FullAccessLoginUnsupportedError);
+    const e = await failure(clientWith(() => json(400, { success: false, error: 'something_else', message: 'x' })).deviceLoginStart('desk admin', 'machine-admin'));
+    expect(e).not.toBeInstanceOf(AccessLoginUnsupportedError);
   });
 
-  it.each([[{ ...startedFull, access: 'machine' }], [{ ...startedFull, access: undefined }]])('a start answer that does not say access "full" is an older relay: refused, and the pending request is named', async (answer) => {
-    const e = await failure(clientWith(() => json(201, answer)).deviceLoginStart('machine admin on desk', 'full'));
-    expect(e).toBeInstanceOf(FullAccessLoginUnsupportedError);
-    expect(e.message).toMatch(/MACHINE login|machine login/);
-    expect(e.message).toMatch(/deny|Deny/);
+  it.each([
+    ['machine-admin', 'machine'],
+    ['machine-admin', undefined],
+    ['full', 'machine'],
+    ['full', undefined],
+  ] as const)('asked %s, the start answer says %s: an older relay started a MACHINE login, refused, the pending request is named', async (asked, said) => {
+    const e = await failure(clientWith(() => json(201, startedAs(said))).deviceLoginStart('desk admin', asked));
+    expect(e).toBeInstanceOf(AccessLoginUnsupportedError);
+    expect((e as AccessLoginUnsupportedError).pendingRequest).toBe(true);
+    expect(e.message).toMatch(/MACHINE login/);
+    expect(e.message).toMatch(/deny the request "desk admin"/i);
   });
 
-  it('poll for full access: accepts access "full" with scopes null', async () => {
-    const r = await clientWith(() => json(200, { status: 'approved', token: 'T', label: 'machine admin on desk', access: 'full', scopes: null })).deviceLoginPoll('x', 'full');
-    expect(r).toEqual({ status: 'approved', token: 'T', label: 'machine admin on desk', scopes: null });
+  it('asked machine-admin, the start answer says full: refused (the console would show a FULL ACCESS request that nobody asked for)', async () => {
+    const e = await failure(clientWith(() => json(201, startedAs('full'))).deviceLoginStart('desk admin', 'machine-admin'));
+    expect(e).toBeInstanceOf(AccessLoginUnsupportedError);
+    expect(e.message).toMatch(/deny the request "desk admin"/i);
+  });
+
+  it('poll for machine-admin: accepts access "machine-admin" with scopes exactly ["machine-admin"]', async () => {
+    const r = await clientWith(() => json(200, delivered({ access: 'machine-admin', scopes: ['machine-admin'] }))).deviceLoginPoll('x', 'machine-admin');
+    expect(r).toEqual({ status: 'approved', token: 'SECRET-DELIVERED', label: 'desk admin', scopes: ['machine-admin'] });
   });
 
   it.each([
     ['a machine token', { access: 'machine', scopes: ['machine'] }],
-    ['no access field', { scopes: null }],
-    ['access full with scopes', { access: 'full', scopes: ['machine'] }],
-  ])('poll for full access: refuses %s, never shows it, says the relay is older', async (_name, extra) => {
-    const e = await failure(clientWith(() => json(200, { status: 'approved', token: 'SECRET-DELIVERED', label: 'x', ...extra })).deviceLoginPoll('DEVICE-SECRET', 'full'));
-    expect(e.message).toMatch(/NOT saved/);
-    expect(e.message).toMatch(/older|not support/);
-    expect(e.message).not.toContain('SECRET-DELIVERED');
-    expect(e.message).not.toContain('DEVICE-SECRET');
+    ['a full-access token', { access: 'full', scopes: null }],
+    ['no access field', { scopes: ['machine-admin'] }],
+    ['access machine-admin with scopes null', { access: 'machine-admin', scopes: null }],
+    ['access machine-admin with the machine scope only', { access: 'machine-admin', scopes: ['machine'] }],
+    ['access machine-admin with more scopes', { access: 'machine-admin', scopes: ['machine-admin', 'queue'] }],
+    ['access machine-admin with no scopes field', { access: 'machine-admin' }],
+  ])('poll for machine-admin: refuses %s, never shows it, names the cause and the token to revoke', async (name, extra) => {
+    const e = await failure(clientWith(() => json(200, delivered(extra))).deviceLoginPoll('DEVICE-SECRET', 'machine-admin'));
+    refused(name, e);
+    expect(e.message).toMatch(/machine-admin/);
   });
 
-  it('poll for a machine login refuses a full-access token even when it says access "machine"', async () => {
-    const e = await failure(clientWith(() => json(200, { status: 'approved', token: 'T', label: 'x', access: 'machine', scopes: null })).deviceLoginPoll('x'));
+  it.each(['machine', 'machine-admin'] as const)('poll for %s: a 409 request_denied (a decoy was clicked) is the status denied, not a crash', async (access) => {
+    const r = await clientWith(() => json(409, { success: false, error: 'request_denied', message: 'You picked a code the machine does not show' })).deviceLoginPoll('x', access);
+    expect(r).toEqual({ status: 'denied' });
+  });
+
+  it('poll for full access: accepts access "full" with scopes null', async () => {
+    const r = await clientWith(() => json(200, delivered({ access: 'full', scopes: null }))).deviceLoginPoll('x', 'full');
+    expect(r).toEqual({ status: 'approved', token: 'SECRET-DELIVERED', label: 'desk admin', scopes: null });
+  });
+
+  it.each([
+    ['a machine token', { access: 'machine', scopes: ['machine'] }],
+    ['a machine-admin token', { access: 'machine-admin', scopes: ['machine-admin'] }],
+    ['no access field', { scopes: null }],
+    ['access full with scopes', { access: 'full', scopes: ['machine'] }],
+  ])('poll for full access: refuses %s, never shows it, names the cause and the token to revoke', async (name, extra) => {
+    const e = await failure(clientWith(() => json(200, delivered(extra))).deviceLoginPoll('DEVICE-SECRET', 'full'));
+    refused(name, e);
+  });
+
+  it.each([
+    ['a machine-admin token', { access: 'machine-admin', scopes: ['machine-admin'] }],
+    ['a full-access token that says machine', { access: 'machine', scopes: null }],
+    ['a full-access token that says full', { access: 'full', scopes: null }],
+    ['a token with other scopes', { access: 'machine', scopes: ['machine', 'queue'] }],
+  ])('poll for a machine login: refuses %s (a machine join never stores more than ["machine"])', async (_name, extra) => {
+    const e = await failure(clientWith(() => json(200, delivered(extra))).deviceLoginPoll('x'));
     expect(e.message).toMatch(/NOT saved/);
+    expect(e.message).not.toContain('SECRET-DELIVERED');
+  });
+
+  it('poll for a machine login still accepts the answer of a relay that predates the access field (no access, scopes ["machine"])', async () => {
+    const r = await clientWith(() => json(200, delivered({ scopes: ['machine'] }))).deviceLoginPoll('x');
+    expect(r).toMatchObject({ status: 'approved', scopes: ['machine'] });
+  });
+});
+
+describe('pairing claim for the admin (machine admin login <code>)', () => {
+  const claimed = (scopes: unknown) => json(200, { success: true, token: 'SECRET-CLAIMED', label: 'admin-pairing', scopes });
+
+  it('accepts a token limited to ["machine-admin"] (preferred) and returns its scopes', async () => {
+    expect(await clientWith(() => claimed(['machine-admin'])).claimPairing('12345678', 'admin')).toEqual({ token: 'SECRET-CLAIMED', label: 'admin-pairing', scopes: ['machine-admin'] });
+  });
+
+  it('accepts a full-access token (legacy) and says so in the returned scopes (null): the caller warns', async () => {
+    expect((await clientWith(() => claimed(null)).claimPairing('12345678', 'admin')).scopes).toBeNull();
+  });
+
+  it.each([[['machine']], [['queue']], [['machine', 'machine-admin']], [[]]])('refuses scopes %j: it could not list or decide, NOT saved, the fix is named', async (scopes) => {
+    const e = await failure(clientWith(() => claimed(scopes)).claimPairing('12345678', 'admin'));
+    expect(e.message).toMatch(/NOT saved/);
+    expect(e.message).toMatch(/machine-admin/);
+    expect(e.message).not.toContain('SECRET-CLAIMED');
+  });
+
+  it('a machine join still refuses an admin or full-access token', async () => {
+    for (const scopes of [['machine-admin'], null]) {
+      const e = await failure(clientWith(() => claimed(scopes)).claimPairing('12345678'));
+      expect(e.message).toMatch(/NOT saved/);
+    }
   });
 });
 
@@ -498,19 +591,22 @@ describe('inbox (documents distributed through the relay)', () => {
     expect(r.requests.filter((q) => q.method === 'GET' && q.path.endsWith('/inbox')).length).toBe(3);
   });
 
-  it('a machine token cannot PUT: scope_denied (403), explained as needing a full-access token', async () => {
+  it('a machine token cannot PUT: full_access_required (403), explained with the machine-admin story and the command', async () => {
     const { machine } = await clients();
     const e = await failure(machine.putInboxDocument(TO, doc(1)));
     expect(e.status).toBe(403);
-    expect(e.code).toBe('scope_denied');
-    expect(e.message).toMatch(/full-access token/);
+    expect(e.code).toBe('full_access_required');
+    expect(e.message).toMatch(/plain machine token/);
+    expect(e.message).toMatch(/machine admin login/);
+    expect(e.message).toMatch(/machine-admin/);
+    expect(e.message).not.toMatch(/FULL ACCESS|WITHOUT/);
   });
 
   it('a token that does not own the inbox gets not_owner on list and delete, with the fix', async () => {
     const { relay: r, machine } = await clients();
     r.setOwner(TO, 'another-token');
-    for (const call of [machine.listInbox(TO), machine.deleteInboxDocument(TO, idOf(1))]) {
-      const e = await failure(call);
+    for (const call of [() => machine.listInbox(TO), () => machine.deleteInboxDocument(TO, idOf(1))]) {
+      const e = await failure(call());
       expect(e.status).toBe(403);
       expect(e.code).toBe('not_owner');
       expect(e.message).toMatch(/does not own the inbox/);
@@ -552,7 +648,7 @@ describe('inbox (documents distributed through the relay)', () => {
     const { relay: r, machine, admin } = await clients();
     r.setOwner(TO, r.token);
     await admin.putInboxDocument(TO, doc(1));
-    expect((await failure(machine.deleteMachine(TO))).code).toBe('scope_denied');
+    expect((await failure(machine.deleteMachine(TO))).code).toBe('full_access_required');
     await admin.deleteMachine(TO);
     expect(r.inbox(TO)).toEqual([]);
     await admin.deleteMachine(TO);

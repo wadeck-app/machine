@@ -30,7 +30,7 @@ export interface RunOptions {
   visible?: string[];
   /** What the person does while the command waits (each pause of a wait): `n` counts from 1, `out` is what was printed so far. */
   onWait?: (n: number, out: string) => Promise<void>;
-  /** Approve every device login (machine or full access) in the relay console as soon as its code is printed (default true). */
+  /** Approve every device login (machine, machine-admin or full access) in the relay console as soon as its code is printed (default true). */
   approveDevice?: boolean;
   hostname?: string;
   /** Wait times are fake: this is how far the CLI believes time went when it decides about timeouts. Default: nothing. */
@@ -107,7 +107,7 @@ export async function startWorld(name: string, relayOptions: { maxMachinesPerTok
     let err = '';
     const asked: string[] = [];
     const visible = [...(o.visible ?? [])];
-    // The codes the person already typed in the console (setup shows two, one after the other: the admin login, then the machine login).
+    // The codes the person already confirmed in the console (setup shows one: the machine-admin login).
     const approvedCodes = new Set<string>();
     let slept = 0;
     let t = Date.now();

@@ -190,11 +190,11 @@ describe('admin commands: nothing is done when the person does not answer', () =
     expect(existsSync(out)).toBe(false);
   });
 
-  it('admin login without a code on a relay that predates the full-access login, pairing prompt open: nothing is claimed or stored', async () => {
+  it('admin login --full-access on a relay that predates the full-access login, pairing prompt open: nothing is claimed or stored', async () => {
     const old = await startFakeRelay({ fullLogin: 'rejects' });
     try {
       const t = fakePromptTimer();
-      const run = cli(a, ['admin', 'login', '--relay', old.url], hang, { promptTimer: t.timer });
+      const run = cli(a, ['admin', 'login', '--full-access', '--relay', old.url], hang, { promptTimer: t.timer });
       await vi.waitFor(() => expect(t.pending()).toBe(1));
       t.fire();
       const r = await run;

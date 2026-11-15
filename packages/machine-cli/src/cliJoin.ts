@@ -1,6 +1,5 @@
 import { AdminLoginInputError, adminLoginByConsole } from './adminDeviceLogin.js';
-import { adminLoginFix } from './fullAccess.js';
-import { existsSync } from 'node:fs';
+import { adminLoginFix } from './fullAccess.js';import { existsSync } from 'node:fs';
 import { adminInit, adminKeyFile, askAdminPassphrase, assertCanInitAdminKey, type Prompt } from './admin.js';
 import { missingAdminTokenMessage, runApprove } from './adminApprove.js';
 import { enableAfterJoin } from './cliStartup.js';
@@ -10,11 +9,12 @@ import { NotInitializedError } from './errors.js';
 import { ensureMachine, readMachine } from './identity.js';
 import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { PromptTimeoutError } from './prompt.js';
-import { normalizeRelayUrl, RelayError } from './relayClient.js';
+import { AccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
 import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 
 // `machine join` and `machine setup` (decision 53): one command per machine. The identity is created on the way; the machine that
-// holds the admin key approves its own enrollment; `setup` also creates the admin key and takes the full-access relay code.
+// holds the admin key approves its own enrollment; `setup` also creates the admin key and does ONE login in the relay console (decision 59): the
+// token of the machine-admin scope is the relay token of this machine AND its admin token (one confirmation, nothing to copy).
 
 /**
  * Create the admin key (decision 51): the passphrase is chosen at the hidden prompt (typed twice) or generated. The
@@ -64,7 +64,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     if (args.yesFinalCode !== undefined) return fail('--yes-final-code does not apply to `machine setup`: this machine created the admin key, there is no code to compare', EXIT.usage);
     if (rest[0] !== undefined) {
       const given = classifyJoinArgument(rest[0]);
-      if (given.kind === 'code') return fail('`machine setup` takes the relay, not a pairing code: it asks for the full-access login itself when it needs it (a request you confirm in the relay console) (`machine setup <relay-host>`)', EXIT.usage);
+      if (given.kind === 'code') return fail('`machine setup` takes the relay, not a pairing code: it asks for the relay login itself (one request you confirm in the relay console) (`machine setup <relay-host>`)', EXIT.usage);
       if (args.relay !== undefined) return fail(`the relay is given twice ("${rest[0]}" and --relay ${args.relay}): give it once`, EXIT.usage);
       relayUrl = given.relayUrl;
     }
@@ -121,7 +121,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const onSigint = () => controller.abort();
   const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
 
-  // `setup`: the admin key and the full-access relay token, when this machine has none yet. Both are kept on a re-run.
+  // `setup`: the admin key and the relay login, when this machine has none yet. Both are kept on a re-run.
   if (o.setup) {
     try {
       if (!existsSync(adminKeyFile(configDir))) {
@@ -133,7 +133,9 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         if (args.hint !== undefined) io.stderr('[warn] --hint ignored: the admin key already exists on this machine, its hint cannot change here\n\n');
       }
       if (readRelayAdminConfig(configDir) === undefined) {
-        // The full-access login: confirmed in the relay console by typing the code shown here (decision 58). A relay that predates it falls back, loudly, to a pairing code.
+        // ONE login confirmed in the relay console (decision 59): a token of the machine-admin scope. Without a relay token yet it is also this machine's
+        // relay token (relay.json), so the second login of the old flow is gone. A relay that predates the scope fails loudly, never falls back to full access.
+        const alsoMachineToken = readRelayConfig(configDir) === undefined;
         if (io.timing === undefined) process.once('SIGINT', onSigint);
         try {
           const login = await adminLoginByConsole(configDir, {
@@ -143,16 +145,23 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
             timing,
             say,
             restart: 'run `machine setup` again (what was created is kept)',
-            askPairingCode: () => o.ask('Full-access pairing code (8 digits): '),
+            asMachineToken: alsoMachineToken,
+            setup: true,
             ...(io.now ? { now: io.now } : {}),
           });
-          say(`[ok] admin token "${login.label}" saved for ${login.relayUrl}\n\n`);
+          say(
+            alsoMachineToken
+              ? `[ok] relay token "${login.label}" saved for ${login.relayUrl}: it is the token of this machine and its admin token (MACHINE ADMIN: it cannot manage tokens)\n\n`
+              : `[ok] admin token "${login.label}" saved for ${login.relayUrl} (MACHINE ADMIN: it cannot manage tokens)\n\n`,
+          );
         } finally {
           process.removeListener('SIGINT', onSigint);
         }
       }
     } catch (e) {
       if (e instanceof AdminLoginInputError) return fail(e.message, EXIT.usage);
+      // A relay that predates the scope: the message already names what to run next.
+      if (e instanceof AccessLoginUnsupportedError) return fail(`${e.message}. What was created (identity, admin key) is kept`);
       if (e instanceof RelayError) return fail(`${e.message}. Nothing else was done; run \`machine setup\` again (what was created is kept)`);
       throw e;
     }
@@ -167,7 +176,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       return fail(`this machine holds the admin key, so it approves its own enrollment, but one step is missing. ${missingAdminTokenMessage(configDir, effectiveRelay)}; then run \`machine ${args.resume ? 'join --resume' : `join${effectiveRelay !== undefined ? ` ${effectiveRelay}` : ''}`}\` again`);
     }
     if (effectiveRelay !== undefined && adminToken.relayUrl !== effectiveRelay) {
-      return fail(`the admin token of this machine belongs to ${adminToken.relayUrl}, not ${effectiveRelay}: join that relay, or ${adminLoginFix({ relay: effectiveRelay, force: true })} (a full-access login of ${effectiveRelay})`);
+      return fail(`the admin token of this machine belongs to ${adminToken.relayUrl}, not ${effectiveRelay}: join that relay, or ${adminLoginFix({ relay: effectiveRelay, force: true })} (an admin login of ${effectiveRelay})`);
     }
   }
 
@@ -178,6 +187,8 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     result = await runJoin(configDir, {
       ...(code !== undefined ? { code } : {}),
       resume: args.resume,
+      // `setup` saved the relay token of this machine (or an earlier run did): no second login.
+      ...(o.setup && readRelayConfig(configDir) !== undefined ? { useSavedToken: true } : {}),
       ...(relayUrl !== undefined ? { relayUrl } : {}),
       force: args.force,
       wait: !args.noWait,
@@ -192,7 +203,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       onPosted: (p) => {
         if (args.json && args.noWait) return;
         say(
-          `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}" (token "${p.label}" saved)\n` +
+          `[ok] ${p.resumed ? 'resuming on' : 'joined'} the relay ${p.relayUrl} as "${p.name}"${o.setup ? '' : ` (token "${p.label}" saved)`}\n` +
             // The machine that holds the admin key approves its own candidacy a moment later: the id and the expiry are noise there.
             (selfApproves ? '\n' : `Candidacy ${p.candidacyId} posted: it ${expiryText(p.expiresAt, epochSeconds())}.\n`) +
             (args.verbose && !selfApproves ? `Candidacy code (--verbose; the admin machine recomputes it itself, there is nothing to compare):\n\n  ${p.verificationCode}\n\n` : ''),
@@ -239,7 +250,9 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         : {}),
     });
   } catch (e) {
-    if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+    // `setup` keeps the relay token it saved: say so, the re-run reuses it (no second login).
+    const savedToken = o.setup && readRelayConfig(configDir) !== undefined ? '. The relay token of this machine is saved: run `machine setup` again, it is reused (no new login)' : '';
+    if (e instanceof RelayError || e instanceof NotInitializedError) return fail(`${e.message}${savedToken}`);
     throw e;
   } finally {
     process.removeListener('SIGINT', onSigint);

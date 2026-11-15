@@ -25,8 +25,8 @@ Usage: machine <command> [options]
 
 Getting started (one command per machine; the name of a machine is the computer name, lowercase):
   first machine (it also becomes the admin machine):
-    machine setup <relay>            creates the admin key (you choose its passphrase), does the full-access login and the
-                                     device login (you type each code in the relay console), approves itself and enrolls
+    machine setup <relay>            creates the admin key (you choose its passphrase), does ONE relay login (you confirm
+                                     it once in the relay console), approves itself and enrolls
   every other machine:
     machine join <relay>             on the new machine: waits for the admin and finishes by itself; shows the
                                      security code to compare with the admin machine
@@ -35,15 +35,16 @@ Getting started (one command per machine; the name of a machine is the computer 
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
   then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
-  Stays manual: the passphrase, the codes typed in the relay console (full-access login code, relay login code) and the security-code comparison (the human steps).
-  Three kinds of code, never mixed: the relay login codes (XXXX-XXXX, shown here, typed in the relay console), the pairing code (8
-  digits, shown by the relay console: scripts, or a relay without the full-access login) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
+  Stays manual: the passphrase, the one confirmation in the relay console (relay login code) and the security-code comparison (the human steps).
+  Three kinds of code, never mixed: the relay login codes (XXXX-XXXX, shown here, confirmed in the relay console), the pairing code (8
+  digits, shown by the relay console: scripts) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
 
 Commands:
   setup <relay> [--generate] [--hint <text>] [--name <name>] [--auto-startup]
                                      the first machine in one command: identity (name from the computer name), admin key
-                                     (passphrase typed twice, or --generate for a random one), the full-access login
-                                     (a request you confirm in the relay console, kept for next time), device login, self-approval
+                                     (passphrase typed twice, or --generate for a random one), ONE relay login (a request you
+                                     confirm in the relay console: MACHINE ADMIN, it can approve machines and cannot manage tokens;
+                                     the token is both the relay token of this machine and its admin token), self-approval
                                      (the passphrase just chosen signs it) and enrollment. Run it again after an interruption:
                                      what exists is kept. Other machines never create an admin key: they use join
   init [--name <name>]               create this machine's UUID and identity key only (optional: setup and join do it). The
@@ -119,11 +120,13 @@ Commands:
                                      the daemon when it runs an older version (run it yourself when the updater says so)
 
 Administration (enrollment through the relay, or by files):
-  admin login [<code>] [--relay <url>] [--force]
-                                     without a code: FULL-ACCESS login, shows a code to type in the relay console (Tokens page)
-                                     and keeps the token in _secrets_/relay-admin.json; a relay that predates it falls back
-                                     to a pairing code, with a [warn] line. With a code: claims a FULL-ACCESS pairing code
-                                     of the relay console (scripts). A machine-scoped token is refused either way
+  admin login [<code>] [--relay <url>] [--force] [--full-access]
+                                     without a code: shows a code to confirm in the relay console (Tokens page; MACHINE ADMIN:
+                                     can approve machines, cannot manage tokens) and keeps the token in _secrets_/relay-admin.json;
+                                     a relay that predates the machine-admin scope fails loudly (update it), nothing falls back to
+                                     full access by itself. --full-access: the explicit opt-in to a FULL-ACCESS token (it can also
+                                     manage tokens; a [warn] says so). With a code: claims a pairing code of the relay console
+                                     (scripts; Tokens, Add token, Limited to scopes: machine-admin). A plain machine token is refused
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
                                      without id: no pending candidacy says so; exactly ONE goes straight to its details; several are listed
                                      (id, name, host, address, age) and you pass the id;
@@ -209,7 +212,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -229,6 +232,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--no-wait') out.noWait = true;
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
+    else if (a === '--full-access') out.fullAccess = true;
     else if (a === '--quiet') out.quiet = true;
     else if (a === '--verbose') out.verbose = true;
     else if (a === '--generate') out.generate = true;
@@ -353,6 +357,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
+  if (args.fullAccess && !(command === 'admin' && rest[0] === 'login')) {
+    return fail('--full-access only applies to `machine admin login` (a FULL-ACCESS token, which can also manage tokens; without it the admin token is limited to machine rights)', EXIT.usage);
+  }
   if (args.autoStartup && command !== 'join' && command !== 'setup') return fail('--auto-startup only applies to `machine join` and `machine setup` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
 
   if (args.promptTimeout !== undefined) {

@@ -9,6 +9,7 @@ import { recordSignedPolicy, runAllow } from './adminAllow.js';
 import { enableAfterJoin } from './cliStartup.js';
 import { adminLogin, runApprove } from './adminApprove.js';
 import { adminLoginByConsole, AdminLoginInputError, adminLoginName } from './adminDeviceLogin.js';
+import { FULL_ACCESS_WARNING } from './fullAccess.js';
 import { runDistribute } from './adminDistribute.js';
 import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';
@@ -259,13 +260,16 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       return EXIT.ok;
     }
     if (sub === 'login') {
-      if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force]', EXIT.usage);
+      if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force] [--full-access]', EXIT.usage);
+      if (first !== undefined && args.fullAccess) return fail('--full-access only applies to the login you confirm in the relay console (`machine admin login --full-access`): a pairing code carries the access it was opened with', EXIT.usage);
       // No default relay: given with --relay, or the one of the saved admin token. Checked before a code is asked for.
       const adminRelay = args.relay ?? readRelayAdminConfig(configDir)?.relayUrl;
       if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login --relay <host-or-url>`, for example --relay https://relay.example.com (the relay is named once, then the stored one is reused)', EXIT.usage);
-      const finish = (r: { relayUrl: string; label: string }): number => {
+      // `warnFull`: the console login already said it (a [warn] line); the pairing code path says it here.
+      const finish = (r: { relayUrl: string; label: string; scopes: string[] | null }, warnFull: boolean): number => {
         if (!existsSync(adminKeyFile(configDir))) io.stderr('[warn] this machine has no admin key yet: run `machine admin init` before `machine admin approve`\n');
-        emit({ relayUrl: r.relayUrl, label: r.label }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}; next: \`machine admin approve\` lists the pending candidacies\n`);
+        if (r.scopes === null && warnFull) io.stderr(`${FULL_ACCESS_WARNING}\n`);
+        emit({ relayUrl: r.relayUrl, label: r.label, scopes: r.scopes }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}${r.scopes === null ? '' : ' (MACHINE ADMIN: it cannot manage tokens)'}; next: \`machine admin approve\` lists the pending candidacies\n`);
         return EXIT.ok;
       };
       try {
@@ -273,9 +277,9 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           // A code: the pairing path, kept for scripts and for relays that predate the confirm-only login.
           const code = first.trim();
           if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
-          return finish(await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force }));
+          return finish(await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force }), true);
         }
-        // No code: the admin confirms a request in the relay console (decision 58). Ctrl-C stops the wait cleanly.
+        // No code: the admin confirms a request in the relay console (decision 59). Ctrl-C stops the wait cleanly.
         const controller = new AbortController();
         const onSigint = () => controller.abort();
         if (io.timing === undefined) process.once('SIGINT', onSigint);
@@ -288,9 +292,10 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
             timing,
             say: args.json ? io.stderr : io.stdout,
             askPairingCode: () => prompt('Full-access pairing code (8 digits): '),
+            ...(args.fullAccess ? { access: 'full' as const } : {}),
             ...(io.now ? { now: io.now } : {}),
           });
-          return finish(r);
+          return finish(r, false);
         } finally {
           process.removeListener('SIGINT', onSigint);
         }

@@ -68,6 +68,8 @@ export interface Parsed {
   noWait: boolean;
   reject: boolean;
   autoStartup: boolean;
+  /** `machine admin login --full-access`: ask for a FULL-ACCESS token (it can also manage tokens) instead of a machine-admin one. An explicit opt-in. */
+  fullAccess: boolean;
   /** `--verbose` (join, setup, admin approve): also shows the candidacy code, which is internal by default (decision 55). */
   verbose: boolean;
   /** `machine cli self-check --quiet`. */

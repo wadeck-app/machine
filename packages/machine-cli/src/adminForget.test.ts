@@ -136,7 +136,8 @@ describe('machine admin forget-relay-record', () => {
     relay.force(`/api/machines/${uuidOf('laptop')}`, 403, { success: false, error: 'scope_denied', message: 'needs full access' }, {}, 'DELETE');
     const r = await cli(adminDir, ['admin', 'forget-relay-record', 'laptop'], undefined, { ask: yes });
     expect(r.code).toBe(1);
-    expect(r.err).toMatch(/full-access token/);
+    expect(r.err).toMatch(/plain machine token/);
+    expect(r.err).toMatch(/machine admin login/);
   });
 
   it('--json prints one JSON document', async () => {

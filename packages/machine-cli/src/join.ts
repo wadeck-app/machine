@@ -6,7 +6,7 @@ import { readMachine } from './identity.js';
 import { expiryText } from './humanTime.js';
 import { exportMachineInfo, type MachineInfo } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
-import { createRelayClient, normalizeRelayUrl, RelayError, type DeviceLoginPoll, type DeviceLoginStarted, type RelayClient } from './relayClient.js';
+import { createRelayClient, normalizeRelayUrl, RelayError, type DeviceAccess, type DeviceLoginPoll, type DeviceLoginStarted, type RelayClient } from './relayClient.js';
 import { deleteCandidacy, readCandidacy, readRelayConfig, relayFile, writeCandidacy, writeRelayConfig, candidacyFile, type CandidacyState } from './relayStore.js';
 
 export const DEFAULT_TIMEOUT_SECONDS = 15 * 60;
@@ -165,7 +165,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
   const started = await publicClient.deviceLoginStart(deviceLabel(info.name));
   const { userCode, verificationUrl } = started;
   say(
-    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl}. Type it on the relay page (it only gives this machine access to the relay, it is not the security code):
+    `Relay login code for "${deviceLabel(info.name)}" on ${relayUrl} (it only gives this machine access to the relay, it is not the security code):
 
 ` +
       `  ${printable(userCode)}
@@ -173,7 +173,9 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
 ` +
       `Relay page: ${printable(verificationUrl)}
 ` +
-      `Open it (any browser), check that the address and the label match this machine, and type the code there.
+      `Click the code ${printable(userCode)} in the relay console (the Tokens page lists the request "${deviceLabel(info.name)}", with six codes): it must be the same as this one. A different code denies the request.
+` +
+      `Check that the address and the label match this machine before you click.
 
 ` +
       `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).
@@ -197,7 +199,7 @@ export interface AwaitDeviceApprovalOptions {
   client: RelayClient;
   started: DeviceLoginStarted;
   /** The kind of token the caller agrees to store (the client refuses the other one). */
-  access: 'machine' | 'full';
+  access: DeviceAccess;
   timing: Timing;
   say: (text: string) => void;
   /** What to run to start over, for the end of every error ("run `machine join <relay>` again for a new code"). */
@@ -230,7 +232,7 @@ export async function awaitDeviceApproval(o: AwaitDeviceApprovalOptions): Promis
       const polled = await client.deviceLoginPoll(deviceCode, o.access);
       if (polled.status === 'approved') return polled;
       if (polled.status === 'denied') {
-        throw new Error(`the request was denied in the relay console: nothing was stored. If it was a mistake, ${restart}`);
+        throw new Error(`the request was denied in the relay console (a different code was clicked than the one shown here, or it was denied there): nothing was stored. If it was a mistake, ${restart}, and click the code it shows`);
       }
       if (polled.status === 'expired') {
         throw new Error(`the code ${printable(userCode)} expired (or was already used) before it was approved: nothing was stored: ${restart}`);
@@ -326,6 +328,12 @@ export interface FlowOptions {
   /** Pairing code. Absent: the relay token comes from a device login (or from the saved token with `resume`). */
   code?: string;
   resume: boolean;
+  /**
+   * `machine setup` found the relay token of this machine already saved (the login of the setup stored it, or an earlier run did): it is used
+   * as it is, no second login and no pairing code. A candidacy saved earlier is reused, else a new one is posted. Unlike `resume`, the output says
+   * "joined", not "resuming".
+   */
+  useSavedToken?: boolean;
   /** Absent: the relay of the saved token (resume only). There is no default relay: a first join must name it. */
   relayUrl?: string;
   force: boolean;
@@ -373,7 +381,7 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
   let state: CandidacyState;
   let resumed = false;
 
-  if (o.resume) {
+  if (o.resume || o.useSavedToken === true) {
     const config = readRelayConfig(configDir);
     if (config === undefined) {
       throw new Error(`no relay token on this machine (${relayFile(configDir)} does not exist): run \`machine join\` (device login, approved in the relay console) or \`machine join <code>\` with a pairing code from the admin`);
@@ -391,7 +399,7 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     } else {
       state = await postNewCandidacy(configDir, client, info, hostname);
     }
-    resumed = true;
+    resumed = o.resume;
   } else {
     const common = {
       relayUrl: o.relayUrl ?? noRelay(),
