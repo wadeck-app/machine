@@ -3,6 +3,7 @@ import type { PeerSession } from '@wadeck-app/machine-transport';
 import { clockText, whenText } from './humanTime.js';
 import { AllAddressesFailedError, describeAddress, PeerAddressError } from './peerAddresses.js';
 import type { Connected, PeerTarget } from './peerConnect.js';
+import { WakeError, type WakeSummary } from './wakeConnect.js';
 import { RelayError, type RelayClient } from './relayClient.js';
 import type { RelayConfig } from './relayStore.js';
 import type { CatchUpReport } from './revocationSync.js';
@@ -261,8 +262,10 @@ export interface PeerPingReport {
   /** Always false: no command goes over a ping. */
   executed: false;
   peer: { name: string; uuid: string; registrationSerial?: number; adminKeyId?: string; registrationValidTo?: number };
-  target?: { source: 'override' | 'relay'; addresses: string[]; refused: string[]; online?: boolean; lastSeen?: number | null; seq?: number; issuedAt?: number };
+  target?: { source: 'override' | 'pinned' | 'relay'; addresses: string[]; refused: string[]; online?: boolean; lastSeen?: number | null; seq?: number; issuedAt?: number };
   rounds: PingRound[];
+  /** Present when this ping woke the peer (`--wake` or a configured type). */
+  wake?: WakeSummary;
   summary: { sent: number; ok: number; failed: number; handshake?: SampleSummary; hello?: SampleSummary };
   warnings: string[];
   error?: string;
@@ -312,6 +315,8 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
   const list = target.addresses.map(addressText).join(', ');
   if (target.source === 'override') {
     deps.say(`[ok] address: --address ${list} (the relay was not asked)`);
+  } else if (target.source === 'pinned') {
+    deps.say(`[ok] address: pinned ${list} (connections.json, \`machine peer connect ${deps.name} --show\`; the relay was not asked)`);
   } else {
     const published = target.issuedAt === undefined ? '' : `, published ${whenText(target.issuedAt, now)}`;
     const presence = target.online === undefined ? '' : `; the relay says ${target.online ? 'online' : 'offline'}${typeof target.lastSeen === 'number' ? `, last seen ${whenText(target.lastSeen, now)}` : ''}`;
@@ -363,6 +368,10 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
         round.attempts = e.attempts.map((a) => ({ address: addressText(a.address), reason: explainConnectFailure(a.reason, a.address, deps.name) }));
         deps.say(`[fail] ${label}: no address of "${deps.name}" answered (${e.attempts.length} tried):`);
         for (const a of round.attempts) deps.say(`[fail]   ${a.address}: ${a.reason}`);
+      } else if (e instanceof WakeError) {
+        // Already complete (cause, numbers and fixes): explaining it as a connection failure would add a wrong cause.
+        round.error = e.message;
+        deps.say(`[fail] ${label}: ${round.error}`);
       } else {
         const where = target.addresses[0] as AddressEntry;
         round.error = explainConnectFailure(messageOf(e), where, deps.name);

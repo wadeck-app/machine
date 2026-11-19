@@ -6,7 +6,8 @@ import { buildAddressRecord, generateSigningKeyPair, type AddressEntry, type Sig
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
-import { AllAddressesFailedError, PeerAddressError, commitRecords, forgetPeerRecord, connectFirst, describeAddress, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
+import { ConnectError } from '@wadeck-app/machine-transport';
+import { AllAddressesFailedError, PeerAddressError, commitRecords, forgetPeerRecord, connectFirst, describeAddress, kindsOfConnectFailure, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { provision } from './testing.js';
 
@@ -255,9 +256,38 @@ describe('connectFirst', () => {
     expect(e).toBeInstanceOf(AllAddressesFailedError);
     expect(e).toBeInstanceOf(PeerAddressError);
     expect((e as AllAddressesFailedError).attempts).toEqual([
-      { address: A2[0], reason: 'no answer from 10.0.0.7:47921 within 3000 ms' },
-      { address: A2[1], reason: 'no answer from 192.168.1.20:47921 within 3000 ms' },
+      { address: A2[0], reason: 'no answer from 10.0.0.7:47921 within 3000 ms', kind: 'unknown' },
+      { address: A2[1], reason: 'no answer from 192.168.1.20:47921 within 3000 ms', kind: 'unknown' },
     ]);
+  });
+
+  it('each attempt carries its failure kind as a type: the transport ConnectError says it, anything else is unknown', async () => {
+    const e = await connectFirst(A2, async (address) => {
+      if (address.host === '10.0.0.7') throw new ConnectError('no answer from 10.0.0.7:47921 within 3000 ms', 'timeout');
+      throw new ConnectError('cannot reach 192.168.1.20:47921: connect ECONNREFUSED', 'unreachable', 'ECONNREFUSED');
+    }).catch((x: unknown) => x);
+    expect((e as AllAddressesFailedError).attempts.map((a) => a.kind)).toEqual(['timeout', 'unreachable']);
+    expect(kindsOfConnectFailure(e)).toEqual(['timeout', 'unreachable']);
+  });
+
+  it('kindsOfConnectFailure: a single ConnectError, an unknown error, and a PeerAddressError that is no connection failure', () => {
+    expect(kindsOfConnectFailure(new ConnectError('x', 'pair-proof'))).toEqual(['pair-proof']);
+    expect(kindsOfConnectFailure(new Error('boom'))).toEqual(['unknown']);
+    expect(kindsOfConnectFailure(new PeerAddressError('the relay has no record'))).toEqual(['unknown']);
+  });
+
+  it('with a pinned origin the total failure says the addresses are pinned, that the relay record is not used, and how to change them', async () => {
+    const e = await connectFirst(
+      A2,
+      async () => {
+        throw new ConnectError('no answer', 'timeout');
+      },
+      { pinnedFor: 'linux-box' },
+    ).catch((x: unknown) => x);
+    expect((e as Error).message).toMatch(/pinned address\(es\) of "linux-box"/);
+    expect((e as Error).message).toMatch(/machine peer connect linux-box --show/);
+    expect((e as Error).message).toMatch(/relay record is not used/);
+    expect((e as Error).message).not.toMatch(/the peer published/);
   });
 
   it('writes an IPv6 address in brackets', () => {

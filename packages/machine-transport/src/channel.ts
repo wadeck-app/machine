@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type net from 'node:net';
 import tls from 'node:tls';
-import type { SigningKeyPair } from '@wadeck-app/machine-core';
+import type { ConnectFailureKind, SigningKeyPair } from '@wadeck-app/machine-core';
 import { mintCertificate, publicKeyOfCertificate } from './cert.js';
 
 // Peer channel: mutual TLS 1.3, each end pinned to an expected Ed25519 identity key (decision 47), then a proof that
@@ -22,6 +22,43 @@ const MAX_READ_AHEAD_BYTES = 128 * 1024;
 const MAX_QUEUED_MESSAGES = 64;
 
 type Role = 'client' | 'server';
+
+/**
+ * A failed connection with its kind as a TYPE (what a wake decides on: only `unreachable` and `timeout` can be cured by waking the peer).
+ * `code` is the system error code when there is one (ECONNREFUSED, ETIMEDOUT...). The message is the one the person reads.
+ */
+export class ConnectError extends Error {
+  constructor(
+    message: string,
+    readonly kind: ConnectFailureKind,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ConnectError';
+  }
+}
+
+/** The kind of a socket error that happened before the TLS handshake finished. */
+export function classifySocketError(code: string | undefined): ConnectFailureKind {
+  switch (code) {
+    case 'ECONNREFUSED':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH':
+    case 'ENETDOWN':
+    case 'EADDRNOTAVAIL':
+      return 'unreachable';
+    case 'ETIMEDOUT':
+      return 'timeout';
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return 'unresolved';
+    case 'ECONNRESET':
+    case 'EPROTO':
+      return 'protocol';
+    default:
+      return code?.startsWith('ERR_SSL') || code?.startsWith('ERR_TLS') ? 'protocol' : 'unknown';
+  }
+}
 
 function proofFor(socket: tls.TLSSocket, pairSecret: Buffer, role: Role): Buffer {
   const exported = socket.exportKeyingMaterial(32, PROOF_LABEL, Buffer.from(role));
@@ -361,34 +398,40 @@ export function connectToPeer(options: ConnectOptions): Promise<PeerSession> {
     });
     const stream = new ByteStream(socket, PRE_AUTH_MAX_BUFFERED);
     let settled = false;
-    const fail = (message: string) => {
+    // Before the TLS handshake finishes a silent or refusing host may be asleep; after it, the peer is up.
+    let secure = false;
+    const fail = (message: string, kind: ConnectFailureKind, code?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      reject(new Error(message));
+      reject(new ConnectError(message, kind, code));
     };
-    const timer = setTimeout(() => fail(`no answer from ${where} within ${timeoutMs} ms: check that the peer machine is running and reachable`), timeoutMs);
-    socket.on('error', (e) => fail(`cannot reach ${where}: ${e.message}`));
+    const timer = setTimeout(() => fail(`no answer from ${where} within ${timeoutMs} ms: check that the peer machine is running and reachable`, secure ? 'protocol' : 'timeout'), timeoutMs);
+    socket.on('error', (e) => {
+      const code = (e as NodeJS.ErrnoException).code;
+      fail(`cannot reach ${where}: ${e.message}`, secure ? 'protocol' : classifySocketError(code), code);
+    });
 
     socket.once('secureConnect', () => {
+      secure = true;
       void (async () => {
         let presented: string;
         try {
           presented = peerKeyOf(socket);
         } catch (e) {
-          return fail(`${where} presented an unusable certificate: ${(e as Error).message}`);
+          return fail(`${where} presented an unusable certificate: ${(e as Error).message}`, 'bad-certificate');
         }
         if (presented !== options.expectedPeerPublicKey) {
-          return fail(`${where} presented key ${presented} but the pinned registration says ${options.expectedPeerPublicKey}: refusing to talk to an unregistered machine`);
+          return fail(`${where} presented key ${presented} but the pinned registration says ${options.expectedPeerPublicKey}: refusing to talk to an unregistered machine`, 'pin-mismatch');
         }
         let ok: boolean;
         try {
           ok = await exchangeProofs(socket, stream, options.pairSecret, 'client');
         } catch (e) {
-          return fail(`${where} closed the connection during authentication (${(e as Error).message}): this machine is probably not registered there, was revoked there, or the pair secret differs; check the peer log`);
+          return fail(`${where} closed the connection during authentication (${(e as Error).message}): this machine is probably not registered there, was revoked there, or the pair secret differs; check the peer log`, 'auth-closed');
         }
-        if (!ok) return fail(`${where} failed the pair secret proof: the pair secret differs, re-run the pairing from the admin console`);
+        if (!ok) return fail(`${where} failed the pair secret proof: the pair secret differs, re-run the pairing from the admin console`, 'pair-proof');
         if (settled) return;
         settled = true;
         clearTimeout(timer);

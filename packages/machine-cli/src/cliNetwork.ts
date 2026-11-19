@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
+import { SHELLS, parseAddress, type Shell } from '@wadeck-app/machine-core';
 import { whenText } from './humanTime.js';
 import { describeAddress, PeerAddressError } from './peerAddresses.js';
-import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
 import { adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { createAdminKey, runJoinCommand } from './cliJoin.js';
 import { recordSignedPolicy, runAllow } from './adminAllow.js';
@@ -16,15 +15,15 @@ import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
+import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, runPeerWake, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
+import { connectWithWake } from './wakeConnect.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
-import { readMachine } from './identity.js';
 import { APPROVAL_MAX_AGE_SECONDS, classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { createRelayClient, RelayError } from './relayClient.js';
 import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { exportMachineInfo, importPeer, installPolicy, installRevocation, loadNetwork, recordRevocationSeen, registerMachine, revocationState, type MachineInfo, type PeerBundle } from './network.js';
 import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
-import { readAliases } from './state.js';
 import { runOnPeer } from './peerService.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
@@ -391,6 +390,8 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       emit({ imported: bundle.registration.body.uuid }, `[ok] this machine now trusts "${bundle.registration.body.name}" (${bundle.registration.body.uuid})\n`);
       return EXIT.ok;
     }
+    if (sub === 'connect') return await runPeerConnect(ctx);
+    if (sub === 'wake') return await runPeerWake(ctx);
     if (sub === 'forget-record') {
       if (first === undefined || second !== undefined) return fail('usage: machine peer forget-record <peer>', EXIT.usage);
       try {
@@ -403,7 +404,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         throw e;
       }
     }
-    return fail('usage: machine peer info [--out <file>] | import <bundle.json> | forget-record <peer>', EXIT.usage);
+    return fail('usage: machine peer info [--out <file>] | import <bundle.json> | forget-record <peer> | connect <machine> [settings] | wake <machine>', EXIT.usage);
   }
 
   if (command === 'policy') {
@@ -449,18 +450,18 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   }
   const command = args.passthrough.join(' ');
 
-  const self = readMachine(configDir);
-  const network = loadNetwork(configDir, epochSeconds());
-  const machines = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-  const resolved = resolveMachineRef(ref, machines, readAliases(configDir));
-  if (!resolved.ok) return fail(resolved.message, EXIT.peer);
-  if (resolved.uuid === self.uuid) return fail('that is this machine: run the command here directly', EXIT.peer);
-  const peer = network.directory.find(resolved.uuid);
-  if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.peer);
-  // The same resolution and connection as `machine ping` (peerConnect.ts): the address override or the verified record of the relay.
-  const target = await resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), now: epochSeconds(), allowLocal: io.allowLoopbackPeers === true, warn: (line) => io.stderr(`[warn] ${line}
-`) });
-  const connected = await connectToTarget(self.identity, peer, target);
+  const trusted = resolveTrustedPeer(ctx, ref, { reference: EXIT.peer, failure: EXIT.peer });
+  if ('exit' in trusted) return trusted.exit;
+  const { self, peer } = trusted;
+  // How this machine reaches the peer (decision 62): pinned addresses win over the relay record, and the type or --wake / --no-wake decides whether a peer that cannot be reached is woken.
+  const read = connectionOf(ctx, peer);
+  if (!read.ok) return EXIT.peer;
+  const wakeSettings = wakeSettingsFor(ctx, peer, read.connection);
+  if (!wakeSettings.ok) return fail(wakeSettings.message, EXIT.peer);
+  // The same resolution and connection as `machine ping` (peerConnect.ts): the address override, the pinned addresses, or the verified record of the relay.
+  const sinks = stderrSinks(ctx);
+  const target = await targetFor(ctx, peer, read.connection, sinks.warn);
+  const { connected } = await connectWithWake(makeWakeEnv(ctx, trusted, { requestedBy: 'run', sinks, pinned: pinnedOf(read.connection) }), target, wakeSettings.settings);
   for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}
 `);
   const session = connected.session;

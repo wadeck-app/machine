@@ -2,6 +2,8 @@ import type { Prompt } from './admin.js';
 import type { PromptTimer } from './prompt.js';
 import type { CliMetaDeps } from './cliMeta.js';
 import type { StartupContext } from './startup.js';
+import type { LocalInterface } from '@wadeck-app/machine-core';
+import type { WakeSender } from './wakeSender.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
 export interface Timing {
@@ -33,6 +35,15 @@ export interface CliIo {
   hostname?: () => string;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
   now?: () => Date;
+  /** Tests only (no command line option exists): the packet sender, the interfaces and the clock of a Wake-on-LAN. Nothing in a test sends a real packet. */
+  wake?: Partial<WakeIo>;
+}
+
+export interface WakeIo {
+  sender: WakeSender;
+  interfaces: () => LocalInterface[];
+  sleep: (ms: number) => Promise<void>;
+  nowMs: () => number;
 }
 
 /**
@@ -55,6 +66,23 @@ export interface Parsed {
   out?: string;
   configDir?: string;
   address?: string;
+  /** Every `--address` (repeatable for `machine peer connect`, once elsewhere). */
+  addressList: string[];
+  /** `machine run` and `machine ping`: wake the peer when it cannot be reached / never. */
+  wake: boolean;
+  noWake: boolean;
+  /** `machine peer connect <machine> --show`. */
+  show: boolean;
+  /** `machine peer connect` settings. */
+  type?: string;
+  wakeMac?: string;
+  wakeBroadcast?: string;
+  wakeProbe?: string;
+  wakeWait?: string;
+  wakeMaxUnicast?: string;
+  wakeMaxBroadcast?: string;
+  wakeConnectTimeout?: string;
+  wakeSettle?: string;
   /** `machine ping <machine> --count <n>`: rounds, 1 to 10 (validated by `parsePingCount`). */
   count?: string;
   shell?: string;

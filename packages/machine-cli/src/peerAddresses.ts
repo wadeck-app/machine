@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { destinationProblem, isUuid, verifyAddressRecord, type AddressEntry, type LastSeenRecord } from '@wadeck-app/machine-core';
+import { destinationProblem, isUuid, verifyAddressRecord, type AddressEntry, type ConnectFailureKind, type LastSeenRecord } from '@wadeck-app/machine-core';
+import { ConnectError } from '@wadeck-app/machine-transport';
 import { withFileLock, writeFileAtomic } from './fsutil.js';
 import { RelayError, type RelayClient } from './relayClient.js';
 
@@ -33,7 +34,7 @@ export class PeerAddressError extends Error {}
 export class AllAddressesFailedError extends PeerAddressError {
   constructor(
     message: string,
-    readonly attempts: Array<{ address: AddressEntry; reason: string }>,
+    readonly attempts: Array<{ address: AddressEntry; reason: string; kind: ConnectFailureKind }>,
   ) {
     super(message);
   }
@@ -240,22 +241,35 @@ export async function lookupPeerPresence(configDir: string, peers: PeerRef[], cl
 export const CONNECT_TIMEOUT_MS = 3000;
 
 /**
- * Tries the addresses in order; the first `connect` that completes wins. Every failure is kept with its address and reason. When none
- * works the error names them all.
+ * Tries the addresses in order; the first `connect` that completes wins. Every failure is kept with its address, reason and kind. When none
+ * works the error names them all. `pinnedFor`: the addresses come from connections.json (`machine peer connect`), not from the relay record.
  */
-export async function connectFirst<T>(addresses: AddressEntry[], connect: (address: AddressEntry) => Promise<T>): Promise<{ session: T; address: AddressEntry; failures: string[] }> {
+export async function connectFirst<T>(
+  addresses: AddressEntry[],
+  connect: (address: AddressEntry) => Promise<T>,
+  origin: { pinnedFor?: string } = {},
+): Promise<{ session: T; address: AddressEntry; failures: string[] }> {
   const failures: string[] = [];
-  const attempts: Array<{ address: AddressEntry; reason: string }> = [];
+  const attempts: Array<{ address: AddressEntry; reason: string; kind: ConnectFailureKind }> = [];
   for (const address of addresses) {
     try {
       return { session: await connect(address), address, failures };
     } catch (e) {
       failures.push(`${describeAddress(address)}: ${(e as Error).message}`);
-      attempts.push({ address, reason: (e as Error).message });
+      attempts.push({ address, reason: (e as Error).message, kind: e instanceof ConnectError ? e.kind : 'unknown' });
     }
   }
-  throw new AllAddressesFailedError(
-    `could not connect to any of the ${addresses.length} address(es) the peer published: ${failures.join('; ')}. The peer may be off, behind a router (publish a reachable address with \`machine daemon --advertise <host[:port]>\` there), or on another network; ${BYPASS}`,
-    attempts,
-  );
+  const name = origin.pinnedFor;
+  const message =
+    name === undefined
+      ? `could not connect to any of the ${addresses.length} address(es) the peer published: ${failures.join('; ')}. The peer may be off, behind a router (publish a reachable address with \`machine daemon --advertise <host[:port]>\` there), or on another network; ${BYPASS}`
+      : `could not connect to any of the ${addresses.length} pinned address(es) of "${name}": ${failures.join('; ')}. The relay record is not used while addresses are pinned: check them with \`machine peer connect ${name} --show\`, change them with \`machine peer connect ${name} --address <host:port>\` or unpin them with \`machine peer connect ${name} --remove\``;
+  throw new AllAddressesFailedError(message, attempts);
+}
+
+/** The typed failure kinds of whatever a connection attempt threw: one per address for a total failure, one for a single failure, `unknown` for anything else (which never wakes). */
+export function kindsOfConnectFailure(error: unknown): ConnectFailureKind[] {
+  if (error instanceof AllAddressesFailedError) return error.attempts.map((a) => a.kind);
+  if (error instanceof ConnectError) return [error.kind];
+  return ['unknown'];
 }

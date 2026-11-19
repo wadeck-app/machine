@@ -38,6 +38,13 @@ Getting started (one command per machine; the name of a machine is the computer 
   check the connection (reads only, runs nothing, needs no allowlist entry):
     machine ping                     this machine's path to the relay, one line per step ([ok] / [warn] / [fail] with cause and fix)
     machine ping <machine>           the real authenticated channel to a peer, like ping(8): handshake and hello times
+  reach a machine that sleeps (same LAN only; the Wake-on-LAN packets are sent from THIS machine):
+    machine peer connect <machine> --address <ip>:<port> --wake-mac <aa:bb:cc:dd:ee:ff>
+                                     once: pins the address and the MAC you type (never learned from the relay); then
+                                     \`machine run\` and \`machine ping\` wake the machine when it cannot be reached
+    machine peer wake <machine>      wake it now and wait for it to answer: prints each step and the measured time
+    The target must SLEEP (suspend), not be shut down: its daemon starts at login, so a machine woken from power-off
+    without auto-login does not listen. Wake-on-LAN gives no acknowledgement: BIOS/driver settings are on the target
   Stays manual: the passphrase, the one confirmation in the relay console (relay login code) and the security-code comparison (the human steps).
   Three kinds of code, never mixed: the relay login codes (XXXX-XXXX, shown here, confirmed in the relay console), the pairing code (8
   digits, shown by the relay console: scripts) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
@@ -62,14 +69,17 @@ Commands:
                                      warning line, never an error)
   resolve <reference>                show which machine a reference means
   alias list | set <alias> <ref> | rm <alias>
-  run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] -- <command...>
+  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] -- <command...>
                                      run one allowed command on a peer. Without --address the addresses come from
                                      the relay (the signed address record of the peer, verified against its
                                      registration), tried in order with 3 s each; --address overrides it and is the
                                      only way without a relay. Before the command, the two machines compare their
                                      admin revocation lists and hand each other what the other lacks (a revocation the
-                                     relay never delivered still arrives); a peer that turns out revoked is refused
-  ping [<machine>] [--count <n>] [--address <host:port>] [--json]
+                                     relay never delivered still arrives); a peer that turns out revoked is refused.
+                                     Addresses pinned with \`peer connect\` win over the relay record. A peer configured
+                                     for Wake-on-LAN (or --wake) that cannot be reached (unreachable or no answer, never an
+                                     authentication failure) is woken, then retried; --no-wake forbids it
+  ping [<machine>] [--count <n>] [--address <host:port>] [--wake | --no-wake] [--json]
                                      without a machine: relay.json, the relay answers (time, version), the token is accepted and its
                                      access level (machine, machine-admin, full), the local daemon runs, this machine's address record is
                                      published (age, presence); exit 0 only when no step fails. With a machine (name, alias, uuid or
@@ -80,7 +90,7 @@ Commands:
                                      the hello round trip, the registration (serial, admin key id) and whether the revocation lists matched.
                                      --count <n> (1 to 10, default 1) opens n connections one second apart and prints min/avg/max (the
                                      hello is sent in the first 4 only: a peer allows 6 revocation exchanges per minute). Exit 0 ok, 1
-                                     failure, 2 usage, 3 unknown or ambiguous machine
+                                     failure, 2 usage, 3 unknown or ambiguous machine. --wake / --no-wake as for run (one wake per ping)
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>] [--advertise <host[:port]>]...
                                      run the daemon in the foreground (started by orch). With a relay (after join)
                                      it publishes its signed address record: the non-loopback interface addresses
@@ -189,6 +199,21 @@ Administration (enrollment through the relay, or by files):
   admin pin <admin.json>             trust the admin key of another machine
   peer info [--out <file>]           this machine's public identity, to give to the admin
   peer import <bundle.json>          trust a peer from an admin-signed bundle
+  peer connect <machine> [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]...
+                [--wake-mac <aa:bb:cc:dd:ee:ff>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>]
+                [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>]
+                                     how THIS machine reaches a peer (stored in connections.json, no secret). --address pins
+                                     addresses (up to 8) that win over the relay record. A MAC turns on the wake: unicast to the
+                                     peer address, a probe window, a directed broadcast, a probe window, alternating, never more
+                                     than --wake-max-unicast and --wake-max-broadcast (default 4 each, at most 8 each), the
+                                     whole wait <= --wake-wait (default 90, 10 to 600), each probe window --wake-probe (default 5,
+                                     1 to 60), each attempt --wake-connect-timeout (default 1000 ms), --wake-settle seconds of
+                                     pause after the answer (default 0). Only toward the subnet this machine shares with the peer.
+                                     A flag changes that value and keeps the others. UNVERIFIED on real hardware: tune per peer
+  peer connect <machine> --show      the effective values, (default) marks what nobody set
+  peer connect <machine> --remove    forget the settings of that peer
+  peer wake <machine>                send the wake now (the same steps), wait for the peer to answer, print the measured time
+                                     and a hint when the answer came late in a probe window. Exit 0 answers, 1 not
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy signed by the admin for this machine
@@ -228,7 +253,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -267,7 +292,22 @@ function parse(argv: string[]): Parsed {
     else if (a === '--hint') out.hint = valueOf('--hint');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
-    else if (a === '--address') out.address = valueOf('--address');
+    else if (a === '--address') {
+      const v = valueOf('--address');
+      out.addressList.push(v);
+      out.address ??= v;
+    } else if (a === '--wake') out.wake = true;
+    else if (a === '--no-wake') out.noWake = true;
+    else if (a === '--show') out.show = true;
+    else if (a === '--type') out.type = valueOf('--type');
+    else if (a === '--wake-mac') out.wakeMac = valueOf('--wake-mac');
+    else if (a === '--wake-broadcast') out.wakeBroadcast = valueOf('--wake-broadcast');
+    else if (a === '--wake-probe') out.wakeProbe = valueOf('--wake-probe');
+    else if (a === '--wake-wait') out.wakeWait = valueOf('--wake-wait');
+    else if (a === '--wake-max-unicast') out.wakeMaxUnicast = valueOf('--wake-max-unicast');
+    else if (a === '--wake-max-broadcast') out.wakeMaxBroadcast = valueOf('--wake-max-broadcast');
+    else if (a === '--wake-connect-timeout') out.wakeConnectTimeout = valueOf('--wake-connect-timeout');
+    else if (a === '--wake-settle') out.wakeSettle = valueOf('--wake-settle');
     else if (a === '--count') out.count = valueOf('--count');
     else if (a === '--shell') out.shell = valueOf('--shell');
     else if (a === '--days') out.days = valueOf('--days');
@@ -355,8 +395,19 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (args.passthrough.length > 0 && command !== 'run' && !(command === 'admin' && rest[0] === 'allow')) {
     return fail('"--" is only used by `machine run` and `machine admin allow` (it introduces the command line)', EXIT.usage);
   }
-  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow')) {
-    return fail('--list and --remove only apply to `machine admin allow` (`machine admin allow <machine> --list`, `machine admin allow <machine> --remove -- <command>`)', EXIT.usage);
+  const peerConnect = command === 'peer' && rest[0] === 'connect';
+  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !(peerConnect && args.remove && !args.list)) {
+    return fail('--list and --remove only apply to `machine admin allow` (`machine admin allow <machine> --list`, `machine admin allow <machine> --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
+  }
+  if (args.wake && args.noWake) return fail('--wake and --no-wake cannot be combined: --wake forces the wake of a peer that cannot be reached, --no-wake forbids it', EXIT.usage);
+  if ((args.wake || args.noWake) && command !== 'run' && command !== 'ping') {
+    return fail(`${args.wake ? '--wake' : '--no-wake'} only applies to \`machine run\` and \`machine ping\` (it wakes the peer when it cannot be reached; \`machine peer wake <machine>\` wakes it now)`, EXIT.usage);
+  }
+  if (!peerConnect) {
+    const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle]];
+    const used = settings.find(([, v]) => v !== undefined);
+    if (used) return fail(`${used[0]} only applies to \`machine peer connect\` (\`machine peer connect <machine> ...\` sets how this machine reaches a peer: pinned addresses, Wake-on-LAN)`, EXIT.usage);
+    if (args.addressList.length > 1) return fail('--address can be given only once here (the several-address form is `machine peer connect <machine> --address <host:port> --address <host:port>`)', EXIT.usage);
   }
   if (args.generate && !(command === 'setup' || (command === 'admin' && rest[0] === 'init'))) {
     return fail('--generate only applies to `machine admin init` and `machine setup` (a random admin passphrase instead of a chosen one)', EXIT.usage);

@@ -19,8 +19,8 @@ export interface PeerToReach {
 }
 
 export interface PeerTarget {
-  /** `override`: `--address`, the relay was not asked. `relay`: the verified address record of the peer. */
-  source: 'override' | 'relay';
+  /** `override`: `--address`, the relay was not asked. `pinned`: the addresses of connections.json (`machine peer connect`), the relay was not asked either and its record is not used. `relay`: the verified address record of the peer. */
+  source: 'override' | 'pinned' | 'relay';
   addresses: AddressEntry[];
   /** One line per address of the record that must not be used, with the reason (loopback, unspecified, link-local). */
   refused: string[];
@@ -33,8 +33,10 @@ export interface PeerTarget {
 }
 
 export interface ResolveOptions {
-  /** `--address <host:port>`: connect there, never ask the relay. The caller has validated it. */
+  /** `--address <host:port>`: connect there, never ask the relay. The caller has validated it. It wins over the pinned addresses. */
   address?: string | undefined;
+  /** The addresses pinned for this peer in connections.json: used instead of the relay record (the relay is untrusted, T-33; the user pinned them for a reason). */
+  pinned?: AddressEntry[] | undefined;
   /** Epoch seconds. */
   now: number;
   /** Tests only: let a record point to loopback. */
@@ -51,6 +53,9 @@ export async function resolvePeerTarget(configDir: string, peer: PeerToReach, op
     const where = parseAddress(options.address);
     if (!where) throw new PeerAddressError(`invalid --address "${options.address}": expected <host>:<port>, for example 192.168.1.20:47921 or [::1]:47921`);
     return { source: 'override', addresses: [{ host: where.host, port: where.port }], refused: [] };
+  }
+  if (options.pinned !== undefined && options.pinned.length > 0) {
+    return { source: 'pinned', addresses: options.pinned.map((a) => ({ host: a.host, port: a.port })), refused: [] };
   }
   let client = options.client;
   if (client === undefined) {
@@ -81,8 +86,9 @@ export interface Connected {
  * Opens the authenticated channel (TLS handshake, key pinning, pair secret proof) to the first address that answers. Nothing is sent over it.
  * `--address`: one attempt with the transport's own timeout and its raw error. Relay: addresses in order, `CONNECT_TIMEOUT_MS` each, every failure
  * kept (an `AllAddressesFailedError` when none answers). `onAttempt` is called with each address just before it is tried (timing in `machine ping`).
+ * `timeoutMs`: the per-address limit of a wake probe (a short one); absent, the normal limit of the source applies.
  */
-export async function connectToTarget(identity: SigningKeyPair, peer: PeerToReach, target: PeerTarget, onAttempt?: (address: AddressEntry) => void): Promise<Connected> {
+export async function connectToTarget(identity: SigningKeyPair, peer: PeerToReach, target: PeerTarget, onAttempt?: (address: AddressEntry) => void, timeoutMs?: number): Promise<Connected> {
   const connect = (address: AddressEntry, handshakeTimeoutMs?: number) => {
     onAttempt?.(address);
     return connectToPeer({
@@ -96,7 +102,7 @@ export async function connectToTarget(identity: SigningKeyPair, peer: PeerToReac
   };
   if (target.source === 'override') {
     const address = target.addresses[0] as AddressEntry;
-    return { session: await connect(address), address, failures: [] };
+    return { session: await connect(address, timeoutMs), address, failures: [] };
   }
-  return await connectFirst(target.addresses, (address) => connect(address, CONNECT_TIMEOUT_MS));
+  return await connectFirst(target.addresses, (address) => connect(address, timeoutMs ?? CONNECT_TIMEOUT_MS), target.source === 'pinned' ? { pinnedFor: peer.name } : {});
 }

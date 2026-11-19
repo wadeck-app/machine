@@ -1,6 +1,8 @@
 export { mintCertificate, publicKeyOfCertificate, type MintedCertificate } from './cert.js';
 export {
   connectToPeer,
+  classifySocketError,
+  ConnectError,
   listenForPeers,
   DEFAULT_HANDSHAKE_TIMEOUT_MS,
   DEFAULT_MAX_FRAME_BYTES,

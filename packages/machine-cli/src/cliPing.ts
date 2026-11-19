@@ -5,7 +5,9 @@ import { makeCommands } from './commands.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { readMachine } from './identity.js';
 import { installRevocation, loadNetwork, recordRevocationSeen, revocationState, trustedRegistrations } from './network.js';
+import { connectionOf, makeWakeEnv, pinnedOf, stderrSinks, wakeSettingsFor } from './cliWake.js';
 import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
+import { connectWithWake, type WakeSummary } from './wakeConnect.js';
 import { checkLine, pingPeer, pingRelay } from './ping.js';
 import { createRelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
@@ -31,6 +33,7 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
   if (ref === undefined) {
     if (args.count !== undefined) return fail('--count only applies to `machine ping <machine>` (the relay form is one round of checks)', EXIT.usage);
     if (args.address !== undefined) return fail('--address only applies to `machine ping <machine>` (it replaces the address the relay gives for that machine)', EXIT.usage);
+    if (args.wake || args.noWake) return fail(`${args.wake ? '--wake' : '--no-wake'} applies to \`machine ping <machine>\` (the form without a machine only checks the path to the relay)`, EXIT.usage);
     const report = await pingRelay({
       now: epochSeconds,
       clock: () => performance.now(),
@@ -68,6 +71,15 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
   const peer = network.directory.find(resolved.uuid);
   if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.failure);
   const registered = trustedRegistrations(configDir, epochSeconds()).find((r) => r.body.uuid === peer.peerId);
+  // How this machine reaches the peer (decision 62): pinned addresses, and whether a peer that cannot be reached is woken (the type, --wake, --no-wake).
+  const read = connectionOf(ctx, peer);
+  if (!read.ok) return read.exit;
+  const wakeSettings = wakeSettingsFor(ctx, peer, read.connection);
+  if (!wakeSettings.ok) return fail(wakeSettings.message, EXIT.usage);
+  // One wake per ping: the rounds after a wake (answered or not) connect directly, so a count of 10 never means ten wakes.
+  let wakeAllowed = wakeSettings.settings !== undefined;
+  let wakeSummary: WakeSummary | undefined;
+  const sinks = stderrSinks(ctx, true);
 
   const sleep = io.timing?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const report = await pingPeer({
@@ -79,8 +91,23 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
     clock: () => performance.now(),
     sleep: (ms) => sleep(ms),
     // The relay is asked, or --address used, by the very code `machine run` uses. The warnings of the resolution are printed by pingPeer.
-    resolveTarget: () => resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), now: epochSeconds(), allowLocal: io.allowLoopbackPeers === true, warn: () => undefined }),
-    connect: (target, onAttempt) => connectToTarget(self.identity, peer, target, onAttempt),
+    resolveTarget: () => resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), pinned: pinnedOf(read.connection), now: epochSeconds(), allowLocal: io.allowLoopbackPeers === true, warn: () => undefined }),
+    connect: async (target, onAttempt) => {
+      if (!wakeAllowed) return await connectToTarget(self.identity, peer, target, onAttempt);
+      const env = makeWakeEnv(ctx, { self, peer }, { requestedBy: 'ping', sinks: { ...sinks, info: args.json ? (line) => io.stderr(`[info] ${line}\n`) : sinks.info }, pinned: pinnedOf(read.connection), onAttempt });
+      try {
+        const result = await connectWithWake(env, target, wakeSettings.settings);
+        if (result.wake) {
+          wakeAllowed = false;
+          wakeSummary = result.wake;
+        }
+        return result.connected;
+      } catch (e) {
+        // A wake that was tried (or refused) is not tried again by the next round.
+        wakeAllowed = false;
+        throw e;
+      }
+    },
     // The same revocation hello as before a `run`: the one authenticated request of the protocol that carries no command.
     catchUp: (session) =>
       catchUpRevocations(session, {
@@ -98,6 +125,7 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
       if (!args.json) io.stderr(`[warn] ${text}\n`);
     },
   });
+  if (wakeSummary) report.wake = wakeSummary;
   if (args.json) {
     emit(report, '');
     if (!report.ok) io.stderr(`[fail] ping: "${peer.name}" did not answer every round: see "rounds" and "error" in the JSON document\n`);

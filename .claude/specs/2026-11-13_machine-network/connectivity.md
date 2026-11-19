@@ -1,6 +1,6 @@
 # Connectivity strategies and Wake-on-LAN -- Machine Network
 
-**Status:** analysis, nothing decided, no code. Proposed decision number: 61 (not recorded in `_index.md` yet).
+**Status:** sections 1-7 are the analysis written before the code. Phase A (same-LAN Wake-on-LAN from the caller) is decision 62 and is built: section 8 says what was built and wins wherever it differs from sections 4.3 to 5.3. Phase B (waker) and phase C are not decided or built. (Number 61 went to `machine ping`.)
 **Trigger:** the Linux box and the M2 Pro Mac sleep; `machine run` must wake them when they cannot be reached.
 Tags: [V] read in the repo; [GK] general knowledge, not verified here; UNVERIFIED = must be tested on the real device.
 
@@ -181,3 +181,48 @@ Cannot be tested offline: that a real NIC wakes (BIOS, driver, switch, Wi-Fi), t
 - Whether `tls.connect({socket})` fits the current `connectToPeer` pinning flow (S3, S4): only the host/port form was read.
 - The existence of any relay limit relevant to S5/S6 (relay code not read).
 - Hard rule 3 and decision 14 wording for a non-command capability: proposed amendment, not discussed with the user.
+
+## 8. Phase A as built (decision 62)
+
+Answers to section 6: Q1 yes (decision 62); Q2 the pinned address wins over the relay record (the relay is untrusted, T-33), `--address` wins over both; Q3 phase A first; Q7 the MAC is typed by the user, never taken from the relay or a record; Q8 yes, in a hash-chained log of the caller (a file of its own, below). Q4, Q5, Q6, Q9 are unchanged (not asked in this step).
+
+### 8.1 Commands and files
+
+| Item | Behaviour |
+|---|---|
+| `machine peer connect <m> [--type] [--address h:p]... [--wake-mac] [--wake-broadcast] [--wake-probe] [--wake-wait] [--wake-max-unicast] [--wake-max-broadcast] [--wake-connect-timeout] [--wake-settle]` | Sets what is given and keeps the rest (a flag overrides the stored value). Everything is validated before anything is written. A MAC given to an entry that had none switches `type` to `ping-if-not-reachable-magic-packet`, said in an `[info]` line |
+| `machine peer connect <m> --show` / `--remove` | `--show`: effective values, `(default)` marks what nobody set; `--json` supported |
+| `machine peer wake <m>` | Tries the connection once; if the peer answers, no packet. Otherwise the wake sequence (8.2). Prints the measured time. Exit 0 answers, 1 not (255 stays `run`'s) |
+| `--wake` / `--no-wake` on `run` and `ping` | `--wake` needs a stored MAC. Default follows the stored `type`. `ping` wakes at most once per invocation |
+| `<configDir>/connections.json` | `{ v: 1, peers: { <uuid>: { type, addresses?, wake? } } }`, strict (unknown field, bad value, wrong type: the command stops with the path, the field and the fix). No secret |
+| `<configDir>/wake-state.json` | Last wake time per peer (cooldown). Uuids and times only |
+| `<configDir>/wake-audit.log` | Hash-chained, same format and verification as the daemon `audit.log`. A file of its own: the daemon keeps its chain head in memory, so a second writer would break the chain and the daemon would refuse to reopen it. Per packet an entry written BEFORE the send (who, which peer, MAC, method, n of total, destinations), and one result. "sent", never "woke". Unwritable log means no packet |
+
+### 8.2 The sequence (supersedes 4.3 steps 3 to 6 and the 0/5/15/30 s schedule)
+
+1. Connect as today. Success: nothing else happens.
+2. Wake only if EVERY failure is `unreachable` or `timeout`. The kind is a type (`ConnectError.kind` in `machine-transport`, one per address in `AllAddressesFailedError.attempts`): an authentication, pin, pair-proof, protocol or DNS failure never wakes, and the output says "not waking" with the cause.
+3. Subnet check: a local, non-loopback IPv4 interface must share a subnet with a known IPv4 address of the peer (pinned, else the verified relay record). Else stop, nothing sent. With no IPv4 address known, only an explicit `--wake-broadcast` that is the directed broadcast of a local network allows a broadcast-only wake; otherwise stop.
+4. Alternate: unicast UDP to the known IPv4 address of the peer (port 9), probe the connection for `probeSeconds`, directed broadcast of that subnet (port 9), probe, unicast, and so on. Success stops at once. Never a limited broadcast (255.255.255.255) and no destination outside those two.
+5. Probing goes on after the last packet until `waitSeconds` is used (a slow resume is still caught). Each attempt has `connectTimeoutMs`, attempts about that far apart. The relay record is read again about every 10 s (an address can change after a resume); pinned addresses never change.
+6. Cooldown: a wake started less than 60 s ago from this machine sends no packet; the run still probes until `waitSeconds` and says so.
+
+Why unicast and broadcast, one after the other, with a probe between: a magic packet has no acknowledgement, so the only feedback is the connection becoming possible. A sleeping host cannot answer ARP, so a unicast to its IP can go undelivered on the LAN; the broadcast does not need that. Sent together, they could not tell which one worked; sent in turn with a window in between, the answer says what preceded it. A window shorter than the resume time reads "did not work" while the host is still waking, so each window is configurable per peer. The defaults are UNVERIFIED on the user's hardware. The output says "woken by unicast" or "by broadcast" for the LAST packet sent before the answer: it is what followed, not proof of cause. No automatic reordering of the methods.
+
+### 8.3 Per-peer timings (`wake` block and flags)
+
+| Field | Flag | Default | Range |
+|---|---|---|---|
+| `probeSeconds` | `--wake-probe` | 5 | 1 to 60 |
+| `waitSeconds` | `--wake-wait` | 90 | 10 to 600 |
+| `maxUnicast` | `--wake-max-unicast` | 4 | 0 to 8 |
+| `maxBroadcast` | `--wake-max-broadcast` | 4 | 0 to 8 |
+| `connectTimeoutMs` | `--wake-connect-timeout` | 1000 | 200 to 10000 |
+| `settleSeconds` | `--wake-settle` | 0 | 0 to 120 |
+
+Integers only, refused (never clamped) with the field and the range; `maxUnicast` + `maxBroadcast` must be at least 1. `wake.broadcast` has no flag default: absent means the directed broadcast of the shared subnet. Tuning aid: a successful wake prints `answered after 14.2 s, woken by unicast (probe window 3, 4.2 s into its 5 s)` and, when the answer came after more than 80% of its window, the command that doubles `probeSeconds` for that peer.
+
+### 8.4 Not built, not verified
+
+- Not built: `machine wake-info` (section 4.2 checklist printed on the target), the waker (phase B), the MAC in the signed address record (phase C), a y/N when `peer connect` changes an entry (changed fields are printed instead).
+- Not verified: that a real NIC wakes; which interface the OS uses for a socket bound to a local address on Windows, macOS, Linux; that a router or switch passes the directed broadcast; the real resume times and whether the defaults fit; Wi-Fi targets; that a 1 s probe attempt is long enough for the handshake of a freshly resumed host (otherwise raise `connectTimeoutMs`). Tests use a fake sender and clock; one real UDP datagram is received on loopback (unicast), never a broadcast.

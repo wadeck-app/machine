@@ -5,6 +5,7 @@ import { NotInitializedError } from './errors.js';
 import { AllAddressesFailedError, PeerAddressError } from './peerAddresses.js';
 import type { Connected, PeerTarget } from './peerConnect.js';
 import { explainConnectFailure, pingPeer, pingRelay, type PeerPingDeps, type RelayPingDeps } from './ping.js';
+import { WakeError } from './wakeConnect.js';
 import { RelayError, type RelayClient, type RelayWhoami } from './relayClient.js';
 import type { CatchUpReport } from './revocationSync.js';
 
@@ -297,6 +298,26 @@ describe('machine ping <machine>', () => {
     expect(w.sessions[0]?.closed).toBe(1);
   });
 
+  it('pinned addresses: says they come from connections.json and that the relay record was not used', async () => {
+    const w = peerWorld({ resolveTarget: async () => ({ source: 'pinned', addresses: [{ host: '192.168.1.40', port: 47921 }], refused: [] }) });
+    const r = await pingPeer(w.deps);
+    expect(r.ok).toBe(true);
+    expect(r.target?.source).toBe('pinned');
+    expect(w.said.join('\n')).toMatch(/\[ok\] address: pinned 192\.168\.1\.40:47921 \(connections\.json, `machine peer connect laptop --show`; the relay was not asked\)/);
+  });
+
+  it('a failed wake is told in its own words, not explained as a connection failure', async () => {
+    const w = peerWorld({
+      connect: async () => {
+        throw new WakeError('no answer from "laptop" after 90 s and 8 packets (4 unicast, 4 broadcast). Wake-on-LAN gives no acknowledgement');
+      },
+    });
+    const r = await pingPeer(w.deps);
+    expect(r.ok).toBe(false);
+    expect(r.rounds[0]?.error).toBe('no answer from "laptop" after 90 s and 8 packets (4 unicast, 4 broadcast). Wake-on-LAN gives no acknowledgement');
+    expect(w.said.join('\n')).toMatch(/\[fail\] ping 1\/1: no answer from "laptop" after 90 s/);
+  });
+
   it('--address: says the relay was not asked', async () => {
     const w = peerWorld({ resolveTarget: async () => ({ source: 'override', addresses: [{ host: '127.0.0.1', port: 5555 }], refused: [] }) });
     const r = await pingPeer(w.deps);
@@ -341,8 +362,8 @@ describe('machine ping <machine>', () => {
 
   it('no address answers: one line per address with its own cause and fix', async () => {
     const attempts = [
-      { address: { host: '10.0.0.7', port: 47921 }, reason: 'cannot reach 10.0.0.7:47921: connect ECONNREFUSED 10.0.0.7:47921' },
-      { address: { host: '192.168.1.20', port: 47921 }, reason: 'no answer from 192.168.1.20:47921 within 3000 ms: check that the peer machine is running and reachable' },
+      { address: { host: '10.0.0.7', port: 47921 }, reason: 'cannot reach 10.0.0.7:47921: connect ECONNREFUSED 10.0.0.7:47921', kind: 'unreachable' as const },
+      { address: { host: '192.168.1.20', port: 47921 }, reason: 'no answer from 192.168.1.20:47921 within 3000 ms: check that the peer machine is running and reachable', kind: 'timeout' as const },
     ];
     const w = peerWorld({
       resolveTarget: async () => target({ addresses: attempts.map((a) => a.address) }),

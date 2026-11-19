@@ -1,6 +1,6 @@
 # Getting started
 
-**Version:** v0.5 (2026-11-15). Implements decisions 51 to 59. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
+**Version:** v0.6 (2026-11-19). Implements decisions 51 to 62. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
 
 ## Commands per case
 
@@ -11,6 +11,7 @@
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
 | Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
 | Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
+| Reach a machine that sleeps (same LAN) | `machine peer connect <machine> --address <ip>:<port> --wake-mac <mac>` once, then `machine run` / `machine ping` as usual; `machine peer wake <machine>` to wake now | type the MAC of the target (never learned from the relay) |
 
 The relay is named once (`<relay>` is a host or URL), then stored. A machine that holds the admin key and runs `machine join <relay>` approves itself (needs `machine admin login` first, or use `setup`). The token of `setup` is the machine token AND the admin token of the first machine (one file content in `relay.json` and `relay-admin.json`); `machine admin login` on another machine adds `<name> admin`. A relay without the `machine-admin` scope fails loudly: update it; `machine admin login --full-access` (a full-access token that can also manage tokens) is the explicit opt-in.
 
@@ -77,6 +78,36 @@ machine ping <machine> [--count 3] [--address host:port] [--json]
 - First form: the relay time includes DNS and TLS setup (first request); the token time is on the warm connection. A full-access token is a `[warn]` (a machine never needs it); a loopback-only address record is a `[warn]` (peers refuse it).
 - Second form, a failure names each address with its error: nothing listens (daemon stopped there), no answer (firewall, asleep), another key answers (wrong address), refused during authentication (not registered there, revoked, clocks, pair secret), no record on the relay (`machine startup enable` there). Exit 1; unknown or ambiguous machine 3; usage 2.
 - `--count n` (1 to 10) opens n connections one second apart and prints min/avg/max; the hello is sent in the first 4 only (a peer allows 6 revocation exchanges per minute).
+
+## Waking a sleeping machine (decision 62)
+
+Same LAN only: the packets are sent from THIS machine, so the caller and the target must share a subnet (a machine on another network gets an explicit error and nothing is sent). Nothing is verified on real hardware yet: tune it per peer.
+
+```
+machine peer connect <machine> --address 192.168.1.40:47921 --wake-mac aa:bb:cc:dd:ee:ff
+    pins the address (it wins over the relay record) and the MAC (typed by you); machine run and machine ping then wake the machine
+    when it cannot be reached (type ping-if-not-reachable-magic-packet; --type direct keeps it manual, then --wake wakes on demand)
+machine peer connect <machine> --show        the effective values, "(default)" marks what nobody set
+machine peer connect <machine> --remove      forget the settings of that peer
+machine peer wake <machine>                  wake now, wait for the answer, print the measured time
+machine run <machine> --wake|--no-wake ...   force or forbid the wake for this command (same on machine ping <machine>)
+```
+
+| Setting | Flag | Default | Range | Meaning |
+|---|---|---|---|---|
+| `probeSeconds` | `--wake-probe` | 5 | 1 to 60 | probe window after each packet |
+| `waitSeconds` | `--wake-wait` | 90 | 10 to 600 | total wait for the answer |
+| `maxUnicast` | `--wake-max-unicast` | 4 | 0 to 8 | unicast packets at most |
+| `maxBroadcast` | `--wake-max-broadcast` | 4 | 0 to 8 | broadcast packets at most |
+| `connectTimeoutMs` | `--wake-connect-timeout` | 1000 | 200 to 10000 | one probe attempt |
+| `settleSeconds` | `--wake-settle` | 0 | 0 to 120 | pause after the answer, before the command |
+| `wake.broadcast` | `--wake-broadcast` | the broadcast of the shared subnet | an IPv4 | only needed when no IPv4 address of the peer is known |
+
+- Order: unicast to the pinned (or last known) IPv4 address, probe, directed broadcast, probe, alternating; success stops at once. A flag changes that value and keeps the others.
+- Tuning: a wake prints `answered after 14.2 s, woken by unicast (probe window 3, 4.2 s into its 5 s)`; after more than 80% of a window it prints the command that raises `probeSeconds`. "By unicast" names the last packet before the answer: Wake-on-LAN gives no acknowledgement.
+- Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A second wake of the same peer within 60 s sends no packet (it still waits).
+- The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable.
+- Trace: `<configDir>/wake-audit.log` (who woke what, how many packets, hash-chained); the settings are in `connections.json` (no secret).
 
 ## Rules a user meets
 
