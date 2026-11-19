@@ -262,6 +262,22 @@ describe('403 for a token that cannot do the admin calls', () => {
   });
 });
 
+describe('403 of the real scope gate (free text, no code)', () => {
+  it('is read as a plain machine token: the login advice, the relay text is not the only thing said', async () => {
+    const text = 'This token is limited to the scope machine and cannot call GET /api/machines/candidacies: that endpoint needs a full-access token.';
+    const relay = await fakeRelay(() => ({ status: 403, body: { success: false, error: text } }));
+    writeAdminConfig(relay.url);
+    const e = await listCandidacies(configDir, NOW).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(RelayRequestError);
+    expect((e as RelayRequestError).message).toMatch(/plain machine token/);
+    expect((e as RelayRequestError).message).toContain('machine admin login --force');
+    expect((e as RelayRequestError).message).not.toContain(TOKEN);
+  });
+});
+
 // The advice sentences are copied here and in machine-cli adminAccess.ts (the two packages do not import each other): the click path and the
 // login advice must not drift apart. The test reads the real module of machine-cli.
 describe('the advice sentences stay in step with machine-cli adminAccess.ts', () => {

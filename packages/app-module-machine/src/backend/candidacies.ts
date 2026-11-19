@@ -242,7 +242,9 @@ export async function listCandidacies(configDir: string, nowSeconds: number, doF
   if (res.status !== 200) {
     const o = asObject(body);
     // Both codes mean "this token cannot do the admin calls" (adminRelay.ts of machine-cli handles the same two).
-    if (o['error'] === 'full_access_required' || o['error'] === 'scope_denied') {
+    // The scope gate of the real relay answers 403 with a free text in `error` and no code: on this admin-only call that is the same refusal.
+    const gateText = res.status === 403 && typeof o['error'] === 'string' && !['not_owner', 'not_registered', 'forbidden'].includes(o['error']);
+    if (o['error'] === 'full_access_required' || o['error'] === 'scope_denied' || gateText) {
       throw new RelayRequestError(res.status, `the token saved by \`machine admin login\` is a plain machine token, so it cannot list candidacies (${ADMIN_TOKEN_WHY}). ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
     }
     const why = typeof o['message'] === 'string' ? o['message'] : typeof o['error'] === 'string' ? o['error'] : 'no detail';

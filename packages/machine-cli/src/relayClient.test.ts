@@ -31,6 +31,38 @@ describe('normalizeRelayUrl', () => {
   });
 });
 
+const GATE_TEXT = (method: string, path: string) =>
+  `This token is limited to the scope machine and cannot call ${method} ${path}: that endpoint needs a full-access token. Use a token of the right scope, or ask the person who runs the relay for a full-access token.`;
+
+describe('the real scope gate answer (403, free text in "error", no code)', () => {
+  const ID = 'c'.repeat(22);
+  const doc = { body: { id: ID, to: UUID } } as never;
+  const calls: Array<[string, (c: ReturnType<typeof createRelayClient>) => Promise<unknown>, string, string]> = [
+    ['list candidacies', (c) => c.listCandidacies(), 'GET', '/api/machines/candidacies'],
+    ['decide', (c) => c.decideCandidacy(ID, { decision: 'reject' } as never), 'PUT', `/api/machines/candidacies/${ID}/decision`],
+    ['write an inbox document', (c) => c.putInboxDocument(UUID, doc), 'PUT', `/api/machines/${UUID}/inbox/${ID}`],
+    ['delete a machine', (c) => c.deleteMachine(UUID), 'DELETE', `/api/machines/${UUID}`],
+  ];
+  it.each(calls)('%s: the advice to run machine admin login, the relay text kept, the token never printed', async (_n, run, method, path) => {
+    const text = GATE_TEXT(method, path);
+    const e = await failure(run(clientWith(() => json(403, { success: false, error: text }))));
+    expect(e.status).toBe(403);
+    expect(e.message).toMatch(/cannot approve machines|plain machine token/);
+    expect(e.message).toContain('machine admin login');
+    expect(e.message).toContain('limited to the scope machine');
+    expect(e.message).not.toContain('SECRET-TOKEN');
+  });
+  it('a known machine code on an admin path keeps its own message (not_owner is not the machine-admin advice)', async () => {
+    const e = await failure(clientWith(() => json(403, { success: false, error: 'not_owner', message: 'no' })).putInboxDocument(UUID, doc));
+    expect(e.message).toMatch(/does not own the inbox/);
+    expect(e.message).not.toMatch(/machine admin login/);
+  });
+  it('the same free text on a path a machine may call is not the admin advice', async () => {
+    const e = await failure(clientWith(() => json(403, { success: false, error: GATE_TEXT('GET', '/api/whoami') })).whoami());
+    expect(e.message).not.toMatch(/machine admin login/);
+  });
+});
+
 describe('error mapping (injected fetch)', () => {
   it('401 on a machine route asks to join again, without the token', async () => {
     const e = await failure(clientWith(() => json(401, { success: false, error: 'unauthorized', message: 'bad token' })).getMachines());
@@ -319,10 +351,10 @@ describe('against the fake relay', () => {
     expect(e.status).toBe(401);
   });
 
-  it('a machine token cannot list candidacies (403 full_access_required)', async () => {
+  it('a machine token cannot list candidacies (403 with the free text of the real scope gate, read as scope_denied)', async () => {
     relay = await startFakeRelay();
     const client = createRelayClient({ baseUrl: relay.url, token: relay.token });
-    expect((await failure(client.listCandidacies())).code).toBe('full_access_required');
+    expect((await failure(client.listCandidacies())).code).toBe('scope_denied');
   });
 
   it('admin calls work with a full-access token and approval is visible to the candidate', async () => {
@@ -621,11 +653,11 @@ describe('inbox (documents distributed through the relay)', () => {
     expect(r.requests.filter((q) => q.method === 'GET' && q.path.endsWith('/inbox')).length).toBe(3);
   });
 
-  it('a machine token cannot PUT: full_access_required (403), explained with the machine-admin story and the command', async () => {
+  it('a machine token cannot PUT: the scope gate 403 (read as scope_denied), explained with the machine-admin story and the command', async () => {
     const { machine } = await clients();
     const e = await failure(machine.putInboxDocument(TO, doc(1)));
     expect(e.status).toBe(403);
-    expect(e.code).toBe('full_access_required');
+    expect(e.code).toBe('scope_denied');
     expect(e.message).toMatch(/plain machine token/);
     expect(e.message).toMatch(/machine admin login/);
     expect(e.message).toMatch(/machine-admin/);
@@ -678,7 +710,7 @@ describe('inbox (documents distributed through the relay)', () => {
     const { relay: r, machine, admin } = await clients();
     r.setOwner(TO, r.token);
     await admin.putInboxDocument(TO, doc(1));
-    expect((await failure(machine.deleteMachine(TO))).code).toBe('full_access_required');
+    expect((await failure(machine.deleteMachine(TO))).code).toBe('scope_denied');
     await admin.deleteMachine(TO);
     expect(r.inbox(TO)).toEqual([]);
     await admin.deleteMachine(TO);

@@ -42,6 +42,8 @@ interface Options {
   down?: ConnectFailureKind[];
   /** After the peer is up, fail with this instead of connecting. */
   afterUp?: ConnectFailureKind[];
+  /** With `afterUp`: the daemon listens from this fake time on (the peer connects). */
+  daemonAtMs?: number;
   interfaces?: LocalInterface[];
   sendFails?: boolean;
   resolveTo?: PeerTarget;
@@ -90,7 +92,7 @@ function world(options: Options = {}) {
       const address = tg.addresses[0] as AddressEntry;
       log.connects.push({ at: t, host: address.host, timeoutMs: opts.timeoutMs });
       const up = options.upAtMs !== undefined && t >= options.upAtMs;
-      if (up && options.afterUp === undefined) {
+      if (up && (options.afterUp === undefined || (options.daemonAtMs !== undefined && t >= options.daemonAtMs))) {
         t += options.upCostMs ?? 0;
         return { session, address, failures: [] };
       }
@@ -298,11 +300,27 @@ describe('connectWithWake', () => {
       expect(auditEntries().at(-1)).toMatchObject({ event: 'wake.result', outcome: 'aborted' });
     });
 
-    it('a refusal that appears WHILE waiting (the host resumed, no daemon) stops the sequence and says to start the daemon', async () => {
+    it('a refusal that appears WHILE waiting (the host resumed, no daemon): no more packet, the probes go on to the end of the wait, then the daemon message', async () => {
       const w = world({ upAtMs: 6000, costMs: 1000, afterUp: ['refused'] });
       const e = await connectWithWake(w.env, target(), settings()).catch((x: unknown) => x);
       expect(e).toBeInstanceOf(WakeError);
-      expect((e as Error).message).toMatch(/The host is awake but nothing listens: start the daemon there \(`machine startup enable` on that machine\)/);
+      expect((e as Error).message).toContain('"linux-box" is reachable but nothing listens on 192.168.1.40:47921: it is awake, so a magic packet would not help. Start the daemon there (`machine startup enable` on that machine), then run the command again');
+      expect((e as Error).message).toMatch(/still refused after 90 s of probing/);
+      // Two packets before the refusal at 6 s, none after; the probes went on to the 90 s of the wait.
+      expect(w.log.sends.length).toBe(2);
+      expect(w.log.connects.filter((c) => c.at > 20_000).length).toBeGreaterThan(20);
+      expect(w.now()).toBeGreaterThanOrEqual(90_000);
+      expect(auditEntries().at(-1)).toMatchObject({ event: 'wake.result', outcome: 'refused', packets: 2 });
+    });
+
+    it('a daemon that starts a few seconds after the host resumed is a success: the answer says the host was awake and how long the daemon took', async () => {
+      const w = world({ upAtMs: 6000, costMs: 1000, afterUp: ['refused'], daemonAtMs: 20_000 });
+      const r = await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 1000 }));
+      expect(r.wake).toMatchObject({ outcome: 'answered', packets: 2, elapsedSeconds: 20 });
+      expect(r.wake?.awakeAfterSeconds).toBeGreaterThanOrEqual(5);
+      expect(r.wake?.daemonTookSeconds).toBeGreaterThanOrEqual(10);
+      expect(w.log.info.join(' | ')).toMatch(/answered after 20 s \(the host was awake, the daemon took 1\d(\.\d)? s to listen\)/);
+      expect(auditEntries().at(-1)).toMatchObject({ event: 'wake.result', outcome: 'answered' });
     });
   });
 

@@ -3,7 +3,7 @@ import { planWakeSteps, type ConnectFailureKind } from './wake.js';
 import { runWakeSequence, type SentStep, type WakeEvent, type WakeSequenceDeps, type WakeSequenceOptions } from './wakeSequence.js';
 
 /** A clock that only moves when the code sleeps or a fake connection says it took time. */
-function harness(options: { upAtMs?: number; connectCostMs?: number; failure?: ConnectFailureKind[]; afterUp?: ConnectFailureKind[] } = {}) {
+function harness(options: { upAtMs?: number; connectCostMs?: number; failure?: ConnectFailureKind[]; afterUp?: ConnectFailureKind[]; daemonAtMs?: number } = {}) {
   let t = 0;
   const log = { sends: [] as Array<{ n: number; method: string; at: number }>, connects: [] as number[], refreshes: [] as number[], events: [] as WakeEvent[], sleeps: [] as number[] };
   const failure = options.failure ?? ['unreachable'];
@@ -17,7 +17,7 @@ function harness(options: { upAtMs?: number; connectCostMs?: number; failure?: C
       log.connects.push(t);
       t += options.connectCostMs ?? 0;
       if (options.upAtMs !== undefined && t >= options.upAtMs) {
-        if (options.afterUp) throw Object.assign(new Error('after up'), { kinds: options.afterUp });
+        if (options.afterUp && !(options.daemonAtMs !== undefined && t >= options.daemonAtMs)) throw Object.assign(new Error('after up'), { kinds: options.afterUp });
         return 'connected';
       }
       throw Object.assign(new Error('down'), { kinds: failure });
@@ -113,6 +113,37 @@ describe('runWakeSequence', () => {
       expect(r.packets).toBe(2);
     }
     expect(h.log.sends.length).toBe(2);
+  });
+
+  it('a refusal while waiting (the host resumed, no daemon yet): no packet after it, but the probes go on until the budget is used, then it ends as refused', async () => {
+    const h = harness({ upAtMs: 6000, connectCostMs: 1000, afterUp: ['refused'] });
+    const r = await runWakeSequence(h.deps, options());
+    expect(r.outcome).toBe('refused');
+    if (r.outcome === 'refused') {
+      expect(r.packets).toBe(2);
+      expect(r.elapsedMs).toBeGreaterThanOrEqual(90_000);
+      expect(r.awakeAtMs).toBe(6000);
+    }
+    expect(h.log.sends.length).toBe(2);
+    expect(h.log.connects.filter((at) => at > 10_000).length).toBeGreaterThan(50);
+  });
+
+  it('a daemon that starts a few seconds after the refusal is a success, and the answer says when the host was first seen awake', async () => {
+    const h = harness({ upAtMs: 6000, connectCostMs: 1000, afterUp: ['refused'], daemonAtMs: 20_000 });
+    const r = await runWakeSequence(h.deps, options());
+    expect(r.outcome).toBe('answered');
+    if (r.outcome === 'answered') {
+      expect(r.awakeAtMs).toBe(6000);
+      expect(r.packets).toBe(2);
+      expect(r.elapsedMs).toBeLessThan(25_000);
+    }
+    expect(h.log.sends.length).toBe(2);
+  });
+
+  it('an answer without any refusal has no awake time', async () => {
+    const h = harness({ upAtMs: 6000, connectCostMs: 1000 });
+    const r = await runWakeSequence(h.deps, options());
+    expect(r.outcome === 'answered' && r.awakeAtMs).toBeUndefined();
   });
 
   it('sends no packet during a cooldown (no steps) and still probes until the deadline', async () => {

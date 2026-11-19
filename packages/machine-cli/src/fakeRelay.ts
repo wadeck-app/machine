@@ -132,8 +132,9 @@ export interface FakeRelay {
   close: () => Promise<void>;
 }
 
-/** The relay's refusal of an admin call by a machine token (poc-node routes.js `requireAdmin`: always `full_access_required`). */
-const ADMIN_ONLY = 'This call is for the admin of the machine network: a full-access token or a token with the machine-admin scope. A machine token cannot list candidacies, decide on them, write an inbox document or delete a machine.';
+/** The scope gate of the real relay (poc-node scopes.js `denyMessage`): 403, a free text in `error`, no code, no `message`. */
+const gateText = (method: string, path: string): string =>
+  `This token is limited to the scope machine and cannot call ${method} ${path}: that endpoint needs a full-access token. Use a token of the right scope, or ask the person who runs the relay for a full-access token.`;
 
 const CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ23456789';
 /** A code that looks like a user code and is not `not`. */
@@ -226,6 +227,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
     res.end(body === undefined ? undefined : JSON.stringify(body));
   };
+  const gateDenied = (res: ServerResponse, method: string, path: string) => send(res, 403, { success: false, error: gateText(method, path), serverTime: 1 });
   const err = (res: ServerResponse, status: number, error: string, message: string, extra: object = {}) => send(res, status, { success: false, error, message, serverTime: 1, ...extra });
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
@@ -353,7 +355,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       return send(res, 201, { success: true, id, createdAt: iso(createdAt), expiresAt: iso(createdAt + 900) });
     }
     if (method === 'GET' && path === '/api/machines/candidacies') {
-      if (!admin) return err(res, 403, 'full_access_required', ADMIN_ONLY);
+      if (!admin) return gateDenied(res, method, path);
       return send(res, 200, {
         success: true,
         candidacies: [...candidacies.entries()]
@@ -374,7 +376,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
     const cand = /^\/api\/machines\/candidacies\/([^/]+)(\/decision)?$/.exec(path);
     if (cand) {
       // The scope gate comes first, as on the real relay (a machine token learns nothing about candidacies that are not its own).
-      if (method === 'PUT' && cand[2] && !admin) return err(res, 403, 'full_access_required', ADMIN_ONLY);
+      if (method === 'PUT' && cand[2] && !admin) return gateDenied(res, method, path);
       const entry = candidacies.get(decodeURIComponent(cand[1] as string));
       if (!entry) return err(res, 404, 'not_found', 'no such candidacy');
       // A candidacy is read by the token that posted it, or by the admin; anyone else gets the same 404 as for an unknown one.
@@ -382,7 +384,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (method === 'GET' && !cand[2] && !admin && poster !== undefined && poster !== presented) return err(res, 404, 'not_found', 'no such candidacy');
       if (method === 'GET' && !cand[2]) return send(res, 200, entry.status === 'approved' ? { status: 'approved', approval: entry.approval } : { status: entry.status });
       if (method === 'PUT' && cand[2]) {
-        if (!admin) return err(res, 403, 'full_access_required', ADMIN_ONLY);
+        if (!admin) return gateDenied(res, method, path);
         if (entry.status !== 'pending') return err(res, 409, 'not_pending', 'already decided');
         const b = body as { decision?: string; approval?: unknown };
         // The binding is saved in one step with the decision: over the limit, the candidacy stays pending.
@@ -406,7 +408,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const id = inboxRoute[2] === undefined ? undefined : decodeURIComponent(inboxRoute[2]);
       if (uuid !== uuid.toLowerCase()) return send(res, 403, { success: false, error: 'forbidden', serverTime: 1 });
       if (method === 'PUT' && id !== undefined) {
-        if (!admin) return err(res, 403, 'full_access_required', ADMIN_ONLY);
+        if (!admin) return gateDenied(res, method, path);
         if (!ID_PATTERN.test(id)) return err(res, 400, 'invalid_id', 'id must be 22 characters of base64url');
         const document = body as { body?: { to?: unknown; id?: unknown } } | undefined;
         if (document?.body?.to !== uuid || document?.body?.id !== id) return err(res, 400, 'invalid_body', 'body.to and body.id must equal the path');
@@ -445,7 +447,7 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       const uuid = machine[1] as string;
       if (uuid !== uuid.toLowerCase()) return send(res, 403, { success: false, error: 'forbidden', serverTime: 1 });
       if (method === 'DELETE' && !machine[2]) {
-        if (!admin) return err(res, 403, 'full_access_required', ADMIN_ONLY);
+        if (!admin) return gateDenied(res, method, path);
         records.delete(uuid);
         lastSeen.delete(uuid);
         owners.delete(uuid);

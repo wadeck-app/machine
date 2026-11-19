@@ -116,7 +116,7 @@ describe('fake relay: address records', () => {
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     const admin = createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
     await machine.putRecord(uuidN(1), recordFor(uuidN(1)));
-    expect((await failure(machine.deleteMachine(uuidN(1)))).code).toBe('full_access_required');
+    expect((await failure(machine.deleteMachine(uuidN(1)))).code).toBe('scope_denied');
     await admin.deleteMachine(uuidN(1));
     expect(await machine.getMachine(uuidN(1))).toBeUndefined();
     // The binding is gone too: the machine must post a new candidacy and be approved again.
@@ -420,7 +420,7 @@ describe('fake relay: the machine-admin scope', () => {
     expect((await call('GET', relay.url, '/api/whoami', relay.adminToken)).body.scopes).toBeNull();
   });
 
-  it('a plain machine token gets 403 full_access_required on every admin call', async () => {
+  it('a plain machine token gets the 403 of the real scope gate (free text, no code) on every admin call', async () => {
     relay = await startFakeRelay();
     const id = 'c'.repeat(22);
     for (const [method, path, body] of [
@@ -430,7 +430,9 @@ describe('fake relay: the machine-admin scope', () => {
       ['DELETE', `/api/machines/${uuidN(1)}`, undefined],
     ] as const) {
       const r = await call(method, relay.url, path, relay.token, body);
-      expect([r.status, r.body.error], `${method} ${path}`).toEqual([403, 'full_access_required']);
+      expect(r.status, `${method} ${path}`).toBe(403);
+      expect(r.body.error, `${method} ${path}`).toBe(`This token is limited to the scope machine and cannot call ${method} ${path}: that endpoint needs a full-access token. Use a token of the right scope, or ask the person who runs the relay for a full-access token.`);
+      expect(r.body.message).toBeUndefined();
     }
   });
 

@@ -1,7 +1,8 @@
 import { isWakeableFailure, type ConnectFailureKind, type WakeMethod, type WakeStep } from './wake.js';
 
 // The wait/retry sequence of a wake (decision 62): send a packet at each step, probe the connection in between (about one attempt per
-// `attemptIntervalMs`), stop at the answer, at the deadline or at a failure that waking cannot cure. Pure: the clock, the socket and the
+// `attemptIntervalMs`), stop at the answer, at the deadline or at a failure that waking cannot cure. A refused connection (the host is awake, no daemon
+// listens yet) stops the packets but not the probes: a daemon can start a few seconds after a resume. Pure: the clock, the socket and the
 // connection are injected. The only feedback a magic packet ever gives is the connection becoming possible.
 
 export interface SentStep extends WakeStep {
@@ -38,8 +39,11 @@ export interface WakeSequenceOptions {
 }
 
 export type WakeOutcome<T> =
-  | { outcome: 'answered'; value: T; packets: number; elapsedMs: number; lastStep: SentStep | undefined }
+  /** `awakeAtMs`: when a probe was first refused (the host was awake, no daemon listened yet); absent when no probe was refused. */
+  | { outcome: 'answered'; value: T; packets: number; elapsedMs: number; lastStep: SentStep | undefined; awakeAtMs?: number }
   | { outcome: 'no-answer'; packets: number; elapsedMs: number; lastError: unknown }
+  /** Probes were refused until the budget was used: the host is awake and no daemon listens. */
+  | { outcome: 'refused'; packets: number; elapsedMs: number; awakeAtMs: number; lastError: unknown }
   /** A retry failed for a reason waking cannot cure (authentication, pin, protocol): the peer is up or something else is wrong. */
   | { outcome: 'aborted'; error: unknown; kinds: ConnectFailureKind[]; packets: number; elapsedMs: number }
   | { outcome: 'send-failed'; error: Error; packets: number; elapsedMs: number };
@@ -51,10 +55,12 @@ export async function runWakeSequence<T>(deps: WakeSequenceDeps<T>, options: Wak
   let lastStep: SentStep | undefined;
   let lastRefresh = start;
   let lastError: unknown;
+  // Set at the first refused probe: from then on no packet is sent (the host is awake), the probes go on.
+  let awakeAtMs: number | undefined;
   for (;;) {
     let elapsed = deps.nowMs() - start;
-    if (elapsed >= options.waitMs) return { outcome: 'no-answer', packets: sent, elapsedMs: elapsed, lastError };
-    while (sent < total && elapsed >= (options.steps[sent] as WakeStep).atMs) {
+    if (elapsed >= options.waitMs) return awakeAtMs !== undefined ? { outcome: 'refused', packets: sent, elapsedMs: elapsed, awakeAtMs, lastError } : { outcome: 'no-answer', packets: sent, elapsedMs: elapsed, lastError };
+    while (awakeAtMs === undefined && sent < total && elapsed >= (options.steps[sent] as WakeStep).atMs) {
       const step: SentStep = { ...(options.steps[sent] as WakeStep), n: sent + 1 };
       try {
         await deps.send(step, total);
@@ -73,15 +79,18 @@ export async function runWakeSequence<T>(deps: WakeSequenceDeps<T>, options: Wak
     const attemptStart = deps.nowMs();
     try {
       const value = await deps.connect();
-      return { outcome: 'answered', value, packets: sent, elapsedMs: deps.nowMs() - start, lastStep };
+      return { outcome: 'answered', value, packets: sent, elapsedMs: deps.nowMs() - start, lastStep, ...(awakeAtMs !== undefined ? { awakeAtMs } : {}) };
     } catch (e) {
       const kinds = deps.kindsOf(e);
-      if (!isWakeableFailure(kinds)) return { outcome: 'aborted', error: e, kinds, packets: sent, elapsedMs: deps.nowMs() - start };
+      // Refused, with nothing worse next to it (unreachable and timeout are what a sleeping host gives): the host is awake and has no daemon yet.
+      const refusedOnly = kinds.includes('refused') && kinds.every((k) => k === 'refused' || k === 'unreachable' || k === 'timeout');
+      if (refusedOnly) awakeAtMs ??= deps.nowMs() - start;
+      if (!refusedOnly && !isWakeableFailure(kinds)) return { outcome: 'aborted', error: e, kinds, packets: sent, elapsedMs: deps.nowMs() - start };
       lastError = e;
     }
     const now = deps.nowMs();
     elapsed = now - start;
-    const nextPacket = sent < total ? (options.steps[sent] as WakeStep).atMs : Number.POSITIVE_INFINITY;
+    const nextPacket = awakeAtMs === undefined && sent < total ? (options.steps[sent] as WakeStep).atMs : Number.POSITIVE_INFINITY;
     const pause = Math.min(Math.max(0, options.attemptIntervalMs - (now - attemptStart)), Math.max(0, nextPacket - elapsed), Math.max(0, options.waitMs - elapsed));
     if (pause > 0) await deps.sleep(pause);
     // A pause of 0 means a packet is due or the budget is used: the loop sends it or stops. An attempt that took longer than the interval goes straight on.

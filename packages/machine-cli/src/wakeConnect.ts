@@ -109,6 +109,10 @@ export interface WakeSummary {
   /** The answer came after more than 80% of its window: raise probeSeconds. */
   tight: boolean;
   cooldownSeconds?: number;
+  /** A probe was refused before the answer (the host was awake, no daemon listened yet): seconds from the first failure to that refusal. */
+  awakeAfterSeconds?: number;
+  /** Same case: seconds the daemon took to listen after the host was seen awake. */
+  daemonTookSeconds?: number;
 }
 
 const fmt = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
@@ -125,6 +129,10 @@ function refusedAddresses(error: unknown, target: PeerTarget): string {
   const refused = error instanceof AllAddressesFailedError ? error.attempts.filter((a) => a.kind === 'refused').map((a) => a.address) : target.addresses.slice(0, 1);
   return [...new Set(refused.map(describeAddress))].join(', ');
 }
+
+/** The host answered (connection refused) and no daemon listens: what to do. Said at once when the first attempt is refused, and after the wait when the probes of the wake were. */
+const nothingListens = (name: string, where: string): string =>
+  `"${name}" is reachable but nothing listens on ${where}: it is awake, so a magic packet would not help. Start the daemon there (\`machine startup enable\` on that machine), then run the command again`;
 
 const hostsOf =(target: PeerTarget): string[] => target.addresses.map((a) => a.host);
 
@@ -148,7 +156,7 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
   const kinds = kindsOfConnectFailure(first);
   if (kinds.includes('refused')) {
     // The host answered at TCP level: it is awake and no daemon listens. Said before anything else, with where and what to do; no packet.
-    env.info(`"${name}" is reachable but nothing listens on ${refusedAddresses(first, target)}: it is awake, so a magic packet would not help. Start the daemon there (\`machine startup enable\` on that machine), then run the command again`);
+    env.info(nothingListens(name, refusedAddresses(first, target)));
     throw first;
   }
   if (!isWakeableFailure(kinds)) {
@@ -247,12 +255,17 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
   if (outcome.outcome === 'answered') {
     const answer = describeAnswer({ elapsedMs: outcome.elapsedMs, lastStep: outcome.lastStep, probeMs: tuning.probeSeconds * 1000 });
     result({ outcome: 'answered', ...(answer.followedBy ? { followedBy: answer.followedBy } : {}), window: answer.window });
+    const awakeAfter = outcome.awakeAtMs === undefined ? undefined : Math.round(outcome.awakeAtMs / 100) / 10;
+    const daemonTook = outcome.awakeAtMs === undefined ? undefined : Math.round((outcome.elapsedMs - outcome.awakeAtMs) / 100) / 10;
     const how =
-      answer.followedBy === undefined
+      daemonTook !== undefined
+        ? `after ${fmt(answer.elapsedSeconds)} s (the host was awake, the daemon took ${fmt(daemonTook)} s to listen)`
+        : answer.followedBy === undefined
         ? `after ${fmt(answer.elapsedSeconds)} s with no packet sent by this run`
         : `after ${fmt(answer.elapsedSeconds)} s, woken by ${answer.followedBy} (probe window ${answer.window}, ${fmt(answer.intoWindowSeconds)} s into its ${tuning.probeSeconds} s)`;
     env.ok(`"${name}" answered ${how}. Wake-on-LAN gives no acknowledgement: this names the last packet sent before the answer, it does not prove which one worked`);
-    if (answer.tight) {
+    // An answer that came after a refusal says nothing about the probe window: the host was already awake.
+    if (answer.tight && daemonTook === undefined) {
       env.info(
         `it answered ${fmt(answer.intoWindowSeconds)} s into a ${tuning.probeSeconds} s probe window: a slower resume would be missed. Raise the window for this peer: machine peer connect ${name} --wake-probe ${Math.min(60, tuning.probeSeconds * 2)}`,
       );
@@ -272,8 +285,16 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
       intoWindowSeconds: answer.intoWindowSeconds,
       tight: answer.tight,
       ...(cooldown > 0 ? { cooldownSeconds: cooldown } : {}),
+      ...(awakeAfter !== undefined && daemonTook !== undefined ? { awakeAfterSeconds: awakeAfter, daemonTookSeconds: daemonTook } : {}),
     };
     return { connected: outcome.value, wake: summary };
+  }
+
+  if (outcome.outcome === 'refused') {
+    result({ outcome: 'refused', awakeAfterMs: Math.round(outcome.awakeAtMs) });
+    throw new WakeError(
+      `${nothingListens(name, refusedAddresses(outcome.lastError, current))}. It was still refused after ${tuning.waitSeconds} s of probing (first refused ${fmt(Math.round(outcome.awakeAtMs / 100) / 10)} s after the first failure; ${outcome.packets} packet(s) sent before that, none after)`,
+    );
   }
 
   if (outcome.outcome === 'aborted') {

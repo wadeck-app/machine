@@ -250,6 +250,20 @@ const relayText = (text: string): string => {
 
 const asObject = (value: unknown): Record<string, unknown> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
 
+const UUID_SEGMENT = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const ID_SEGMENT = '[A-Za-z0-9_-]{22}';
+// The calls only a full-access or machine-admin token may make (poc-node scopes.js ADMIN_CALLS): the list of candidacies, the decision on one,
+// writing an inbox document, deleting a machine.
+const ADMIN_ONLY_CALLS: ReadonlyArray<readonly [string, RegExp]> = [
+  ['GET', new RegExp('^/api/machines/candidacies$')],
+  ['PUT', new RegExp(`^/api/machines/candidacies/${ID_SEGMENT}/decision$`)],
+  ['PUT', new RegExp(`^/api/machines/${UUID_SEGMENT}/inbox/${ID_SEGMENT}$`)],
+  ['DELETE', new RegExp(`^/api/machines/${UUID_SEGMENT}$`)],
+];
+const isAdminOnlyCall = (method: string, path: string): boolean => ADMIN_ONLY_CALLS.some(([m, re]) => m === method && re.test(path.split('?')[0] as string));
+// The codes a machine call can get on a 403 from the route itself (not from the scope gate): they keep their own explanation.
+const MACHINE_CODES_ON_403: ReadonlySet<string> = new Set(['not_owner', 'not_registered', 'too_many_machines', 'forbidden', 'full_access_required', 'scope_denied']);
+
 export function createRelayClient(options: RelayClientOptions): RelayClient {
   const baseUrl = normalizeRelayUrl(options.baseUrl);
   const doFetch = options.fetch ?? globalThis.fetch;
@@ -347,8 +361,12 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     // Sanitized once, here: the relay's text reaches the terminal and the log through the message, humanText and code.
     const error = typeof body.error === 'string' ? relayText(body.error) : undefined;
     const relayMessage = typeof body.message === 'string' ? relayText(body.message) : undefined;
-    const code = c.pairing ? undefined : error;
-    const humanText = c.pairing ? error : relayMessage;
+    // The scope gate of the real relay (poc-node scopes.js denyMessage) answers 403 with a free text in `error` and NO code ("This token is
+    // limited to the scope machine and cannot call ..."). On an admin-only call, with no code a machine call can also get, that text is the
+    // refusal of a plain machine token: it is read as `scope_denied`, the relay's text kept as the human text.
+    const gateDenied = status === 403 && !c.pairing && !c.publicRoute && isAdminOnlyCall(c.method, c.path) && (error === undefined || !MACHINE_CODES_ON_403.has(error));
+    const code = gateDenied ? 'scope_denied' : c.pairing ? undefined : error;
+    const humanText = c.pairing ? error : gateDenied ? (relayMessage ?? error) : relayMessage;
     const retryHeader = Number(headers.get('retry-after'));
     const retryBody = typeof body.retryAfterSeconds === 'number' ? body.retryAfterSeconds : undefined;
     const retryAfterSeconds = retryBody ?? (Number.isFinite(retryHeader) && headers.get('retry-after') !== null ? retryHeader : undefined);
