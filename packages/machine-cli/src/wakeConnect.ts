@@ -77,6 +77,8 @@ export interface WakeEnv {
   peer: PeerToReach;
   /** Which command asked for the wake (audit). */
   requestedBy: 'run' | 'ping' | 'peer wake';
+  /** An explicit `machine peer wake`: the 60 s cooldown (made for the automatic wakes of `run` and `ping`) does not apply. The packet limits do. */
+  bypassCooldown?: boolean;
   epochSeconds: () => number;
   nowMs: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -118,7 +120,13 @@ function describeFailure(error: unknown): string {
   return reasonOf((error as Error).message);
 }
 
-const hostsOf = (target: PeerTarget): string[] => target.addresses.map((a) => a.host);
+/** The addresses that refused the connection, as `host:port`. */
+function refusedAddresses(error: unknown, target: PeerTarget): string {
+  const refused = error instanceof AllAddressesFailedError ? error.attempts.filter((a) => a.kind === 'refused').map((a) => a.address) : target.addresses.slice(0, 1);
+  return [...new Set(refused.map(describeAddress))].join(', ');
+}
+
+const hostsOf =(target: PeerTarget): string[] => target.addresses.map((a) => a.host);
 
 function destinationsOf(method: WakeMethod, routes: readonly WakeRoute[]): string[] {
   return [...new Set(routes.flatMap((r) => (method === 'unicast' ? r.unicast : [r.broadcast])))];
@@ -138,6 +146,11 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
   if (settings === undefined) throw first;
   const name = env.peer.name;
   const kinds = kindsOfConnectFailure(first);
+  if (kinds.includes('refused')) {
+    // The host answered at TCP level: it is awake and no daemon listens. Said before anything else, with where and what to do; no packet.
+    env.info(`"${name}" is reachable but nothing listens on ${refusedAddresses(first, target)}: it is awake, so a magic packet would not help. Start the daemon there (\`machine startup enable\` on that machine), then run the command again`);
+    throw first;
+  }
   if (!isWakeableFailure(kinds)) {
     // Said for a connection failure only: a missing address record or a relay error is not about the peer being up or down.
     if (first instanceof AllAddressesFailedError || first instanceof ConnectError) env.info(`not waking "${name}": ${describeFailure(first)}. A magic packet cannot fix that (only "unreachable" and "timeout" can mean a sleeping machine)`);
@@ -151,7 +164,7 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
 
   // The cooldown file is read before anything is sent: a corrupt one stops here, naming the file.
   const lastWakeAt = readWakeState(env.configDir).peers[env.peer.peerId]?.lastWakeAt;
-  const cooldown = cooldownRemainingSeconds(lastWakeAt, env.epochSeconds());
+  const cooldown = env.bypassCooldown === true ? 0 : cooldownRemainingSeconds(lastWakeAt, env.epochSeconds());
   const steps = cooldown > 0 ? [] : planWakeSteps({ canUnicast, maxUnicast: tuning.maxUnicast, maxBroadcast: tuning.maxBroadcast, probeMs: tuning.probeSeconds * 1000, waitMs: tuning.waitSeconds * 1000 });
   const packet = buildMagicPacket(settings.macBytes);
 
@@ -266,7 +279,7 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
   if (outcome.outcome === 'aborted') {
     result({ outcome: 'aborted', kinds: outcome.kinds });
     throw new WakeError(
-      `"${name}" answers, but the connection fails for another reason, so waking is not the problem (after ${outcome.packets} packet(s), ${fmt(Math.round(outcome.elapsedMs / 100) / 10)} s): ${(outcome.error as Error).message}`,
+      `"${name}" answers, but the connection fails for another reason, so waking is not the problem (after ${outcome.packets} packet(s), ${fmt(Math.round(outcome.elapsedMs / 100) / 10)} s): ${(outcome.error as Error).message}${outcome.kinds.includes('refused') ? `. The host is awake but nothing listens: start the daemon there (\`machine startup enable\` on that machine), then run the command again` : ''}`,
     );
   }
 

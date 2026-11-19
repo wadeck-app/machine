@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bundleLinkLine, planBundleLink, syncBundleLink, type BundleLinkFs } from './bundleLink.js';
+import { pruneStaged } from './platformBinary.js';
 
 // The Windows junction `<staged folder>\node_modules` -> the folder that holds @wadeck-app/machine-cli (port of orch bundle-link.ts).
 // The Go launcher, staged out of node_modules, finds the bundle only through <node dir>\node_modules or by walking up node_modules from its own folder.
@@ -130,6 +131,17 @@ describe.runIf(process.platform === 'win32')('junction on the real file system (
     syncBundleLink(planFor(modules));
     expect(lstatSync(join(stage, 'node_modules')).isSymbolicLink()).toBe(true);
     rmSync(stage, { recursive: true });
+    expect(existsSync(bundle)).toBe(true);
+    expect(realFs.readFileSync(bundle, 'utf8')).toBe('// bundle');
+  });
+
+  it('pruneStaged on a staged folder that holds a real junction removes the junction and the folder, never the target', () => {
+    syncBundleLink(planFor(modules));
+    expect(lstatSync(join(stage, 'node_modules')).isSymbolicLink()).toBe(true);
+    const result = pruneStaged(join(root, 'config'), 'another-stamp');
+    expect(result).toEqual({ removed: ['1.0.0'], skipped: [] });
+    expect(existsSync(stage)).toBe(false);
+    // The target of the junction is untouched.
     expect(existsSync(bundle)).toBe(true);
     expect(realFs.readFileSync(bundle, 'utf8')).toBe('// bundle');
   });

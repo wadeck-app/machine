@@ -240,7 +240,7 @@ describe('admin approve and join: the relay flow', () => {
   });
 
   async function adminReady(): Promise<string> {
-    await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
+    await ok(adminDir, ['admin', 'login', '87654321', '--full-access', '--relay', relay.url]);
     await ok(cand, ['join', '12345678', '--relay', relay.url, '--no-wait']);
     return [...relay.candidacies.keys()].at(-1) as string;
   }

@@ -6,6 +6,7 @@ import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { runStartupCommand } from './cliStartup.js';
+import { runWakeInfo } from './cliWake.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
@@ -35,7 +36,7 @@ Getting started (one command per machine; the name of a machine is the computer 
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
   then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
-  check the connection (reads only, runs nothing, needs no allowlist entry):
+  check the connection (runs nothing on the peer, needs no allowlist entry; the revocation hello is the real catch-up, see ping below):
     machine ping                     this machine's path to the relay, one line per step ([ok] / [warn] / [fail] with cause and fix)
     machine ping <machine>           the real authenticated channel to a peer, like ping(8): handshake and hello times
   reach a machine that sleeps (same LAN only; the Wake-on-LAN packets are sent from THIS machine):
@@ -43,6 +44,8 @@ Getting started (one command per machine; the name of a machine is the computer 
                                      once: pins the address and the MAC you type (never learned from the relay); then
                                      \`machine run\` and \`machine ping\` wake the machine when it cannot be reached
     machine peer wake <machine>      wake it now and wait for it to answer: prints each step and the measured time
+    machine wake-info <machine>      checklist to prepare THE TARGET (BIOS/driver, per-system settings, daemon at login, its MAC)
+    A refused connection (the machine answers, no daemon listens) is never woken: start the daemon there.
     The target must SLEEP (suspend), not be shut down: its daemon starts at login, so a machine woken from power-off
     without auto-login does not listen. Wake-on-LAN gives no acknowledgement: BIOS/driver settings are on the target
   Stays manual: the passphrase, the one confirmation in the relay console (relay login code) and the security-code comparison (the human steps).
@@ -86,8 +89,12 @@ Commands:
                                      prefix, resolved like run): the addresses come from --address or the signed record of the relay, exactly
                                      as for run, then the mutual TLS 1.3 channel opens (key pinned, pair secret proven) and the revocation
                                      hello (the same one run sends first) is answered; no command is sent, so nothing is executed, no
-                                     allowlist entry is needed and the peer audits nothing. Reports each address tried, the handshake time,
-                                     the hello round trip, the registration (serial, admin key id) and whether the revocation lists matched.
+                                     allowlist entry is needed and the peer audits nothing when the hello is answered. The hello is the real
+                                     revocation catch-up: admin-signed revocation lists may be installed here, the peer's version is recorded
+                                     here and yours there, and it uses one of the peer's 6 revocation exchanges per minute (shared with run).
+                                     Reports each address tried, the handshake time,
+                                     the hello round trip, the registration (serial, admin key id) and whether the revocation lists matched
+                                     (a refused hello is "not compared", not a difference).
                                      --count <n> (1 to 10, default 1) opens n connections one second apart and prints min/avg/max (the
                                      hello is sent in the first 4 only: a peer allows 6 revocation exchanges per minute). Exit 0 ok, 1
                                      failure, 2 usage, 3 unknown or ambiguous machine. --wake / --no-wake as for run (one wake per ping)
@@ -108,9 +115,10 @@ Commands:
                                      later it is discarded and nothing is pinned (ask the admin again: join --resume).
                                      get a relay token, post this machine's candidacy (with its uuid), wait for the
                                      admin's approval, then show the security code and enroll. Without a code: device
-                                     login. It prints a code and a page; open the page (any browser), check that
-                                     the address and label match this machine and type the code there. Nothing is
-                                     typed here, no terminal is needed (SSH works). Ctrl-C or a lost session during
+                                     login. It prints a code and a page; open the page (any browser), compare the
+                                     code with the one the console shows, check that the source address and the label
+                                     match this machine, then approve (click the code when the console lists several).
+                                     Nothing is typed here, no terminal is needed (SSH works). Ctrl-C or a lost session during
                                      the device login stores nothing: run \`machine join <relay>\` again for a new code
                                      (the device code is never printed nor saved).
                                      The argument: only digits (spaces and hyphens allowed, 1234 5678) = pairing
@@ -151,7 +159,8 @@ Administration (enrollment through the relay, or by files):
                                      a relay that predates the machine-admin scope fails loudly (update it), nothing falls back to
                                      full access by itself. --full-access: the explicit opt-in to a FULL-ACCESS token (it can also
                                      manage tokens; a [warn] says so). With a code: claims a pairing code of the relay console
-                                     (scripts; Tokens, Add token, Limited to scopes: machine-admin). A plain machine token is refused
+                                     (scripts; Tokens, Add token, Limited to scopes: machine-admin). A plain machine token is refused,
+                                     and so is a FULL-ACCESS pairing unless --full-access is given with the code
   admin approve [<id>] [--relay <url>] [--days <n>] [--reject]
                                      without id: no pending candidacy says so; exactly ONE goes straight to its details; several are listed
                                      (id, name, host, address, age) and you pass the id;
@@ -207,13 +216,20 @@ Administration (enrollment through the relay, or by files):
                                      peer address, a probe window, a directed broadcast, a probe window, alternating, never more
                                      than --wake-max-unicast and --wake-max-broadcast (default 4 each, at most 8 each), the
                                      whole wait <= --wake-wait (default 90, 10 to 600), each probe window --wake-probe (default 5,
-                                     1 to 60), each attempt --wake-connect-timeout (default 1000 ms), --wake-settle seconds of
+                                     1 to 60), each probe attempt (connect and handshake) --wake-connect-timeout (default 3000 ms, 200 to 10000), --wake-settle seconds of
                                      pause after the answer (default 0). Only toward the subnet this machine shares with the peer.
                                      A flag changes that value and keeps the others. UNVERIFIED on real hardware: tune per peer
   peer connect <machine> --show      the effective values, (default) marks what nobody set
   peer connect <machine> --remove    forget the settings of that peer
   peer wake <machine>                send the wake now (the same steps), wait for the peer to answer, print the measured time
-                                     and a hint when the answer came late in a probe window. Exit 0 answers, 1 not
+                                     and a hint when the answer came late in a probe window. Exit 0 answers, 1 not. The 60 s cooldown
+                                     between wakes applies to \`run --wake\` and \`ping --wake\`; this explicit command ignores it (the
+                                     packet limits still apply)
+  wake-info <machine>                checklist to prepare THE TARGET for Wake-on-LAN: what this machine knows (pinned address, MAC),
+                                     the BIOS/UEFI and per-system settings (Linux ethtool and NetworkManager; macOS and Windows
+                                     lines are marked UNVERIFIED), the machine-side requirements (suspend not shut down, daemon
+                                     at login, same LAN), how to find the MAC, and the \`machine peer connect\` command to run here.
+                                     Plain text, reads local files only, sends nothing. Exit 0, 3 unknown machine
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy signed by the admin for this machine
@@ -387,7 +403,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, 'wake-info': 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -488,6 +504,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
 
     if (command === 'startup') return await runStartupCommand(ctx);
     if (command === 'cli') return await runCliMeta(ctx);
+    if (command === 'wake-info') return runWakeInfo(ctx);
 
     const handled = await runNetworkCommand(command, ctx);
     if (handled !== undefined) return handled;

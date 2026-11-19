@@ -164,11 +164,12 @@ describe('connectWithWake', () => {
   });
 
   it('sends unicast, probes, sends broadcast, probes, alternating; success after the third packet stops it and is measured', async () => {
+    // 1000 ms attempts (the fake attempt costs 1000 ms): one probe per second.
     const w = world({ upAtMs: 12_000, costMs: 1000 });
-    const r = await connectWithWake(w.env, target(), settings());
+    const r = await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 1000 }));
     expect(w.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['unicast@0', 'broadcast@5000', 'unicast@10000']);
     expect(w.log.sends[0]?.routes[0]).toMatchObject({ unicast: ['192.168.1.40'], broadcast: '192.168.1.255', localAddress: '192.168.1.10' });
-    // Probes between the packets: about one attempt per second, each with the 1000 ms limit of the peer settings.
+    // Probes between the packets: about one attempt per second, each with the limit of the peer settings.
     const between = w.log.connects.filter((c) => c.at > 0 && c.at < 5000);
     expect(between.length).toBeGreaterThanOrEqual(3);
     expect(between.every((c) => c.timeoutMs === 1000)).toBe(true);
@@ -194,7 +195,7 @@ describe('connectWithWake', () => {
 
   it('prints the measured time and, when it took more than 80% of a window, the hint to raise probeSeconds for that peer', async () => {
     const w = world({ upAtMs: 14_000, upCostMs: 200, costMs: 1000 });
-    await connectWithWake(w.env, target(), settings());
+    await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 1000 }));
     const said = w.log.info.join('\n');
     expect(said).toMatch(/answered after 14\.2 s, woken by unicast \(probe window 3, 4\.2 s into its 5 s\)/);
     expect(said).toMatch(/4\.2 s into a 5 s probe window/);
@@ -225,6 +226,21 @@ describe('connectWithWake', () => {
     expect(JSON.stringify(entries)).not.toMatch(/"woke"/);
   });
 
+  it('an explicit wake (bypassCooldown) sends packets even when the last wake was seconds ago; the packet limits still apply', async () => {
+    recordWake(dir, UUID, EPOCH0 - 5);
+    const run = world({ costMs: 1000 });
+    const err = await connectWithWake(run.env, target(), settings({ waitSeconds: 10, probeSeconds: 2 })).catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(WakeError);
+    expect(run.log.sends).toEqual([]);
+    expect((err as Error).message).toMatch(/cooldown/);
+    const explicit = world({ costMs: 1000 });
+    explicit.env.bypassCooldown = true;
+    const again = await connectWithWake(explicit.env, target(), settings({ waitSeconds: 10, probeSeconds: 2, maxUnicast: 2, maxBroadcast: 1 })).catch((x: unknown) => x);
+    expect(again).toBeInstanceOf(WakeError);
+    expect(explicit.log.sends.map((s) => s.method)).toEqual(['unicast', 'broadcast', 'unicast']);
+    expect(explicit.log.info.join('\n')).not.toMatch(/cooldown/);
+  });
+
   it('writes the cooldown state when the first packet goes', async () => {
     const w = world({ upAtMs: 2000, costMs: 1000 });
     await connectWithWake(w.env, target(), settings());
@@ -239,6 +255,23 @@ describe('connectWithWake', () => {
       expect(existsSync(wakeAuditFile(dir))).toBe(false);
       expect(existsSync(wakeStateFile(dir))).toBe(false);
       expect(w.log.info.join('\n')).toMatch(/not waking "linux-box"/);
+    });
+
+    it('a refused connection (the host answered, no daemon listens): no packet, and the message says to start the daemon', async () => {
+      const w = world({ down: ['refused'], costMs: 100 });
+      await expect(connectWithWake(w.env, target(), settings())).rejects.toBeInstanceOf(AllAddressesFailedError);
+      expect(w.log.sends).toEqual([]);
+      expect(existsSync(wakeAuditFile(dir))).toBe(false);
+      expect(existsSync(wakeStateFile(dir))).toBe(false);
+      const said = w.log.info.join('\n');
+      expect(said).toContain('"linux-box" is reachable but nothing listens on 192.168.1.40:47921: it is awake, so a magic packet would not help. Start the daemon there (`machine startup enable` on that machine), then run the command again');
+    });
+
+    it('a refusal mixed with a timeout is still a refusal: the host is up', async () => {
+      const w = world({ down: ['timeout', 'refused'], costMs: 100 });
+      await expect(connectWithWake(w.env, target(), settings())).rejects.toBeInstanceOf(AllAddressesFailedError);
+      expect(w.log.sends).toEqual([]);
+      expect(w.log.info.join('\n')).toMatch(/reachable but nothing listens on 192\.168\.1\.40:47921/);
     });
 
     it('one address unreachable and another refusing authentication: not woken (the peer is up)', async () => {
@@ -264,6 +297,13 @@ describe('connectWithWake', () => {
       expect(w.log.sends.length).toBe(2);
       expect(auditEntries().at(-1)).toMatchObject({ event: 'wake.result', outcome: 'aborted' });
     });
+
+    it('a refusal that appears WHILE waiting (the host resumed, no daemon) stops the sequence and says to start the daemon', async () => {
+      const w = world({ upAtMs: 6000, costMs: 1000, afterUp: ['refused'] });
+      const e = await connectWithWake(w.env, target(), settings()).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(WakeError);
+      expect((e as Error).message).toMatch(/The host is awake but nothing listens: start the daemon there \(`machine startup enable` on that machine\)/);
+    });
   });
 
   describe('where a packet may go', () => {
@@ -281,7 +321,7 @@ describe('connectWithWake', () => {
 
     it('no IPv4 address known but a configured broadcast of this LAN: broadcast only, and the output says so', async () => {
       const w = world({ upAtMs: 9000, costMs: 1000 });
-      await connectWithWake(w.env, target('box.example.net'), settings({ broadcast: '192.168.1.255' }));
+      await connectWithWake(w.env, target('box.example.net'), settings({ broadcast: '192.168.1.255', connectTimeoutMs: 1000 }));
       expect(w.log.sends.every((s) => s.method === 'broadcast')).toBe(true);
       expect(w.log.sends.length).toBe(2);
       expect(w.log.info.join('\n')).toMatch(/no known IPv4 address of "linux-box" on this network: broadcast only/);

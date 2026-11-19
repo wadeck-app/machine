@@ -1,5 +1,5 @@
-import { parseAddress, type AddressEntry, type SigningKeyPair } from '@wadeck-app/machine-core';
-import { connectToPeer, type PeerSession } from '@wadeck-app/machine-transport';
+import { parseAddress, type AddressEntry, type ConnectFailureKind, type SigningKeyPair } from '@wadeck-app/machine-core';
+import { connectToPeer, ConnectError, type PeerSession } from '@wadeck-app/machine-transport';
 import { whenText } from './humanTime.js';
 import { connectFirst, CONNECT_TIMEOUT_MS, PeerAddressError, resolvePeerAddresses } from './peerAddresses.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
@@ -88,9 +88,19 @@ export interface Connected {
  * kept (an `AllAddressesFailedError` when none answers). `onAttempt` is called with each address just before it is tried (timing in `machine ping`).
  * `timeoutMs`: the per-address limit of a wake probe (a short one); absent, the normal limit of the source applies.
  */
-export async function connectToTarget(identity: SigningKeyPair, peer: PeerToReach, target: PeerTarget, onAttempt?: (address: AddressEntry) => void, timeoutMs?: number): Promise<Connected> {
+export async function connectToTarget(
+  identity: SigningKeyPair,
+  peer: PeerToReach,
+  target: PeerTarget,
+  onAttempt?: (address: AddressEntry) => void,
+  timeoutMs?: number,
+  /** Tests only (WakeIo.simulateFailure): a sleeping peer. */
+  simulateFailure?: (address: AddressEntry) => ConnectFailureKind | undefined,
+): Promise<Connected> {
   const connect = (address: AddressEntry, handshakeTimeoutMs?: number) => {
     onAttempt?.(address);
+    const simulated = simulateFailure?.(address);
+    if (simulated !== undefined) return Promise.reject(new ConnectError(`cannot reach ${address.host}:${address.port}: simulated ${simulated} (tests only)`, simulated));
     return connectToPeer({
       identity,
       host: address.host,

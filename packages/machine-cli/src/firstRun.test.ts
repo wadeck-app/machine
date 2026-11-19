@@ -403,6 +403,13 @@ describe('passphrase hint (decision 57)', () => {
     expect(existsSync(adminKeyFile(a))).toBe(false);
   });
 
+  it('--hint with only spaces is a usage error (never silently dropped), before anything is asked', async () => {
+    const blank = await cli(a, ['admin', 'init', '--hint', '   '], forbidden('a passphrase'));
+    expect(blank.code).toBe(2);
+    expect(blank.err).toMatch(/--hint.*only spaces/);
+    expect(existsSync(adminKeyFile(a))).toBe(false);
+  });
+
   it('--hint is refused anywhere else', async () => {
     const r = await cli(a, ['status', '--hint', 'x']);
     expect(r.code).toBe(2);

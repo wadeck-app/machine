@@ -46,7 +46,7 @@ beforeEach(async () => {
   }
   relay = await startFakeRelay();
   admin = makeAdmin(adminDir);
-  await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
+  await ok(adminDir, ['admin', 'login', '87654321', '--full-access', '--relay', relay.url]);
   await enroll(dirOf('laptop'), 'cand-laptop');
 });
 afterEach(async () => {

@@ -24,12 +24,12 @@ async function cli(...args: string[]): Promise<{ code: number; out: string; err:
 
 describe('startMachineDaemon', () => {
   it('refuses to start without an identity and says what to run', async () => {
-    await expect(startMachineDaemon(dir, { port: 0, version: 'x' })).rejects.toThrow(/machine init --name/);
+    await expect(startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'x' })).rejects.toThrow(/machine init --name/);
   });
 
   it('serves the CLI: status goes through the running daemon, not an in-process copy', async () => {
     initMachine(dir, 'desktop');
-    const daemon = await startMachineDaemon(dir, { port: 0, version: 'served-by-daemon' });
+    const daemon = await startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'served-by-daemon' });
     try {
       const r = await cli('status');
       expect(r.code).toBe(0);
@@ -42,7 +42,7 @@ describe('startMachineDaemon', () => {
 
   it('exposes a promise that settles when the daemon has stopped, so `machine daemon` can end cleanly', async () => {
     initMachine(dir, 'desktop');
-    const daemon = await startMachineDaemon(dir, { port: 0, version: 'v' });
+    const daemon = await startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'v' });
     let settled = false;
     void daemon.stopped.then(() => (settled = true));
     await new Promise((r) => setTimeout(r, 50));
@@ -54,7 +54,7 @@ describe('startMachineDaemon', () => {
 
   it('falls back to in-process answers once the daemon is stopped', async () => {
     initMachine(dir, 'desktop');
-    const daemon = await startMachineDaemon(dir, { port: 0, version: 'served-by-daemon' });
+    const daemon = await startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'served-by-daemon' });
     await daemon.stop();
     const r = await cli('status');
     expect(r.code).toBe(0);
@@ -124,6 +124,8 @@ describe('startMachineDaemon app-core registration', () => {
     const calls: Array<{ machineConfigDir?: string | undefined; moduleStamp?: string | undefined }> = [];
     const daemon = await startMachineDaemon(dir, {
       port: 0,
+      peerPort: 0,
+      peerHost: '127.0.0.1',
       version: '2026.11.14-001-abcdef12',
       updates: inertUpdates(),
       register: async (o) => {
@@ -144,6 +146,8 @@ describe('startMachineDaemon app-core registration', () => {
     const lines: string[] = [];
     const daemon = await startMachineDaemon(dir, {
       port: 0,
+      peerPort: 0,
+      peerHost: '127.0.0.1',
       version: 'x',
       log: (l) => lines.push(l),
       register: async () => {
@@ -162,7 +166,7 @@ describe('startMachineDaemon app-core registration', () => {
   it('a development build does not register and says so in the log', async () => {
     initMachine(dir, 'desktop');
     const lines: string[] = [];
-    const daemon = await startMachineDaemon(dir, { port: 0, version: '0.1.0', log: (l) => lines.push(l) });
+    const daemon = await startMachineDaemon(dir, { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: '0.1.0', log: (l) => lines.push(l) });
     try {
       expect(lines.join('\n')).toMatch(/app-core registration skipped: 0\.1\.0 is a development build/);
     } finally {

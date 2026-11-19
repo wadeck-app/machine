@@ -84,7 +84,7 @@ async function firstMachinePosts(): Promise<string> {
   const init = await ok(a, ['admin', 'init', '--generate']);
   passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
   expect(passphrase).not.toBe('');
-  await ok(a, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+  await ok(a, ['admin', 'login', ADMIN_CODE, '--full-access', '--relay', relay.url]);
   await ok(a, ['join', MACHINE_CODE, '--relay', relay.url, '--no-wait']);
   return relay.pendingIds()[0] as string;
 }
@@ -95,7 +95,7 @@ async function adminMachineReady(): Promise<void> {
   const init = await ok(a, ['admin', 'init', '--generate']);
   passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
   expect(passphrase).not.toBe('');
-  await ok(a, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+  await ok(a, ['admin', 'login', ADMIN_CODE, '--full-access', '--relay', relay.url]);
 }
 const deviceRequests = () => relay.requests.filter((q) => q.path.startsWith('/api/device-login/'));
 // The person at the relay console: approves every login request that is waiting (setup sends the admin login first, then the machine login).

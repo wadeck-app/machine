@@ -45,7 +45,7 @@ async function twoMachines(): Promise<void> {
   await ok(a, ['init', '--name', 'desktop']);
   const init = await ok(a, ['admin', 'init', '--generate']);
   passphrase = /passphrase[^\n]*\n\s*([A-Z0-9 -]{20,})/i.exec(init.err)?.[1]?.trim() ?? '';
-  await ok(a, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+  await ok(a, ['admin', 'login', ADMIN_CODE, '--full-access', '--relay', relay.url]);
   const first = await cli(a, ['join', MACHINE_CODE, '--relay', relay.url], async () => passphrase, { timing: fakeTiming(), ask: forbidden('a question') });
   expect(first.code, first.err).toBe(0);
   await ok(b, ['init', '--name', 'laptop']);

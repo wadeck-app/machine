@@ -97,7 +97,7 @@ beforeEach(async () => {
   }
   relay = await startFakeRelay();
   admin = makeAdmin(adminDir);
-  await ok(adminDir, ['admin', 'login', '87654321', '--relay', relay.url]);
+  await ok(adminDir, ['admin', 'login', '87654321', '--full-access', '--relay', relay.url]);
   await ok(dirOf('laptop'), ['admin', 'pin', join(adminDir, 'admin.json')]);
   writeRelayConfig(dirOf('laptop'), { relayUrl: relay.url, token: relay.token, label: 'laptop', claimedAt: new Date().toISOString() }, false);
   relay.setOwner(uuidOf('laptop'), relay.token);

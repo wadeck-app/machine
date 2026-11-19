@@ -137,8 +137,9 @@ describe('passphrase hint (decision 57)', () => {
     expect(decryptAdminKey(envelope, STRONG).publicKey).toBe(kp.publicKey);
   });
 
-  it('an empty or blank hint means no hint', () => {
-    expect(encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: '   ' }).v).toBe(1);
+  it('no hint option means no hint; a blank hint is refused, not dropped (finding: it used to be silently ignored)', () => {
+    expect(encryptAdminKey(generateSigningKeyPair(), STRONG, {}).v).toBe(1);
+    expect(() => encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: '   ' })).toThrow(/only spaces/);
   });
 
   it('the hint is authenticated: swapping, removing or adding it breaks decryption', () => {
@@ -155,6 +156,11 @@ describe('passphrase hint (decision 57)', () => {
     expect(checkHint(String.fromCharCode(99, 97, 102, 233), STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/printable ASCII/) });
     expect(checkHint('line' + String.fromCharCode(10) + 'break', STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/printable ASCII/) });
     expect(checkHint(`it is ${STRONG.toUpperCase()} indeed`, STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/contains the passphrase/) });
+    // Only spaces (or nothing): refused with a message, never silently dropped by the trim at encryption.
+    expect(checkHint('   ', STRONG)).toMatchObject({ ok: false, message: expect.stringMatching(/only spaces/) });
+    expect(checkHint('')).toMatchObject({ ok: false, message: expect.stringMatching(/only spaces/) });
+    expect(() => encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: '   ' })).toThrow(/only spaces/);
+    expect(() => adminKeyHint({ ...encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: 'ok' }), hint: '   ' })).toThrow(/the hint is malformed/);
     expect(checkHint('x'.repeat(80), STRONG)).toEqual({ ok: true });
     expect(checkHint(STRONG)).toEqual({ ok: true });
     expect(() => encryptAdminKey(generateSigningKeyPair(), STRONG, { hint: STRONG })).toThrow(/contains the passphrase/);

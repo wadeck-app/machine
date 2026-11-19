@@ -52,7 +52,7 @@ describe('machine peer connect <machine> --show', () => {
         '  total wait        90 s (default)  --wake-wait: total time to wait for the peer to answer',
         '  max unicast       4 (default)  --wake-max-unicast: unicast packets at most (0 = none)',
         '  max broadcast     4 (default)  --wake-max-broadcast: broadcast packets at most (0 = none)',
-        '  connect timeout   1000 ms (default)  --wake-connect-timeout: limit of one probe connection attempt',
+        '  connect timeout   3000 ms (default)  --wake-connect-timeout: limit of one probe attempt (connect and handshake; a host that just resumed answers TCP late and TLS later)',
         '  settle            0 s (default)  --wake-settle: pause after the peer answered, before the command (a host whose network answers before its daemon is ready)',
         '',
       ].join('\n'),
@@ -260,7 +260,7 @@ describe('machine peer wake <machine>', () => {
   it('a peer that is not on this LAN: nothing is sent, the error says why (exit 1)', async () => {
     await connect(['laptop', '--address', '127.0.0.1:1', '--wake-mac', 'aa:bb:cc:dd:ee:01']);
     const sent: string[] = [];
-    const r = await wakeCli(['laptop'], { sender: fakeSender(sent), interfaces: () => [{ name: 'tun0', address: '10.8.0.5', netmask: '255.255.255.0', internal: false }], ...noSleep });
+    const r = await wakeCli(['laptop'], { sender: fakeSender(sent), interfaces: () => [{ name: 'tun0', address: '10.8.0.5', netmask: '255.255.255.0', internal: false }], simulateFailure: () => 'timeout', ...noSleep });
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/\[fail\] .*"laptop" is unreachable .*Wake-on-LAN cannot be tried: this machine is not on the same network as laptop/);
     expect(r.err).toMatch(/nothing was sent/);

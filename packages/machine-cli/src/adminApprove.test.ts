@@ -31,7 +31,7 @@ const forbidden = (what: string) => async (): Promise<string> => {
 // The candidacy code (base32, only with --verbose) and the security code (final code, 25 digits in five groups).
 const lastCodeLine = (out: string): string => [...out.matchAll(/^ {2}([0-9A-Z]{4}(?:-[0-9A-Z]{4}){3})$/gm)].at(-1)?.[1] as string;
 const lastSecurityCodeLine = (out: string): string => [...out.matchAll(/^ {2}(\d{5}(?: \d{5}){4})$/gm)].at(-1)?.[1] as string;
-const login = () => cli(adminDir, ['admin', 'login', ADMIN_CODE, '--relay', relay.url]);
+const login = () => cli(adminDir, ['admin', 'login', ADMIN_CODE, '--full-access', '--relay', relay.url]);
 const approve = (args: string[] = [], io: { ask?: (l: string) => Promise<string>; prompt?: () => Promise<string> } = {}) =>
   cli(adminDir, ['admin', 'approve', ...args, '--relay', relay.url], io.prompt ?? (async () => admin.passphrase), { ask: io.ask ?? yes });
 const decisions = () => relay.requests.filter((q) => q.method === 'PUT' && q.path.endsWith('/decision'));

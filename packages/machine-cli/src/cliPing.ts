@@ -93,7 +93,7 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
     // The relay is asked, or --address used, by the very code `machine run` uses. The warnings of the resolution are printed by pingPeer.
     resolveTarget: () => resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), pinned: pinnedOf(read.connection), now: epochSeconds(), allowLocal: io.allowLoopbackPeers === true, warn: () => undefined }),
     connect: async (target, onAttempt) => {
-      if (!wakeAllowed) return await connectToTarget(self.identity, peer, target, onAttempt);
+      if (!wakeAllowed) return await connectToTarget(self.identity, peer, target, onAttempt, undefined, io.wake?.simulateFailure);
       const env = makeWakeEnv(ctx, { self, peer }, { requestedBy: 'ping', sinks: { ...sinks, info: args.json ? (line) => io.stderr(`[info] ${line}\n`) : sinks.info }, pinned: pinnedOf(read.connection), onAttempt });
       try {
         const result = await connectWithWake(env, target, wakeSettings.settings);

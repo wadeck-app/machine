@@ -194,9 +194,10 @@ export interface RelayClient {
   readonly baseUrl: string;
   /**
    * `access` is the kind of token the caller agrees to store: a machine token (default, `join`: exactly ["machine"]) or an admin one (`admin login <code>`:
-   * ["machine-admin"], or full access, which the caller warns about). The other kinds are refused and never returned.
+   * ["machine-admin"] only), or `admin-full` (the explicit `--full-access` opt-in: ["machine-admin"] or full access, which the caller warns about).
+   * The other kinds are refused and never returned.
    */
-  claimPairing(code: string, access?: 'machine' | 'admin'): Promise<ClaimAnswer>;
+  claimPairing(code: string, access?: 'machine' | 'admin' | 'admin-full'): Promise<ClaimAnswer>;
   /** Public route (no Authorization header): asks the relay for a request the user confirms in the console. */
   deviceLoginStart(label: string, access?: DeviceAccess): Promise<DeviceLoginStarted>;
   /**
@@ -239,6 +240,13 @@ export interface RelayWhoami {
 
 /** Text from the relay shown on a terminal: printable ASCII only, no escape sequence gets through. */
 const printable = (text: string): string => text.replace(/[^\x20-\x7e]/g, '?');
+
+/** The longest relay text kept in an error, a log or a terminal: what a relay says is data, never trusted. */
+const MAX_RELAY_TEXT = 300;
+const relayText = (text: string): string => {
+  const clean = printable(text);
+  return clean.length > MAX_RELAY_TEXT ? `${clean.slice(0, MAX_RELAY_TEXT)}...` : clean;
+};
 
 const asObject = (value: unknown): Record<string, unknown> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
 
@@ -336,8 +344,9 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   }
 
   function mapError(c: Call, status: number, body: Record<string, unknown>, headers: Headers): RelayError {
-    const error = typeof body.error === 'string' ? body.error : undefined;
-    const relayMessage = typeof body.message === 'string' ? body.message : undefined;
+    // Sanitized once, here: the relay's text reaches the terminal and the log through the message, humanText and code.
+    const error = typeof body.error === 'string' ? relayText(body.error) : undefined;
+    const relayMessage = typeof body.message === 'string' ? relayText(body.message) : undefined;
     const code = c.pairing ? undefined : error;
     const humanText = c.pairing ? error : relayMessage;
     const retryHeader = Number(headers.get('retry-after'));
@@ -386,7 +395,9 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       message = `the relay ${baseUrl} refused the stored token (invalid or revoked)${detail}: run \`machine join <code>\` again with a new code from the admin`;
     } else if (status === 403) {
       message =
-        code === 'full_access_required' || code === 'scope_denied'
+        // The machine-admin advice is true only for the admin calls of the machine network (candidacy list and decision, inbox writing,
+        // machine deletion: all under /api/machines). On another path the same code does not mean "log in as machine admin".
+        (code === 'full_access_required' || code === 'scope_denied') && c.path.startsWith('/api/machines')
           ? `this call is for the admin of the machine network and the token used is a plain machine token (${code})${detail}: ${adminLoginFix()}`
           : `the relay ${baseUrl} refused this request (403)${detail}: the token may lack the "machine" scope, or the request was malformed; run \`machine join <code>\` again if the token was rotated`;
     } else if (status === 404) {
@@ -425,16 +436,22 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     baseUrl,
 
     async claimPairing(code, access = 'machine') {
-      const r = (await call({ method: 'POST', path: '/api/pairings/claim', body: { code }, pairing: true, ...(access === 'admin' ? { forAdmin: true } : {}) })) as NonNullable<Awaited<ReturnType<typeof call>>>;
+      const r = (await call({ method: 'POST', path: '/api/pairings/claim', body: { code }, pairing: true, ...(access !== 'machine' ? { forAdmin: true } : {}) })) as NonNullable<Awaited<ReturnType<typeof call>>>;
       const { token: claimed, label, scopes } = r.body;
       if (typeof claimed !== 'string' || claimed.length === 0) throw malformed('the pairing claim');
-      if (access === 'admin') {
-        // The preferred token is limited to ["machine-admin"]; a full-access one (null) still works, the caller warns that it can manage tokens.
+      if (access !== 'machine') {
+        // The token is limited to ["machine-admin"]. A full-access one (null) is stored only with the explicit opt-in (`admin-full`): the caller warns.
         const adminScoped = Array.isArray(scopes) && scopes.length === 1 && scopes[0] === 'machine-admin';
+        if (scopes === null && access === 'admin') {
+          throw new RelayError({
+            status: r.status,
+            message: `the pairing code gives a FULL-ACCESS token${typeof label === 'string' && label.length > 0 ? ` (labelled "${printable(label)}")` : ''}, which can also manage tokens, and the token was NOT saved: full access is never taken without being asked. This code is now used up and the token exists on the relay: revoke it in the relay console (Tokens). Then open a new pairing limited to the machine-admin scope: ${adminLoginFix()}; or, if you really want a full-access token, use a new code with \`machine admin login <code> --full-access\``,
+          });
+        }
         if (scopes !== null && !adminScoped) {
           throw new RelayError({
             status: r.status,
-            message: `the pairing code gives a token whose scopes are ${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}: it could not list or decide candidacies (it needs exactly ["machine-admin"], or full access), and the token was NOT saved. This code is now used up: open a new pairing limited to the machine-admin scope: ${adminLoginFix()}`,
+            message: `the pairing code gives a token whose scopes are ${Array.isArray(scopes) ? JSON.stringify(scopes) : 'unknown'}: it could not list or decide candidacies (it needs exactly ["machine-admin"]${access === 'admin-full' ? ', or full access with --full-access' : ''}), and the token was NOT saved. This code is now used up: open a new pairing limited to the machine-admin scope: ${adminLoginFix()}`,
           });
         }
         return { token: claimed, label: typeof label === 'string' ? label : '', scopes: adminScoped ? ['machine-admin'] : null };

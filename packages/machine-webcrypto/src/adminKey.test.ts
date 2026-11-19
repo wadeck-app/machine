@@ -145,6 +145,8 @@ describe('passphrase hint (decision 57): the two implementations agree on the au
     const withHint = encryptAdminKey(newPair(), STRONG, { hint: 'ok' });
     const bad = JSON.stringify({ ...withHint, hint: 'bad' + String.fromCharCode(27) });
     expect(() => adminKeyHint(bad)).toThrow(/the hint is malformed/);
+    // Only spaces: malformed here too (machine-core refuses to write it).
+    expect(() => adminKeyHint(JSON.stringify({ ...withHint, hint: '   ' }))).toThrow(/the hint is malformed/);
     expect(await messageOfAsync(() => unlockAdminKey(bad, STRONG, { extractable: false }))).toMatch(/the hint is malformed/);
   });
 

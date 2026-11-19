@@ -7,7 +7,7 @@
 | Case | Commands | Human steps |
 |---|---|---|
 | First machine (also the admin) | `machine setup <relay>` | choose the admin passphrase (typed twice, asked again after a typo, 3 attempts) and an optional hint; confirm the relay login code in the relay console, once (MACHINE ADMIN: can approve machines, cannot manage tokens) |
-| Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | type the relay login code on the relay page; on the admin machine: y/N and the passphrase; on both machines: compare the security code |
+| Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | compare the relay login code with the one in the relay console and approve (nothing is typed); on the admin machine: y/N and the passphrase; on both machines: compare the security code |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
 | Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
 | Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
@@ -20,7 +20,7 @@ The relay is named once (`<relay>` is a host or URL), then stored. A machine tha
 | Code | Looks like | Where it comes from | What you do with it |
 |---|---|---|---|
 | Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | compare it with the code the relay console shows (Tokens page lists the request "<name>" or "<name> admin"), check the source address is this computer, then approve; if the console shows several codes, click this one (a different code denies the request and you run the command again): nothing to copy |
-| Relay login code (machine) | `X35M-M87M` | printed by `join` | type it in the relay console: it only gives this machine access to the relay |
+| Relay login code (machine) | `X35M-M87M` | printed by `join` | compare it with the code the relay console shows (source address too), then approve; if the console shows several codes, click this one: it only gives this machine access to the relay |
 | Pairing code | 8 digits | relay console, Tokens, Add token, "Limited to scopes", machine-admin | only for scripts (`machine admin login <code>`); with `--full-access` on a relay that predates the full-access login (`[warn]` line, then it is asked, WITHOUT "Limited to scopes") |
 | Security code | `31447 56532 70010 53274 49389` | printed on the admin machine after it signs, and on the new machine | compare the two: it must read exactly the same on both. If not, `machine admin revoke <name>` |
 
@@ -33,11 +33,12 @@ Security code: 25 digits, 83 bits. `--yes-final-code` takes it quoted or as five
 New machine (`machine join <relay>`):
 
 ```
-Relay login code for "laptop" on <relay>. Type it on the relay page (it only gives this machine access to the relay, it is not the security code):
+Relay login code for "laptop" on <relay> (it only gives this machine access to the relay, it is not the security code):
 
   TH9B-3MHH
 
 Relay page: <relay page>
+Compare this code with the one in the relay console (the Tokens page lists the request "laptop", marked machine), check that the source address is this computer, then approve. If the console shows several codes, click this one.
 ...
 Candidacy LLADk3BpEqJkNFQuHZT_cA posted: it expires in 15 min (16:07).
 On the admin machine run: machine admin approve
@@ -89,7 +90,9 @@ machine peer connect <machine> --address 192.168.1.40:47921 --wake-mac aa:bb:cc:
     when it cannot be reached (type ping-if-not-reachable-magic-packet; --type direct keeps it manual, then --wake wakes on demand)
 machine peer connect <machine> --show        the effective values, "(default)" marks what nobody set
 machine peer connect <machine> --remove      forget the settings of that peer
-machine peer wake <machine>                  wake now, wait for the answer, print the measured time
+machine peer wake <machine>                  wake now, wait for the answer, print the measured time (ignores the 60 s cooldown)
+machine wake-info <machine>                  checklist to prepare THE TARGET: its BIOS/driver/system settings, daemon at login, how to find its MAC,
+                                             and the command above filled with what this machine knows (reads local files, sends nothing)
 machine run <machine> --wake|--no-wake ...   force or forbid the wake for this command (same on machine ping <machine>)
 ```
 
@@ -99,14 +102,14 @@ machine run <machine> --wake|--no-wake ...   force or forbid the wake for this c
 | `waitSeconds` | `--wake-wait` | 90 | 10 to 600 | total wait for the answer |
 | `maxUnicast` | `--wake-max-unicast` | 4 | 0 to 8 | unicast packets at most |
 | `maxBroadcast` | `--wake-max-broadcast` | 4 | 0 to 8 | broadcast packets at most |
-| `connectTimeoutMs` | `--wake-connect-timeout` | 1000 | 200 to 10000 | one probe attempt |
+| `connectTimeoutMs` | `--wake-connect-timeout` | 3000 | 200 to 10000 | one probe attempt (connect and handshake) |
 | `settleSeconds` | `--wake-settle` | 0 | 0 to 120 | pause after the answer, before the command |
 | `wake.broadcast` | `--wake-broadcast` | the broadcast of the shared subnet | an IPv4 | only needed when no IPv4 address of the peer is known |
 
 - Order: unicast to the pinned (or last known) IPv4 address, probe, directed broadcast, probe, alternating; success stops at once. A flag changes that value and keeps the others.
 - Tuning: a wake prints `answered after 14.2 s, woken by unicast (probe window 3, 4.2 s into its 5 s)`; after more than 80% of a window it prints the command that raises `probeSeconds`. "By unicast" names the last packet before the answer: Wake-on-LAN gives no acknowledgement.
-- Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A second wake of the same peer within 60 s sends no packet (it still waits).
-- The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable.
+- Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A refused connection is not woken either: the machine answered, so it is awake and no daemon listens; the output says to start the daemon there (`machine startup enable`). A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits); `machine peer wake` is explicit and ignores that cooldown (the packet limits still apply).
+- The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable. `machine wake-info <machine>` prints this checklist for the target (macOS and Windows lines are marked UNVERIFIED).
 - Trace: `<configDir>/wake-audit.log` (who woke what, how many packets, hash-chained); the settings are in `connections.json` (no secret).
 
 ## Rules a user meets

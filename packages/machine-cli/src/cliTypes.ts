@@ -2,7 +2,7 @@ import type { Prompt } from './admin.js';
 import type { PromptTimer } from './prompt.js';
 import type { CliMetaDeps } from './cliMeta.js';
 import type { StartupContext } from './startup.js';
-import type { LocalInterface } from '@wadeck-app/machine-core';
+import type { AddressEntry, ConnectFailureKind, LocalInterface } from '@wadeck-app/machine-core';
 import type { WakeSender } from './wakeSender.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
@@ -44,6 +44,11 @@ export interface WakeIo {
   interfaces: () => LocalInterface[];
   sleep: (ms: number) => Promise<void>;
   nowMs: () => number;
+  /**
+   * Tests only: a sleeping peer. Called before each real connection attempt; a kind makes the attempt fail with it (a `ConnectError`, as a real
+   * timeout would) without touching the network. A refused loopback port is NOT a sleeping peer (the host answered), so tests use this.
+   */
+  simulateFailure: (address: AddressEntry) => ConnectFailureKind | undefined;
 }
 
 /**

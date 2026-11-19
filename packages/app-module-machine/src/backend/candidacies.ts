@@ -14,10 +14,10 @@ import { SECRETS_DIRNAME } from './configDir.js';
 const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 1024 * 1024;
 // Same sentences as machine-cli adminAccess.ts (the two packages do not import each other).
-const ADMIN_TOKEN_WHY = 'approving a machine needs the admin relay token (limited to machine rights, it cannot manage tokens)';
-const PAIRING_CLICK_PATH = 'in the relay console open Tokens, Add token, "Limited to scopes", machine-admin';
+export const ADMIN_TOKEN_WHY = 'approving a machine needs the admin relay token (limited to machine rights, it cannot manage tokens)';
+export const PAIRING_CLICK_PATH = 'in the relay console open Tokens, Add token, "Limited to scopes", machine-admin';
 // The confirm-once login first (decision 59), the pairing code as the alternative.
-const LOGIN_ADVICE = `run \`machine admin login --force\` and confirm the request in the relay console (Tokens page, the request marked MACHINE ADMIN: it can approve machines and cannot manage tokens); or with a pairing code: ${PAIRING_CLICK_PATH}, then run \`machine admin login <code> --force\``;
+export const LOGIN_ADVICE = `run \`machine admin login --force\` and confirm the request in the relay console (Tokens page, the request marked MACHINE ADMIN: it can approve machines and cannot manage tokens); or with a pairing code: ${PAIRING_CLICK_PATH}, then run \`machine admin login <code> --force\``;
 
 /** There is no usable admin token on this machine: absent file, corrupt file, relay URL not acceptable. Status 503 for the page. */
 export class RelayNotConfiguredError extends Error {
@@ -241,7 +241,8 @@ export async function listCandidacies(configDir: string, nowSeconds: number, doF
   }
   if (res.status !== 200) {
     const o = asObject(body);
-    if (o['error'] === 'full_access_required') {
+    // Both codes mean "this token cannot do the admin calls" (adminRelay.ts of machine-cli handles the same two).
+    if (o['error'] === 'full_access_required' || o['error'] === 'scope_denied') {
       throw new RelayRequestError(res.status, `the token saved by \`machine admin login\` is a plain machine token, so it cannot list candidacies (${ADMIN_TOKEN_WHY}). ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
     }
     const why = typeof o['message'] === 'string' ? o['message'] : typeof o['error'] === 'string' ? o['error'] : 'no detail';

@@ -1,3 +1,4 @@
+import { unlinkSync } from 'node:fs';
 import { hostname as osHostname } from 'node:os';
 import { adminLogin } from './adminApprove.js';
 import type { Timing } from './cliTypes.js';
@@ -116,12 +117,27 @@ export async function adminLoginByConsole(configDir: string, o: AdminConsoleLogi
   o.say(access === 'full' ? '[ok] full access approved\n' : '[ok] machine admin access approved\n');
   const claimedAt = (o.now?.() ?? new Date()).toISOString();
   const config = { relayUrl, token: polled.token, label: polled.label, claimedAt };
+  const lost = (why: string, where: string): Error =>
+    new Error(`the relay delivered the token but it could not be saved (${why}): ${where}. Revoke "${printable(polled.label)}" in the relay console (Tokens), then ${restart}`);
+  // One token, two files when it is also the machine token: the daemon reads relay.json, the admin commands read relay-admin.json.
+  // relay.json goes first and is taken back when the admin file cannot be written: a half-done login must not leave a machine token that
+  // makes the next run stop on "this machine already holds a relay token".
+  let relayWritten = false;
   try {
-    // One token, two files when it is also the machine token: the daemon reads relay.json, the admin commands read relay-admin.json.
-    if (o.asMachineToken === true) writeRelayConfig(configDir, config, false);
+    if (o.asMachineToken === true) {
+      writeRelayConfig(configDir, config, false);
+      relayWritten = true;
+    }
     writeRelayAdminConfig(configDir, config, o.force);
   } catch (e) {
-    throw new Error(`the relay delivered the token but it could not be saved (${(e as Error).message}): the token is lost. Revoke "${printable(polled.label)}" in the relay console (Tokens), then ${restart}`);
+    const why = (e as Error).message;
+    if (!relayWritten) throw lost(why, 'nothing was kept on this machine, the token is lost');
+    try {
+      unlinkSync(relayFile(configDir));
+    } catch (undo) {
+      throw lost(why, `the token is STILL in ${relayFile(configDir)} (it could not be taken back: ${(undo as Error).message}); delete that file`);
+    }
+    throw lost(why, 'nothing was kept on this machine (relay.json was removed again), the token is lost');
   }
   if (access === 'full') o.say(`${FULL_ACCESS_WARNING}\n`);
   return { relayUrl, label: polled.label, viaPairingCode: false, scopes: polled.scopes };
@@ -143,7 +159,8 @@ async function pairingFallback(configDir: string, o: AdminConsoleLoginOptions, r
     throw new AdminLoginInputError(`no pairing code could be asked (${(e as Error).message}): this relay does not support the full-access login yet, so pass a pairing code: ${fullPairingFix({ relay: relayUrl, ...(o.force ? { force: true } : {}) })}`);
   }
   if (code.length === 0 || code.length > 32) throw new AdminLoginInputError('the pairing code is empty or longer than 32 characters: copy it again from the relay console');
-  const login = await adminLogin(configDir, { code, relayUrl, force: o.force, client, ...(o.now ? { now: o.now } : {}) });
+  // Only reached with --full-access (the explicit opt-in), so a full-access pairing is accepted here.
+  const login = await adminLogin(configDir, { code, relayUrl, force: o.force, client, fullAccess: true, ...(o.now ? { now: o.now } : {}) });
   if (login.scopes === null) o.say(`${FULL_ACCESS_WARNING}\n`);
   return { relayUrl: login.relayUrl, label: login.label, viaPairingCode: true, scopes: login.scopes };
 }

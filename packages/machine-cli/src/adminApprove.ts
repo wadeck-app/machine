@@ -34,12 +34,14 @@ export interface AdminLoginOptions {
   /** Tests inject a client; the default talks to the relay over the network. */
   client?: RelayClient;
   now?: () => Date;
+  /** `--full-access` was given with the code: a FULL-ACCESS token is accepted (else it is refused, never stored by surprise). */
+  fullAccess?: boolean;
 }
 
 /**
- * Claim a pairing code that gives an admin token (scopes ["machine-admin"], or full access: the opposite of `join`, which refuses both) and store
- * it in `_secrets_/relay-admin.json`. A plain machine token is refused by the client: it could neither list nor decide. `scopes` is null for a
- * full-access token, which the caller must warn about.
+ * Claim a pairing code that gives an admin token (scopes ["machine-admin"]; full access only with `fullAccess`: the opposite of `join`, which
+ * refuses both) and store it in `_secrets_/relay-admin.json`. A plain machine token is refused by the client: it could neither list nor decide.
+ * `scopes` is null for a full-access token, which the caller must warn about.
  */
 export async function adminLogin(configDir: string, options: AdminLoginOptions): Promise<{ relayUrl: string; label: string; scopes: string[] | null }> {
   const relayUrl = normalizeRelayUrl(options.relayUrl);
@@ -48,7 +50,7 @@ export async function adminLogin(configDir: string, options: AdminLoginOptions):
     throw new Error(`this machine already holds an admin relay token (${relayAdminFile(configDir)}): pass --force with a new pairing code to replace it (the old token is then forgotten, not revoked: revoke it in the relay console)`);
   }
   const client = options.client ?? createRelayClient({ baseUrl: relayUrl });
-  const claimed = await client.claimPairing(options.code, 'admin');
+  const claimed = await client.claimPairing(options.code, options.fullAccess === true ? 'admin-full' : 'admin');
   const claimedAt = (options.now?.() ?? new Date()).toISOString();
   try {
     writeRelayAdminConfig(configDir, { relayUrl, token: claimed.token, label: claimed.label, claimedAt }, options.force);

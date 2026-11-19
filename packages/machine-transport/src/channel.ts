@@ -24,7 +24,7 @@ const MAX_QUEUED_MESSAGES = 64;
 type Role = 'client' | 'server';
 
 /**
- * A failed connection with its kind as a TYPE (what a wake decides on: only `unreachable` and `timeout` can be cured by waking the peer).
+ * A failed connection with its kind as a TYPE (what a wake decides on: only `unreachable` and `timeout` can be cured by waking the peer; `refused` means it is awake).
  * `code` is the system error code when there is one (ECONNREFUSED, ETIMEDOUT...). The message is the one the person reads.
  */
 export class ConnectError extends Error {
@@ -41,7 +41,9 @@ export class ConnectError extends Error {
 /** The kind of a socket error that happened before the TLS handshake finished. */
 export function classifySocketError(code: string | undefined): ConnectFailureKind {
   switch (code) {
+    // The host answered (a reset): it is awake, nothing listens. Not a reason to wake it.
     case 'ECONNREFUSED':
+      return 'refused';
     case 'EHOSTUNREACH':
     case 'ENETUNREACH':
     case 'ENETDOWN':

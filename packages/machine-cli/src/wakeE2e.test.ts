@@ -57,20 +57,28 @@ async function startDaemon(dir: string, peerPort: number, advertise: Array<{ hos
 
 interface Wakeable {
   sent: WakeMethod[];
-  io: { wake: { sender: WakeSender; interfaces: () => LocalInterface[]; sleep: (ms: number) => Promise<void>; nowMs: () => number }; allowLoopbackPeers: true };
+  io: { wake: { sender: WakeSender; interfaces: () => LocalInterface[]; sleep: (ms: number) => Promise<void>; nowMs: () => number; simulateFailure: () => 'timeout' | undefined }; allowLoopbackPeers: true };
   /** Fake time, in ms. */
   now: () => number;
 }
 
-/** A fake sender that "wakes" the peer (starts its daemon) at the `wakeAt`-th packet (1 = the first); never when `wakeAt` is undefined. */
-function wakeWorld(options: { wakeAt?: number; start?: () => Promise<unknown> } = {}): Wakeable {
+/**
+ * A fake sender that "wakes" the peer (starts its daemon) at the `wakeAt`-th packet (1 = the first); never when `wakeAt` is undefined. While the
+ * peer is asleep every connection attempt fails with an injected `timeout` (a refused loopback port is a host that answered: it is never woken).
+ * `asleep: false`: the real network answers (a running daemon, another key, or a refusal).
+ */
+function wakeWorld(options: { wakeAt?: number; start?: () => Promise<unknown>; asleep?: boolean } = {}): Wakeable {
+  let awake = options.asleep === false;
   let t = 0;
   const sent: WakeMethod[] = [];
   const sender: WakeSender = {
     send: async (method, packet, routes) => {
       expect(packet.length).toBe(102);
       sent.push(method);
-      if (options.wakeAt === sent.length) await options.start?.();
+      if (options.wakeAt === sent.length) {
+        await options.start?.();
+        awake = true;
+      }
       return { destinations: routes.map((r) => ({ method, to: method === 'unicast' ? (r.unicast[0] as string) : r.broadcast, from: r.localAddress, ok: true })) };
     },
   };
@@ -86,6 +94,7 @@ function wakeWorld(options: { wakeAt?: number; start?: () => Promise<unknown> } 
           t += ms;
         },
         nowMs: () => t,
+        simulateFailure: () => (awake ? undefined : 'timeout'),
       },
     },
   };
@@ -134,12 +143,25 @@ describe('machine run with a sleeping peer', () => {
     // The daemon of A itself answers: its key is not the one registered for "laptop".
     await startDaemon(a, port);
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01']);
-    const world = wakeWorld({ wakeAt: 1, start: async () => { throw new Error('a packet must not be sent'); } });
+    const world = wakeWorld({ asleep: false, wakeAt: 1, start: async () => { throw new Error('a packet must not be sent'); } });
     const r = await run(world);
     expect(r.code).toBe(255);
     expect(world.sent).toEqual([]);
     expect(r.err).toMatch(/\[info\] not waking "laptop"/);
     expect(r.err).toMatch(/presented key .* pinned registration/);
+    expect(existsSync(wakeAuditFile(a))).toBe(false);
+  });
+
+  it('a REFUSED connection never wakes (the host is up, no daemon listens): no packet, no audit, the message says to start the daemon', async () => {
+    // A closed loopback port is a real ECONNREFUSED: the host answered at TCP level.
+    const port = await freePort();
+    await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01']);
+    const world = wakeWorld({ asleep: false, wakeAt: 1, start: async () => { throw new Error('a packet must not be sent'); } });
+    const r = await run(world);
+    expect(r.code).toBe(255);
+    expect(world.sent).toEqual([]);
+    expect(r.err).toContain(`[info] "laptop" is reachable but nothing listens on 127.0.0.1:${port}: it is awake, so a magic packet would not help. Start the daemon there (\`machine startup enable\` on that machine), then run the command again`);
+    expect(r.err).toMatch(/\[fail\] .*ECONNREFUSED/);
     expect(existsSync(wakeAuditFile(a))).toBe(false);
   });
 
@@ -200,6 +222,20 @@ describe('machine run with a sleeping peer', () => {
 });
 
 describe('machine ping --wake and machine peer wake', () => {
+  it('peer wake ignores the cooldown that a run just started; run and ping still respect it', async () => {
+    const port = await freePort();
+    await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01', '--wake-wait', '10', '--wake-probe', '2']);
+    expect((await run(wakeWorld())).code).toBe(255);
+    const viaRun = wakeWorld();
+    expect((await run(viaRun)).code).toBe(255);
+    expect(viaRun.sent).toEqual([]);
+    const explicit = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
+    const r = await cli(a, ['peer', 'wake', 'laptop'], undefined, explicit.io);
+    expect(r.code).toBe(0);
+    expect(explicit.sent).toEqual(['unicast']);
+    expect(r.err).not.toMatch(/cooldown/);
+  });
+
   it('ping wakes a peer configured for it, reports the wake in --json, and the peer audits nothing', async () => {
     const port = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01']);
@@ -229,7 +265,7 @@ describe('machine ping --wake and machine peer wake', () => {
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by unicast \(probe window 1, [\d.]+ s into its 5 s\)/);
     expect(world.sent).toEqual(['unicast']);
-    const awake = wakeWorld();
+    const awake = wakeWorld({ asleep: false });
     const again = await cli(a, ['peer', 'wake', 'laptop'], undefined, awake.io);
     expect(again.code).toBe(0);
     expect(again.out).toMatch(/\[ok\] "laptop" already answers on 127\.0\.0\.1:\d+: no packet was sent/);
@@ -258,14 +294,14 @@ describe('pinned addresses win over the relay record', () => {
 
     const dead = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${dead}`]);
-    const world = wakeWorld();
+    const world = wakeWorld({ asleep: false });
     const pinned = await run(world);
     expect(pinned.code).toBe(255);
     expect(pinned.err).toMatch(/pinned address\(es\) of "laptop"/);
     expect(pinned.err).toContain(`127.0.0.1:${dead}`);
 
     expect((await cli(a, ['peer', 'connect', 'laptop', '--remove'])).code).toBe(0);
-    const viaRelay = await run(wakeWorld());
+    const viaRelay = await run(wakeWorld({ asleep: false }));
     expect(viaRelay.err).toBe('');
     expect(viaRelay.code).toBe(0);
     expect(viaRelay.out).toContain('hi');

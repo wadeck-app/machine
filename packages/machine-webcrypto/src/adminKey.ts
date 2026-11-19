@@ -53,13 +53,16 @@ function parseEnvelope(fileContent: string): Record<string, any> {
 function readHint(envelope: Record<string, any>): string | undefined {
   const hint: unknown = envelope.hint;
   if (hint === undefined) return undefined;
-  if (typeof hint !== 'string' || hint.length === 0 || Array.from(hint).length > 80 || !/^[\x20-\x7e]+$/.test(hint)) {
+  if (typeof hint !== 'string' || hint.length === 0 || Array.from(hint).length > 80 || !/^[\x20-\x7e]+$/.test(hint) || hint.trim().length === 0) {
     throw new Error('admin key file: the hint is malformed (it must be 1 to 80 printable ASCII characters); restore the file from another machine');
   }
   return hint;
 }
 
-/** The hint of a key file, readable without the passphrase (it is stored in clear, authenticated at unlock). */
+/**
+ * The hint of a key file, readable without the passphrase (it is stored in clear). It is shown BEFORE authentication: a swapped hint is
+ * detected only when the file is decrypted (the unlock fails), not before.
+ */
 export function adminKeyHint(fileContent: string): string | undefined {
   return readHint(parseEnvelope(fileContent));
 }

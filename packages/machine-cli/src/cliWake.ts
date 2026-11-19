@@ -22,7 +22,8 @@ import { EXIT, type CommandContext } from './cliTypes.js';
 import { connectionsFile, readConnections, removeConnection, updateConnection, ConnectionsError } from './connectionsStore.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork } from './network.js';
-import { describeAddress, PeerAddressError } from './peerAddresses.js';
+import { describeAddress, PeerAddressError, readPeerRecords } from './peerAddresses.js';
+import { wakeInfoText } from './wakeInfo.js';
 import { connectToTarget, resolvePeerTarget, type PeerTarget, type PeerToReach } from './peerConnect.js';
 import { readAliases } from './state.js';
 import { NotInitializedError } from './errors.js';
@@ -98,6 +99,8 @@ export function makeWakeEnv(ctx: CommandContext, trusted: TrustedPeer, options: 
     self: { uuid: self.uuid, name: self.name },
     peer,
     requestedBy: options.requestedBy,
+    // An explicit `machine peer wake` is the user asking now: the cooldown of the automatic wakes does not apply (the packet limits still do).
+    bypassCooldown: options.requestedBy === 'peer wake',
     epochSeconds: () => epochSecondsOf(ctx),
     nowMs: io.wake?.nowMs ?? (() => performance.now()),
     sleep: io.wake?.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
@@ -105,7 +108,7 @@ export function makeWakeEnv(ctx: CommandContext, trusted: TrustedPeer, options: 
     sender: io.wake?.sender ?? createWakeSender(),
     ...options.sinks,
     resolveTarget: () => resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), pinned: options.pinned, now: epochSecondsOf(ctx), allowLocal: io.allowLoopbackPeers === true, warn: options.sinks.warn }),
-    connect: (target, { timeoutMs }) => connectToTarget(self.identity, peer, target, options.onAttempt, timeoutMs),
+    connect: (target, { timeoutMs }) => connectToTarget(self.identity, peer, target, options.onAttempt, timeoutMs, io.wake?.simulateFailure),
   };
 }
 
@@ -348,3 +351,35 @@ export async function runPeerWake(ctx: CommandContext): Promise<number> {
   }
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// machine wake-info
+
+/** The checklist that prepares the target of a wake. Local files only: no connection, no packet, nothing written. */
+export function runWakeInfo(ctx: CommandContext): number {
+  const { args, rest, io, fail } = ctx;
+  const ref = rest[0];
+  if (args.json) return fail('--json does not apply to `machine wake-info` (a checklist for a person: plain text)', EXIT.usage);
+  if (ref === undefined || rest.length > 1) return fail('usage: machine wake-info <machine>', EXIT.usage);
+  const trusted = resolveTrustedPeer(ctx, ref, { reference: EXIT.reference, failure: EXIT.failure });
+  if ('exit' in trusted) return trusted.exit;
+  const { peer } = trusted;
+  const read = connectionOf(ctx, peer);
+  if (!read.ok) return read.exit;
+  try {
+    const remembered = readPeerRecords(ctx.configDir)[peer.peerId]?.addresses ?? [];
+    io.stdout(
+      wakeInfoText({
+        name: peer.name,
+        uuid: peer.peerId,
+        pinned: (read.connection?.addresses ?? []).map(describeAddress),
+        remembered: remembered.map(describeAddress),
+        mac: read.connection?.wake?.mac,
+      }),
+    );
+    return EXIT.ok;
+  } catch (e) {
+    if (e instanceof PeerAddressError) return fail(e.message);
+    throw e;
+  }
+}

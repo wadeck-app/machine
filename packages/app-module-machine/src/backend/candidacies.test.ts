@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { candidacyCode, generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RelayNotConfiguredError, RelayRequestError, listCandidacies } from './candidacies.js';
+import { pathToFileURL } from 'node:url';
+import { ADMIN_TOKEN_WHY, LOGIN_ADVICE, PAIRING_CLICK_PATH, RelayNotConfiguredError, RelayRequestError, listCandidacies } from './candidacies.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
 const TOKEN = 'admin-token-secret-value';
@@ -243,5 +244,36 @@ describe('listCandidacies binding (deployed ownership-at-approval contract)', ()
     expect(view.rebind).toBe(true);
     expect(view.boundToCandidateToken).toBeUndefined();
     expect(view.problems.join(' ')).toContain('boundToCandidateToken');
+  });
+});
+
+describe('403 for a token that cannot do the admin calls', () => {
+  it.each(['full_access_required', 'scope_denied'])('%s: says the saved token is a plain machine token, with the login advice and no token', async (code) => {
+    const relay = await fakeRelay(() => ({ status: 403, body: { success: false, error: code, message: 'needs more' } }));
+    writeAdminConfig(relay.url);
+    const e = await listCandidacies(configDir, NOW).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(RelayRequestError);
+    expect((e as RelayRequestError).message).toMatch(/plain machine token/);
+    expect((e as RelayRequestError).message).toContain('machine admin login --force');
+    expect((e as RelayRequestError).message).not.toContain(TOKEN);
+  });
+});
+
+// The advice sentences are copied here and in machine-cli adminAccess.ts (the two packages do not import each other): the click path and the
+// login advice must not drift apart. The test reads the real module of machine-cli.
+describe('the advice sentences stay in step with machine-cli adminAccess.ts', () => {
+  it('ADMIN_TOKEN_WHY, PAIRING_CLICK_PATH and the login advice (with --force) are the same text', async () => {
+    const path = join(import.meta.dirname, '..', '..', '..', 'machine-cli', 'src', 'adminAccess.ts');
+    const cli = (await import(/* @vite-ignore */ pathToFileURL(path).href)) as {
+      ADMIN_TOKEN_WHY: string;
+      PAIRING_CLICK_PATH: string;
+      adminLoginFix: (o: { force?: boolean }) => string;
+    };
+    expect(ADMIN_TOKEN_WHY).toBe(cli.ADMIN_TOKEN_WHY);
+    expect(PAIRING_CLICK_PATH).toBe(cli.PAIRING_CLICK_PATH);
+    expect(LOGIN_ADVICE).toBe(cli.adminLoginFix({ force: true }));
   });
 });

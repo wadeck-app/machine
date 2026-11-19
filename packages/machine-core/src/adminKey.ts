@@ -53,6 +53,8 @@ export function checkPassphrase(passphrase: string): PassphraseCheck {
  * control character can reach a terminal) and must not give the passphrase away. Case-insensitive on the NFKC form.
  */
 export function checkHint(hint: string, passphrase?: string): PassphraseCheck {
+  // A hint of only spaces would be dropped by the trim at encryption: refused, never silently ignored.
+  if (hint.trim().length === 0) return { ok: false, message: 'the hint is empty (only spaces): give a text that helps you remember the passphrase, or leave the hint out' };
   if (Array.from(hint).length > HINT_MAX_LENGTH) return { ok: false, message: `the hint must be at most ${HINT_MAX_LENGTH} characters` };
   if (!/^[ -~]*$/.test(hint)) return { ok: false, message: 'the hint must be printable ASCII (letters, digits, punctuation, spaces)' };
   // Without the passphrase (an early check of --hint) only the rules that do not depend on it are applied.
@@ -62,11 +64,15 @@ export function checkHint(hint: string, passphrase?: string): PassphraseCheck {
   return { ok: true };
 }
 
-/** The hint of a key file (undefined when there is none). It is not secret-bearing: read it without the passphrase. Throws when it is malformed. */
+/**
+ * The hint of a key file (undefined when there is none). It is not secret-bearing: read it without the passphrase. Throws when it is malformed.
+ * It is shown BEFORE the passphrase is typed and authenticated only when the file is decrypted: a swapped hint is detected then (the unlock
+ * fails), not before. It proves nothing.
+ */
 export function adminKeyHint(envelope: AdminKeyEnvelope): string | undefined {
   const hint = (envelope as { hint?: unknown }).hint;
   if (hint === undefined) return undefined;
-  if (typeof hint !== 'string' || hint.length === 0 || Array.from(hint).length > HINT_MAX_LENGTH || !/^[ -~]+$/.test(hint)) {
+  if (typeof hint !== 'string' || hint.length === 0 || Array.from(hint).length > HINT_MAX_LENGTH || !/^[ -~]+$/.test(hint) || hint.trim().length === 0) {
     throw new Error('admin key file: the hint is malformed (it must be 1 to 80 printable ASCII characters); restore the file from another machine');
   }
   return hint;
@@ -103,7 +109,8 @@ function deriveKey(passphrase: string, salt: Buffer, iterations: number): Buffer
 export function encryptAdminKey(keyPair: SigningKeyPair, passphrase: string, options: { iterations?: number; hint?: string } = {}): AdminKeyEnvelope {
   const check = checkPassphrase(passphrase);
   if (!check.ok) throw new Error(`admin key: ${check.message}`);
-  const hint = options.hint?.trim() ? options.hint.trim() : undefined;
+  // A hint of only spaces is refused by checkHint below, never silently dropped.
+  const hint = options.hint === undefined ? undefined : options.hint.trim();
   if (hint !== undefined) {
     const hintCheck = checkHint(hint, passphrase);
     if (!hintCheck.ok) throw new Error(`admin key: ${hintCheck.message}`);

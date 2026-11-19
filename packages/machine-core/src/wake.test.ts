@@ -183,7 +183,7 @@ describe('selectWakeRoutes', () => {
 
 describe('tuning', () => {
   it('has the documented defaults', () => {
-    expect(WAKE_TUNING_DEFAULTS).toEqual({ probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 1000, settleSeconds: 0 });
+    expect(WAKE_TUNING_DEFAULTS).toEqual({ probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 });
     expect(WAKE_COOLDOWN_SECONDS).toBe(60);
     expect(WAKE_PORT).toBe(9);
   });
@@ -214,7 +214,7 @@ describe('tuning', () => {
 
   it('resolveTuning applies the configured values over the defaults and says which fields are defaulted', () => {
     const r = resolveTuning({ probeSeconds: 12, maxUnicast: 0 });
-    expect(r.values).toEqual({ probeSeconds: 12, waitSeconds: 90, maxUnicast: 0, maxBroadcast: 4, connectTimeoutMs: 1000, settleSeconds: 0 });
+    expect(r.values).toEqual({ probeSeconds: 12, waitSeconds: 90, maxUnicast: 0, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 });
     expect(r.defaulted).toEqual(['waitSeconds', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds']);
     expect(resolveTuning({}).defaulted).toEqual([...WAKE_TUNING_FIELDS]);
   });
@@ -296,7 +296,7 @@ describe('cooldown', () => {
 });
 
 describe('isWakeableFailure', () => {
-  const kinds: ConnectFailureKind[] = ['unreachable', 'timeout', 'unresolved', 'pin-mismatch', 'bad-certificate', 'auth-closed', 'pair-proof', 'protocol', 'unknown'];
+  const kinds: ConnectFailureKind[] = ['unreachable', 'refused', 'timeout', 'unresolved', 'pin-mismatch', 'bad-certificate', 'auth-closed', 'pair-proof', 'protocol', 'unknown'];
   it.each(kinds)('%s', (kind) => {
     expect(isWakeableFailure([kind])).toBe(kind === 'unreachable' || kind === 'timeout');
   });
@@ -305,6 +305,8 @@ describe('isWakeableFailure', () => {
     expect(isWakeableFailure(['unreachable', 'timeout'])).toBe(true);
     expect(isWakeableFailure(['unreachable', 'auth-closed'])).toBe(false);
     expect(isWakeableFailure(['timeout', 'pair-proof'])).toBe(false);
+    // A refusal means something answered at TCP level: the host is awake.
+    expect(isWakeableFailure(['timeout', 'refused'])).toBe(false);
   });
 
   it('never wakes on an empty list: no failure is no reason', () => {

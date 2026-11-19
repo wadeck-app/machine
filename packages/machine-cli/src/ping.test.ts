@@ -428,6 +428,23 @@ describe('machine ping <machine>', () => {
     expect(w.said.join('\n')).toMatch(/revocation lists.*not supported/);
   });
 
+  it('a rate-limited hello: [warn] not compared (with the cause), never "differed", and its time stays out of the hello statistics', async () => {
+    const limited = report({ inSync: undefined, peerDigest: undefined, peerVersion: undefined, warnings: ['laptop refused the revocation exchange: too many revocation exchanges from this machine: try again in a minute'] });
+    const w = peerWorld({ catchUp: async () => limited });
+    const r = await pingPeer(w.deps);
+    expect(r.ok).toBe(true);
+    const out = w.said.join('\n');
+    expect(out).toContain('[warn] revocation lists: not compared (laptop refused the revocation exchange: too many revocation exchanges from this machine: try again in a minute)');
+    expect(out).not.toMatch(/differed/);
+    expect(out).not.toMatch(/\[ok\] revocation lists/);
+    expect(out).not.toMatch(/, hello \d/);
+    expect(r.summary.hello).toBeUndefined();
+    expect(r.rounds[0]?.helloMs).toBeUndefined();
+    // Recorded once in the report, not printed a second time as a bare warning.
+    expect(r.warnings).toHaveLength(1);
+    expect(w.warned).toHaveLength(0);
+  });
+
   it('the lists differed: says what was installed here and what was sent there', async () => {
     const w = peerWorld({ catchUp: async () => report({ inSync: false, installed: true, sent: true }) });
     await pingPeer(w.deps);
@@ -507,7 +524,7 @@ describe('machine ping <machine>', () => {
 describe('explainConnectFailure', () => {
   const addr = { host: '10.0.0.7', port: 47921 };
   it('keeps the original reason first and adds one fix', () => {
-    const e = explainConnectFailure('cannot reach 10.0.0.7:47921: connect ECONNREFUSED 10.0.0.7:47921', addr, 'laptop');
+    const e = explainConnectFailure('cannot reach 10.0.0.7:47921: connect ECONNREFUSED 10.0.0.7:47921', 'laptop');
     expect(e.startsWith('cannot reach 10.0.0.7:47921: connect ECONNREFUSED')).toBe(true);
     expect(e).toMatch(/nothing listens on that port/i);
   });
@@ -519,10 +536,10 @@ describe('explainConnectFailure', () => {
     ['connect ETIMEDOUT 10.0.0.7:47921', /timed out/],
     ['frame is not valid JSON (x): the peer runs an incompatible version', /incompatible/],
   ])('%s', (reason, expected) => {
-    expect(explainConnectFailure(reason, addr, 'laptop')).toMatch(expected);
+    expect(explainConnectFailure(reason, 'laptop')).toMatch(expected);
   });
   it('an unknown reason is returned unchanged plus the pointer to the peer log', () => {
-    const e = explainConnectFailure('something new', addr, 'laptop');
+    const e = explainConnectFailure('something new', 'laptop');
     expect(e.startsWith('something new')).toBe(true);
     expect(e).toMatch(/machine cli logs/);
   });

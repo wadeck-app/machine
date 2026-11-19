@@ -47,6 +47,27 @@ describe('error mapping (injected fetch)', () => {
     expect(e.message).toMatch(/new code/);
   });
 
+  it('the relay text is sanitized once at the source: ESC and newline never reach the message, humanText or code; it is capped', async () => {
+    const hostile = 'bad\u001b[2J\nforged line\r[ok] done';
+    const e = await failure(clientWith(() => json(500, { success: false, error: hostile, message: `${hostile}${'x'.repeat(1000)}` })).getMachines());
+    // eslint-disable-next-line no-control-regex
+    for (const text of [e.message, e.humanText ?? '', e.code ?? '']) expect(text).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(e.humanText).toContain('bad?[2J?forged line?[ok] done');
+    expect((e.humanText ?? '').length).toBeLessThanOrEqual(303);
+    const p = await failure(clientWith(() => json(401, { success: false, error: hostile })).claimPairing('1234'));
+    // eslint-disable-next-line no-control-regex
+    expect(`${p.message}${p.humanText}`).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it('403 full_access_required / scope_denied: the machine-admin advice only on the machine network admin calls, not on any other path', async () => {
+    const onMachines = await failure(clientWith(() => json(403, { success: false, error: 'full_access_required', message: 'admin only' })).listCandidacies());
+    expect(onMachines.message).toMatch(/machine admin login/);
+    const elsewhere = await failure(clientWith(() => json(403, { success: false, error: 'scope_denied', message: 'no' })).whoami());
+    expect(elsewhere.status).toBe(403);
+    expect(elsewhere.message).not.toMatch(/machine admin login|machine-admin/);
+    expect(elsewhere.message).toMatch(/refused this request \(403\)/);
+  });
+
   it('429 carries Retry-After and says how long to wait', async () => {
     const e = await failure(clientWith(() => json(429, { success: false, error: 'too_many_candidacies', message: 'slow down' }, { 'Retry-After': '42' })).getMachines());
     expect(e.retryAfterSeconds).toBe(42);
@@ -519,8 +540,17 @@ describe('pairing claim for the admin (machine admin login <code>)', () => {
     expect(await clientWith(() => claimed(['machine-admin'])).claimPairing('12345678', 'admin')).toEqual({ token: 'SECRET-CLAIMED', label: 'admin-pairing', scopes: ['machine-admin'] });
   });
 
-  it('accepts a full-access token (legacy) and says so in the returned scopes (null): the caller warns', async () => {
-    expect((await clientWith(() => claimed(null)).claimPairing('12345678', 'admin')).scopes).toBeNull();
+  it('a full-access token is accepted only with the explicit opt-in (admin-full) and says so in the returned scopes (null): the caller warns', async () => {
+    expect((await clientWith(() => claimed(null)).claimPairing('12345678', 'admin-full')).scopes).toBeNull();
+  });
+
+  it('a full-access token is REFUSED without the opt-in: NOT saved, it must be revoked, the explicit way is named', async () => {
+    const e = await failure(clientWith(() => claimed(null)).claimPairing('12345678', 'admin'));
+    expect(e.message).toMatch(/FULL-ACCESS token/);
+    expect(e.message).toMatch(/NOT saved/);
+    expect(e.message).toMatch(/revoke it in the relay console/);
+    expect(e.message).toContain('--full-access');
+    expect(e.message).not.toContain('SECRET-CLAIMED');
   });
 
   it.each([[['machine']], [['queue']], [['machine', 'machine-admin']], [[]]])('refuses scopes %j: it could not list or decide, NOT saved, the fix is named', async (scopes) => {

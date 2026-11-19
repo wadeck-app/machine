@@ -261,7 +261,6 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     }
     if (sub === 'login') {
       if (second !== undefined) return fail('usage: machine admin login [<code>] [--relay <url>] [--force] [--full-access]', EXIT.usage);
-      if (first !== undefined && args.fullAccess) return fail('--full-access only applies to the login you confirm in the relay console (`machine admin login --full-access`): a pairing code carries the access it was opened with', EXIT.usage);
       // No default relay: given with --relay, or the one of the saved admin token. Checked before a code is asked for.
       const adminRelay = args.relay ?? readRelayAdminConfig(configDir)?.relayUrl;
       if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login --relay <host-or-url>`, for example --relay https://relay.example.com (the relay is named once, then the stored one is reused)', EXIT.usage);
@@ -277,7 +276,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           // A code: the pairing path, kept for scripts and for relays that predate the confirm-only login.
           const code = first.trim();
           if (code.length === 0 || code.length > 32) return fail('the pairing code is empty or longer than 32 characters: copy it again from the relay console', EXIT.usage);
-          return finish(await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force }), true);
+          return finish(await adminLogin(configDir, { code, relayUrl: adminRelay, force: args.force, fullAccess: args.fullAccess }), true);
         }
         // No code: the admin confirms a request in the relay console (decision 59). Ctrl-C stops the wait cleanly.
         const controller = new AbortController();

@@ -85,9 +85,11 @@ describe('onboarding with the real relay', () => {
       expect(refused.status, path).toBe(403);
     }
     // The token never appears in what setup printed (checked above with the output) nor in a log file of this machine.
-    for (const file of ['logs']) {
-      if (existsSync(join(a, file))) for (const entry of readdirSync(join(a, file))) expect(readFileSync(join(a, file, entry), 'utf8')).not.toContain(admin.token);
-    }
+    // Not conditional: every command writes its trace, so the log folder must exist (else this check would prove nothing).
+    expect(existsSync(join(a, 'logs')), 'the command log of the first machine').toBe(true);
+    const logs = readdirSync(join(a, 'logs'));
+    expect(logs.length).toBeGreaterThan(0);
+    for (const entry of logs) expect(readFileSync(join(a, 'logs', entry), 'utf8')).not.toContain(admin.token);
   });
 
   it('admin login with --force on the real relay: a second machine-admin request ("desktop admin"), the admin token is replaced, the machine token stays', async () => {

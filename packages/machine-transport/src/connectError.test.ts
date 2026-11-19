@@ -33,13 +33,13 @@ async function failureOf(promise: Promise<unknown>): Promise<ConnectError> {
 }
 
 describe('typed connection failures (a wake must never fire on an authentication failure)', () => {
-  it('nothing listens: unreachable, with the system code, same message as before', async () => {
+  it('nothing listens: refused (the host is up), with the system code, same message as before', async () => {
     const probe = net.createServer();
     await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
     const port = (probe.address() as net.AddressInfo).port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
     const e = await failureOf(attempt(port));
-    expect(e.kind).toBe('unreachable');
+    expect(e.kind).toBe('refused');
     expect(e.code).toBe('ECONNREFUSED');
     expect(e.message).toMatch(/^cannot reach 127\.0\.0\.1:\d+: /);
   });
@@ -90,7 +90,8 @@ describe('typed connection failures (a wake must never fire on an authentication
 
 describe('classifySocketError', () => {
   it.each([
-    ['ECONNREFUSED', 'unreachable'],
+    // The host answered at TCP level: it is awake, no daemon listens. A magic packet cannot fix that.
+    ['ECONNREFUSED', 'refused'],
     ['EHOSTUNREACH', 'unreachable'],
     ['ENETUNREACH', 'unreachable'],
     ['ENETDOWN', 'unreachable'],

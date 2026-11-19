@@ -4,8 +4,10 @@ import { isIPv4 } from 'node:net';
 
 /** Why a connection to a peer failed, as a type (never a string match). Only `unreachable` and `timeout` can be cured by waking the peer. */
 export type ConnectFailureKind =
-  /** The socket failed before any TLS byte: refused, no route, network down, host unreachable. */
+  /** The socket failed before any TLS byte: no route, network down, host unreachable. */
   | 'unreachable'
+  /** The host answered at TCP level (connection refused): it is awake and no daemon listens on that port. A magic packet cannot fix it. */
+  | 'refused'
   /** Nothing answered within the limit. */
   | 'timeout'
   /** The host name did not resolve (DNS): a magic packet cannot fix it. */
@@ -39,13 +41,13 @@ export const WAKE_TUNING_FIELDS = ['probeSeconds', 'waitSeconds', 'maxUnicast', 
 export type WakeTuningField = (typeof WAKE_TUNING_FIELDS)[number];
 export type WakeTuning = Record<WakeTuningField, number>;
 
-export const WAKE_TUNING_DEFAULTS: Readonly<WakeTuning> = { probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 1000, settleSeconds: 0 };
+export const WAKE_TUNING_DEFAULTS: Readonly<WakeTuning> = { probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 };
 export const WAKE_TUNING_LIMITS: Readonly<Record<WakeTuningField, { min: number; max: number; unit: string; meaning: string }>> = {
   probeSeconds: { min: 1, max: 60, unit: 's', meaning: 'how long the connection is probed after each packet before the next one' },
   waitSeconds: { min: 10, max: 600, unit: 's', meaning: 'total time to wait for the peer to answer' },
   maxUnicast: { min: 0, max: 8, unit: '', meaning: 'unicast packets at most (0 = none)' },
   maxBroadcast: { min: 0, max: 8, unit: '', meaning: 'broadcast packets at most (0 = none)' },
-  connectTimeoutMs: { min: 200, max: 10_000, unit: 'ms', meaning: 'limit of one probe connection attempt' },
+  connectTimeoutMs: { min: 200, max: 10_000, unit: 'ms', meaning: 'limit of one probe attempt (connect and handshake; a host that just resumed answers TCP late and TLS later)' },
   settleSeconds: { min: 0, max: 120, unit: 's', meaning: 'pause after the peer answered, before the command (a host whose network answers before its daemon is ready)' },
 };
 

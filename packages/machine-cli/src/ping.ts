@@ -204,7 +204,7 @@ export const PING_HELLO_ROUNDS = 4;
 export const PING_INTERVAL_MS = 1000;
 
 /** The failure of one connection, in the words of what the person can do about it. The original reason always comes first. */
-export function explainConnectFailure(reason: string, _address: AddressEntry, name: string): string {
+export function explainConnectFailure(reason: string, name: string): string {
   const fix = (text: string): string => `${reason}. ${text}`;
   const peerLog = `the log of "${name}" says why: run \`machine cli logs\` there`;
   if (/ECONNREFUSED/.test(reason)) return fix(`Nothing listens on that port: the daemon of "${name}" is not running or listens on another port. On "${name}" run \`machine startup enable\` or \`machine daemon\`; \`machine status\` there shows the peer port`);
@@ -329,6 +329,7 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
   const handshakes: number[] = [];
   const hellos: number[] = [];
   let announced = false;
+  let revocationSaid = false;
   for (let n = 1; n <= deps.count; n++) {
     const label = `ping ${n}/${deps.count}`;
     const round: PingRound = { n, ok: false };
@@ -345,14 +346,29 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
       let hello = '';
       if (n <= PING_HELLO_ROUNDS) {
         const caught = await deps.catchUp(connected.session);
-        round.helloMs = tenth(caught.helloRoundTripMs);
-        hellos.push(caught.helloRoundTripMs);
+        // Compared: the peer answered with its own hello (its digest). A refusal (rate limit, older build) says nothing about the lists, and its
+        // time is not the hello round trip: it is kept out of the hello statistics.
+        const compared = caught.peerDigest !== undefined;
+        if (compared) {
+          round.helloMs = tenth(caught.helloRoundTripMs);
+          hellos.push(caught.helloRoundTripMs);
+          hello = `, hello ${ms(caught.helloRoundTripMs)} ms`;
+        }
         round.revocation = { peerSupportsCatchUp: caught.peerSupportsCatchUp, ...(caught.inSync !== undefined ? { inSync: caught.inSync } : {}), installed: caught.installed, sent: caught.sent, ...(caught.peerVersion !== undefined ? { peerVersion: caught.peerVersion } : {}) };
-        for (const w of caught.warnings) warn(w);
-        hello = `, hello ${ms(caught.helloRoundTripMs)} ms`;
+        const notCompared = !compared && caught.peerSupportsCatchUp;
+        // The not-compared line carries the warnings: they are recorded without being printed a second time.
+        for (const w of caught.warnings) {
+          if (notCompared) warnings.push(w);
+          else warn(w);
+        }
         if (!announced) {
           announced = true;
           deps.say(`[ok] peer: "${deps.name}" proved the identity key pinned by its registration and the pair secret (mutual TLS 1.3)`);
+        }
+        if (notCompared) {
+          deps.say(`[warn] revocation lists: not compared (${caught.warnings.length > 0 ? caught.warnings.join('; ') : 'the peer did not send its lists state'})`);
+        } else if (!revocationSaid) {
+          revocationSaid = true;
           deps.say(`[${caught.peerSupportsCatchUp && caught.inSync !== false ? 'ok' : 'info'}] revocation lists: ${revocationText(caught, deps.name)}`);
         }
       } else if (!announced) {
@@ -365,7 +381,7 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
     } catch (e) {
       round.error = messageOf(e);
       if (e instanceof AllAddressesFailedError) {
-        round.attempts = e.attempts.map((a) => ({ address: addressText(a.address), reason: explainConnectFailure(a.reason, a.address, deps.name) }));
+        round.attempts = e.attempts.map((a) => ({ address: addressText(a.address), reason: explainConnectFailure(a.reason, deps.name) }));
         deps.say(`[fail] ${label}: no address of "${deps.name}" answered (${e.attempts.length} tried):`);
         for (const a of round.attempts) deps.say(`[fail]   ${a.address}: ${a.reason}`);
       } else if (e instanceof WakeError) {
@@ -373,8 +389,7 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
         round.error = e.message;
         deps.say(`[fail] ${label}: ${round.error}`);
       } else {
-        const where = target.addresses[0] as AddressEntry;
-        round.error = explainConnectFailure(messageOf(e), where, deps.name);
+        round.error = explainConnectFailure(messageOf(e), deps.name);
         deps.say(`[fail] ${label}: ${round.error}`);
       }
     } finally {

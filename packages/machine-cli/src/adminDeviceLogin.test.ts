@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { adminLoginLabel } from './adminDeviceLogin.js';
+import { adminLoginByConsole, adminLoginLabel } from './adminDeviceLogin.js';
 import { startFakeRelay, type FakeRelay, type FakeRelayOptions } from './fakeRelay.js';
 import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { cli, fakeTiming, ok } from './testing.js';
@@ -175,10 +175,19 @@ describe('machine admin login with a code (scripts): the pairing path', () => {
     expect(r.err).not.toContain('FULL ACCESS');
   });
 
-  it('a full-access pairing is accepted but warned about, with the way to the machine-admin token', async () => {
+  it('a full-access pairing WITHOUT --full-access is refused and not saved (full access is never taken without being asked)', async () => {
     const r = await cli(dir, ['admin', 'login', '87654321', '--relay', relay.url], forbidden('a prompt'), { ask: forbidden('a question') });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/FULL-ACCESS token/);
+    expect(r.err).toMatch(/NOT saved/);
+    expect(r.err).toContain('--full-access');
+    expect(readRelayAdminConfig(dir)).toBeUndefined();
+  });
+
+  it('a full-access pairing WITH --full-access is accepted but warned about, with the way to the machine-admin token', async () => {
+    const r = await cli(dir, ['admin', 'login', '87654321', '--full-access', '--relay', relay.url], forbidden('a prompt'), { ask: forbidden('a question') });
     expect(r.code, r.err).toBe(0);
-    expect(r.err).toMatch(/\[warn\] this admin token has FULL ACCESS: it can also manage tokens/);
+    expect(r.err).toContain('[warn] this admin token has FULL ACCESS: it can also manage tokens');
     expect(r.err).toMatch(/machine admin login --force/);
     expect(r.out).not.toContain('MACHINE ADMIN');
     expect(readRelayAdminConfig(dir)?.token).toBe(relay.adminToken);
@@ -192,11 +201,12 @@ describe('machine admin login with a code (scripts): the pairing path', () => {
     expect(readRelayAdminConfig(dir)).toBeUndefined();
   });
 
-  it('--full-access with a code is a usage error (a pairing carries its own access)', async () => {
+  it('--full-access with a code and a machine-admin pairing: accepted, stored as machine-admin (the pairing carries its own access), no full-access warning', async () => {
+    await start({ adminScopes: ['machine-admin'] });
     const r = await cli(dir, ['admin', 'login', '87654321', '--full-access', '--relay', relay.url], forbidden('a prompt'), { ask: forbidden('a question') });
-    expect(r.code).toBe(2);
-    expect(r.err).toMatch(/--full-access/);
-    expect(relay.requests).toHaveLength(0);
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).not.toContain('FULL ACCESS');
+    expect(readRelayAdminConfig(dir)?.token).toBe(relay.adminToken);
   });
 });
 
@@ -350,5 +360,28 @@ describe('the console shows six codes and the person clicks one (relay 7e0b586)'
     expect(r.out).toContain('Code to type in the relay console');
     expect(r.out).toMatch(/Type this code there/);
     expect([...relay.deviceLogins.values()].map((d) => d.choices)).toEqual([[]]);
+  });
+});
+
+describe('machine setup login (one token, two files): the second write fails', () => {
+  it('relay.json is taken back when relay-admin.json cannot be written, the error says nothing was kept, and a re-run is not stuck', async () => {
+    // A directory where the temporary file of the admin token goes: the write of relay-admin.json fails after relay.json was written.
+    mkdirSync(join(dir, '_secrets_', `relay-admin.json.${process.pid}.tmp`), { recursive: true });
+    const options = { relayUrl: relay.url, force: false, name: 'desk', say: () => undefined, asMachineToken: true, timing: approveAt(1) };
+    let message = '';
+    try {
+      await adminLoginByConsole(dir, options);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/could not be saved/);
+    expect(message).toMatch(/nothing was kept on this machine \(relay\.json was removed again\)/);
+    expect(message).toMatch(/Revoke "desk" in the relay console/);
+    expect(readRelayConfig(dir)).toBeUndefined();
+    expect(readRelayAdminConfig(dir)).toBeUndefined();
+    // The next run goes through the checks: it is no longer stopped by "already holds a relay token".
+    rmSync(join(dir, '_secrets_', `relay-admin.json.${process.pid}.tmp`), { recursive: true });
+    await adminLoginByConsole(dir, { ...options, timing: approveAt(1) });
+    expect(readRelayConfig(dir)?.token).toBe(readRelayAdminConfig(dir)?.token);
   });
 });
