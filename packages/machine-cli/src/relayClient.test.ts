@@ -820,3 +820,79 @@ describe('every answer of the relay is bounded (an untrusted relay cannot make t
     expect((await failure(c.getMachines())).message).toMatch(/3 MiB/);
   });
 });
+
+describe('version and whoami (machine ping)', () => {
+  it('getVersion reads the public GET /api/version without sending the token', async () => {
+    let seen: { url: string; authorization: string | null } | undefined;
+    const c = createRelayClient({
+      baseUrl: 'https://relay.example',
+      token: 'SECRET-TOKEN',
+      fetch: (async (url: string, init: RequestInit) => {
+        seen = { url, authorization: new Headers(init.headers).get('authorization') };
+        return json(200, { success: true, version: '2026.11.14-144', serverStartedAt: '2026-11-14T10:00:00.000Z', uptimeSeconds: 3600, instanceNonce: 'n' });
+      }) as typeof fetch,
+    });
+    expect(await c.getVersion()).toEqual({ version: '2026.11.14-144', uptimeSeconds: 3600 });
+    expect(seen).toEqual({ url: 'https://relay.example/api/version', authorization: null });
+  });
+
+  it('getVersion says "no such route" with undefined on a 404 (an older relay, or not a relay at all)', async () => {
+    expect(await clientWith(() => json(404, { success: false, error: 'not_found', message: 'no' })).getVersion()).toBeUndefined();
+  });
+
+  it('getVersion refuses an answer without a version string, naming the relay', async () => {
+    const e = await failure(clientWith(() => json(200, { success: true })).getVersion());
+    expect(e.status).toBe(0);
+    expect(e.message).toMatch(/unexpected answer to the relay version/);
+  });
+
+  it('getVersion reports an unreachable relay with the fix', async () => {
+    const c = createRelayClient({ baseUrl: 'https://relay.example', fetch: (async () => { throw new Error('getaddrinfo ENOTFOUND relay.example'); }) as typeof fetch });
+    const e = await failure(c.getVersion());
+    expect(e.status).toBe(0);
+    expect(e.message).toMatch(/cannot reach the relay https:\/\/relay\.example .*ENOTFOUND/);
+  });
+
+  it.each([
+    [['machine'], ['machine']],
+    [['machine-admin'], ['machine-admin']],
+    [null, null],
+  ])('whoami returns the scopes %j of the token and its label', async (scopes, expected) => {
+    const c = clientWith(() => json(200, { success: true, username: 'u', tokenId: 't', label: 'desktop', via: 'bearer', scopes, serverTime: '2026-11-15T10:00:00.000Z', tokenCount: 2 }));
+    expect(await c.whoami()).toEqual({ scopes: expected, label: 'desktop' });
+  });
+
+  it('whoami sends the token', async () => {
+    let authorization: string | null = null;
+    const c = createRelayClient({ baseUrl: 'https://relay.example', token: 'SECRET-TOKEN', fetch: (async (_u: string, init: RequestInit) => { authorization = new Headers(init.headers).get('authorization'); return json(200, { success: true, scopes: ['machine'] }); }) as typeof fetch });
+    await c.whoami();
+    expect(authorization).toBe('Bearer SECRET-TOKEN');
+  });
+
+  it('whoami is undefined on a 404 (a relay without /api/whoami)', async () => {
+    expect(await clientWith(() => json(404, { success: false })).whoami()).toBeUndefined();
+  });
+
+  it('whoami on a revoked token says so and never prints the token', async () => {
+    const e = await failure(clientWith(() => json(401, { success: false, error: 'unauthorized', message: 'invalid token' })).whoami());
+    expect(e.status).toBe(401);
+    expect(e.message).toMatch(/machine join/);
+    expect(e.message).not.toContain('SECRET-TOKEN');
+  });
+
+  it('whoami refuses scopes that are neither null nor a list of strings', async () => {
+    const e = await failure(clientWith(() => json(200, { success: true, scopes: 'machine' })).whoami());
+    expect(e.message).toMatch(/unexpected answer to whoami \(scopes\)/);
+  });
+
+  it('works against the fake relay: version is public, whoami shows the scopes of each kind of token', async () => {
+    const relay = await startFakeRelay();
+    try {
+      expect((await createRelayClient({ baseUrl: relay.url }).getVersion())?.version).toMatch(/\S/);
+      expect(await createRelayClient({ baseUrl: relay.url, token: relay.token }).whoami()).toMatchObject({ scopes: ['machine'] });
+      expect(await createRelayClient({ baseUrl: relay.url, token: relay.adminToken }).whoami()).toMatchObject({ scopes: null });
+    } finally {
+      await relay.close();
+    }
+  });
+});

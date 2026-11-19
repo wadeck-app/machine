@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, resolveMachineRef, type Shell } from '@wadeck-app/machine-core';
-import { connectToPeer } from '@wadeck-app/machine-transport';
 import { whenText } from './humanTime.js';
-import { connectFirst, CONNECT_TIMEOUT_MS, describeAddress, PeerAddressError, resolvePeerAddresses } from './peerAddresses.js';
+import { describeAddress, PeerAddressError } from './peerAddresses.js';
+import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
 import { adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
 import { createAdminKey, runJoinCommand } from './cliJoin.js';
 import { recordSignedPolicy, runAllow } from './adminAllow.js';
@@ -27,6 +27,7 @@ import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidde
 import { readAliases } from './state.js';
 import { runOnPeer } from './peerService.js';
 import { catchUpRevocations } from './revocationSync.js';
+import { runPingCommand } from './cliPing.js';
 
 // The commands that deal with the network: admin signing, peers, policy and remote execution.
 
@@ -415,6 +416,8 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
 
   if (command === 'join' || command === 'setup') return await runJoinCommand(ctx, { setup: command === 'setup', prompt, ask: askLine });
 
+  if (command === 'ping') return await runPingCommand(ctx);
+
   if (command === 'run') {
     // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.
     try {
@@ -454,35 +457,13 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   if (resolved.uuid === self.uuid) return fail('that is this machine: run the command here directly', EXIT.peer);
   const peer = network.directory.find(resolved.uuid);
   if (!peer) return fail(`"${ref}" is not a trusted peer: see \`machine status\` for what was left out and why`, EXIT.peer);
-  const connect = (host: string, port: number, handshakeTimeoutMs?: number) =>
-    connectToPeer({
-      identity: self.identity,
-      host,
-      port,
-      expectedPeerPublicKey: peer.identityPublicKey,
-      pairSecret: peer.pairSecret,
-      ...(handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs } : {}),
-    });
-  let session;
-  if (args.address) {
-    // Explicit override: the relay is not asked.
-    const where = parseAddress(args.address) as { host: string; port: number };
-    session = await connect(where.host, where.port);
-  } else {
-    const relayConfig = readRelayConfig(configDir);
-    if (relayConfig === undefined) {
-      return fail(`no address known for "${peer.name}": pass --address <host:port>, or join a relay (\`machine join <relay>\`) so that the address is learned from the signed address record of the peer`, EXIT.peer);
-    }
-    const found = await resolvePeerAddresses(configDir, { uuid: peer.peerId, name: peer.name, identityPublicKey: peer.identityPublicKey }, createRelayClient({ baseUrl: relayConfig.relayUrl, token: relayConfig.token }), epochSeconds(), { allowLocal: io.allowLoopbackPeers === true });
-    for (const line of found.refused) io.stderr(`[warn] ${line}\n`);
-    // What the relay says about presence is information (it can lag or lie): the addresses are tried anyway.
-    if (found.online === false) {
-      io.stderr(`[warn] the relay says "${peer.name}" is offline${typeof found.lastSeen === 'number' ? ` (last seen ${whenText(found.lastSeen, epochSeconds())})` : ''}: trying its published addresses anyway\n`);
-    }
-    const connected = await connectFirst(found.addresses, (address) => connect(address.host, address.port, CONNECT_TIMEOUT_MS));
-    for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}\n`);
-    session = connected.session;
-  }
+  // The same resolution and connection as `machine ping` (peerConnect.ts): the address override or the verified record of the relay.
+  const target = await resolvePeerTarget(configDir, peer, { ...(args.address ? { address: args.address } : {}), now: epochSeconds(), allowLocal: io.allowLoopbackPeers === true, warn: (line) => io.stderr(`[warn] ${line}
+`) });
+  const connected = await connectToTarget(self.identity, peer, target);
+  for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}
+`);
+  const session = connected.session;
   let answer;
   try {
     // Before any request: exchange the revocation lists (a revocation the relay never delivered still reaches whoever meets a peer that has it).

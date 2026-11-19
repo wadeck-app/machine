@@ -29,6 +29,16 @@ export interface RememberedRecord {
 /** A problem to tell the person: the message is complete (cause and way out). */
 export class PeerAddressError extends Error {}
 
+/** No published address answered: `attempts` keeps each address with its own reason (the message already lists them all). */
+export class AllAddressesFailedError extends PeerAddressError {
+  constructor(
+    message: string,
+    readonly attempts: Array<{ address: AddressEntry; reason: string }>,
+  ) {
+    super(message);
+  }
+}
+
 const corrupt = (file: string, why: string): PeerAddressError =>
   new PeerAddressError(
     `${file} is corrupt or invalid (${why}): it remembers the highest address record seen per peer, which protects against a relay serving an old record. Delete it to start again: every peer is then learned again from the relay`,
@@ -235,14 +245,17 @@ export const CONNECT_TIMEOUT_MS = 3000;
  */
 export async function connectFirst<T>(addresses: AddressEntry[], connect: (address: AddressEntry) => Promise<T>): Promise<{ session: T; address: AddressEntry; failures: string[] }> {
   const failures: string[] = [];
+  const attempts: Array<{ address: AddressEntry; reason: string }> = [];
   for (const address of addresses) {
     try {
       return { session: await connect(address), address, failures };
     } catch (e) {
       failures.push(`${describeAddress(address)}: ${(e as Error).message}`);
+      attempts.push({ address, reason: (e as Error).message });
     }
   }
-  throw new PeerAddressError(
+  throw new AllAddressesFailedError(
     `could not connect to any of the ${addresses.length} address(es) the peer published: ${failures.join('; ')}. The peer may be off, behind a router (publish a reachable address with \`machine daemon --advertise <host[:port]>\` there), or on another network; ${BYPASS}`,
+    attempts,
   );
 }

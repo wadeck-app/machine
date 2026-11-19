@@ -44,6 +44,12 @@ export interface CatchUpReport {
   /** Our lists were sent to the peer (it verifies them itself: acceptance is not acknowledged). */
   sent: boolean;
   warnings: string[];
+  /** Milliseconds between sending the hello and reading the first answer (a refusal counts: it is an answer). */
+  helloRoundTripMs: number;
+  /** The digest of the lists the peer announced, when it answered the hello. */
+  peerDigest?: string;
+  /** Both sides held the same lists BEFORE the exchange (same digest). Absent when the peer did not answer with a hello. */
+  inSync?: boolean;
 }
 
 function typeOf(message: unknown): unknown {
@@ -75,17 +81,19 @@ export async function catchUpRevocations(session: PeerSession, deps: CatchUpClie
   const timeoutMs = options.timeoutMs ?? DEFAULT_CATCHUP_TIMEOUT_MS;
   const warnings: string[] = [];
   const before = deps.state();
+  const sentAt = performance.now();
   session.send({ type: 'hello', revocationDigest: before.digest, revocationVersion: before.version });
 
   const answer = await within(session.next(), timeoutMs, 'answer to the revocation hello');
+  const helloRoundTripMs = performance.now() - sentAt;
   if (typeOf(answer) === 'refused') {
     const reason = (answer as { reason?: unknown }).reason;
     if (reason === 'unknown-message') {
       // An older build: served as before, but it cannot hand over or take a revocation list.
-      return { peerSupportsCatchUp: false, installed: false, sent: false, warnings: [`${deps.peerLabel} does not support revocation catch-up (older machine build): update it so that revocations reach it when it connects`] };
+      return { peerSupportsCatchUp: false, installed: false, sent: false, helloRoundTripMs, warnings: [`${deps.peerLabel} does not support revocation catch-up (older machine build): update it so that revocations reach it when it connects`] };
     }
     if (reason === 'rate-limited') {
-      return { peerSupportsCatchUp: true, installed: false, sent: false, warnings: [`${deps.peerLabel} refused the revocation exchange: ${RATE_LIMITED_MESSAGE.replace('from this peer', 'from this machine')}`] };
+      return { peerSupportsCatchUp: true, installed: false, sent: false, helloRoundTripMs, warnings: [`${deps.peerLabel} refused the revocation exchange: ${RATE_LIMITED_MESSAGE.replace('from this peer', 'from this machine')}`] };
     }
     throw new Error(`${deps.peerLabel} refused the revocation hello (${String(reason)}): ${String((answer as { message?: unknown }).message ?? '')}`);
   }
@@ -136,5 +144,5 @@ export async function catchUpRevocations(session: PeerSession, deps: CatchUpClie
       warnings.push(`cannot send the revocation lists to ${deps.peerLabel}: ${(e as Error).message}`);
     }
   }
-  return { peerSupportsCatchUp: true, peerVersion: remote.revocationVersion, installed, sent, warnings };
+  return { peerSupportsCatchUp: true, peerVersion: remote.revocationVersion, peerDigest: remote.revocationDigest, inSync: remote.revocationDigest === before.digest, installed, sent, helloRoundTripMs, warnings };
 }

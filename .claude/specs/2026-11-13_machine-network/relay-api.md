@@ -114,6 +114,16 @@ Presence: `lastSeen` is the time of the last `PUT` or `heartbeat` for that `uuid
 - Every relay answer is read with a cap (64 KiB by default, 4 KiB one record, 3 MiB the machine list, 1 MiB an inbox page); a larger one is a loud error naming the limit.
 - The heartbeat goes out first in a round; the record is published right after it. `peer-records.json` is written under a lock file with the data flushed (`peer forget-record <peer>` is the only way to lower it, per peer).
 
+## Calls used by `machine ping` (decision 61)
+
+| Call | Auth | Use |
+|---|---|---|
+| `GET /api/version` | public | reachability, round trip, `version`, `uptimeSeconds` (a 404 = older relay, a warning) |
+| `GET /api/whoami` | any scope | token accepted, `scopes` (`null` = full access), `label` (a 404 = older relay: the token is checked with `GET /api/machines` and the level is said to be unknown) |
+| `GET /api/machines/{own uuid}` | M | the address record this machine published, verified against its own identity key |
+
+Both routes exist in poc-node (checked against the real relay by `npm run test:relay`); no new relay call.
+
 ## Not in this version
 
 Distribution of registrations, revocation lists and policies through the relay (inbox routes, documents): see distribution.md. `machine admin register`, `machine peer import` and `machine policy install` still move those documents by file (decision 48).

@@ -6,7 +6,7 @@ import { buildAddressRecord, generateSigningKeyPair, type AddressEntry, type Sig
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
-import { PeerAddressError, commitRecords, forgetPeerRecord, connectFirst, describeAddress, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
+import { AllAddressesFailedError, PeerAddressError, commitRecords, forgetPeerRecord, connectFirst, describeAddress, peerRecordsFile, readPeerRecords, resolvePeerAddresses, lookupPeerPresence } from './peerAddresses.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { provision } from './testing.js';
 
@@ -246,6 +246,18 @@ describe('connectFirst', () => {
         throw new Error(`no answer from ${describeAddress(address)} within 3000 ms`);
       }),
     ).rejects.toThrow(/10\.0\.0\.7:47921: no answer from 10\.0\.0\.7:47921 within 3000 ms.*192\.168\.1\.20:47921: no answer/s);
+  });
+
+  it('the error of a total failure also carries each address with its own reason (machine ping prints one line per address)', async () => {
+    const e = await connectFirst(A2, async (address) => {
+      throw new Error(`no answer from ${describeAddress(address)} within 3000 ms`);
+    }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(AllAddressesFailedError);
+    expect(e).toBeInstanceOf(PeerAddressError);
+    expect((e as AllAddressesFailedError).attempts).toEqual([
+      { address: A2[0], reason: 'no answer from 10.0.0.7:47921 within 3000 ms' },
+      { address: A2[1], reason: 'no answer from 192.168.1.20:47921 within 3000 ms' },
+    ]);
   });
 
   it('writes an IPv6 address in brackets', () => {

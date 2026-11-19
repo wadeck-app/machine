@@ -244,6 +244,9 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       return send(res, f.status, f.body, f.headers);
     }
 
+    // Public, like the real relay: version and uptime.
+    if (method === 'GET' && path === '/api/version') return send(res, 200, { success: true, version: '2099.01.01-1', serverStartedAt: new Date(Date.now() - 3_600_000).toISOString(), uptimeSeconds: 3600, instanceNonce: 'fake' });
+
     if (method === 'POST' && path === '/api/pairings/claim') {
       const given = String((body as { code?: unknown } | undefined)?.code ?? '').replace(/[\s-]/g, '');
       if (given === adminCode && !adminCodeUsed) {

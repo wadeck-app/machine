@@ -54,6 +54,7 @@ export { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, type EditContext, type Po
 export { candidacyCode, finalCode, formatFinalCode, newCandidacyRandom } from './sas.js';
 export { HINT_MAX_LENGTH, MIN_ITERATIONS, PASSPHRASE_MIN_LENGTH, PASSPHRASE_RECOMMENDED_LENGTH, adminKeyHint, checkHint, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
 export { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry, type NormalizedName, type Resolution } from './reference.js';
+export { MAX_PING_COUNT, parsePingCount, summarizeSamples, type PingCount, type SampleSummary } from './ping.js';
 export {
   DEFAULT_REQUEST_LIFETIME_SECONDS,
   MAX_REQUEST_LIFETIME_SECONDS,

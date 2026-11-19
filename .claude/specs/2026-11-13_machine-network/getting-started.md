@@ -10,6 +10,7 @@
 | Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | type the relay login code on the relay page; on the admin machine: y/N and the passphrase; on both machines: compare the security code |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
 | Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
+| Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
 
 The relay is named once (`<relay>` is a host or URL), then stored. A machine that holds the admin key and runs `machine join <relay>` approves itself (needs `machine admin login` first, or use `setup`). The token of `setup` is the machine token AND the admin token of the first machine (one file content in `relay.json` and `relay-admin.json`); `machine admin login` on another machine adds `<name> admin`. A relay without the `machine-admin` scope fails loudly: update it; `machine admin login --full-access` (a full-access token that can also manage tokens) is the explicit opt-in.
 
@@ -61,6 +62,21 @@ Security code of "laptop" (admin key ab5e...):
 
 It must read exactly the same on "laptop". If it differs, run: machine admin revoke laptop
 ```
+
+## Testing the connection (decision 61)
+
+```
+machine ping                      this machine -> relay: relay.json, relay answers (ms, version), token accepted + access level,
+                                  local daemon running, own address record published (age, presence). Exit 0 only if no step fails
+machine ping <machine> [--count 3] [--address host:port] [--json]
+                                  this machine -> peer: address(es) tried, mutual TLS handshake (ms), hello round trip (ms),
+                                  registration (serial, admin key id), revocation lists same or exchanged. Nothing is executed
+```
+
+- `[fail]` lines go to stderr with cause and fix; a stopped local daemon fails the first form (it publishes the address and receives commands) although `machine run` does not need it.
+- First form: the relay time includes DNS and TLS setup (first request); the token time is on the warm connection. A full-access token is a `[warn]` (a machine never needs it); a loopback-only address record is a `[warn]` (peers refuse it).
+- Second form, a failure names each address with its error: nothing listens (daemon stopped there), no answer (firewall, asleep), another key answers (wrong address), refused during authentication (not registered there, revoked, clocks, pair secret), no record on the relay (`machine startup enable` there). Exit 1; unknown or ambiguous machine 3; usage 2.
+- `--count n` (1 to 10) opens n connections one second apart and prints min/avg/max; the hello is sent in the first 4 only (a peer allows 6 revocation exchanges per minute).
 
 ## Rules a user meets
 

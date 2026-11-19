@@ -35,6 +35,9 @@ Getting started (one command per machine; the name of a machine is the computer 
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
   then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
+  check the connection (reads only, runs nothing, needs no allowlist entry):
+    machine ping                     this machine's path to the relay, one line per step ([ok] / [warn] / [fail] with cause and fix)
+    machine ping <machine>           the real authenticated channel to a peer, like ping(8): handshake and hello times
   Stays manual: the passphrase, the one confirmation in the relay console (relay login code) and the security-code comparison (the human steps).
   Three kinds of code, never mixed: the relay login codes (XXXX-XXXX, shown here, confirmed in the relay console), the pairing code (8
   digits, shown by the relay console: scripts) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
@@ -66,6 +69,18 @@ Commands:
                                      only way without a relay. Before the command, the two machines compare their
                                      admin revocation lists and hand each other what the other lacks (a revocation the
                                      relay never delivered still arrives); a peer that turns out revoked is refused
+  ping [<machine>] [--count <n>] [--address <host:port>] [--json]
+                                     without a machine: relay.json, the relay answers (time, version), the token is accepted and its
+                                     access level (machine, machine-admin, full), the local daemon runs, this machine's address record is
+                                     published (age, presence); exit 0 only when no step fails. With a machine (name, alias, uuid or
+                                     prefix, resolved like run): the addresses come from --address or the signed record of the relay, exactly
+                                     as for run, then the mutual TLS 1.3 channel opens (key pinned, pair secret proven) and the revocation
+                                     hello (the same one run sends first) is answered; no command is sent, so nothing is executed, no
+                                     allowlist entry is needed and the peer audits nothing. Reports each address tried, the handshake time,
+                                     the hello round trip, the registration (serial, admin key id) and whether the revocation lists matched.
+                                     --count <n> (1 to 10, default 1) opens n connections one second apart and prints min/avg/max (the
+                                     hello is sent in the first 4 only: a peer allows 6 revocation exchanges per minute). Exit 0 ok, 1
+                                     failure, 2 usage, 3 unknown or ambiguous machine
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>] [--advertise <host[:port]>]...
                                      run the daemon in the foreground (started by orch). With a relay (after join)
                                      it publishes its signed address record: the non-loopback interface addresses
@@ -180,6 +195,7 @@ Administration (enrollment through the relay, or by files):
 
 Options:
   --json                 machine-readable output
+  --count <n>            rounds of machine ping <machine> (1 to 10, one second apart; min/avg/max)
   --relay <url>          relay for \`join\` and \`admin login\` (no default: required the first time, then the stored one is reused; https only, http on 127.0.0.1 for tests)
   --verbose              also show the candidacy code (join, setup, admin approve): internal by default, the admin machine recomputes
                          and checks it itself; the security code is the one to compare
@@ -252,6 +268,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
     else if (a === '--address') out.address = valueOf('--address');
+    else if (a === '--count') out.count = valueOf('--count');
     else if (a === '--shell') out.shell = valueOf('--shell');
     else if (a === '--days') out.days = valueOf('--days');
     else if (a === '--secret-from') out.secretFrom = valueOf('--secret-from');
@@ -330,7 +347,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -351,6 +368,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     const problem = checkHint(args.hint);
     if (!problem.ok) return fail(`--hint: ${problem.message}`, EXIT.usage);
   }
+  if (args.count !== undefined && command !== 'ping') return fail('--count only applies to `machine ping <machine>` (the number of rounds, 1 to 10)', EXIT.usage);
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
   if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && rest[0] === 'approve'))) {
     return fail('--verbose only applies to `machine join`, `machine setup` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);

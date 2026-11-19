@@ -135,6 +135,14 @@ describe('machine usage', () => {
     expect((await run('--version', '--json')).out).toBe(`${appVersion()}\n`);
   });
 
+  it('machine ping is in the Getting started section and in the command list', async () => {
+    const out = (await run('--help')).out;
+    const gettingStarted = out.slice(0, out.indexOf('Commands:'));
+    expect(gettingStarted).toMatch(/machine ping <machine>/);
+    expect(out).toContain("ping [<machine>] [--count <n>]");
+    expect(out).toMatch(/--count <n> +rounds of/);
+  });
+
   it('--version is in the help', async () => {
     expect((await run('--help')).out).toMatch(/--version\s+print the version/);
   });

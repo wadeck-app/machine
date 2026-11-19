@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readMachine } from '../identity.js';
 import type { RunningDaemon } from '../daemonEntry.js';
+import { SECRETS_DIRNAME } from '../paths.js';
+import { writeRelayConfig } from '../relayStore.js';
 import { SHELL, startWorld, type World } from './world.js';
 
 // INIT and ONBOARDING against the REAL relay (server.js of poc-node, started by the helper of that repository): `npm run test:relay`.
@@ -200,6 +202,47 @@ describe('onboarding with the real relay', () => {
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/refused by laptop/);
     expect(r.out).toBe('');
+  });
+
+  it('ping (the path to the relay) on the real relay: every step answers, the access level comes from the real /api/whoami, the loopback record is a warning', async () => {
+    const r = await w.run('desktop', a, ['ping']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/\[ok\] relay\.json: \S+ \(token labelled "desktop"\)/);
+    // The real /api/version (public): a version string and an uptime, and a measured round trip.
+    expect(r.out).toMatch(/\[ok\] relay reachable in [\d.]+ ms \(first request: includes DNS and TLS setup\), version \S+, up /);
+    expect(r.out).toMatch(/\[ok\] token accepted in [\d.]+ ms, access level machine-admin \(can approve machines, cannot manage tokens\)/);
+    expect(r.out).toContain('[ok] local daemon is running');
+    // The test daemons advertise loopback, which peers refuse: said as a warning, not a failure.
+    expect(r.err).toMatch(/\[warn\] address record published: 127\.0\.0\.1:\d+ \(seq \d+, .*Peers refuse every one of these addresses/);
+    // The token never reaches the output.
+    const token = (JSON.parse(readFileSync(join(a, SECRETS_DIRNAME, 'relay.json'), 'utf8')) as { token: string }).token;
+    expect(r.out + r.err).not.toContain(token);
+  });
+
+  it('ping <machine> on the real relay: the address of the peer comes from its record, the mutual TLS channel opens, nothing is executed, the peer audits nothing', async () => {
+    const auditBefore = existsSync(join(b, 'audit.log')) ? readFileSync(join(b, 'audit.log'), 'utf8') : '';
+    const r = await w.run('desktop', a, ['ping', 'laptop', '--count', '3'], { allowLoopbackPeers: true });
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/\[ok\] address: 1 address\(es\) from the relay record of "laptop" \(seq \d+, .*the relay says online/);
+    expect(r.out).toMatch(/\[ok\] peer: "laptop" proved the identity key pinned by its registration and the pair secret/);
+    expect(r.out).toMatch(/3 attempts, 3 answered, 0 failed/);
+    expect(r.out).toMatch(/nothing was executed on it/);
+    const auditAfter = existsSync(join(b, 'audit.log')) ? readFileSync(join(b, 'audit.log'), 'utf8') : '';
+    expect(auditAfter).toBe(auditBefore);
+    // And the other way round, with --json.
+    const back = await w.run('laptop', b, ['ping', 'desktop', '--json'], { allowLoopbackPeers: true });
+    expect(back.code, back.err).toBe(0);
+    expect(JSON.parse(back.out)).toMatchObject({ ok: true, executed: false, peer: { name: 'desktop' } });
+  });
+
+  it('ping on the real relay with a token the relay does not know: the real 401 is explained with the fix, and the token is not printed', async () => {
+    const dir = w.machineDir('stranger');
+    writeRelayConfig(dir, { relayUrl: w.relay.url, token: 'tok_not_a_real_token', label: 'stranger', claimedAt: new Date().toISOString() }, false);
+    const r = await w.run('stranger', dir, ['ping']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/\[fail\] the relay \S+ refused the stored token \(invalid or revoked\).*machine join/);
+    expect(r.out + r.err).not.toContain('tok_not_a_real_token');
   });
 
   it('list with the relay: the peer is online with its published address', async () => {

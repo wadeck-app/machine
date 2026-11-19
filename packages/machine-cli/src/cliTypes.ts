@@ -55,6 +55,8 @@ export interface Parsed {
   out?: string;
   configDir?: string;
   address?: string;
+  /** `machine ping <machine> --count <n>`: rounds, 1 to 10 (validated by `parsePingCount`). */
+  count?: string;
   shell?: string;
   days?: string;
   secretFrom?: string;

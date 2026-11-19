@@ -452,6 +452,19 @@ describe('revocation catch-up, client side', () => {
     expect(await run(w, s)).toMatchObject({ type: 'result' });
   });
 
+  it('reports how long the hello took to be answered and whether both sides already held the same lists (machine ping)', async () => {
+    const w = await world();
+    const same = await w.catchUp(await w.connect());
+    expect(same.helloRoundTripMs).toBeGreaterThanOrEqual(0);
+    expect(same.helloRoundTripMs).toBeLessThan(5000);
+    expect(same.inSync).toBe(true);
+    expect(same.peerDigest).toBe(w.server.state().digest);
+
+    w.server.install(w.sign([{ uuid: X, serial: 5 }], NOW + 50));
+    const behind = await w.catchUp(await w.connect());
+    expect(behind.inSync).toBe(false);
+  });
+
   it('sends its own lists to a peer that is behind', async () => {
     const w = await world();
     w.client.install(w.sign([{ uuid: X, serial: 5 }], NOW + 50));

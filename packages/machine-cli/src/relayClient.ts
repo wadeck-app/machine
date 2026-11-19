@@ -221,6 +221,20 @@ export interface RelayClient {
   getMachine(uuid: string): Promise<(MachineEntry & { etag?: string }) | undefined>;
   listCandidacies(): Promise<PendingCandidacy[]>;
   decideCandidacy(id: string, decision: CandidacyDecision): Promise<void>;
+  /** Public route (no Authorization header): the version of the relay and its uptime. `undefined` when the relay has no such route (an older relay, or not a relay). */
+  getVersion(): Promise<RelayVersion | undefined>;
+  /** What the relay says about the token in use (scopes: `null` = full access). `undefined` when the relay has no `/api/whoami`. */
+  whoami(): Promise<RelayWhoami | undefined>;
+}
+
+export interface RelayVersion {
+  version: string;
+  uptimeSeconds?: number;
+}
+
+export interface RelayWhoami {
+  scopes: string[] | null;
+  label?: string;
 }
 
 /** Text from the relay shown on a terminal: printable ASCII only, no escape sequence gets through. */
@@ -613,6 +627,22 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
 
     async decideCandidacy(id, decision) {
       await call({ method: 'PUT', path: `/api/machines/candidacies/${idPath(id)}/decision`, body: decision, decision: true });
+    },
+
+    async getVersion() {
+      const r = await call({ method: 'GET', path: '/api/version', publicRoute: true, accept: [404] });
+      if (r === undefined) return undefined;
+      if (typeof r.body.version !== 'string' || r.body.version.length === 0) throw malformed('the relay version');
+      const uptime = r.body.uptimeSeconds;
+      return { version: printable(r.body.version), ...(typeof uptime === 'number' && Number.isFinite(uptime) && uptime >= 0 ? { uptimeSeconds: uptime } : {}) };
+    },
+
+    async whoami() {
+      const r = await call({ method: 'GET', path: '/api/whoami', accept: [404] });
+      if (r === undefined) return undefined;
+      const { scopes, label } = r.body;
+      if (scopes !== null && !(Array.isArray(scopes) && scopes.every((s) => typeof s === 'string'))) throw malformed('whoami', 'scopes');
+      return { scopes: scopes as string[] | null, ...(typeof label === 'string' ? { label: printable(label) } : {}) };
     },
   };
 }
