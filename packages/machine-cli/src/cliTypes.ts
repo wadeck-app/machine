@@ -118,6 +118,8 @@ export interface Parsed {
   remove: boolean;
   /** `machine cli logs --follow` (-f). */
   follow: boolean;
+  /** `machine cli register --force-register`: register even when the config dir is under the OS temporary folder. */
+  forceRegister: boolean;
   timeout?: string;
   promptTimeout?: string;
   policy?: string;

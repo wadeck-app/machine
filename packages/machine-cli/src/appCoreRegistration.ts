@@ -18,6 +18,31 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The first words of the line logged when registration is skipped under the temporary folder (the CLI sends such a line to stderr). */
+export const APP_CORE_SKIP_PREFIX = 'app-core registration skipped:';
+
+function realOrResolved(p: string): string {
+  const missing: string[] = [];
+  let current = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missing);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.join(current, ...missing);
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Whether `dir` is `tmp` or below it, on real paths (the nearest existing ancestor is resolved), case-insensitive on Windows. */
+export function isUnderTempDir(dir: string, tmp: string): boolean {
+  const fold = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const rel = path.relative(fold(realOrResolved(tmp)), fold(realOrResolved(dir)));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 /** app-core's config dir, which APP_CORE_CONFIG_DIR overrides the way app-core itself honours it. */
 export function getAppCoreConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return env['APP_CORE_CONFIG_DIR'] ?? path.join(os.homedir(), '.config', 'app-core');
@@ -178,6 +203,10 @@ export interface RegisterOnStartOptions {
   moduleStamp?: string | undefined;
   appCoreConfigDir?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
+  /** The OS temporary folder (default os.tmpdir()); a machine config dir under it is not registered unless forced or APP_CORE_CONFIG_DIR is set. */
+  tmpdir?: string | undefined;
+  /** `machine cli register --force-register`: register even from the temporary folder. */
+  forceRegister?: boolean | undefined;
   log: (message: string) => void;
 }
 
@@ -190,6 +219,16 @@ export async function registerOnStart(options: RegisterOnStartOptions): Promise<
   const appCoreConfigDir = options.appCoreConfigDir ?? getAppCoreConfigDir(env);
 
   try {
+    // A config dir under the temp folder is a probe or a test: app-core would remember a path that will disappear. APP_CORE_CONFIG_DIR is explicit isolation.
+    if (
+      options.machineConfigDir !== undefined &&
+      options.forceRegister !== true &&
+      env['APP_CORE_CONFIG_DIR'] === undefined &&
+      isUnderTempDir(options.machineConfigDir, options.tmpdir ?? os.tmpdir())
+    ) {
+      log(`${APP_CORE_SKIP_PREFIX} the configuration folder ${options.machineConfigDir} is under the temporary folder, so the module would be registered from a path that will disappear (a probe or a test). Set APP_CORE_CONFIG_DIR to an isolated app-core folder to register there, or run machine cli register --force-register`);
+      return;
+    }
     const found = findAppModule(packageRoot);
     if (found === undefined) {
       log(`app-core: no app-module found, not registering. Looked for ${appModuleManifestCandidates(packageRoot).join(' and ')}. A published install should ship one: reinstall machine. In a source checkout, build it with: BUNDLE_VERSION=<version> npm run bundle --workspace=packages/app-module-machine`);

@@ -367,6 +367,33 @@ describe('machine cli register', () => {
     expect(r.out).toContain('app-core: registered machine');
   });
 
+  it('--force-register is passed to the registration', async () => {
+    const seen: Array<boolean | undefined> = [];
+    const r = await run(['cli', 'register', '--force-register'], { register: async (o) => void seen.push(o.forceRegister) });
+    expect(r.code).toBe(0);
+    expect(seen).toEqual([true]);
+    const r2 = await run(['cli', 'register'], { register: async (o) => void seen.push(o.forceRegister) });
+    expect(r2.code).toBe(0);
+    expect(seen).toEqual([true, false]);
+  });
+
+  it('a skipped registration exits 0 with the skip line on stderr, not stdout', async () => {
+    const line = 'app-core registration skipped: the configuration folder X is under the temporary folder, so the module would be registered from a path that will disappear (a probe or a test). Set APP_CORE_CONFIG_DIR to an isolated app-core folder to register there, or run machine cli register --force-register';
+    const r = await run(['cli', 'register'], { register: async (o) => o.log(line) });
+    expect(r.code).toBe(0);
+    expect(r.err).toContain(line);
+    expect(r.out).not.toContain('skipped');
+  });
+
+  it('--force-register only applies to machine cli register', async () => {
+    const r = await run(['cli', 'version', '--force-register']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--force-register only applies to .machine cli register./);
+    const r2 = await run(['ping', '--force-register']);
+    expect(r2.code).toBe(2);
+    expect(r2.err).toMatch(/--force-register only applies/);
+  });
+
   it('a registration that throws is a failure with the cause', async () => {
     const r = await run(['cli', 'register'], {
       register: async () => {

@@ -179,7 +179,7 @@ Rules: the daemon's working directory must not be inside `node_modules` (launche
 
 - Ships inside the wrapper as `app-module/` (queue `bundle.ts:96-113`, orch `copy-app-module.sh`).
 - The daemon registers it at start (port of orch `registerOnStart`, `app-core-registration.ts:150-210`): skip when app-core's config dir does not exist; stage the module to `<configDir>/app-module/<stamp>/` because app-core stores a path and npm deletes the package folder on update (`app-core-registration.ts:61-78`); prune older stamps only after app-core accepted the new path; never throws (a log line). Uses `@wadeck-app/app-core-sdk/register` `registerModule` (`latest`).
-- `machine cli register` (decision 38a) = same function, run by hand.
+- `machine cli register` (decision 38a) = same function, run by hand. Both skip a config dir under the OS temp folder unless `APP_CORE_CONFIG_DIR` is set; `cli register --force-register` overrides (decision 64).
 - The module backend must read the same config dir as the daemon (already `app-module-machine/src/backend/configDir.ts`).
 
 ### 3.8 Workflow (`.github/workflows/publish.yml`)

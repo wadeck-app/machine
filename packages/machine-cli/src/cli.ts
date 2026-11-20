@@ -151,6 +151,9 @@ Commands:
   cli logs [--follow | -f]           the updater and daemon log of today (<config dir>/logs)
   cli post-update                    run by the updater after an update: refresh the startup job when it exists and restart
                                      the daemon when it runs an older version (run it yourself when the updater says so)
+  cli register [--force-register]    offer the admin page module to app-core now (the daemon does it at each start). Skipped, exit 0
+                                     with one line on stderr, when the config dir is under the OS temporary folder (a probe or a test)
+                                     unless APP_CORE_CONFIG_DIR names an isolated app-core folder; --force-register overrides
 
 Administration (enrollment through the relay, or by files):
   admin login [<code>] [--relay <url>] [--force] [--full-access]
@@ -269,7 +272,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -296,6 +299,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--list') out.list = true;
     else if (a === '--remove') out.remove = true;
     else if (a === '--follow' || a === '-f') out.follow = true;
+    else if (a === '--force-register') out.forceRegister = true;
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
@@ -441,6 +445,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     return fail('--verbose only applies to `machine join`, `machine setup` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);
   }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
+  if (args.forceRegister && command !== 'cli') return fail('--force-register only applies to `machine cli register`', EXIT.usage);
   if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
   if (args.fullAccess && !(command === 'admin' && rest[0] === 'login')) {
     return fail('--full-access only applies to `machine admin login` (a FULL-ACCESS token, which can also manage tokens; without it the admin token is limited to machine rights)', EXIT.usage);

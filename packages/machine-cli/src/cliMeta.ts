@@ -1,4 +1,4 @@
-import { registerOnStart, type RegisterOnStartOptions } from './appCoreRegistration.js';
+import { APP_CORE_SKIP_PREFIX, registerOnStart, type RegisterOnStartOptions } from './appCoreRegistration.js';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,6 +173,7 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
   if (extra.length > 0) return fail(`unexpected argument "${extra[0]}" for \`machine cli ${sub}\`: ${USAGE}`, EXIT.usage);
   if (args.quiet && sub !== 'self-check') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.follow && sub !== 'logs') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
+  if (args.forceRegister && sub !== 'register') return fail('--force-register only applies to `machine cli register`', EXIT.usage);
 
   const deps = resolveDeps(ctx);
   const devRefusal = (): number | undefined => (isReleaseVersion(deps.version) ? undefined : fail(devBuildRefusalMessage('machine', deps.version)));
@@ -185,9 +186,17 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
       case 'register': {
         // Explicit request: no development-build skip here, the user asked for it. Every outcome of registerOnStart is a log line.
         const lines: string[] = [];
-        await deps.register({ packageRoot: packageRoot(), machineConfigDir: configDir, moduleStamp: deps.version, log: (line) => lines.push(`${line}
-`) });
-        emit({ version: deps.version, log: lines.map((l) => l.trimEnd()) }, lines.join(''));
+        const skipped: string[] = [];
+        await deps.register({
+          packageRoot: packageRoot(),
+          machineConfigDir: configDir,
+          moduleStamp: deps.version,
+          forceRegister: args.forceRegister,
+          log: (line) => (line.startsWith(APP_CORE_SKIP_PREFIX) ? skipped : lines).push(`${line}\n`),
+        });
+        // A skip is a warning, not a result: stderr, exit 0.
+        if (skipped.length > 0) io.stderr(skipped.join(''));
+        emit({ version: deps.version, ...(skipped.length > 0 ? { skipped: skipped.map((l) => l.trimEnd()) } : {}), log: lines.map((l) => l.trimEnd()) }, lines.join(''));
         return EXIT.ok;
       }
       case 'logs':

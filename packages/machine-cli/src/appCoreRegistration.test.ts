@@ -10,6 +10,7 @@ import {
   getAppCoreConfigDir,
   pruneStagedModules,
   registerOnStart,
+  isUnderTempDir,
   stageAppModule,
 } from './appCoreRegistration.js';
 
@@ -90,6 +91,8 @@ async function setup(port?: number): Promise<Setup> {
       machineConfigDir,
       moduleStamp: '2026.11.14-001',
       appCoreConfigDir,
+      // Not the folder of this test: the machine config dir (under root) is NOT under this fake OS temp folder.
+      tmpdir: path.join(root, 'fake-os-tmp'),
       env: { APP_CORE_PORT: String(port ?? (await freePort())) },
       log: (message: string) => logs.push(message),
     },
@@ -324,5 +327,78 @@ describe('registerOnStart', () => {
     expect(fs.existsSync(s.machineConfigDir)).toBe(false);
     const pickup = JSON.parse(fs.readFileSync(path.join(s.appCoreConfigDir, 'modules', 'machine.json'), 'utf8')) as { source: { path: string } };
     expect(pickup.source.path).toBe(path.resolve(sibling, 'manifest.json'));
+  });
+});
+
+describe('isUnderTempDir', () => {
+  it('is true for the folder itself and anything below it, false for a sibling with the same prefix', () => {
+    const tmp = path.join(root, 'tmp');
+    fs.mkdirSync(path.join(tmp, 'a', 'b'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'tmp-other'), { recursive: true });
+    expect(isUnderTempDir(tmp, tmp)).toBe(true);
+    expect(isUnderTempDir(path.join(tmp, 'a', 'b'), tmp)).toBe(true);
+    expect(isUnderTempDir(path.join(tmp, 'not-created-yet', 'x'), tmp)).toBe(true);
+    expect(isUnderTempDir(path.join(root, 'tmp-other'), tmp)).toBe(false);
+    expect(isUnderTempDir(root, tmp)).toBe(false);
+  });
+
+  it('compares real paths: a link into the temp folder counts as inside', () => {
+    const tmp = path.join(root, 'tmp');
+    const real = path.join(tmp, 'real');
+    fs.mkdirSync(real, { recursive: true });
+    const link = path.join(root, 'link');
+    try {
+      fs.symlinkSync(real, link, 'junction');
+    } catch (err) {
+      throw new Error(`cannot create the junction this test needs (${(err as Error).message}): fix the test environment`);
+    }
+    expect(isUnderTempDir(link, tmp)).toBe(true);
+  });
+
+  it.runIf(process.platform === 'win32')('ignores the case on Windows', () => {
+    const tmp = path.join(root, 'tmp');
+    fs.mkdirSync(tmp, { recursive: true });
+    expect(isUnderTempDir(path.join(tmp, 'x').toUpperCase(), tmp)).toBe(true);
+  });
+});
+
+describe('registerOnStart under the temporary folder', () => {
+  const SKIP = (dir: string): string =>
+    `app-core registration skipped: the configuration folder ${dir} is under the temporary folder, so the module would be registered from a path that will disappear (a probe or a test). Set APP_CORE_CONFIG_DIR to an isolated app-core folder to register there, or run machine cli register --force-register`;
+
+  it('skips with the exact line: no copy, no pickup file, no request', async () => {
+    const appCore = await fakeAppCore(200, { ok: true });
+    const s = await setup(appCore.port);
+    await registerOnStart({ ...s.options, tmpdir: root });
+    expect(s.logs).toEqual([SKIP(s.machineConfigDir)]);
+    expect(fs.existsSync(s.machineConfigDir)).toBe(false);
+    expect(fs.existsSync(path.join(s.appCoreConfigDir, 'modules'))).toBe(false);
+    expect(appCore.requests).toHaveLength(0);
+  });
+
+  it('registers when APP_CORE_CONFIG_DIR is set (explicit isolation), into that app-core dir', async () => {
+    const s = await setup();
+    await registerOnStart({ ...s.options, tmpdir: root, appCoreConfigDir: undefined, env: { ...s.options.env, APP_CORE_CONFIG_DIR: s.appCoreConfigDir } });
+    expect(fs.existsSync(path.join(s.appCoreConfigDir, 'modules', 'machine.json'))).toBe(true);
+    expect(s.logs.join('\n')).not.toContain('skipped: the configuration folder');
+  });
+
+  it('registers with forceRegister', async () => {
+    const s = await setup();
+    await registerOnStart({ ...s.options, tmpdir: root, forceRegister: true });
+    expect(fs.existsSync(path.join(s.appCoreConfigDir, 'modules', 'machine.json'))).toBe(true);
+  });
+
+  it('registers when the config dir is outside the temporary folder', async () => {
+    const s = await setup();
+    await registerOnStart({ ...s.options, tmpdir: path.join(root, 'elsewhere') });
+    expect(fs.existsSync(path.join(s.appCoreConfigDir, 'modules', 'machine.json'))).toBe(true);
+  });
+
+  it('uses os.tmpdir() by default', async () => {
+    const s = await setup();
+    const { tmpdir: _t, ...rest } = s.options;
+    await registerOnStart(rest);
+    expect(s.logs).toEqual([SKIP(s.machineConfigDir)]);
   });
 });
