@@ -59,12 +59,27 @@ The Candidacies page shows a vertical timeline on the left (candidacy received, 
 
 `derivePairSecretV2` (machine-core) and its WebCrypto twin (machine-webcrypto): the admin key signs `machine/pair-secret/v2 NUL uuidA:serialA NUL uuidB:serialB` (ordered by uuid), then HKDF-SHA256 over the 64 signature bytes. Deterministic (Ed25519), unforgeable without the admin key, no raw seed needed, so the browser keeps a non-extractable key. Identical outputs in Node and WebCrypto on fixed vectors and 100 random cases. The only production call site is `machine-cli/src/distribute.ts` (switched in a follow-up commit once the bootstrap work in machine-cli is done). The V1 seed-based function stays exported, deprecated. Consequence unchanged (T-36): whoever can sign with the unlocked admin key can recompute every pair secret.
 
+## Health route (decision 65)
+
+`GET /health` is the update test of app-core-cli (app-core `module-authoring.md`, "Update test of app-core-cli"). Always 200 with `{ ok, checks: [{ name, ok, detail }] }`, GET only, no write (tests compare the config folder listing before and after), at most about 2 s (relay and daemon asked in parallel, 2 s each). The staged server uses the REAL config folder and a temp app-core data dir; the module writes nothing at load time (it only registers routes).
+
+| Check | ok:false when | Otherwise (ok:true) |
+|---|---|---|
+| `config-dir` | folder missing, not a directory or unreadable (advice: `machine setup`; the module still loads) | readable |
+| `identity` | `_secrets_/identity.json` missing, corrupt or without name | the machine name only, never the keys |
+| `config-files` | a present file of `_secrets_/{peers,address-state}.json`, `{policy,connections,peer-records}.json` is not valid JSON (path and fix named) | valid or absent |
+| `relay` | `relay.json` corrupt or invalid (path, fix) | absent: "not joined"; `GET /api/whoami` with the machine token: reachable; down, timeout, refused token or odd status: the cause in `detail` |
+| `admin-token` | `relay-admin.json` corrupt or invalid (path, fix) | absent: informational; present: scopes from `/api/whoami` (`full access` for null), or why unknown |
+| `daemon` | never | answers (name) or why not (stopped, token refused) |
+
+Rule: ok:false only for what the update could cause or what makes the module unusable. A relay outage is ok:true ("relay unreachable: <cause>") because updating the module cannot fix the relay. No token or key text is ever in an answer.
+
 ## Status of the work breakdown (2026-11-14)
 
 | Item | Status |
 |---|---|
 | 1 `machine-webcrypto` | Done (separate work) |
-| 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, local app-core-cli devDependency). Post decision, distribution and the signature check are not started |
+| 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies`, `/health` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, local app-core-cli devDependency). Post decision, distribution and the signature check are not started |
 | 3 dsl-lib components | `packages/dsl-lib-machine` (jsdom tests, generated entries, CSS): `VerticalTimeline` (generic, incubating), `PassphraseSigner` (unlock and sign a registration in the page, key in a ref), `FinalCodeDisplay`. Not done: the key file route, wiring the signed result to a backend post, the two components are on no page yet |
 | 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (timeline of the five steps with static statuses, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
 | 5 Publish | Not started |

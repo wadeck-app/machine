@@ -2,6 +2,7 @@
 import { listCandidacies, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
+import { runHealth } from './health.js';
 
 // Backend of the machine module. Slice 1: read-only routes only. No route here signs, spends the relay token or changes
 // anything (decision D25: signing happens in the browser). Local-API limit, stated honestly: app-core checks only Host and
@@ -85,6 +86,9 @@ function candidacyRow(view: CandidacyListView): CandidacyListView & { ageText: s
  */
 export default function register(ctx: ModuleContextLike): void {
   const configDir = (): string => resolveModuleConfigDir(process.env);
+
+  // Update test of app-core-cli (decision 65): always 200 in the documented format, read only, about 2 s at most. See health.ts.
+  ctx.registerRoute('GET', '/health', async (_req, reply) => reply.code(200).send(await runHealth(configDir())));
 
   ctx.registerRoute('GET', '/status', async (_req, reply) => {
     try {

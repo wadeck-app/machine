@@ -136,6 +136,7 @@ describe('the packaged module through a real app-core server', () => {
       if (url === '/list') return { status: 200, body: { result: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [{ uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', aliases: ['b'] }] } } };
       return { status: 404, body: { error: 'Unknown command' } };
     });
+    writeFileSync(join(configDir, '_secrets_', 'identity.json'), JSON.stringify({ v: 1, uuid: UUID, name: 'alpha', createdAt: 'x', publicKey: 'p', privateKey: 'INTEGRATION-PRIVATE-KEY' }));
     writeFileSync(join(configDir, 'daemon.port.json'), JSON.stringify({ pid: process.pid, port: daemonPort, peerPort: 1 }));
     writeFileSync(join(configDir, 'health_token'), DAEMON_TOKEN);
 
@@ -199,6 +200,16 @@ describe('the packaged module through a real app-core server', () => {
     const text = JSON.stringify(body);
     expect(text).not.toContain(ADMIN_TOKEN);
     expect(text).not.toContain('AAAA-BBBB-CCCC-DDDD');
+  });
+
+  it('GET /health answers the documented format through the packaged bundle, without any secret', async () => {
+    const { status, body } = await call('/health');
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.checks.map((c: { name: string }) => c.name)).toEqual(['config-dir', 'identity', 'config-files', 'relay', 'admin-token', 'daemon']);
+    for (const c of body.checks) expect(c.ok, JSON.stringify(c)).toBe(true);
+    const text = JSON.stringify(body);
+    for (const secret of [ADMIN_TOKEN, DAEMON_TOKEN, 'INTEGRATION-PRIVATE-KEY']) expect(text).not.toContain(secret);
   });
 
   it('GET /status answers 503 with an actionable error when the daemon port file disappears (read at each request)', async () => {

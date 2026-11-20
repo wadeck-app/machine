@@ -9,6 +9,7 @@ app-core module `machine` (title "Machine"): admin pages of the machine network.
 | `GET /api/modules/machine/status` | local daemon `status` | status, or `{ status, kind, error }` |
 | `GET /api/modules/machine/machines` | local daemon `list` | rows for the Machines page (no presence or addresses yet) |
 | `GET /api/modules/machine/candidacies` | relay, admin token | candidacies with the recomputed code, `count` for the tab indicator |
+| `GET /api/modules/machine/health` | config folder, relay (`/api/whoami`), daemon | update test of app-core-cli (decision 65): `{ ok, checks[] }` |
 
 - Config dir: `MACHINE_CONFIG_DIR`, else `~/.config/machine` (same as machine-cli).
 - Daemon: port from `<configDir>/daemon.port.json`, bearer token from `<configDir>/health_token`, both read at each request.

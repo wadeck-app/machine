@@ -71,7 +71,7 @@ function readToken(configDir: string): string {
   }
 }
 
-function post(port: number, command: string, token: string): Promise<{ status: number; text: string }> {
+function post(port: number, command: string, token: string, timeoutMs: number): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const req = request({
       hostname: '127.0.0.1',
@@ -84,19 +84,19 @@ function post(port: number, command: string, token: string): Promise<{ status: n
       res.on('data', (chunk: Buffer) => { text += chunk.toString(); });
       res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
     });
-    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error(`no answer within ${TIMEOUT_MS} ms`)));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)));
     req.on('error', reject);
     req.end();
   });
 }
 
-export async function callDaemon(configDir: string, command: string): Promise<unknown> {
+export async function callDaemon(configDir: string, command: string, timeoutMs: number = TIMEOUT_MS): Promise<unknown> {
   if (!COMMAND.test(command)) throw new Error(`invalid daemon command "${command}": expected a lower-case word`);
   const port = readPort(configDir);
   const token = readToken(configDir);
   let answer: { status: number; text: string };
   try {
-    answer = await post(port, command, token);
+    answer = await post(port, command, token, timeoutMs);
   } catch (e) {
     throw new DaemonUnreachableError(`the machine daemon does not answer on 127.0.0.1:${port} (${(e as Error).message}): the port file may be stale; ${START_ADVICE}`);
   }
