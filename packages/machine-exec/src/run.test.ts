@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { detectOemCodePage } from './oemCodePage.js';
 import { runCommand, type RunOptions } from './run.js';
 
 // These run the REAL shells of the machine that executes the tests (T-15 conformance). Each platform block states what
@@ -64,6 +68,51 @@ describe.runIf(onWindows)('real cmd', () => {
   });
 });
 
+describe.runIf(onWindows)('real cmd, output in the OEM code page', () => {
+  const accented = String.fromCharCode(0xe9);
+  // The approved string must be printable ASCII (T-15): the OEM bytes come from a file that `type` copies untouched.
+  // 0x82 is e acute in cp437/850/858/852/860/863/865.
+  const oemBytes = Buffer.from([0x63, 0x61, 0x66, 0x82, 0x0d, 0x0a]);
+  let dir: string;
+  let file: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'machine-exec-oem-'));
+    file = join(dir, 'oem.txt');
+    writeFileSync(file, oemBytes);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('decodes what cmd writes in the OEM page instead of reporting a lossy decoding', async () => {
+    const page = await detectOemCodePage(process.env);
+    expect(page, 'the OEM code page of this machine could not be read from the registry').toBeDefined();
+    const r = await runCommand({ shell: 'cmd', command: `type "${file}"`, ...quick });
+    expect(r.exitCode).toBe(0);
+    expect(lines(r.stdout)).toEqual([`caf${accented}`]);
+    expect(r.outputNotUtf8).toBe(false);
+    expect(r.decodedFrom).toBe(`cp${String(page)}`);
+  });
+
+  it('decodes stderr too', async () => {
+    const r = await runCommand({ shell: 'cmd', command: `type "${file}" 1>&2`, ...quick });
+    expect(lines(r.stderr)).toEqual([`caf${accented}`]);
+    expect(r.decodedFrom).toMatch(/^cp\d+$/);
+  });
+
+  it('keeps the warning when the page of the machine is unknown', async () => {
+    const r = await runCommand({ shell: 'cmd', command: `type "${file}"`, oemCodePage: async () => undefined, ...quick });
+    expect(r.outputNotUtf8).toBe(true);
+    expect(r.decodedFrom).toBeUndefined();
+  });
+
+  it('does not touch valid UTF-8', async () => {
+    const r = await runCommand({ shell: 'cmd', command: 'echo plain', ...quick });
+    expect(r.decodedFrom).toBeUndefined();
+    expect(r.outputNotUtf8).toBe(false);
+  });
+});
+
 describe.runIf(onWindows)('real PowerShell', () => {
   // The first PowerShell launch on the windows-latest runner stayed silent for the whole 30 s three times (no byte on stdout or stderr,
   // exit code null; cause unproven: start-up or hang). This separate, generous first launch tells the two apart: if it finishes, the
@@ -114,6 +163,19 @@ describe.runIf(onWindows)('real PowerShell', () => {
     });
     expect(r.truncated).toBe(true);
     expect(r.outputNotUtf8).toBe(false);
+  });
+
+  it('decodes PowerShell output written in the OEM page (its default console encoding)', async () => {
+    const page = await detectOemCodePage(process.env);
+    expect(page, 'the OEM code page of this machine could not be read from the registry').toBeDefined();
+    const r = await runCommand({
+      shell: 'ps',
+      command: `[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(${String(page)}); [Console]::Out.Write([char]0xE9)`,
+      ...quick,
+    });
+    expect(r.stdout).toBe(String.fromCharCode(0xe9));
+    expect(r.outputNotUtf8).toBe(false);
+    expect(r.decodedFrom).toBe(`cp${String(page)}`);
   });
 
   it('does not pass secrets of the daemon environment to the command', async () => {
@@ -174,12 +236,14 @@ describe('runCommand on any platform', () => {
   });
 
   it('reports a decoding problem instead of hiding it', async () => {
-    // Output that is not UTF-8 (OEM code pages on Windows) must be flagged, never silently garbled.
-    // Emits the single byte 0xE9, which is not valid UTF-8.
+    // Output that is not UTF-8 and cannot be decoded must be flagged, never silently garbled. Emits the single byte 0xE9, which is
+    // not valid UTF-8. On Windows the page of the machine is declared unknown here: with a real one the byte is a letter of that page
+    // (0xE9 is U acute in cp850), see "real cmd, output in the OEM code page" for the decoded case.
     const request: Pick<RunOptions, 'shell' | 'command'> = onWindows
       ? { shell: 'ps', command: '[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252); [Console]::Out.Write([char]0xE9)' }
       : { shell: 'sh', command: "printf '\\351'" };
-    const r = await runCommand({ ...request, ...quick });
+    const r = await runCommand({ ...request, ...quick, oemCodePage: async () => undefined });
     expect(r.outputNotUtf8).toBe(true);
+    expect(r.decodedFrom).toBeUndefined();
   });
 });

@@ -166,6 +166,8 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
   const ctxWith = (resolve: (s: string) => string, extra: Partial<StartupContext> = {}): StartupContext => ({
     configDir,
     orch: stub.orch,
+    // The wrapper script and its staging order are under test here, not the start of the daemon (startupDaemon.test.ts).
+    start: false,
     platform: 'win32',
     // No node on PATH: the launcher cannot find the bundle by itself, so the wrapper form is needed.
     env: { PATH: '', SystemRoot: 'C:\\Windows' },

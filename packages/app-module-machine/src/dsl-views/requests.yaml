@@ -1,0 +1,51 @@
+$sources:
+  requests:
+    url: GET /api/modules/machine/requests
+    poll: 30s
+
+# Read-only (decision 73): what the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`).
+# Pending = refused because the command is not allowed (a command the policy allows now is not listed). The page runs nothing and signs
+# nothing: the exact command that allows a request is shown, to run on the admin machine. Ages are humanized by the route. No code columns.
+# The requests of OTHER machines are listed by `machine requests <machine>` on the admin machine; the page cannot ask a peer yet (see remoteNote).
+$type: PageContent
+sections:
+  - $type: PageHeader
+    title: Requests
+    subtitle: Commands that peers asked this machine to run. Read-only.
+  - $type: Card
+    $if: $sources.requests.chainText
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.requests.chainText
+  - $type: Card
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.requests.remoteNote
+  - $type: Markdown
+    text: "### Waiting for approval"
+  - $type: DataTable
+    rows: $sources.requests.pending
+    emptyMessage: $sources.requests.emptyMessage
+    expansion:
+      $type: Markdown
+      text: $ctx.row.nextWhere
+    columns:
+      - { key: "peerText", label: "From", nowrap: true }
+      - { key: "shell", label: "Shell", nowrap: true }
+      - { key: "command", label: "Command" }
+      - { key: "countText", label: "Times", nowrap: true }
+      - { key: "firstSeenText", label: "First", nowrap: true }
+      - { key: "lastSeenText", label: "Last", nowrap: true }
+      - { key: "nextCommand", label: "To allow it" }
+  - $type: Markdown
+    text: "### History"
+  - $type: DataTable
+    rows: $sources.requests.history
+    emptyMessage: No entry in the audit log
+    columns:
+      - { key: "whenText", label: "When", nowrap: true }
+      - { key: "peerText", label: "From", nowrap: true }
+      - { key: "kind", label: "Kind", nowrap: true }
+      - { key: "text", label: "What" }

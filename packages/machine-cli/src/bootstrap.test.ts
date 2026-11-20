@@ -218,7 +218,7 @@ describe('one command per machine', () => {
       // The self-approval is said once (no candidacy id, no "Enter the admin passphrase" before "Signing with ...").
       expect(r.out).toContain('\nSigning with the admin passphrase you just set.\n');
       expect(r.out).not.toMatch(/Candidacy \S+ posted|Enter the admin passphrase to sign/);
-      expect(r.out).toMatch(/\[ok\] enrolled "midgard2"[^\n]*\n[^\n]*\n[^\n]*\n\nnext:/);
+      expect(r.out).toMatch(/\[ok\] enrolled "midgard2"[^\n]*\n[^\n]*\n[^\n]*\nallow list: managed by the admin \(policy mode admin\)\n\nnext:/);
       expect(r.out).toMatch(/To start machine at login run: machine startup enable/);
       expect(r.out).toContain(`another machine: run \`machine join ${relay.url}\``);
       expect(r.out + r.err).not.toContain(chosen);
@@ -264,8 +264,8 @@ describe('one command per machine', () => {
       const h2 = human();
       const again = await cli(a, ['setup', relay.url], h2.prompt, { timing: fakeTiming(consoleApprovesAll), ask: h2.ask, hostname: () => 'desktop' });
       expect(again.code, again.err).toBe(0);
-      // Decision 67: what exists is one "(already done)" line, the total stays 5.
-      expect(again.out).toContain('Step 2/5: Admin passphrase (already done)');
+      // Decision 67: what exists is one "(already done)" line, the total stays 6 (the "Allow list" step of decision 69 included).
+      expect(again.out).toContain('Step 2/6: Admin passphrase (already done)');
       // The key already exists: the passphrase is asked once, to sign (no choice, no confirmation).
       expect(h2.hidden).toHaveLength(1);
       expect(h2.visible).toHaveLength(0);

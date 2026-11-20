@@ -1,0 +1,278 @@
+import { verifyAuditChain } from './audit.js';
+
+// Reader of the audit log of a machine (T-07, T-21): what the peers asked and what became of it. Pure: it takes the lines of the
+// log and the answers of the current policy, and reads no file. The chain is verified first; what follows a break is shown flagged
+// (`verified: false`) and never feeds the pending list. Everything shown is printable ASCII and bounded: an old or edited log
+// cannot send a control sequence to a terminal or a web page.
+
+export const DEFAULT_PENDING_LIMIT = 100;
+export const DEFAULT_HISTORY_LIMIT = 50;
+export const MAX_LIMIT = 1000;
+const MAX_TEXT = 2048;
+
+/** Refusals of a request that the admin (or the owner) could still allow: the command is not on the list, or there is no list. */
+const PENDING_REASONS: readonly string[] = ['not-listed', 'no-policy'];
+
+export const HISTORY_KINDS = ['run', 'refused', 'session', 'document'] as const;
+export type HistoryKind = (typeof HISTORY_KINDS)[number];
+
+export interface PendingGroup {
+  peer: string;
+  peerName?: string;
+  shell: string;
+  command: string;
+  count: number;
+  /** Epoch seconds. */
+  firstSeen: number;
+  lastSeen: number;
+  /** Reason of the last refusal: `not-listed` or `no-policy`. */
+  reason: string;
+}
+
+export interface HistoryEntry {
+  /** Epoch seconds. */
+  at: number;
+  kind: HistoryKind;
+  /** The event name of the log (`accepted` for a run, whatever its outcome). */
+  event: string;
+  /** False after a break of the chain: the entry cannot be trusted. */
+  verified: boolean;
+  peer?: string;
+  peerName?: string;
+  shell?: string;
+  command?: string;
+  id?: string;
+  reason?: string;
+  /** Runs: `completed`, `failed`, or `accepted` (no completion in the log: a crash or a cut). */
+  outcome?: string;
+  exitCode?: number | null;
+  durationMs?: number;
+  timedOut?: boolean;
+  truncated?: boolean;
+  error?: string;
+}
+
+export type RequestsChain =
+  | { ok: true; entries: number }
+  | { ok: false; line: number; message: string; trustedEntries: number; unverifiedEntries: number; unreadableLines: number };
+
+export interface RequestsSummary {
+  chain: RequestsChain;
+  pending: PendingGroup[];
+  /** Distinct pending groups before the cap. */
+  pendingTotal: number;
+  /** Groups left out because the current policy allows them now. */
+  allowedNow: number;
+  history: HistoryEntry[];
+  /** Entries that match the filter before the limit. */
+  historyTotal: number;
+  /** Verified entries left out because their time or shape is unusable. */
+  skipped: number;
+}
+
+export interface HistoryFilter {
+  /** UUID of the source machine. */
+  peer?: string;
+  /** Epoch seconds, inclusive. */
+  since?: number;
+  kinds?: readonly HistoryKind[];
+  limit?: number;
+}
+
+export interface SummarizeOptions {
+  /** Does the policy in force allow this command for this peer now? (false when there is no policy) */
+  isAllowed: (peer: string, shell: string, command: string) => boolean;
+  nameOf?: (uuid: string) => string | undefined;
+  pendingLimit?: number;
+  history?: HistoryFilter;
+}
+
+/** Printable ASCII, bounded: anything else becomes `?`. */
+export function printable(value: string, max: number = MAX_TEXT): string {
+  const text = value.length > max ? `${value.slice(0, max)}...` : value;
+  return text.replace(/[^\x20-\x7e]/g, '?');
+}
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' ? printable(v) : undefined);
+
+interface Parsed {
+  entry: Record<string, unknown>;
+  verified: boolean;
+}
+
+function parseLine(line: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(line) as { entry?: unknown };
+    const entry = parsed?.entry;
+    return typeof entry === 'object' && entry !== null && !Array.isArray(entry) ? (entry as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function kindOf(event: string): HistoryKind {
+  if (event === 'accepted' || event === 'completed' || event === 'failed') return 'run';
+  if (event === 'refused') return 'refused';
+  if (event.startsWith('document')) return 'document';
+  return 'session';
+}
+
+export function summarizeRequests(lines: readonly string[], options: SummarizeOptions): RequestsSummary {
+  const verification = verifyAuditChain(lines);
+  const trusted = verification.ok ? lines.length : verification.line - 1;
+  const parsed: Parsed[] = [];
+  let unreadable = 0;
+  lines.forEach((line, index) => {
+    const entry = parseLine(line);
+    if (entry === undefined) {
+      // A verified line always parses: only the part after a break can be unreadable.
+      unreadable += 1;
+      return;
+    }
+    parsed.push({ entry, verified: index < trusted });
+  });
+  const unverified = parsed.filter((p) => !p.verified).length;
+  const chain: RequestsChain = verification.ok
+    ? { ok: true, entries: verification.entries }
+    : { ok: false, line: verification.line, message: verification.message, trustedEntries: trusted, unverifiedEntries: unverified, unreadableLines: unreadable };
+
+  const nameOf = (uuid: string | undefined): { peerName?: string } => {
+    const name = uuid === undefined ? undefined : options.nameOf?.(uuid);
+    return name === undefined ? {} : { peerName: printable(name, 100) };
+  };
+
+  const groups = new Map<string, PendingGroup>();
+  const rows: HistoryEntry[] = [];
+  const runById = new Map<string, HistoryEntry>();
+  let skipped = 0;
+
+  for (const { entry, verified } of parsed) {
+    const event = str(entry['event']);
+    const ts = typeof entry['ts'] === 'string' ? Date.parse(entry['ts']) : Number.NaN;
+    if (event === undefined || Number.isNaN(ts)) {
+      if (verified) skipped += 1;
+      continue;
+    }
+    const at = Math.floor(ts / 1000);
+    const kind = kindOf(event);
+    const peer = str(entry['source']);
+    const shell = str(entry['shell']);
+    const command = str(entry['command']);
+    const id = str(entry['id']);
+    const reason = str(entry['reason']);
+
+    if (event === 'completed' || event === 'failed') {
+      const row = id === undefined ? undefined : runById.get(id);
+      if (row !== undefined) {
+        row.outcome = event;
+        if (event === 'completed') {
+          if (typeof entry['exitCode'] === 'number' || entry['exitCode'] === null) row.exitCode = entry['exitCode'];
+          if (typeof entry['durationMs'] === 'number') row.durationMs = entry['durationMs'];
+          if (typeof entry['timedOut'] === 'boolean') row.timedOut = entry['timedOut'];
+          if (typeof entry['truncated'] === 'boolean') row.truncated = entry['truncated'];
+        } else {
+          const error = str(entry['error']);
+          if (error !== undefined) row.error = error;
+        }
+        continue;
+      }
+    }
+
+    const row: HistoryEntry = {
+      at,
+      kind,
+      event,
+      verified,
+      ...(peer !== undefined ? { peer, ...nameOf(peer) } : {}),
+      ...(shell !== undefined ? { shell } : {}),
+      ...(command !== undefined ? { command } : {}),
+      ...(id !== undefined ? { id } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    };
+    if (event === 'accepted') {
+      row.outcome = 'accepted';
+      if (id !== undefined) runById.set(id, row);
+    } else if (kind === 'run') {
+      // A completion whose acceptance is not in the log (cut at the head): shown on its own.
+      row.outcome = event;
+      if (typeof entry['exitCode'] === 'number' || entry['exitCode'] === null) row.exitCode = entry['exitCode'] as number | null;
+      if (typeof entry['durationMs'] === 'number') row.durationMs = entry['durationMs'];
+      const error = str(entry['error']);
+      if (error !== undefined) row.error = error;
+    }
+    rows.push(row);
+
+    if (verified && event === 'refused' && reason !== undefined && PENDING_REASONS.includes(reason) && peer !== undefined && shell !== undefined && command !== undefined) {
+      const key = `${peer}\u0000${shell}\u0000${command}`;
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, { peer, ...nameOf(peer), shell, command, count: 1, firstSeen: at, lastSeen: at, reason });
+      else {
+        group.count += 1;
+        group.firstSeen = Math.min(group.firstSeen, at);
+        group.lastSeen = Math.max(group.lastSeen, at);
+        group.reason = reason;
+      }
+    }
+  }
+
+  let allowedNow = 0;
+  const open = [...groups.values()].filter((g) => {
+    if (!options.isAllowed(g.peer, g.shell, g.command)) return true;
+    allowedNow += 1;
+    return false;
+  });
+  // Newest first; the sort is stable, so equal times keep the order of the log.
+  open.sort((a, b) => b.lastSeen - a.lastSeen);
+
+  const filter = options.history ?? {};
+  const matching = rows.filter(
+    (h) => (filter.peer === undefined || h.peer === filter.peer) && (filter.since === undefined || h.at >= filter.since) && (filter.kinds === undefined || filter.kinds.includes(h.kind)),
+  );
+  const limit = filter.limit ?? DEFAULT_HISTORY_LIMIT;
+
+  return {
+    chain,
+    pending: open.slice(0, options.pendingLimit ?? DEFAULT_PENDING_LIMIT),
+    pendingTotal: open.length,
+    allowedNow,
+    history: limit >= matching.length ? matching : matching.slice(matching.length - limit),
+    historyTotal: matching.length,
+    skipped,
+  };
+}
+
+/** The command as the admin would type it after `--` (one argument). Best effort for a POSIX shell, shown as a suggestion only. */
+export function shellQuote(command: string): string {
+  if (/^[A-Za-z0-9_\-./:=@%+,]+$/.test(command)) return command;
+  if (!/["$`\\]/.test(command)) return `"${command}"`;
+  if (!command.includes("'")) return `'${command}'`;
+  return `"${command.replace(/(["$`\\])/g, '\\$1')}"`;
+}
+
+/**
+ * The command that allows a pending request: `machine admin allow <machine> ...` (mode admin, run on the admin machine) or
+ * `machine policy allow ...` (mode local, run ON that machine).
+ */
+export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'>, machine: { name: string; policyMode: 'admin' | 'local' }): string {
+  const tail = `--shell ${group.shell} -- ${shellQuote(group.command)}`;
+  return machine.policyMode === 'local' ? `machine policy allow ${tail}` : `machine admin allow ${machine.name} ${tail}`;
+}
+
+/** One line about a history entry (without its time, peer and kind): `sh "ls" -> exit 0 in 1.5 s`, `(not-listed) sh "ls"`, `session-closed (too-many-refusals)`. */
+export function describeHistory(h: HistoryEntry): string {
+  switch (h.kind) {
+    case 'run': {
+      const call = `${h.shell ?? '?'} "${h.command ?? '?'}"`;
+      if (h.outcome === 'completed') {
+        const exit = h.exitCode === null || h.exitCode === undefined ? 'none' : String(h.exitCode);
+        return `${call} -> exit ${exit}${h.timedOut ? ' (timed out)' : ''}${h.durationMs !== undefined ? ` in ${(h.durationMs / 1000).toFixed(1)} s` : ''}`;
+      }
+      if (h.outcome === 'failed') return `${call} -> could not run${h.error !== undefined ? `: ${h.error}` : ''}`;
+      return `${call} -> accepted, no completion in the log (crash or cut)`;
+    }
+    case 'refused':
+      return `(${h.reason ?? 'unknown reason'})${h.shell !== undefined ? ` ${h.shell} "${h.command ?? '?'}"` : ''}`;
+    default:
+      return `${h.event}${h.reason !== undefined ? ` (${h.reason})` : ''}`;
+  }
+}

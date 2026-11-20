@@ -40,7 +40,9 @@ export {
   applyPolicy,
   assertPolicyBody,
   authorize,
+  commandForHint,
   commandTextProblem,
+  effectiveList,
   entryKey,
   signPolicy,
   type ApplyPolicyContext,
@@ -77,6 +79,45 @@ export {
   type VerifyRequestContext,
 } from './request.js';
 export { GENESIS_HASH, appendAudit, verifyAuditChain, type AuditVerification } from './audit.js';
+export {
+  DEFAULT_HISTORY_LIMIT,
+  DEFAULT_PENDING_LIMIT,
+  HISTORY_KINDS,
+  MAX_LIMIT,
+  allowCommand,
+  describeHistory,
+  printable,
+  shellQuote,
+  summarizeRequests,
+  type HistoryEntry,
+  type HistoryFilter,
+  type HistoryKind,
+  type PendingGroup,
+  type RequestsChain,
+  type RequestsSummary,
+  type SummarizeOptions,
+} from './requests.js';
+export {
+  MAX_REQUESTS_LISTS_PER_MINUTE,
+  REQUESTS_LIST_DOMAIN,
+  REQUESTS_LIST_LIFETIME_SECONDS,
+  REQUESTS_LIST_MAX_GROUPS,
+  REQUESTS_LIST_MAX_LIFETIME_SECONDS,
+  REQUESTS_LIST_SKEW_SECONDS,
+  buildRequestsListAnswer,
+  newRequestsList,
+  parseRequestsListAnswer,
+  signRequestsList,
+  verifyRequestsList,
+  type ParsedAnswer,
+  type RequestsListAnswer,
+  type RequestsListBody,
+  type RequestsListData,
+  type RequestsListFailure,
+  type RequestsListResult,
+  type SignedRequestsList,
+  type VerifyRequestsListContext,
+} from './requestsList.js';
 export { openSealed, sealTo } from './seal.js';
 // `verifyDocument` of document.ts is exported as `verifyInboxDocument`: `verifyDocument` above is the low-level signature check.
 export {
@@ -155,4 +196,4 @@ export {
   type WakeTuningField,
 } from './wake.js';
 export { runWakeSequence, type SentStep, type WakeEvent, type WakeOutcome, type WakeSequenceDeps, type WakeSequenceOptions } from './wakeSequence.js';
-export { CONNECTION_TYPES, parseConnections, serializeConnections, type Connections, type ConnectionType, type PeerConnection, type WakeConfig } from './connections.js';
+export { CONNECTION_TYPES, parseConnections, resolveRunShell, type RunShellSource, serializeConnections, type Connections, type ConnectionType, type PeerConnection, type WakeConfig } from './connections.js';

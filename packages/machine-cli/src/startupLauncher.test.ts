@@ -94,6 +94,8 @@ describe('the staged launcher form, with a fake installed platform package', () 
   const ctxWith = (resolve: (s: string) => string, extra: Partial<StartupContext> = {}): StartupContext => ({
     configDir,
     orch: stub.orch,
+    // Staging and pruning are under test here, not the start of the daemon (startupDaemon.test.ts).
+    start: false,
     platform: 'linux',
     env: { PATH: '' },
     bundlePath: BUNDLE,

@@ -68,6 +68,14 @@ describe('callDaemon', () => {
     expect(seen[0]?.authorization).toBe(`Bearer ${TOKEN}`);
   });
 
+  it('sends a payload as a JSON body (the remote requests command)', async () => {
+    const { port, seen } = await fakeDaemon(() => ({ status: 200, body: { result: { ok: true } } }));
+    writePortFile(port);
+    writeToken();
+    await callDaemon(configDir, 'remoteRequests', 5000, { peer: 'laptop', request: { body: {}, signature: 'x' } });
+    expect(JSON.parse(seen[0]?.body ?? '')).toEqual({ peer: 'laptop', request: { body: {}, signature: 'x' } });
+  });
+
   it('reads the port file at EACH call (a restarted daemon on another port is followed)', async () => {
     const first = await fakeDaemon(() => ({ status: 200, body: { result: 'first' } }));
     const second = await fakeDaemon(() => ({ status: 200, body: { result: 'second' } }));

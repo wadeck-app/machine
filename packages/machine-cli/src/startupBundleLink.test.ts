@@ -50,6 +50,8 @@ describe.runIf(process.platform === 'win32')('node_modules junction of the stage
   const ctxWith = (resolve: (s: string) => string, extra: Partial<StartupContext> = {}): StartupContext => ({
     configDir,
     orch: stub.orch,
+    // Staging order and the junction are under test here, not the start of the daemon (startupDaemon.test.ts).
+    start: false,
     platform: 'win32',
     env: { PATH: '', SystemRoot: 'C:\\Windows' },
     bundlePath: bundle,

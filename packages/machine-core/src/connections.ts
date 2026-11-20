@@ -1,5 +1,6 @@
 import { isIPv4 } from 'node:net';
 import { MAX_ADDRESSES, hostProblem, type AddressEntry } from './addressRecord.js';
+import { SHELLS, type Shell } from './policy.js';
 import { isUuid } from './reference.js';
 import { WAKE_TUNING_DEFAULTS, WAKE_TUNING_FIELDS, WAKE_TUNING_LIMITS, checkTuning, parseMac } from './wake.js';
 
@@ -25,6 +26,8 @@ export interface WakeConfig {
 
 export interface PeerConnection {
   type: ConnectionType;
+  /** Default shell of `machine run <peer>` on THIS machine: the shell of the peer is not the shell of the caller (a Windows caller, a Linux peer). */
+  shell?: Shell;
   /** Pinned addresses: they win over the relay record. Absent or empty: the relay record is used. */
   addresses?: AddressEntry[];
   wake?: WakeConfig;
@@ -94,17 +97,36 @@ export function parseConnections(raw: unknown): Connections {
     if (!isUuid(uuid)) throw new Error(`peers: the key "${uuid}" is not a machine uuid`);
     const where = `peers.${uuid}`;
     if (!isObject(value)) throw new Error(`${where}: expected an object`);
-    assertKeys(value, ['type'], ['addresses', 'wake'], where);
+    assertKeys(value, ['type'], ['addresses', 'wake', 'shell'], where);
     if (!(CONNECTION_TYPES as readonly unknown[]).includes(value.type)) throw new Error(`${where}.type: unknown type ${JSON.stringify(value.type)}, expected one of ${CONNECTION_TYPES.join(', ')}`);
     const connection: PeerConnection = { type: value.type as ConnectionType };
     if (value.addresses !== undefined) connection.addresses = parseAddresses(value.addresses, where);
     if (value.wake !== undefined) connection.wake = parseWake(value.wake, where);
+    if (value.shell !== undefined) {
+      if (!(SHELLS as readonly unknown[]).includes(value.shell)) throw new Error(`${where}.shell: expected one of ${SHELLS.join(', ')}, got ${JSON.stringify(value.shell)}`);
+      connection.shell = value.shell as Shell;
+    }
     if (connection.type === 'ping-if-not-reachable-magic-packet' && connection.wake === undefined) {
       throw new Error(`${where}: the type "ping-if-not-reachable-magic-packet" needs "wake" with the MAC address of the peer (wake.mac)`);
     }
     peers[uuid.toLowerCase()] = connection;
   }
   return { v: 1, peers };
+}
+
+export type RunShellSource = 'explicit' | 'peer-default' | 'platform';
+
+/**
+ * The shell of `machine run`: `--shell`, else the default of that peer (connections.json), else the platform of THIS machine (cmd on Windows,
+ * sh elsewhere). An unknown explicit shell is an error, never a fallback.
+ */
+export function resolveRunShell(i: { explicit?: string | undefined; peerDefault?: Shell | undefined; platform: string }): { shell: Shell; source: RunShellSource } {
+  if (i.explicit !== undefined) {
+    if (!(SHELLS as readonly string[]).includes(i.explicit)) throw new Error(`unknown shell "${i.explicit}": expected one of ${SHELLS.join(', ')}`);
+    return { shell: i.explicit as Shell, source: 'explicit' };
+  }
+  if (i.peerDefault !== undefined) return { shell: i.peerDefault, source: 'peer-default' };
+  return { shell: i.platform === 'win32' ? 'cmd' : 'sh', source: 'platform' };
 }
 
 /** Peers sorted by uuid, a trailing newline. */

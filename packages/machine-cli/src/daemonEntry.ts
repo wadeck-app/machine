@@ -19,6 +19,7 @@ import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { fileURLToPath } from 'node:url';
 import { FileAuditLog, FileUsageStore } from './stores.js';
 import { policyFingerprint } from './policyMode.js';
+import { makeRequestsListDeps } from './requestsView.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
 export const DEFAULT_DAEMON_PORT = 47920;
@@ -142,6 +143,8 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
           },
           seen: (peerUuid, announced) => recordRevocationSeen(configDir, peerUuid, announced, now(), (warning) => log(`revocation: ${warning}`)),
         },
+        // The read-only `requests-list` exchange (decision 74): signed by the admin, answered from this machine's audit.log.
+        requests: makeRequestsListDeps(configDir, now, log),
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },
@@ -205,6 +208,11 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
           cached = undefined;
         },
         log: (line) => log(line),
+        // Decision 70: no policy yet (mode admin: it comes through this very inbox) -> the inbox is read every 10 s for the first 5 minutes.
+        needsPolicy: () => {
+          const network = loadNetwork(configDir, now());
+          return network.enrolled && network.policyMode === 'admin' && network.policy === undefined;
+        },
         ...(options.inbox?.timer ? { timer: options.inbox.timer } : {}),
         ...(options.inbox?.heartbeatMs !== undefined ? { heartbeatMs: options.inbox.heartbeatMs } : {}),
       });

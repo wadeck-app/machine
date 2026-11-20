@@ -2,7 +2,8 @@ import { resolve } from 'node:path';
 import { daemonPortFile } from './daemonPortFile.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { bundleLinkLine } from './bundleLink.js';
-import { disableStartup, enableStartup, startupStatus, StartupError, type DaemonForm, type EnableResult, type StartupContext } from './startup.js';
+import type { DaemonState } from './daemonPortFile.js';
+import { disableStartup, enableStartup, startupStatus, StartupError, type DaemonForm, type DaemonOutcome, type EnableResult, type StartupContext } from './startup.js';
 
 // `machine startup enable | disable | status`: thin front-end over startup.ts.
 
@@ -11,7 +12,7 @@ const USAGE = 'usage: machine startup [status] | enable | disable (without a sub
 
 /** Tests inject the orch stub and the daemon source through `io.startup`; there is no command line option for it. */
 function startupContext(ctx: CommandContext): StartupContext {
-  return { configDir: ctx.configDir, env: ctx.env, ...ctx.io.startup };
+  return { configDir: ctx.configDir, env: ctx.env, start: !ctx.args.noStart, ...ctx.io.startup };
 }
 
 const FORM_TEXT: Record<DaemonForm | 'unknown', string> = {
@@ -21,13 +22,27 @@ const FORM_TEXT: Record<DaemonForm | 'unknown', string> = {
   unknown: 'unknown (not a command this version of machine writes)',
 };
 
-function enableText(r: EnableResult): string {
+/** `daemon: running (peer port N, pid P)`, or `daemon: NOT running: <what to do>` plus the problem found with the port file, if any. */
+export function daemonStateText(state: DaemonState, startHint: string): string {
+  if (state.running) return `daemon: running (peer port ${state.peerPort}, pid ${state.pid})\n`;
+  return `daemon: NOT running: ${startHint}\n${state.problem === undefined ? '' : `[warn] ${state.problem}\n`}`;
+}
+
+/** What `enable` says about the daemon: started now, already up, not started on request, or not started (cause and fix). */
+function daemonOutcomeText(d: DaemonOutcome, id: string, start: boolean): string {
+  if (d.running) return d.started ? `[ok] daemon started (peer port ${d.peerPort})\n` : `[ok] daemon already running (peer port ${d.peerPort}, pid ${d.pid})\n`;
+  if (!start) return `[info] daemon not started (--no-start): it starts at the next login of orch, or now with \`orch restart-job ${id}\`${d.reason === undefined ? '' : `\n[warn] ${d.reason}`}\n`;
+  return `[warn] ${d.reason ?? 'the daemon is not running'}\n`;
+}
+
+function enableText(r: EnableResult, start: boolean): string {
+  const daemon = daemonOutcomeText(r.daemon, r.id, start);
   const form = r.form !== 'development' ? `${FORM_TEXT[r.form]} (the job needs Node >= 22 on its PATH: the launcher starts node)` : FORM_TEXT.development;
   const removed = r.pruned && r.pruned.removed.length > 0 ? `removed older staged launchers: ${r.pruned.removed.join(', ')}\n` : '';
   const skipped = r.pruned && r.pruned.skipped.length > 0 ? `older staged launchers still in use, kept until the next run: ${r.pruned.skipped.join(', ')}\n` : '';
   const note = r.formNote === undefined ? '' : `${r.formNote}\n`;
   const link = r.bundleLink === undefined ? '' : `${bundleLinkLine(r.bundleLink)}\n`;
-  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}${link}port file: ${r.portFile}\n`;
+  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}${link}port file: ${r.portFile}\n${daemon}`;
 }
 
 /**
@@ -37,7 +52,7 @@ function enableText(r: EnableResult): string {
 export async function enableAfterJoin(ctx: CommandContext, say: (text: string) => void): Promise<string | undefined> {
   try {
     const r = await enableStartup(startupContext(ctx));
-    say(enableText(r) + `${ORCH_INSTALL_HINT}\n`);
+    say(enableText(r, !ctx.args.noStart) + `${ORCH_INSTALL_HINT}\n`);
     return undefined;
   } catch (e) {
     if (e instanceof StartupError) return e.message;
@@ -56,8 +71,12 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
     const sctx = startupContext(ctx);
     if (sub === 'enable') {
       const r = await enableStartup(sctx);
-      emit(r, enableText(r) + (args.json ? '' : `${ORCH_INSTALL_HINT}\n`));
-      if (args.json) io.stderr(`${ORCH_INSTALL_HINT}\n`);
+      emit(r, enableText(r, !args.noStart) + (args.json ? '' : `${ORCH_INSTALL_HINT}\n`));
+      if (args.json) {
+        // One JSON document on stdout: the warning the text carries goes to stderr.
+        if (!r.daemon.running && r.daemon.reason !== undefined) io.stderr(`[warn] ${r.daemon.reason}\n`);
+        io.stderr(`${ORCH_INSTALL_HINT}\n`);
+      }
       return EXIT.ok;
     }
     if (sub === 'disable') {
@@ -68,12 +87,12 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
     const s = await startupStatus(sctx);
     if (!s.exists) {
       const note = s.formNote === undefined ? '' : `${s.formNote}\n`;
-      emit(s, `startup job "${s.id}": absent (run machine startup enable)\nenable would register the form: ${FORM_TEXT[s.expectedForm]}\n${note}`);
+      emit(s, `startup job "${s.id}": absent (run machine startup enable)\nenable would register the form: ${FORM_TEXT[s.expectedForm]}\n${note}${daemonStateText(s.daemon, 'start it with `machine startup enable` (at login) or `machine daemon`')}`);
     } else {
       const note = s.formNote === undefined ? '' : `${s.formNote}\n`;
       const wrapper = s.wrapper === undefined ? '' : `wrapper script: ${s.wrapper}\n`;
       const forms = `registered form: ${FORM_TEXT[s.registeredForm ?? 'unknown']}\nexpected form: ${FORM_TEXT[s.expectedForm]}\n${wrapper}${note}${s.bundleLink === undefined ? '' : `${bundleLinkLine(s.bundleLink)}\n`}`;
-      emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${forms}${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n`);
+      emit(s, `startup job "${s.id}": present\ncommand: ${s.command}\n${forms}${s.upToDate ? 'up to date' : 'outdated: run machine startup enable'}\n${daemonStateText(s.daemon, `start it with \`orch restart-job ${s.id}\` or \`machine startup enable\``)}`);
     }
     // Loud but not an error: stderr in both modes, so --json stays one document on stdout (it also lists the conflicts).
     for (const c of s.conflicts) {

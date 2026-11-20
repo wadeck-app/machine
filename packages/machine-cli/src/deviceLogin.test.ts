@@ -317,15 +317,31 @@ describe('machine join and the startup at login', () => {
       rmSync(stub.dir, { recursive: true, force: true });
     });
 
-    it('runs startup enable once the join succeeded, and then no longer suggests it', async () => {
-      stub.script({ ensure: { stdout: 'added machine\n' } });
+    it('runs startup enable once the join succeeded (it starts the daemon now), and then no longer suggests it', async () => {
+      // The stub plays orch: restart-job writes the port file a started daemon writes (this test process stands for the daemon).
+      stub.script({ ensure: { stdout: 'added machine\n' }, 'restart-job': { stdout: '{"started":true}', writeFile: { path: join(dir, 'daemon.port.json'), content: JSON.stringify({ pid: process.pid, port: 1, peerPort: 2 }) } } });
       const r = await auto(['--auto-startup']);
       expect(r.code, r.err).toBe(0);
-      expect(stub.calls()).toHaveLength(1);
-      expect(stub.calls()[0]?.slice(0, 3)).toEqual(['ensure', 'startup', 'machine']);
+      expect(stub.calls().map((c) => c.slice(0, 3))).toEqual([['ensure', 'startup', 'machine'], ['restart-job', 'machine', '--json']]);
       expect(r.out).toContain('[ok] startup job "machine" added');
+      expect(r.out).toContain('[ok] daemon started (peer port 2)');
       expect(r.out).not.toContain('To start machine at login run');
       expect(readRelayConfig(dir)).toBeDefined();
+    });
+
+    it('--no-start registers the job and starts nothing', async () => {
+      stub.script({ ensure: { stdout: 'added machine\n' } });
+      const r = await auto(['--auto-startup', '--no-start']);
+      expect(r.code, r.err).toBe(0);
+      expect(stub.calls().map((c) => c[0])).toEqual(['ensure']);
+      expect(r.out).toContain('daemon not started (--no-start)');
+    });
+
+    it('--no-start without --auto-startup is refused (nothing to start), nothing sent', async () => {
+      const r = await auto(['--no-start']);
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/--no-start on `machine join` and `machine setup` only has a meaning with --auto-startup/);
+      expect(stub.calls()).toEqual([]);
     });
 
     it('with --json stdout stays one JSON document and the startup text goes to stderr', async () => {

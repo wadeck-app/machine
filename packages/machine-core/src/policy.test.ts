@@ -117,6 +117,32 @@ describe('authorize', () => {
     if (!decision.allowed) expect(decision.message).toContain('ipconfig /all');
   });
 
+  it('names the other shell when the SAME command is listed under it (the refusal reveals only what the caller already sent)', () => {
+    const p = policy({ defaults: [{ shell: 'sh', command: 'ls' }, { shell: 'bash', command: 'ls' }, { shell: 'sh', command: 'uptime' }] });
+    const decision = authorize(p, PEER, { shell: 'cmd', command: 'ls' }, NOW, unused, 'admin', 'thinkcentre');
+    expect(decision).toMatchObject({ allowed: false, reason: 'not-listed', allowedShells: ['sh', 'bash'] });
+    if (decision.allowed) throw new Error('expected a refusal');
+    expect(decision.message).toBe('"ls" is allowed with shell sh or bash, not with cmd: run machine run thinkcentre --shell sh -- ls (or: machine peer connect thinkcentre --shell sh to make it the default)');
+    // Never another command of the list.
+    expect(decision.message).not.toContain('uptime');
+  });
+
+  it('quotes a command with spaces in the hint, and says <machine> when the name is unknown', () => {
+    const p = policy({ defaults: [{ shell: 'sh', command: 'ls -la' }] });
+    const decision = authorize(p, PEER, { shell: 'cmd', command: 'ls -la' }, NOW, unused);
+    if (decision.allowed) throw new Error('expected a refusal');
+    expect(decision.message).toContain('run machine run <machine> --shell sh -- "ls -la"');
+  });
+
+  it('gives no hint when the command is listed nowhere, or only in the list another peer uses', () => {
+    const p = policy({ defaults: [{ shell: 'sh', command: 'ls' }], peers: { [PEER]: [{ shell: 'sh', command: 'pwd' }] } });
+    const none = authorize(p, PEER, { shell: 'cmd', command: 'ls' }, NOW, unused, 'admin', 'thinkcentre');
+    if (none.allowed) throw new Error('expected a refusal');
+    expect(none).not.toHaveProperty('allowedShells');
+    expect(none.message).toContain('must add this exact string to the peer list');
+    expect(none.message).not.toContain('is allowed with shell');
+  });
+
   it('does not normalize: case, trailing space and another shell all miss', () => {
     for (const request of [{ shell: 'cmd' as const, command: 'IPCONFIG' }, { shell: 'cmd' as const, command: 'ipconfig ' }, { shell: 'ps' as const, command: 'ipconfig' }]) {
       expect(authorize(policy(), PEER, request, NOW, unused)).toMatchObject({ allowed: false, reason: 'not-listed' });

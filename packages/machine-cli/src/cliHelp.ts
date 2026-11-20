@@ -62,7 +62,7 @@ const GROUPS: GroupHelp[] = [
         name: 'allow',
         usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] [--list | --remove] -- <command...>',
         text: 'allow ONE exact command on a machine (signed policy), list or withdraw what is allowed',
-        options: ['--shell   the shell of the command (default: this machine platform, said)', '--out <file>   write the signed policy to a file instead of sending it', '--list   show what is allowed on the machine (no command)', '--remove   withdraw the command'],
+        options: ['--shell   the shell of the command, part of the exact entry (default: this machine platform, said; a Linux target needs --shell sh from Windows)', '--out <file>   write the signed policy to a file instead of sending it', '--list   show what is allowed on the machine (no command)', '--remove   withdraw the command'],
         examples: ['machine admin allow laptop -- "ipconfig /all"', 'machine admin allow laptop --list', 'machine admin allow laptop --remove -- "ipconfig /all"'],
       },
       {
@@ -124,15 +124,16 @@ const GROUPS: GroupHelp[] = [
       },
       {
         name: 'connect',
-        usage: 'connect <machine> [--address <host:port>]... [--type direct|ping-if-not-reachable-magic-packet] [--wake-mac <mac>] [--show | --remove]',
+        usage: 'connect <machine> [--shell cmd|ps|bash|sh | --no-shell] [--address <host:port>]... [--type direct|ping-if-not-reachable-magic-packet] [--wake-mac <mac>] [--show | --remove]',
         text: 'how THIS machine reaches a peer: pinned addresses, Wake-on-LAN (stored locally, no secret)',
         options: [
+          '--shell cmd|ps|bash|sh   default shell of `machine run <machine>` here (used when run has no --shell, else the platform of this machine); --no-shell forgets it',
           '--address <host:port>   pin an address (repeatable, up to 8); wins over the relay record',
           '--wake-mac <aa:bb:cc:dd:ee:ff>   the MAC to wake (typed by you, never taken from the relay)',
           '--wake-broadcast <ipv4>, --wake-probe <s>, --wake-wait <s>, --wake-max-unicast <n>, --wake-max-broadcast <n>, --wake-connect-timeout <ms>, --wake-settle <s>   wake tuning (see `machine --help`)',
           '--show   the effective values; --remove   forget the settings of that peer',
         ],
-        examples: ['machine peer connect laptop --address 192.168.1.20:47921 --wake-mac aa:bb:cc:dd:ee:ff', 'machine peer connect laptop --show'],
+        examples: ['machine peer connect laptop --shell sh', 'machine peer connect laptop --address 192.168.1.20:47921 --wake-mac aa:bb:cc:dd:ee:ff', 'machine peer connect laptop --show'],
       },
       {
         name: 'wake',
@@ -156,8 +157,14 @@ const GROUPS: GroupHelp[] = [
     summary: 'start the daemon at login through an orch startup job named "machine"',
     bare: 'shows the status of the startup job (the same as `machine startup status`)',
     subs: [
-      { name: 'status', usage: 'status', text: 'does the job exist, its command, the form registered, is it up to date (exit 0 either way)', examples: ['machine startup status', 'machine startup status --json'] },
-      { name: 'enable', usage: 'enable', text: 'create or refresh the job (run it again after moving machine); never runs `orch install`', examples: ['machine startup enable'] },
+      { name: 'status', usage: 'status', text: 'does the job exist, its command, the form registered, is it up to date, does the daemon run (exit 0 either way)', examples: ['machine startup status', 'machine startup status --json'] },
+      {
+        name: 'enable',
+        usage: 'enable [--no-start]',
+        text: 'create or refresh the job (run it again after moving machine) and start the daemon now when it is not running (a startup job alone only starts at the next login of orch; a running daemon is left alone); never runs `orch install`',
+        options: ['--no-start   register the job without starting the daemon now'],
+        examples: ['machine startup enable', 'machine startup enable --no-start'],
+      },
       { name: 'disable', usage: 'disable', text: 'end the running daemon and remove the job', examples: ['machine startup disable'] },
     ],
     examples: ['machine startup', 'machine startup enable'],

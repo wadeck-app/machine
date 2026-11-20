@@ -10,7 +10,10 @@ import {
   parseAddress,
   parseMac,
   resolveMachineRef,
+  resolveRunShell,
   resolveTuning,
+  SHELLS,
+  type Shell,
   type AddressEntry,
   type ConnectionType,
   type LocalInterface,
@@ -155,10 +158,17 @@ const LABELS: Record<WakeTuningField, { label: string; flag: string; unit: strin
 
 const valueText = (field: WakeTuningField, value: number | undefined): string => (value === undefined ? 'default' : `${value}${LABELS[field].unit}`);
 
+const platformShell = (): Shell => resolveRunShell({ platform: process.platform }).shell;
+
+/** The default shell of `machine run <name>`: set by `--shell`, or the platform of this machine. */
+const shellLine = (name: string, shell: Shell | undefined): string =>
+  `  ${'shell'.padEnd(16)}  ${shell === undefined ? `(default) ${platformShell()}, the platform of this machine: machine peer connect ${name} --shell <cmd|ps|bash|sh>` : `${shell} (machine run ${name} uses it unless --shell is given)`}`;
+
 function showLines(name: string, uuid: string, file: string, connection: PeerConnection): string[] {
   const lines = [`${name} (${uuid})  ${file}`, `  ${'type'.padEnd(16)}  ${connection.type}`];
   const addresses = connection.addresses ?? [];
   lines.push(`  ${'addresses'.padEnd(16)}  ${addresses.length === 0 ? '(none pinned) the relay record is used' : `${addresses.map(describeAddress).join(', ')} (pinned: the relay record is not used)`}`);
+  lines.push(shellLine(name, connection.shell));
   const wake = connection.wake;
   if (wake === undefined) {
     lines.push(`  ${'wake'.padEnd(16)}  not configured: machine peer connect ${name} --wake-mac <aa:bb:cc:dd:ee:ff>`);
@@ -183,13 +193,14 @@ function showDocument(name: string, uuid: string, connection: PeerConnection | u
     if (v === undefined) defaulted.push(field);
     else effective[field] = v;
   }
-  return { uuid, name, entry: connection ?? null, effective, defaulted };
+  const shell = resolveRunShell({ peerDefault: connection?.shell, platform: process.platform });
+  return { uuid, name, entry: connection ?? null, shell: { effective: shell.shell, source: shell.source }, effective, defaulted };
 }
 
 export async function runPeerConnect(ctx: CommandContext): Promise<number> {
   const { args, rest, io, configDir, fail, emit } = ctx;
   const ref = rest[1];
-  const usage = 'usage: machine peer connect <machine> [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]... [--wake-mac <mac>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>] [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>] | machine peer connect <machine> --show | --remove';
+  const usage = 'usage: machine peer connect <machine> [--shell cmd|ps|bash|sh | --no-shell] [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]... [--wake-mac <mac>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>] [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>] | machine peer connect <machine> --show | --remove';
   if (ref === undefined || rest.length > 2) return fail(usage, EXIT.usage);
 
   const wakeFlags: Array<[WakeTuningField, string | undefined]> = [
@@ -200,15 +211,20 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
     ['connectTimeoutMs', args.wakeConnectTimeout],
     ['settleSeconds', args.wakeSettle],
   ];
-  const settingFlags = [args.type, args.wakeMac, args.wakeBroadcast, ...wakeFlags.map(([, v]) => v), ...(args.addressList.length > 0 ? ['x'] : [])].filter((v) => v !== undefined);
+  const settingFlags = [args.type, args.wakeMac, args.wakeBroadcast, args.shell, ...(args.noShell ? ['x'] : []), ...wakeFlags.map(([, v]) => v), ...(args.addressList.length > 0 ? ['x'] : [])].filter((v) => v !== undefined);
+  if (args.shell !== undefined && args.noShell) return fail('--shell and --no-shell cannot be combined: --shell sets the default shell of that peer, --no-shell forgets it', EXIT.usage);
   if (args.show && args.remove) return fail('--show and --remove cannot be combined: --show only reads, --remove deletes the settings of the peer', EXIT.usage);
   if ((args.show || args.remove) && settingFlags.length > 0) return fail(`${args.show ? '--show' : '--remove'} takes no setting: give the settings in one command, then \`machine peer connect ${ref} --show\``, EXIT.usage);
   if (!args.show && !args.remove && settingFlags.length === 0) {
-    return fail(`nothing to set: give --address, --type, --wake-mac or a timing flag (--wake-probe, --wake-wait, --wake-max-unicast, --wake-max-broadcast, --wake-connect-timeout, --wake-settle), or --show / --remove. ${usage}`, EXIT.usage);
+    return fail(`nothing to set: give --shell, --address, --type, --wake-mac or a timing flag (--wake-probe, --wake-wait, --wake-max-unicast, --wake-max-broadcast, --wake-connect-timeout, --wake-settle), or --show / --remove. ${usage}`, EXIT.usage);
   }
 
   // The flags are validated before anything is read or written: a typo costs nothing.
-  const given: { type?: ConnectionType; addresses?: AddressEntry[]; mac?: string; broadcast?: string; tuning: Partial<Record<WakeTuningField, number>> } = { tuning: {} };
+  const given: { type?: ConnectionType; addresses?: AddressEntry[]; mac?: string; broadcast?: string; shell?: Shell; tuning: Partial<Record<WakeTuningField, number>> } = { tuning: {} };
+  if (args.shell !== undefined) {
+    if (!(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
+    given.shell = args.shell as Shell;
+  }
   if (args.type !== undefined) {
     if (!(CONNECTION_TYPES as readonly string[]).includes(args.type)) return fail(`--type must be one of ${CONNECTION_TYPES.join(', ')}, got "${args.type}"`, EXIT.usage);
     given.type = args.type as ConnectionType;
@@ -261,6 +277,11 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
     }
 
     // ---- set ----
+    if (args.noShell && current?.shell === undefined) {
+      if (args.json) emit({ saved: false, ...showDocument(peer.name, peer.peerId, current) }, '');
+      else io.stdout(`[info] "${peer.name}" has no default shell: nothing to remove (\`machine run\` uses the platform of this machine, ${platformShell()}, or --shell)\n`);
+      return EXIT.ok;
+    }
     const wakeKeys = Object.keys(given.tuning);
     const mac = given.mac ?? current?.wake?.mac;
     if (mac === undefined && (wakeKeys.length > 0 || given.broadcast !== undefined)) {
@@ -276,6 +297,8 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
     if (type === TYPE_NOTE && mac === undefined) return fail(`--type ${TYPE_NOTE} needs the MAC address of "${peer.name}": add --wake-mac aa:bb:cc:dd:ee:ff (the MAC is typed by you, never learned from the relay)`, EXIT.usage);
 
     const next: PeerConnection = { type: type as ConnectionType };
+    const shell = args.noShell ? undefined : (given.shell ?? current?.shell);
+    if (shell !== undefined) next.shell = shell;
     const addresses = given.addresses ?? current?.addresses;
     if (addresses !== undefined && addresses.length > 0) next.addresses = addresses;
     if (mac !== undefined) {
@@ -302,6 +325,7 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
         if (before !== after) io.stderr(`[info] ${label}: ${was(before)} -> ${was(after)}\n`);
       };
       change('type', current.type, saved.type);
+      change('shell', current.shell, saved.shell);
       change('addresses', current.addresses?.map(describeAddress).join(', '), saved.addresses?.map(describeAddress).join(', '));
       change('wake mac', current.wake?.mac, saved.wake?.mac);
       change('wake broadcast', current.wake?.broadcast, saved.wake?.broadcast);

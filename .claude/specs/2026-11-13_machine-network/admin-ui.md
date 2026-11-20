@@ -33,6 +33,7 @@ The page only UNLOCKS the admin key: it applies no length rule to the passphrase
 |---|---|---|
 | Machines | backend route to the daemon (`list`, presence, addresses, aliases) | alias set and remove |
 | Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | approve (unlock, sign in the page, post decision through the backend, then distribution documents), reject |
+| Requests (decisions 73, 74) | daemon command `requests` (audit log of this machine, same reader as `machine requests`) | read-only: pending (exact command to allow), history, chain state. The remote section needs a browser-signed `requests-list` document posted to `POST /requests/remote` (route built, sensitive); the signing component is not built |
 | Policy | local policy files through the daemon | edit allowlists and limits, sign in the page, install and distribute |
 | Audit | daemon audit log | view and verify the hash chain |
 | Unlock | none (page memory only) | passphrase, unlock duration, lock now |

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { candidacyCode, generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
+import { GENESIS_HASH, appendAudit, candidacyCode, generateSigningKeyPair, newCandidacyRandom, summarizeRequests, type Json } from '@wadeck-app/machine-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
@@ -116,6 +116,25 @@ function startServer(builtModule: string): Promise<string> {
   });
 }
 
+/** What the daemon command `requests` answers: the real reader over a real hash-chained log. */
+function requestsAnswer(): unknown {
+  const now = Math.floor(Date.now() / 1000);
+  const at = (offset: number) => new Date((now + offset) * 1000).toISOString();
+  const entries: Array<Record<string, Json>> = [
+    { ts: at(-300), event: 'refused', source: '11111111-1111-4111-8111-111111111111', reason: 'not-listed', id: 'a', shell: 'sh', command: 'ls' },
+    { ts: at(-100), event: 'refused', source: '11111111-1111-4111-8111-111111111111', reason: 'not-listed', id: 'b', shell: 'sh', command: 'ls' },
+  ];
+  const lines: string[] = [];
+  let prev = GENESIS_HASH;
+  entries.forEach((entry, seq) => {
+    const r = appendAudit({ prevHash: prev, seq, entry });
+    lines.push(r.line);
+    prev = r.hash;
+  });
+  const summary = summarizeRequests(lines, { isAllowed: () => false, nameOf: () => 'beta' });
+  return { initialized: true, ok: true, self: { uuid: UUID, name: 'alpha' }, policyMode: 'admin', adminKeyHere: false, logFile: 'x', logPresent: true, now, summary, problems: [] };
+}
+
 async function call(path: string): Promise<{ status: number; body: any }> {
   const response = await fetch(`${baseUrl}/api/modules/machine${path}`);
   return { status: response.status, body: await response.json() };
@@ -134,6 +153,7 @@ describe('the packaged module through a real app-core server', () => {
       if (auth !== `Bearer ${DAEMON_TOKEN}`) return { status: 401, body: { error: 'Unauthorized' } };
       if (url === '/status') return { status: 200, body: { result: { initialized: true, uuid: UUID, name: 'alpha', version: '1', enrolled: true, peers: 1, problems: [], configDir } } };
       if (url === '/list') return { status: 200, body: { result: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [{ uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', aliases: ['b'] }] } } };
+      if (url === '/requests') return { status: 200, body: { result: requestsAnswer() } };
       return { status: 404, body: { error: 'Unknown command' } };
     });
     writeFileSync(join(configDir, '_secrets_', 'identity.json'), JSON.stringify({ v: 1, uuid: UUID, name: 'alpha', createdAt: 'x', publicKey: 'p', privateKey: 'INTEGRATION-PRIVATE-KEY' }));
@@ -187,6 +207,14 @@ describe('the packaged module through a real app-core server', () => {
     expect(status).toBe(200);
     expect(body.machines.map((m: { name: string }) => m.name)).toEqual(['alpha', 'beta']);
     expect(body.count).toBe(2);
+  });
+
+  it('GET /requests answers the pending rows of the audit log through the packaged bundle, and the Requests page is packaged', async () => {
+    const { status, body } = await call('/requests');
+    expect(status).toBe(200);
+    expect(body.count).toBe(1);
+    expect(body.pending[0]).toMatchObject({ peerText: 'beta', countText: '2 times', nextCommand: 'machine admin allow alpha --shell sh -- ls' });
+    expect(existsSync(join(builtModuleDir, 'dsl-frontend', 'requests.json'))).toBe(true);
   });
 
   it('GET /candidacies answers the recomputed code, the binding warning, the count, and never the token or the relay code', async () => {

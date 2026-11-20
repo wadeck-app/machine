@@ -11,6 +11,9 @@ import { ensureMachine, machineExists, readMachine } from './identity.js';
 import { createSteps, trackedSay, type StepDef } from './steps.js';
 import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { PromptTimeoutError } from './prompt.js';
+import { chooseAllowList, type AllowListMode } from './allowListStep.js';
+import { readPolicyMode } from './policyMode.js';
+import { runLocalEnable } from './policyLocal.js';
 import { AccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
 import { readCandidacy, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 
@@ -108,7 +111,17 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
 
+  // Decision 70: who manages the allow list of this machine. The choice is asked after the enrolment; the flag answers it up front.
+  const policyFlag = args.policy as AllowListMode | undefined;
+  if (policyFlag !== undefined && args.noWait) {
+    return fail('--policy cannot be combined with --no-wait: the allow list is chosen once this machine is enrolled; give --policy to `machine join --resume` (or answer the question there)', EXIT.usage);
+  }
+  const alreadyLocal = readPolicyMode(configDir).mode === 'local';
+  if (policyFlag === 'admin' && alreadyLocal) {
+    return fail('--policy admin: this machine already manages its own allow list (policy mode local); `machine policy delegate` gives it back to the admin', EXIT.usage);
+  }
   // The steps of the path this command takes (decision 67): known now, so that the total is exact. A step already done is shown as one line.
+  const allowListStep: StepDef[] = args.noWait ? [] : [{ key: 'allow-list', title: 'Allow list', ...(alreadyLocal ? { skipped: 'policy mode local' } : {}) }];
   const holdsKey = existsSync(adminKeyFile(configDir));
   const selfApproving = o.setup || (holdsKey && !args.noWait);
   const identityDone = machineExists(configDir);
@@ -119,6 +132,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         { key: 'admin-key', title: 'Admin passphrase', ...(holdsKey ? { skipped: true as const } : {}) },
         { key: 'login', title: 'Relay login', ...(readRelayAdminConfig(configDir) !== undefined ? { skipped: true as const } : {}) },
         { key: 'candidacy', title: 'Enrolment of this machine' },
+        ...allowListStep,
         { key: 'done', title: 'Summary and next steps' },
       ]
     : [
@@ -131,6 +145,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         },
         // Nothing to compare when this machine approves itself, and no approval to compare before the admin acted.
         ...(selfApproving || args.noWait ? [] : [{ key: 'compare', title: 'Security code comparison' }]),
+        ...allowListStep,
         { key: 'done', title: args.noWait ? 'Next steps' : 'Done' },
       ];
   const steps = createSteps(say, plan);
@@ -309,6 +324,30 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
   // A paragraph of its own (the human reads the next steps, then the optional one).
   const startupSpaced = startupHint === '' ? '' : `\n${startupHint}`;
+  // Decision 70: the step "Allow list", once this machine is enrolled. A failure here never undoes the enrolment: the machine keeps the default (the admin), the failure is reported at the end.
+  let allowMode: AllowListMode = alreadyLocal ? 'local' : 'admin';
+  let allowKeyId: string | undefined;
+  let allowProblem: string | undefined;
+  if (result.status === 'enrolled' && !alreadyLocal) {
+    enter('allow-list');
+    const selfName = readMachine(configDir).name;
+    const chosen = await chooseAllowList({ ...(policyFlag !== undefined ? { flag: policyFlag } : {}), selfName, ask: o.ask, say, warn: io.stderr });
+    if (chosen.mode === 'local') {
+      try {
+        say('\n');
+        const enabled = await runLocalEnable(configDir, { prompt: o.prompt, ask: o.ask, say, warn: io.stderr, now: epochSeconds });
+        allowMode = 'local';
+        allowKeyId = enabled.keyId;
+        say(`[ok] this machine manages its own allow list (policy key ${enabled.keyId})\n`);
+      } catch (e) {
+        if (e instanceof PromptTimeoutError) throw e;
+        allowProblem = `this machine is enrolled, but its allow list could not be taken over: ${(e as Error).message}. The admin still manages it (the default); run \`machine policy local enable\` to try again`;
+      }
+    } else if (chosen.how !== 'default-no-terminal') {
+      say('[ok] the admin manages the allow list of this machine\n');
+    }
+  }
+  const allowLine = allowMode === 'local' ? `allow list: managed by this machine (policy mode local${allowKeyId !== undefined ? `, key ${allowKeyId}` : ''})\n` : 'allow list: managed by the admin (policy mode admin)\n';
   enter('done');
   if (result.status === 'posted') {
     emit(result.posted, 'next: on the admin machine run `machine admin approve`; it prints a security code for this machine. Then run `machine join --resume` here: it shows the security code, which must read exactly the same on the admin machine\n' + startupSpaced);
@@ -320,10 +359,13 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
         : e.isAdminMachine
           ? 'no other machine yet: this machine is the first of the network\n'
           : 'peers trusted: none (the admin included none)\n';
+    const localAllow = '`machine policy allow -- <command>` on this machine';
     const next = e.isAdminMachine
-      ? `next:\n  another machine: run \`machine join ${result.posted.relayUrl}\` on it, then \`machine admin approve\` here\n  allow a command: \`machine admin allow <machine> -- <command>\` (this machine or another)\n`
-      : 'next: the admin allows commands on this machine (`machine admin allow <this machine> -- <command>`, run on the admin machine), then `machine status`\n';
-    emit({ ...e, relayUrl: result.posted.relayUrl }, `[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}\n${next}${startupSpaced}`);
+      ? `next:\n  another machine: run \`machine join ${result.posted.relayUrl}\` on it, then \`machine admin approve\` here\n  allow a command: ${allowMode === 'local' ? `${localAllow}, or \`machine admin allow <machine> -- <command>\` for another machine` : '`machine admin allow <machine> -- <command>` (this machine or another)'}\n`
+      : allowMode === 'local'
+        ? `next: allow a command on this machine (${localAllow}), then \`machine status\`\n`
+        : 'next: the admin allows commands on this machine (`machine admin allow <this machine> -- <command>`, run on the admin machine), then `machine status`\n';
+    emit({ ...e, relayUrl: result.posted.relayUrl, policyMode: allowMode }, `[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}${allowLine}\n${next}${startupSpaced}`);
   }
   if (args.json && startupHint) io.stderr(startupHint);
   if (args.autoStartup) {
@@ -331,5 +373,6 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     const problem = await enableAfterJoin(ctx, say);
     if (problem !== undefined) return fail(`joined the relay, but the startup job could not be enabled: ${problem}\nthe join is kept; fix the cause, then run \`machine startup enable\``);
   }
+  if (allowProblem !== undefined) return fail(allowProblem);
   return distributionFailed ? EXIT.failure : EXIT.ok;
 }

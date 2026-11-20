@@ -11,7 +11,7 @@ The user-facing guide (install, quick start, allow, run, Wake-on-LAN, troublesho
 | First machine (also the admin) | `machine setup <relay>` | choose the admin passphrase (typed twice, asked again after a typo, 3 attempts) and an optional hint; confirm the relay login code in the relay console, once (MACHINE ADMIN: can approve machines, cannot manage tokens) |
 | Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | compare the relay login code with the one in the relay console and approve (nothing is typed); on the admin machine: y/N and the passphrase; on both machines: compare the security code |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
-| Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
+| Start the daemon now and at each login (each machine) | `machine startup enable` (`--no-start` registers only; `machine status` shows `daemon: running` or `NOT running` with the fix) | none; never automatic unless `--auto-startup` |
 | Stop starting at login | `machine startup disable` | none; also ends the running daemon of the job |
 | Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
 | Reach a machine that sleeps (same LAN) | `machine peer connect <machine> --address <ip>:<port> --wake-mac <mac>` once, then `machine run` / `machine ping` as usual; `machine peer wake <machine>` to wake now | type the MAC of the target (never learned from the relay) |
@@ -100,8 +100,8 @@ Numbering rule, the same everywhere: N counts the steps of the path this run tak
 
 | Command | Steps (full path) |
 |---|---|
-| `setup` | Identity, Admin passphrase, Relay login, Enrolment of this machine, Summary and next steps (5) |
-| `join` | Identity, Relay login, Candidacy posted (waiting for the admin, or approved by this machine), Security code comparison, Done (5; 4 without the comparison; `--no-wait` ends with Next steps) |
+| `setup` | Identity, Admin passphrase, Relay login, Enrolment of this machine, Allow list, Summary and next steps (6) |
+| `join` | Identity, Relay login, Candidacy posted (waiting for the admin, or approved by this machine), Security code comparison, Allow list, Done (6; 5 without the comparison; `--no-wait` has no Allow list and ends with Next steps, 4) |
 | `admin approve` | Pending candidacy, Passphrase and signature, Security code, Documents distributed (4; 3 when nobody is left to tell) |
 | `admin init` | Admin passphrase, Done (2) |
 | `admin login` (console) | Relay login, Done (2) |
@@ -153,7 +153,18 @@ machine run <machine> --wake|--no-wake ...   force or forbid the wake for this c
 - The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable. `machine wake-info <machine>` prints this checklist for the target (macOS and Windows lines are marked UNVERIFIED).
 - Trace: `<configDir>/wake-audit.log` (who woke what, how many packets, hash-chained); the settings are in `connections.json` (no secret).
 
-## Who manages the allow list of a machine (decision 68)
+## Who manages the allow list of a machine (decision 68, asked at join: decision 70)
+
+`machine join` and `machine setup` ask it in the step "Allow list", once the machine is enrolled:
+
+```
+Who manages the allow list of this machine (the commands its peers may run here)?
+  [1] the admin (default): delegated, nothing to set up here; on the admin machine run `machine admin allow laptop -- <command>`
+  [2] this machine itself: independent of any other machine; you choose a local passphrase now (`machine policy local enable`)
+Choice [1]:
+```
+
+`--policy admin|local` answers it (scripts). Without a terminal and without the flag the default is `admin` and a `[warn]` says so. The summary shows `allow list: managed by the admin (policy mode admin)` (or local); `machine status` shows it later. No admin signature is involved: the choice is local to this machine.
 
 | Mode | Who signs the list | Edit with | Use for |
 |---|---|---|---|
@@ -173,6 +184,31 @@ machine status                                shows "policy mode"; machine list 
 - `machine admin allow <machine>` cannot tell that the target is in mode `local` (a peer's mode is not published): the target refuses the document and says why. Allow on the target itself: `machine policy allow`.
 - Forgotten local passphrase: the list stays as it is. To go back to the admin: stop the daemon (`machine startup disable`, or `orch kill machine`), delete `policy-mode.json` and `policy-local.json` in the config dir and `_secrets_/policy.key.json`, start the daemon, then have the admin sign a policy (`machine admin allow <this machine> -- <command>`).
 
+## Requests: what peers asked and could not run (decisions 73 and 74)
+
+A command a peer sends that is not allowed is refused and written to the audit log of the target. `machine requests` reads that log; nothing is run or changed.
+
+```
+machine requests                  the pending list of THIS machine: refused because not allowed, newest first, with the exact command to allow each
+machine requests --history [--peer <machine>] [--since 30m|2h|3d|2026-11-20] [--event run|refused|session|document] [--limit <n>]
+machine requests <machine>        admin machine: the pending list of a peer (asks the admin passphrase; nothing is run on the peer)
+machine requests --all            the same for every peer, one passphrase; a peer that cannot be reached is reported, the others are shown
+```
+
+```
+requests waiting for approval on laptop (2 commands refused because not allowed, newest first):
+  thinkcentre -> sh "df -h"  1 time, first 21:59 (1 min ago), last 21:59 (1 min ago)
+      machine admin allow laptop --shell sh -- "df -h"
+  thinkcentre -> sh "ls"  3 times, first 18:55 (3 h ago), last 21:55 (5 min ago)
+      machine admin allow laptop --shell sh -- ls
+```
+
+- Pending groups are (machine, shell, command). A command the policy allows now is not listed. Up to 100 groups (`--limit`), the total is shown.
+- In mode `local` the next command is `machine policy allow ...`, to run on that machine. In mode `admin`, `machine admin allow` allows the command for every peer (the default list).
+- A broken audit log is a `[warn]` with its line and the verified part is still listed; what follows the break is marked `[UNVERIFIED]` and never pending. Keep a copy, then move the file away (the daemon refuses to start on a broken log).
+- The remote view needs the admin key on the machine that asks and a peer that runs this version (`peer too old: update it with machine cli update`). It lists the pending requests only; a peer allows 6 such lists per minute and audits each one. The history is read on each machine.
+- The Requests page of the module shows the same for this machine (pending and history). It does not list other machines yet: the page cannot sign the request in the browser (not built), use `machine requests <machine>`.
+
 ## Rules a user meets
 
 - Command groups (decision 66): `machine <group>` alone shows the current state, read-only: `admin` the candidacies waiting for approval (never asks, never approves; `machine admin approve [<id>]` does), `peer` the peers, `startup` the job status, `cli` the versions, `alias` the aliases, `policy` its help. `machine <group> --help` (or `machine <group> help`, `machine help <group>`) is the help of the group, `machine <group> <subcommand> --help` of one subcommand. An unknown subcommand is a usage error (exit 2) with the list.
@@ -181,7 +217,9 @@ machine status                                shows "policy mode"; machine list 
 - Passphrase: 12 characters minimum, a warning below 20; a typo or a too-short entry is asked again (3 attempts, then nothing is created); prompts are short, the explanation is printed above them; `--generate` or an empty answer gives a random one, shown once. It cannot be recovered.
 - Passphrase hint (decision 57): optional, asked after the confirmation (Enter = none) or `--hint <text>` (admin init, setup); 80 printable ASCII characters, never the passphrase itself (refused if it contains it). Shown as `Hint: ...` above every unlock prompt on every machine. Stored in clear in the key file: see the threat model.
 - Times are local with a relative hint (`expires in 15 min (16:07)`); `--json` keeps ISO strings and epoch seconds.
+- The shell is part of the exact entry (decision 71). From a Windows machine to a Linux target: `machine admin allow thinkcentre --shell sh -- ls`, then `machine run thinkcentre --shell sh -- ls`, or once `machine peer connect thinkcentre --shell sh` (default shell of that machine on this one; `--no-shell` removes it). `machine admin allow` prints the exact `machine run` that matches. A `not-listed` refusal says when the same command exists under another shell. `machine allowed <machine>` lists what the policy signed here allows (read-only).
 - `machine run <machine> -- <command>` needs no local daemon. The daemon of the TARGET machine must run (`machine startup enable` there) to receive the policy and the command. `machine list` says so per peer: `On "laptop" run machine startup enable ... then run machine list again here`.
+- `no-policy` right after `machine admin allow` (decision 70): the policy is in the relay inbox of the target, not installed yet. A target without a policy reads its inbox every 10 s for the first 5 minutes after its daemon starts, else every 60 s: retry shortly. `machine run` adds `a policy (version N) for <machine> was signed here <age> and sent through the relay: it is not installed yet; retry in about N s` when it recorded one less than 15 minutes ago. Still refused after a few minutes: is the daemon of the target running (`machine list`, `machine startup enable` there)? Is the target in mode local (`machine status` there; it refuses admin-signed policies)?
 - `machine admin allow` assumes the target has no policy when none was signed on this machine; a target holding a policy signed elsewhere refuses it ("policy changed, reload").
 - After `machine admin revoke`, `machine status` lists the revoked machines apart (`laptop  uuid 5c8179d2  revocation installed here 3 min ago (15:52)`); `machine admin forget-relay-record laptop` and `machine admin distribute laptop` take the name, the uuid or a uuid prefix.
 - `join --no-wait`, `join --resume`, `admin login <code>`, `admin approve <id>`, `init`, `admin init` stay for scripts and interrupted runs.

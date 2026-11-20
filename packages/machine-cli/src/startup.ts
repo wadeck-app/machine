@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, join, resolve, win32 } from 'node:path';
 import { ConfigDir } from '@wadeck-app/shared-cli/ConfigDir';
 import { planBundleLink, syncBundleLink, type BundleLinkFs, type BundleLinkPlan, type BundleLinkReport } from './bundleLink.js';
-import { daemonPortFile } from './daemonPortFile.js';
+import { daemonPortFile, readDaemonState, type DaemonState } from './daemonPortFile.js';
 import { pruneStaged, stagedLauncher, stageWrapper, WRAPPER_NAME, wrapperScript, wrapperState, type BinaryDeps, type PruneResult } from './platformBinary.js';
 
 // Registration of the daemon as an orch startup job (spec: startup.md, packaging.md). Library only: no I/O besides
@@ -79,7 +79,18 @@ export interface StartupContext {
   binary?: BinaryDeps;
   /** Tests: the fs of the Windows node_modules junction (bundleLink.ts). */
   bundleLinkFs?: BundleLinkFs;
+  /** `enable` starts the daemon now when it is not running. false (`--no-start`, post-update) registers the job only. Default true. */
+  start?: boolean;
+  /** How long `enable` waits for the started daemon to write its port file. Default 15 s (orch's own wait for a restart is 15 s). */
+  startWaitMs?: number;
+  /** Poll interval of that wait (tests). Default 200 ms. */
+  startPollMs?: number;
+  /** Tests: whether a pid is alive. Default: process.kill(pid, 0). */
+  isAlive?: (pid: number) => boolean;
 }
+
+const START_WAIT_MS = 15_000;
+const START_POLL_MS = 200;
 
 /** Windows: double quotes (cmd.exe). Elsewhere: single quotes, a quote inside becomes '\'' . */
 export function quoteArg(value: string, platform: NodeJS.Platform): string {
@@ -365,8 +376,18 @@ function parseOutcome<T extends string>(stdout: string, allowed: readonly T[], w
   throw fail();
 }
 
+/** State of the local daemon after `enable`: `started` only when this call started it. `reason` says why it is not running (cause and fix). */
+export interface DaemonOutcome {
+  running: boolean;
+  started: boolean;
+  pid?: number;
+  peerPort?: number;
+  reason?: string;
+}
+
 export interface EnableResult {
   action: 'added' | 'updated' | 'unchanged';
+  daemon: DaemonOutcome;
   id: string;
   command: string;
   portFile: string;
@@ -386,13 +407,70 @@ export async function enableStartup(ctx: StartupContext): Promise<EnableResult> 
   const bundleLink = plan.bundleLink === undefined ? undefined : syncBundleLink(plan.bundleLink, ctx.bundleLinkFs);
   const portFile = daemonPortFile(resolve(ctx.configDir));
   const id = ctx.id ?? STARTUP_JOB_ID;
+  // Read before orch is called: an outdated command makes `ensure --restart-if-changed` restart a running daemon, and that restart must not be mistaken for "down".
+  const before = readDaemonState(resolve(ctx.configDir), ctx.isAlive);
   const restart = ctx.restartOnExit === false ? [] : ['--restart-on-exit'];
   const args = ['ensure', 'startup', id, '--command', command, ...restart, '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', portFile, '--json'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup enable');
   const action = parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged');
   const pruned = plan.keepStamp === undefined ? undefined : pruneStaged(resolve(ctx.configDir), plan.keepStamp, ctx.binary?.fs);
-  return { action, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }), ...(bundleLink === undefined ? {} : { bundleLink }) };
+  const daemon = await ensureDaemonRunning(ctx, id, before);
+  return { action, daemon, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }), ...(bundleLink === undefined ? {} : { bundleLink }) };
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const runningOutcome = (state: Extract<DaemonState, { running: true }>, started: boolean): DaemonOutcome => ({ running: true, started, pid: state.pid, peerPort: state.peerPort });
+
+/** Cause and fix when the daemon did not come up: the daemon prints its own error in a terminal, and its log keeps the rest. */
+function notStartedReason(cause: string, id: string): string {
+  return `${cause}. Run \`machine daemon\` in a terminal to see its error, then \`machine cli logs\` (or \`orch logs --job ${id}\`) for the log of the job; once fixed, run \`orch restart-job ${id}\` (never \`orch trigger\`: it ignores the liveness check and starts a second instance)`;
+}
+
+/**
+ * A `startup` job only starts when orch starts (login), so after `enable` the daemon may be down. When it is, `orch restart-job <id>`
+ * starts it (it honours the liveness check, unlike `orch trigger`), then the port file is awaited. A daemon that already runs is left alone
+ * (an outdated command was already restarted by `ensure --restart-if-changed`). Never throws: the job is registered either way.
+ */
+async function ensureDaemonRunning(ctx: StartupContext, id: string, before: DaemonState): Promise<DaemonOutcome> {
+  if (before.running) return runningOutcome(before, false);
+  const configDir = resolve(ctx.configDir);
+  const down: DaemonOutcome = { running: false, started: false, ...(before.problem === undefined ? {} : { reason: before.problem }) };
+  if (ctx.start === false) return down;
+  const waitMs = ctx.startWaitMs ?? START_WAIT_MS;
+  const seconds = Math.max(1, Math.round(waitMs / 1000));
+  const args = ['restart-job', id, '--json'];
+  let result: OrchResult;
+  try {
+    result = await runOrch(ctx, args);
+  } catch (e) {
+    return { running: false, started: false, reason: notStartedReason(`orch could not be asked to start the job: ${(e as Error).message}`, id) };
+  }
+  if (result.code !== 0) {
+    // Skipped by the liveness check: orch saw a live daemon (the file may have been written in between).
+    const now = readDaemonState(configDir, ctx.isAlive);
+    if (now.running) return runningOutcome(now, false);
+    return { running: false, started: false, reason: notStartedReason(`the job is registered but orch did not start it: ${restartJobReason(result)}`, id) };
+  }
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const state = readDaemonState(configDir, ctx.isAlive);
+    if (state.running) return runningOutcome(state, true);
+    if (Date.now() >= deadline) {
+      const note = state.problem === undefined ? 'no daemon.port.json from a live daemon appeared' : state.problem;
+      return { running: false, started: false, reason: notStartedReason(`the job is registered but the daemon did not start within ${seconds} s: ${note}`, id) };
+    }
+    await sleep(ctx.startPollMs ?? START_POLL_MS);
+  }
+}
+
+/** What orch says when `restart-job` did not start the job: the `reason` of its JSON answer, else its own output. */
+function restartJobReason(result: OrchResult): string {
+  const json = parseJson(result.stdout);
+  const reason = typeof json === 'object' && json !== null ? (json as { reason?: unknown }).reason : undefined;
+  if (typeof reason === 'string' && reason.length > 0) return reason;
+  return result.stderr.trim() || result.stdout.trim() || `exit ${result.code} with no message`;
 }
 
 /**
@@ -487,6 +565,8 @@ export interface StatusResult {
   bundleLink?: BundleLinkReport;
   /** Other orch jobs whose liveness port file is this daemon's: two supervisors on one daemon fight over it. */
   conflicts: { id: string; command: string }[];
+  /** Whether the local daemon runs (daemon.port.json and a live pid; read only, no network). */
+  daemon: DaemonState;
 }
 
 /** Every orch job other than `id` with the same liveness port file as this configuration folder. */
@@ -513,7 +593,7 @@ export async function startupStatus(ctx: StartupContext): Promise<StatusResult> 
   const id = ctx.id ?? STARTUP_JOB_ID;
   const plan = planDaemon(ctx, false);
   const expected = expectedCommand(ctx, plan);
-  const base = { id, expected, expectedForm: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }) };
+  const base = { id, expected, expectedForm: plan.form, daemon: readDaemonState(resolve(ctx.configDir), ctx.isAlive), ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }) };
   const args = ['show', id, '--json'];
   const result = await runOrch(ctx, args);
   // Exit 3 of orch show: no such job.

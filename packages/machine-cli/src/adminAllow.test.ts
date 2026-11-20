@@ -86,6 +86,59 @@ describe('machine admin allow <machine> <command>', () => {
     expect(JSON.parse((await ok(b, ['status', '--json'])).out)).toMatchObject({ policyVersion: 1 });
   });
 
+  describe('the last line says the EXACT `machine run` that matches the entry (decision 71)', () => {
+    const OTHER = SHELL === 'cmd' ? 'sh' : 'cmd';
+    const thenLine = (out: string): string => /Then: (machine run .*)\n/.exec(out)?.[1] ?? '';
+
+    it('the shell of the entry is the one run picks here: no --shell, no suggestion', async () => {
+      await twoMachines();
+      const r = await allow(['laptop', '--shell', SHELL, '--', 'echo hello']);
+      expect(r.code, r.err).toBe(0);
+      expect(thenLine(r.out)).toBe('machine run laptop -- "echo hello"');
+      expect(r.out).not.toContain('make ');
+    });
+
+    it('no --shell given: the platform shell is used (said) and the hint is the plain command', async () => {
+      await twoMachines();
+      const r = await allow(['laptop', '--', 'ls']);
+      expect(thenLine(r.out)).toBe('machine run laptop -- ls');
+    });
+
+    it('another shell than the one run picks (a Windows admin, a Linux target): --shell in the command, and how to make it the default', async () => {
+      await twoMachines();
+      const r = await allow(['laptop', '--shell', OTHER, '--', 'ls']);
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain(`Then: machine run laptop --shell ${OTHER} -- ls (or make ${OTHER} the default for that machine: machine peer connect laptop --shell ${OTHER})`);
+    });
+
+    it('the default shell of that machine (peer connect --shell) is what run picks: no --shell, and no suggestion to set it again', async () => {
+      await twoMachines();
+      expect((await cli(a, ['peer', 'connect', 'laptop', '--shell', OTHER])).code).toBe(0);
+      const r = await allow(['laptop', '--shell', OTHER, '--', 'ls']);
+      expect(thenLine(r.out)).toBe('machine run laptop -- ls');
+      expect(r.out).not.toContain('make ');
+      // And the platform shell is now the one that needs --shell.
+      const back = await allow(['laptop', '--shell', SHELL, '--', 'pwd']);
+      expect(back.out).toContain(`Then: machine run laptop --shell ${SHELL} -- pwd`);
+    });
+
+    it('a damaged connections.json: the hint keeps --shell (always right) and says why', async () => {
+      await twoMachines();
+      writeFileSync(join(a, 'connections.json'), '{ nope');
+      const r = await allow(['laptop', '--shell', SHELL, '--', 'ls']);
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain(`Then: machine run laptop --shell ${SHELL} -- ls`);
+      expect(r.out).toMatch(/\[warn\].*connections\.json cannot be used/);
+    });
+
+    it('a remove says nothing to run', async () => {
+      await twoMachines();
+      await allow(['laptop', '--shell', SHELL, '--', 'ls']);
+      const r = await allow(['laptop', '--remove', '--shell', SHELL, '--', 'ls']);
+      expect(r.out).not.toContain('Then: machine run');
+    });
+  });
+
   it('the next allow builds version 2 from the first (entries kept), a remove builds version 3, and --list shows what is allowed', async () => {
     await twoMachines();
     expect((await allow(['laptop', '--shell', SHELL, '--', 'echo', 'one'])).code).toBe(0);

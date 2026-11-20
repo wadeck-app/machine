@@ -118,7 +118,8 @@ describe('buildShellLine and findOnPath (Windows runs orch.cmd through cmd.exe)'
 });
 
 describe('enableStartup', () => {
-  const ctx = () => ({ configDir, orch: stub.orch, daemon: UNIX_BUNDLE, platform: 'linux' as const });
+  // `start: false`: the ensure call is under test here; the start of the daemon is in startupDaemon.test.ts.
+  const ctx = () => ({ configDir, orch: stub.orch, daemon: UNIX_BUNDLE, platform: 'linux' as const, start: false });
 
   it('runs exactly the agreed orch ensure with the quoted daemon command and the port file', async () => {
     stub.script({ ensure: { stdout: 'added machine\n' } });

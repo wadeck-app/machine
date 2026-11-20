@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPolicyBody, nextPolicyBody, POLICY_DOMAIN, resolveMachineRef, signPolicy, verifyDocument, type PolicyBody, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
+import { assertPolicyBody, commandForHint, nextPolicyBody, POLICY_DOMAIN, resolveMachineRef, resolveRunShell, signPolicy, verifyDocument, type PolicyBody, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
 import type { Json } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
+import { ConnectionsError, readConnections } from './connectionsStore.js';
 import { writeFileAtomic } from './fsutil.js';
 import { exportMachineInfo, installPolicy, loadNetwork } from './network.js';
 import { clockText, relativeText } from './humanTime.js';
@@ -66,6 +67,24 @@ export type AllowResult =
   | { kind: 'listed'; uuid: string; version: number }
   | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' }
   | { kind: 'signed'; uuid: string; name: string; version: number; delivery: 'inbox' | 'installed' | 'file'; failed: boolean; out: string };
+
+/**
+ * The `machine run` that matches the entry just allowed (the shell is part of the exact entry, decision 71). `--shell` is left out only when it equals
+ * the shell `run` picks on THIS machine: the default of that peer in connections.json, else the platform. A damaged connections.json is said (a
+ * `[warn]`) and the hint keeps `--shell`, which is right whatever the file says.
+ */
+export function runHint(configDir: string, name: string, uuid: string, shell: Shell, command: string, say: (text: string) => void): string {
+  let picked: Shell | undefined;
+  try {
+    picked = resolveRunShell({ peerDefault: readConnections(configDir).peers[uuid]?.shell, platform: process.platform }).shell;
+  } catch (e) {
+    if (!(e instanceof ConnectionsError)) throw e;
+    say(`[warn] ${e.message}: the command below names the shell explicitly\n`);
+  }
+  const quoted = commandForHint(command);
+  if (picked === shell) return `machine run ${name} -- ${quoted}`;
+  return `machine run ${name} --shell ${shell} -- ${quoted} (or make ${shell} the default for that machine: machine peer connect ${name} --shell ${shell})`;
+}
 
 const line = (e: PolicyEntry): string => `${e.shell}  ${JSON.stringify(e.command)}${e.limits ? `  limits ${JSON.stringify(e.limits)}` : ''}`;
 
@@ -176,7 +195,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     failed = formatted.failed;
     out += formatted.out;
     if (formatted.failed) out += formatted.err;
-    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it within about a minute (the daemon must run there: \`machine startup enable\`). Then: machine run ${target.name} -- <command>\n`;
+    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it within about a minute (the daemon must run there: \`machine startup enable\`).${o.mode === 'allow' ? ` Then: ${runHint(configDir, target.name, target.uuid, shell, command, o.say)}` : ''}\n`;
   }
   o.say(out);
   return { kind: 'signed', uuid: target.uuid, name: target.name, version: body.version, delivery, failed, out };

@@ -170,6 +170,31 @@ describe('peer service', () => {
     expect(w.runs).toHaveLength(0);
   });
 
+  it('records the shell and the command of a request refused for lack of a policy, so that `machine requests` can list it', async () => {
+    const w = await world({ noPolicy: true });
+    await ask(w, 'echo hello');
+    expect(w.audit.entries[0]).toMatchObject({ event: 'refused', reason: 'no-policy', source: A, shell: expect.any(String), command: 'echo hello' });
+  });
+
+  it('names the shell that works when the same command is listed under another one (the name of THIS machine, the shells in the answer, not in the audit)', async () => {
+    const w = await world();
+    const other = SHELL === 'cmd' ? 'sh' : 'cmd';
+    w.setPolicy([{ shell: other, command: 'ls' }, { shell: other, command: 'uptime' }]);
+    const answer = (await ask(w, 'ls')) as { type: string; reason: string; message: string; allowedShells?: string[] };
+    expect(answer).toMatchObject({ type: 'refused', reason: 'not-listed', allowedShells: [other] });
+    expect(answer.message).toBe(`"ls" is allowed with shell ${other}, not with ${SHELL}: run machine run b --shell ${other} -- ls (or: machine peer connect b --shell ${other} to make it the default)`);
+    // Only what the caller sent comes back: another entry of the list is never named.
+    expect(answer.message).not.toContain('uptime');
+    expect(w.audit.entries[0]).toMatchObject({ event: 'refused', reason: 'not-listed', shell: SHELL, command: 'ls' });
+    expect(w.audit.entries[0]).not.toHaveProperty('allowedShells');
+  });
+
+  it('records the shell and the exact command of a request refused as not listed (the input of `machine requests`)', async () => {
+    const w = await world();
+    await ask(w, 'echo hello && echo more');
+    expect(w.audit.entries[0]).toMatchObject({ event: 'refused', reason: 'not-listed', source: A, shell: expect.any(String), command: 'echo hello && echo more' });
+  });
+
   it('refuses a replayed request and runs the command once', async () => {
     const w = await world();
     const session = await w.connect();

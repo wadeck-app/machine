@@ -145,7 +145,8 @@ function resolveDeps(ctx: CommandContext): CliMetaDeps {
             throw e;
           }
         },
-        enable: () => enableStartup(startupCtx),
+        // Never starts the daemon: after an update a daemon that is down was stopped on purpose; `ensure --restart-if-changed` already restarts a running one.
+        enable: () => enableStartup({ ...startupCtx, start: false }),
       },
       daemon: o.postUpdate?.daemon ?? daemon,
     },

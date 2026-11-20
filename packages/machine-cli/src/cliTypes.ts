@@ -92,7 +92,10 @@ export interface Parsed {
   wakeSettle?: string;
   /** `machine ping <machine> --count <n>`: rounds, 1 to 10 (validated by `parsePingCount`). */
   count?: string;
+  /** `machine run`, `admin allow`, `policy allow`: the shell of the command. `machine peer connect`: the default shell of that peer. */
   shell?: string;
+  /** `machine peer connect <machine> --no-shell`: forget the default shell of that peer. */
+  noShell: boolean;
   days?: string;
   secretFrom?: string;
   peerPort?: string;
@@ -105,8 +108,16 @@ export interface Parsed {
   noWait: boolean;
   reject: boolean;
   autoStartup: boolean;
+  /** `--no-start` (startup enable, join/setup --auto-startup): register the startup job without starting the daemon now. */
+  noStart: boolean;
   /** `machine admin login --full-access`: ask for a FULL-ACCESS token (it can also manage tokens) instead of a machine-admin one. An explicit opt-in. */
   fullAccess: boolean;
+  /** `machine requests`: `--history` (the log instead of the pending list), `--all` (every peer, remote), `--since`, `--event`, `--limit`. Set only when given. */
+  history?: true;
+  all?: true;
+  since?: string;
+  event?: string;
+  limit?: string;
   /** `--verbose` (join, setup, admin approve): also shows the candidacy code, which is internal by default (decision 55). */
   verbose: boolean;
   /** `machine cli self-check --quiet`. */

@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { SHELLS, parseAddress, type Shell } from '@wadeck-app/machine-core';
+import { SHELLS, parseAddress, resolveRunShell, type Shell } from '@wadeck-app/machine-core';
+import { refusalListLine } from './allowedView.js';
+import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
 import { describeAddress, PeerAddressError } from './peerAddresses.js';
 import { adminKeyFile, assertCanInitAdminKey, pinAdminKey, signPolicyFile } from './admin.js';
@@ -16,6 +18,7 @@ import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
+import { runRemoteRequests } from './cliRequestsRemote.js';
 import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, runPeerWake, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
 import { connectWithWake } from './wakeConnect.js';
 import { writeFileAtomic } from './fsutil.js';
@@ -28,6 +31,7 @@ import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidde
 import { runOnPeer } from './peerService.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
+import { pendingPolicyLine } from './pendingPolicy.js';
 import { unknownSubcommandMessage } from './cliHelp.js';
 import { runPolicyModeCommand } from './cliPolicy.js';
 
@@ -468,6 +472,11 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
 
   if (command === 'ping') return await runPingCommand(ctx);
 
+  // `machine requests <machine>` and `--all` (decision 74); `machine requests` alone is handled by cli.ts (this machine's own log).
+  if (command === 'requests') return await runRemoteRequests(ctx, prompt);
+
+  if (command === 'allowed') return runAllowed(ctx);
+
   if (command === 'run') {
     // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.
     try {
@@ -487,8 +496,8 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
     return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] -- <command...>', EXIT.peer);
   }
-  const shell = args.shell ?? (process.platform === 'win32' ? 'cmd' : 'sh');
-  if (!(SHELLS as readonly string[]).includes(shell)) return fail(`unknown shell "${shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
+  // An unknown --shell is refused before anything is read or sent; the shell itself is chosen below, once the connections.json of the peer is read.
+  if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
   if (args.address !== undefined && !parseAddress(args.address)) {
     return fail(`invalid --address "${args.address}": expected <host>:<port>, for example 192.168.1.20:47921 or [::1]:47921`, EXIT.peer);
   }
@@ -505,6 +514,10 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   // How this machine reaches the peer (decision 62): pinned addresses win over the relay record, and the type or --wake / --no-wake decides whether a peer that cannot be reached is woken.
   const read = connectionOf(ctx, peer);
   if (!read.ok) return EXIT.peer;
+  // The shell is part of the exact entry: --shell, else the default of this peer on this machine (`machine peer connect <peer> --shell`), else the platform of this machine.
+  const chosen = resolveRunShell({ explicit: args.shell, peerDefault: read.connection?.shell, platform: process.platform });
+  const shell: Shell = chosen.shell;
+  if (chosen.source === 'peer-default') io.stderr(`[info] shell ${shell}: the default of ${peer.name} (machine peer connect ${peer.name} --shell; --shell overrides it)\n`);
   const wakeSettings = wakeSettingsFor(ctx, peer, read.connection);
   if (!wakeSettings.ok) return fail(wakeSettings.message, EXIT.peer);
   // The same resolution and connection as `machine ping` (peerConnect.ts): the address override, the pinned addresses, or the verified record of the relay.
@@ -539,8 +552,14 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     // The fix is the command to run on the admin machine, with this exact command (an exact match is the only rule).
     // A peer that manages its own list (policy mode local) cannot be changed from here: its refusal message names the owner (the caller does not know the mode).
     const quoted = /[\s"'`]/.test(command) ? `"${command}"` : command;
-    const how = answer.reason === 'not-listed' ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted} (if ${peer.name} manages its own allow list, run \`machine policy allow --shell ${shell} -- ${quoted}\` on ${peer.name} instead)` : '';
-    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}`, EXIT.peer);
+    // When the target says the same command is allowed under another shell, adding it under this one would widen the list for nothing: its hint is the whole advice.
+    const otherShell = answer.allowedShells !== undefined && answer.allowedShells.length > 0;
+    const how = answer.reason === 'not-listed' && !otherShell ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted} (if ${peer.name} manages its own allow list, run \`machine policy allow --shell ${shell} -- ${quoted}\` on ${peer.name} instead)` : '';
+    // Decision 70: a policy signed here a moment ago and not installed yet explains no-policy / not-listed: say so (one line).
+    const pending = pendingPolicyLine(configDir, { uuid: peer.peerId, name: peer.name }, { reason: answer.reason, shell, command, selfUuid: self.uuid }, epochSeconds(), (w) => io.stderr(`[warn] ${w}\n`));
+    // What the policy signed HERE allows for this machine (local knowledge: the target never sends its list, T-03).
+    const listed = answer.reason === 'not-listed' ? refusalListLine(configDir, { uuid: peer.peerId, name: peer.name }, self.uuid, (w) => io.stderr(`[warn] ${w}\n`)) : undefined;
+    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);
@@ -550,6 +569,8 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   }
   if (answer.timedOut) io.stderr('[warn] the command was stopped: it exceeded the time limit of the peer\n');
   if (answer.truncated) io.stderr('[warn] the output was cut: it exceeded the output limit of the peer\n');
+  // A peer older than decision 70 never sends it. The value comes from the peer: only a plain code page name is shown.
+  if (typeof answer.decodedFrom === 'string' && /^cp\d{3,5}$/.test(answer.decodedFrom)) io.stderr(`[info] output decoded from the target's code page ${answer.decodedFrom}\n`);
   if (answer.outputNotUtf8) io.stderr('[warn] the output is not valid UTF-8 (probably an OEM code page): accented characters may be wrong\n');
   return remoteExitCode(answer.exitCode);
 }

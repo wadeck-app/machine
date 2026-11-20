@@ -3,6 +3,9 @@ import { ageText, listCandidacies,RelayNotConfiguredError, RelayRequestError, ty
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
+import { checkModuleHeader } from './guard.js';
+import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './requests.js';
+import type { RequestsListAnswer } from '@wadeck-app/machine-core';
 
 // Backend of the machine module. Slice 1: read-only routes only. No route here signs, spends the relay token or changes
 // anything (decision D25: signing happens in the browser). Local-API limit, stated honestly: app-core checks only Host and
@@ -11,13 +14,27 @@ import { runHealth } from './health.js';
 
 /** The minimal part of the app-core ModuleContext this module uses (the SDK package is not a dependency of this slice). */
 export interface ModuleContextLike {
-  registerRoute(method: string, subPath: string, handler: (req: unknown, reply: ReplyLike) => unknown): void;
+  registerRoute(method: string, subPath: string, handler: (req: unknown, reply: ReplyLike) => unknown, options?: { effect: 'read' | 'write' | 'sensitive' }): void;
 }
 
 export interface ReplyLike {
   code(status: number): ReplyLike;
   send(body: unknown): unknown;
 }
+
+/** Connecting and asking a peer takes up to the connection timeouts plus the answer timeout of the daemon. */
+const REMOTE_TIMEOUT_MS = 45_000;
+
+/** The HTTP status of a failure of `remoteRequests` (the reason is the `kind`; anything not listed is 502). */
+const REMOTE_STATUS: Record<string, number> = {
+  'unknown-peer': 404,
+  'bad-payload': 400,
+  'wrong-target': 400,
+  'source-mismatch': 400,
+  'bad-signature': 403,
+  'no-admin': 403,
+  'rate-limited': 429,
+};
 
 interface Failure {
   status: number;
@@ -28,7 +45,10 @@ interface Failure {
 function failureOf(err: unknown): Failure {
   if (err instanceof DaemonUnreachableError) return { status: 503, kind: 'daemon_unreachable', error: err.message };
   if (err instanceof DaemonAuthError) return { status: 502, kind: 'daemon_token_refused', error: err.message };
+  // An older daemon does not know a command of this module: the fix is the update, not a retry.
+  if (err instanceof DaemonCommandError && /Unknown command/.test(err.message)) return { status: 502, kind: 'daemon_error', error: `${err.message}: the daemon is older than this module, update it with \`machine cli update\` and restart it` };
   if (err instanceof DaemonCommandError) return { status: 502, kind: 'daemon_error', error: err.message };
+  if (err instanceof RequestsAnswerError) return { status: 502, kind: 'daemon_error', error: err.message };
   if (err instanceof RelayNotConfiguredError) return { status: 503, kind: 'relay_not_configured', error: err.message };
   if (err instanceof RelayRequestError) return { status: 502, kind: 'relay_error', error: err.message };
   return { status: 500, kind: 'internal', error: err instanceof Error ? err.message : String(err) };
@@ -124,6 +144,48 @@ export default function register(ctx: ModuleContextLike): void {
       return reply.code(failure.status).send(failure);
     }
   });
+
+  // The Requests page (decision 73): the audit log of THIS machine through the daemon command `requests` (the reader of `machine requests`).
+  ctx.registerRoute('GET', '/requests', async (_req, reply) => {
+    try {
+      const answer = await callDaemon(configDir(), 'requests');
+      if (isNotInitialized(answer)) {
+        const failure = notInitialized(answer);
+        return reply.code(failure.status).send(failure);
+      }
+      return reply.code(200).send(requestsPage(answer, Math.floor(Date.now() / 1000)));
+    } catch (err) {
+      const failure = failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  });
+
+  // The remote section (decision 74): the page signs a `requests-list` document with the admin key IN THE BROWSER and posts it here; the
+  // daemon forwards it to the peer, which checks the signature. This backend never sees the admin key or the passphrase. Sensitive (PIN
+  // of app-core) because it makes this machine contact another one; the module header keeps stray posts out.
+  ctx.registerRoute(
+    'POST',
+    '/requests/remote',
+    async (req, reply) => {
+      const refusal = checkModuleHeader(req);
+      if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+      const body = typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined;
+      const { machine, request } = typeof body === 'object' && body !== null ? (body as { machine?: unknown; request?: unknown }) : {};
+      if (typeof machine !== 'string' || machine.length === 0 || typeof request !== 'object' || request === null) {
+        return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'expected {"machine": "<name or uuid>", "request": <requests-list document signed with the admin key>}' });
+      }
+      try {
+        const answer = (await callDaemon(configDir(), 'remoteRequests', REMOTE_TIMEOUT_MS, { peer: machine, request })) as { ok?: boolean; answer?: RequestsListAnswer; reason?: string; message?: string };
+        if (answer.ok === true && answer.answer !== undefined) return reply.code(200).send(remoteRequestsPage(answer.answer, Math.floor(Date.now() / 1000)));
+        const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
+        return reply.code(REMOTE_STATUS[reason] ?? 502).send({ status: REMOTE_STATUS[reason] ?? 502, kind: reason, error: typeof answer.message === 'string' ? answer.message : 'the peer did not answer with a list' });
+      } catch (err) {
+        const failure = failureOf(err);
+        return reply.code(failure.status).send(failure);
+      }
+    },
+    { effect: 'sensitive' },
+  );
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

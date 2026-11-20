@@ -5,6 +5,7 @@ import { readAdminPin } from './admin.js';
 import { writeFileAtomic } from './fsutil.js';
 import type { MachineIdentity } from './identity.js';
 import { importPeer, installPolicy, installRevocation, loadNetwork } from './network.js';
+import { pollDelayMs } from './noPolicy.js';
 import { RelayError, type InboxEntry, type RelayClient } from './relayClient.js';
 
 // The receiving side of distribution.md. The daemon sends a heartbeat every 60 s; when the relay says documents are waiting (and
@@ -20,7 +21,6 @@ import { RelayError, type InboxEntry, type RelayClient } from './relayClient.js'
 // in the inbox and it is examined again at every round, until it expires.
 
 export const HEARTBEAT_MS = 60_000;
-const MAX_BACKOFF_MS = 600_000;
 /**
  * Ids of installed documents kept on disk: the relay keeps no tombstone, so a replayed PUT of an acknowledged id is stored again.
  * When the oldest are forgotten, a replay of such a document is harmless: a peer is imported again identically (or refused when
@@ -51,6 +51,11 @@ export interface InboxLoopOptions {
   now: () => number;
   log: (line: string) => void;
   heartbeatMs?: number;
+  /**
+   * True while this machine waits for a policy (none installed, decision 70): the loop then runs at FAST_POLL_MS for FAST_POLL_WINDOW_MS after
+   * its start, then at the normal cadence. Absent: always the normal cadence. It must not throw; if it does, the normal cadence is used and the error is logged once.
+   */
+  needsPolicy?: () => boolean;
   timer?: InboxTimer;
   /** Asked in every round, right AFTER the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
   publisher?: { tick(): Promise<void> };
@@ -168,6 +173,7 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
     clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   };
   const selfUuid = o.self.uuid;
+  const startedAt = o.now();
   const handled = new HandledIds(join(o.configDir, 'inbox-state.json'), o.handledCap ?? MAX_HANDLED_IDS);
   // Errors of the relay: said once, forgotten at the next success so that a later outage is said again.
   const errorWarned = new BoundedSet();
@@ -516,7 +522,15 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
 
   const schedule = (): void => {
     if (stopped) return;
-    const delay = failures === 0 ? heartbeatMs : Math.min(heartbeatMs * 2 ** failures, MAX_BACKOFF_MS);
+    let needsPolicy = false;
+    if (o.needsPolicy !== undefined && failures === 0) {
+      try {
+        needsPolicy = o.needsPolicy();
+      } catch (e) {
+        notice('needs-policy', `inbox: cannot tell whether a policy is installed (${safe((e as Error).message)}): the normal cadence is used`);
+      }
+    }
+    const delay = pollDelayMs({ normalMs: heartbeatMs, failures, needsPolicy, elapsedMs: (o.now() - startedAt) * 1000 });
     handle = timer.set(() => void step(), delay);
   };
   const step = async (): Promise<void> => {

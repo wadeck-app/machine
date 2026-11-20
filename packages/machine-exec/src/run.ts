@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import type { Shell } from '@wadeck-app/machine-core';
 import { launchSpec, scrubEnv, windowsSystemRoot } from './launch.js';
+import { detectOemCodePage } from './oemCodePage.js';
+import { decodeOutput } from './outputDecode.js';
 
 export interface RunOptions {
   shell: Shell;
@@ -12,6 +14,8 @@ export interface RunOptions {
   /** Environment to scrub; defaults to this process's. */
   env?: Record<string, string | undefined>;
   cwd?: string;
+  /** The OEM code page of the machine, used to decode output that is not UTF-8 (Windows cmd and ps only). Defaults to the registry value, read once. Tests inject it. */
+  oemCodePage?: () => Promise<number | undefined>;
 }
 
 export interface RunResult {
@@ -23,17 +27,9 @@ export interface RunResult {
   truncated: boolean;
   /** The output was not valid UTF-8 (for example an OEM code page on Windows) and was decoded lossily. */
   outputNotUtf8: boolean;
+  /** The output was not UTF-8 and was converted from this code page of the machine (for example `cp850`); absent otherwise. */
+  decodedFrom?: string;
   durationMs: number;
-}
-
-function decode(chunks: Buffer[], cut: boolean): { text: string; lossy: boolean } {
-  const bytes = Buffer.concat(chunks);
-  try {
-    // `stream` tolerates an incomplete character at the end: our own cap may have cut it, which is not an encoding problem.
-    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: cut }), lossy: false };
-  } catch {
-    return { text: bytes.toString('utf8'), lossy: true };
-  }
 }
 
 function killTree(pid: number, env: Record<string, string | undefined>, fallback: () => void): void {
@@ -116,17 +112,22 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      const o = decode(out, truncated);
-      const e = decode(err, truncated);
-      resolve({
-        exitCode: killed ? null : code,
-        stdout: o.text,
-        stderr: e.text,
-        timedOut,
-        truncated,
-        outputNotUtf8: o.lossy || e.lossy,
-        durationMs: Date.now() - started,
-      });
+      // Only the output is converted, after the command ran: the approved string is never touched (T-15). The OEM code page is
+      // asked only for output that is not UTF-8, and only on Windows for the shells that write it (cmd, ps).
+      const oem = process.platform === 'win32' && (options.shell === 'cmd' || options.shell === 'ps') ? (options.oemCodePage ?? (() => detectOemCodePage(sourceEnv))) : async () => undefined;
+      Promise.all([decodeOutput(out, truncated, oem), decodeOutput(err, truncated, oem)]).then(([o, e]) => {
+        const decodedFrom = [o.decodedFrom, e.decodedFrom].find((p) => p !== undefined);
+        resolve({
+          exitCode: killed ? null : code,
+          stdout: o.text,
+          stderr: e.text,
+          timedOut,
+          truncated,
+          outputNotUtf8: o.lossy || e.lossy,
+          ...(decodedFrom !== undefined ? { decodedFrom } : {}),
+          durationMs: Date.now() - started,
+        });
+      }, reject);
     });
   });
 }

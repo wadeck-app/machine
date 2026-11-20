@@ -3,6 +3,8 @@ import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './err
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
+import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
+import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
 // when no daemon is running and the tests need no network. No answer ever carries a secret.
@@ -146,6 +148,16 @@ export function makeCommands(configDir: string, version: string | (() => string)
         policyMode: network.policyMode,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };
+    },
+
+    /** The Requests page of the module (decision 73): the pending list and the last history entries of this machine's audit log. Read-only. */
+    requests(): RequestsAnswer {
+      return requestsAnswer(configDir, {}, now());
+    },
+
+    /** The Requests page, remote section (decision 74): forwards a request signed in the browser with the admin key to a peer. Read-only; signs nothing. */
+    remoteRequests(payload?: unknown): Promise<RemoteRequestsAnswer> {
+      return remoteRequestsCommand(configDir, payload, now());
     },
 
     resolve(payload?: unknown): ResolveAnswer {

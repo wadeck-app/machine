@@ -5,9 +5,11 @@ import { addRelayView, relayLines } from './listPresence.js';
 import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
-import { runStartupCommand } from './cliStartup.js';
+import { daemonStateText, runStartupCommand } from './cliStartup.js';
+import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWakeInfo } from './cliWake.js';
+import { runRequests } from './cliRequests.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { startMachineDaemon } from './daemonEntry.js';
@@ -41,7 +43,10 @@ Getting started (one command per machine; the name of a machine is the computer 
                                      security code (with several pending machines it lists them: pass the id)
   allow a command on a machine (admin machine):
     machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
-  then, on each machine: machine startup enable (start at login; never done by itself unless join/setup --auto-startup)
+    machine allowed <machine>                       what is allowed there per the policy signed here (read-only)
+    The shell is part of the exact entry: \`--shell sh\` on a Linux target even from Windows, then \`machine run <machine> --shell sh -- <command>\`
+    (or once: \`machine peer connect <machine> --shell sh\`, the default shell of that machine on this one)
+  then, on each machine: machine startup enable (starts the daemon now and at each login; never done by itself unless join/setup --auto-startup)
   check the connection (runs nothing on the peer, needs no allowlist entry; the revocation hello is the real catch-up, see ping below):
     machine ping                     this machine's path to the relay, one line per step ([ok] / [warn] / [fail] with cause and fix)
     machine ping <machine>           the real authenticated channel to a peer, like ping(8): handshake and hello times
@@ -59,7 +64,7 @@ Getting started (one command per machine; the name of a machine is the computer 
   digits, shown by the relay console: scripts) and the security code (25 digits in five groups, compared between two machines: the one that protects you).
 
 Commands:
-  setup <relay> [--generate] [--hint <text>] [--name <name>] [--auto-startup]
+  setup <relay> [--generate] [--hint <text>] [--name <name>] [--auto-startup] [--policy admin|local]
                                      the first machine in one command: identity (name from the computer name), admin key
                                      (passphrase typed twice, or --generate for a random one), ONE relay login (a request you
                                      confirm in the relay console: MACHINE ADMIN, it can approve machines and cannot manage tokens;
@@ -70,13 +75,16 @@ Commands:
                                      name is --name or the computer name, normalised to lowercase letters, digits and hyphens
                                      (a note says what was changed); it is the stable reference signed at enrollment, a
                                      friendlier local label is \`machine alias set <label> <name>\`
-  status                            identity, enrollment state, policy, revocation version and peers last seen
+  status                            identity, whether the daemon runs, enrollment state, policy, revocation version and peers last seen
                                      behind on it, the machines revoked here (name, uuid, when), what was left out
   list                               this machine and its registered peers (and the revocation version each peer
                                      announced at its last handshake); with a relay also their last known
                                      addresses and whether the relay says they are online (a relay problem is a
                                      warning line, never an error)
   resolve <reference>                show which machine a reference means
+  allowed <machine>                  what the machine allows: for a peer the last policy signed on THIS machine (entries per shell,
+                                     version, when it was signed here) and a line saying the installed list is asked there with
+                                     \`machine policy allow --list\`; for this machine the installed policy and its mode. Read-only, no passphrase
   alias list | set <alias> <ref> | rm <alias>
   run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] -- <command...>
                                      run one allowed command on a peer. Without --address the addresses come from
@@ -111,8 +119,9 @@ Commands:
                                      to 8: a NAT, a hostname, a VPN, an SSH tunnel; without a port the peer port is
                                      used). With nothing to publish it says why and publishes nothing
   stop                               stop the running daemon
-  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup] [--name <name>]
-                                     one command: the identity is created when there is none (--name, else the computer name). On the
+  join [<relay-host-or-url> | <code>] [--relay <url>] [--force] [--no-wait] [--timeout <seconds>] [--yes-final-code <code>] [--prompt-timeout <s>] [--auto-startup] [--name <name>] [--policy admin|local]
+                                     one command: the identity is created when there is none (--name, else the computer name). Step "Allow list": who
+                                     manages what peers may run here, the admin (default) or this machine; --policy answers it (required without a terminal, else the default is admin and said). On the
                                      machine that holds the admin key it approves its own enrollment (one passphrase, nothing to compare;
                                      needs the admin relay token: \`machine admin login\`, or use \`machine setup\`). On any other machine it
                                      prints what the admin runs (\`machine admin approve\`), waits, then shows the security code, which must read exactly the same on the admin machine
@@ -134,12 +143,14 @@ Commands:
                                      code needs --relay too); later runs reuse the one stored in relay.json.
                                      --relay <url> is the same as the relay argument (not both)
                                      join never starts anything at login by itself; it ends by suggesting
-                                     \`machine startup enable\`. --auto-startup runs it as the last step (a failure
-                                     there is reported and makes join exit 1; the join itself is not undone)
+                                     \`machine startup enable\`. --auto-startup runs it as the last step: it also starts the daemon
+                                     now (--no-start: register only); a failure there is reported and makes join exit 1; the join
+                                     itself is not undone
   startup [status | enable | disable]  start the daemon at login through an orch startup job named "machine"
                                      (needs orch: npm i -g @wadeck-app/orchestrator-cli). enable creates or refreshes
-                                     the job (run it again after moving machine); disable removes it; status shows
-                                     whether it exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
+                                     the job (run it again after moving machine) and starts the daemon now when it is not
+                                     running (--no-start: register only); disable removes it; status shows
+                                     whether the daemon runs, whether the job exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
@@ -228,6 +239,10 @@ Administration (enrollment through the relay, or by files):
                                      1 to 60), each probe attempt (connect and handshake) --wake-connect-timeout (default 3000 ms, 200 to 10000), --wake-settle seconds of
                                      pause after the answer (default 0). Only toward the subnet this machine shares with the peer.
                                      A flag changes that value and keeps the others. UNVERIFIED on real hardware: tune per peer
+  peer connect <machine> --shell cmd|ps|bash|sh | --no-shell
+                                     the default shell of \`machine run <machine>\` on this machine (strict, shown by --show, removed by
+                                     --no-shell or --remove). \`run\` uses --shell, else this default (said on stderr), else the platform
+                                     of this machine (cmd on Windows, sh elsewhere)
   peer connect <machine> --show      the effective values, (default) marks what nobody set
   peer connect <machine> --remove    forget the settings of that peer
   peer wake <machine>                send the wake now (the same steps), wait for the peer to answer, print the measured time
@@ -239,6 +254,19 @@ Administration (enrollment through the relay, or by files):
                                      lines are marked UNVERIFIED), the machine-side requirements (suspend not shut down, daemon
                                      at login, same LAN), how to find the MAC, and the \`machine peer connect\` command to run here.
                                      Plain text, reads local files only, sends nothing. Exit 0, 3 unknown machine
+  requests [--limit <n>] [--json]    the commands peers asked THIS machine to run that were refused because they are not allowed, grouped
+                                     by machine, shell and command (count, first and last time), newest first, with the exact command that
+                                     allows each (\`machine admin allow <this machine> ...\`, or \`machine policy allow ...\` in mode local).
+                                     Read-only: reads this machine's audit.log (hash chain verified, a broken chain is a warning with its
+                                     line), no daemon needed. A command the policy allows now is not listed. At most 100 groups (--limit)
+  requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
+                                     what happened here: runs (exit code, duration), refusals with their reason, session and document
+                                     events; chronological, the last 50 by default (--limit up to 1000); --since 2026-11-20 or 3h
+  requests <machine> [--limit <n>]   ADMIN machine only: ask that peer for its pending list over the authenticated channel (one read-only
+                                     frame signed with the admin key: the passphrase is asked, nothing is run or changed on the peer; the
+                                     peer audits it and allows 6 per minute). A peer that is too old says so: \`machine cli update\` there
+  requests --all [--limit <n>]       the same for every trusted peer, one passphrase; a peer that cannot be reached is reported, the others
+                                     are still shown (exit 1). Pending list only: the history of a machine is read on that machine
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy for this machine: signed by the admin (mode admin, the default) or by the local policy key (mode local)
@@ -289,7 +317,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -309,6 +337,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--no-wait') out.noWait = true;
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
+    else if (a === '--no-start') out.noStart = true;
     else if (a === '--full-access') out.fullAccess = true;
     else if (a === '--quiet') out.quiet = true;
     else if (a === '--verbose') out.verbose = true;
@@ -317,6 +346,11 @@ function parse(argv: string[]): Parsed {
     else if (a === '--remove') out.remove = true;
     else if (a === '--follow' || a === '-f') out.follow = true;
     else if (a === '--force-register') out.forceRegister = true;
+    else if (a === '--history') out.history = true;
+    else if (a === '--all') out.all = true;
+    else if (a === '--since') out.since = valueOf('--since');
+    else if (a === '--event') out.event = valueOf('--event');
+    else if (a === '--limit') out.limit = valueOf('--limit');
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
@@ -337,6 +371,7 @@ function parse(argv: string[]): Parsed {
     } else if (a === '--wake') out.wake = true;
     else if (a === '--no-wake') out.noWake = true;
     else if (a === '--show') out.show = true;
+    else if (a === '--no-shell') out.noShell = true;
     else if (a === '--type') out.type = valueOf('--type');
     else if (a === '--wake-mac') out.wakeMac = valueOf('--wake-mac');
     else if (a === '--wake-broadcast') out.wakeBroadcast = valueOf('--wake-broadcast');
@@ -431,7 +466,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, 'wake-info': 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, 'wake-info': 1, allowed: 1, requests: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -444,15 +479,20 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !policyAllow && !(peerConnect && args.remove && !args.list)) {
     return fail('--list and --remove only apply to `machine admin allow` and `machine policy allow` (`machine admin allow <machine> --list`, `machine policy allow --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
   }
-  if (args.peer !== undefined && !policyAllow) {
-    return fail('--peer only applies to `machine policy allow` (`machine policy allow --peer <machine> -- <command>` edits the own list of a peer)', EXIT.usage);
+  if (args.peer !== undefined && !policyAllow && command !== 'requests') {
+    return fail('--peer only applies to `machine policy allow` (`machine policy allow --peer <machine> -- <command>` edits the own list of a peer) and to `machine requests --history`', EXIT.usage);
+  }
+  const requestsOptions: Array<[string, unknown]> = [['--history', args.history], ['--all', args.all], ['--since', args.since], ['--event', args.event], ['--limit', args.limit]];
+  const requestsOption = requestsOptions.find(([, v]) => v !== undefined);
+  if (requestsOption !== undefined && command !== 'requests') {
+    return fail(`${requestsOption[0] as string} only applies to \`machine requests\` (the requests refused by this machine: pending list, or --history)`, EXIT.usage);
   }
   if (args.wake && args.noWake) return fail('--wake and --no-wake cannot be combined: --wake forces the wake of a peer that cannot be reached, --no-wake forbids it', EXIT.usage);
   if ((args.wake || args.noWake) && command !== 'run' && command !== 'ping') {
     return fail(`${args.wake ? '--wake' : '--no-wake'} only applies to \`machine run\` and \`machine ping\` (it wakes the peer when it cannot be reached; \`machine peer wake <machine>\` wakes it now)`, EXIT.usage);
   }
   if (!peerConnect) {
-    const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle]];
+    const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--no-shell', args.noShell || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle]];
     const used = settings.find(([, v]) => v !== undefined);
     if (used) return fail(`${used[0]} only applies to \`machine peer connect\` (\`machine peer connect <machine> ...\` sets how this machine reaches a peer: pinned addresses, Wake-on-LAN)`, EXIT.usage);
     if (args.addressList.length > 1) return fail('--address can be given only once here (the several-address form is `machine peer connect <machine> --address <host:port> --address <host:port>`)', EXIT.usage);
@@ -467,6 +507,13 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     const problem = checkHint(args.hint);
     if (!problem.ok) return fail(`--hint: ${problem.message}`, EXIT.usage);
   }
+  // --policy is a signed file for `admin distribute --policy <file>` and admin|local for join and setup (decision 70): nowhere else.
+  if (args.policy !== undefined && !(command === 'join' || command === 'setup' || (command === 'admin' && rest[0] === 'distribute'))) {
+    return fail('--policy only applies to `machine join` and `machine setup` (--policy admin|local: who manages the allow list of this machine) and to `machine admin distribute --policy <signed.json>`', EXIT.usage);
+  }
+  if (args.policy !== undefined && (command === 'join' || command === 'setup') && args.policy !== 'admin' && args.policy !== 'local') {
+    return fail(`--policy must be "admin" (the admin signs the allow list, the default) or "local" (this machine manages its own), got "${args.policy}"`, EXIT.usage);
+  }
   if (args.count !== undefined && command !== 'ping') return fail('--count only applies to `machine ping <machine>` (the number of rounds, 1 to 10)', EXIT.usage);
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
   if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && (rest[0] === 'approve' || rest.length === 0)))) {
@@ -478,6 +525,13 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (args.fullAccess && !(command === 'admin' && rest[0] === 'login')) {
     return fail('--full-access only applies to `machine admin login` (a FULL-ACCESS token, which can also manage tokens; without it the admin token is limited to machine rights)', EXIT.usage);
   }
+  if (args.noStart) {
+    const forEnable = command === 'startup' && rest[0] === 'enable';
+    if (!forEnable && command !== 'join' && command !== 'setup') {
+      return fail('--no-start only applies to `machine startup enable`, `machine join` and `machine setup` (with --auto-startup): it registers the startup job without starting the daemon now', EXIT.usage);
+    }
+    if (!forEnable && !args.autoStartup) return fail('--no-start on `machine join` and `machine setup` only has a meaning with --auto-startup (without it no startup job is created and no daemon is started)', EXIT.usage);
+  }
   if (args.autoStartup && command !== 'join' && command !== 'setup') return fail('--auto-startup only applies to `machine join` and `machine setup` (to start machine at login by itself, run `machine startup enable`)', EXIT.usage);
 
   if (args.promptTimeout !== undefined) {
@@ -486,8 +540,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || command === 'setup' || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable', EXIT.usage);
+    const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
   }
 
   // `machine policy` alone: no read-only view of the policy exists, so the help of the group (decision 66). Needs no configuration directory.
@@ -544,6 +598,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'startup') return await runStartupCommand(ctx);
     if (command === 'cli') return await runCliMeta(ctx);
     if (command === 'wake-info') return runWakeInfo(ctx);
+    // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
+    if (command === 'requests' && rest.length === 0 && args.all !== true) return await runRequests(ctx);
 
     // Bare groups (decision 66): `machine peer` shows what `machine list` shows, `machine alias` what `machine alias list` shows.
     const bareView = command === 'peer' && rest.length === 0;
@@ -572,10 +628,13 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
       case 'status': {
         const r = (await client.send('status')) as StatusAnswer | NotInitialized;
         if (notInitialized(r)) return fail(r.message);
+        // Read only and local (daemon.port.json and a live pid): `status` never starts the daemon and asks no network.
+        const daemon = readDaemonState(configDir, io.startup?.isAlive);
         const lines = [
           `${r.name} (${r.uuid})`,
           `version: ${r.version}`,
           `config: ${r.configDir}`,
+          ...daemonStateText(daemon, 'start it with machine startup enable (at login) or machine daemon').trimEnd().split('\n'),
           r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
           r.policyMode === 'local'
             ? `policy mode: local (this machine manages its own allow list, policy key ${r.localPolicyKeyId ?? 'unknown: policy-mode.json is damaged'})`
@@ -585,7 +644,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
         ];
-        emit(r, `${lines.join('\n')}\n`);
+        emit({ ...r, daemon }, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {

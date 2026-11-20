@@ -9,6 +9,8 @@ app-core module `machine` (title "Machine"): admin pages of the machine network.
 | `GET /api/modules/machine/status` | local daemon `status` | status, or `{ status, kind, error }` |
 | `GET /api/modules/machine/machines` | local daemon `list` | rows for the Machines page (no presence or addresses yet) |
 | `GET /api/modules/machine/candidacies` | relay, admin token | candidacies with the recomputed code, `count` for the tab indicator |
+| `GET /api/modules/machine/requests` | local daemon `requests` (the audit log, same reader as `machine requests`) | Requests page: pending rows (ages, next command), history rows, chain state, `count` for the tab indicator (decision 73) |
+| `POST /api/modules/machine/requests/remote` | local daemon `remoteRequests` | sensitive (app-core PIN) and `x-machine-module`; body `{ machine, request }`, `request` = the `requests-list` document SIGNED IN THE BROWSER with the admin key; answers the peer rows. No page component signs it yet (decision 74) |
 | `GET /api/modules/machine/health` | config folder, relay (`/api/whoami`), daemon | update test of app-core-cli (decision 65): `{ ok, checks[] }` |
 
 - Config dir: `MACHINE_CONFIG_DIR`, else `~/.config/machine` (same as machine-cli).

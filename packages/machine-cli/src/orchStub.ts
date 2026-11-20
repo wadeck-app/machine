@@ -10,6 +10,8 @@ export interface OrchReply {
   code?: number;
   stdout?: string;
   stderr?: string;
+  /** A file the stub writes before it answers (what a started daemon does: its port file). */
+  writeFile?: { path: string; content: string };
 }
 
 export interface OrchStub {
@@ -30,6 +32,7 @@ fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify(process.ar
 if (process.env.ORCH_STUB_WATCH) fs.appendFileSync(path.join(__dirname, 'watch.log'), (fs.existsSync(process.env.ORCH_STUB_WATCH) ? 'exists' : 'missing') + '\\n');
 const script = JSON.parse(fs.readFileSync(path.join(__dirname, 'script.json'), 'utf8'));
 const reply = script[process.argv[2]] || { code: 99, stderr: 'stub: no scripted reply for ' + process.argv[2] };
+if (reply.writeFile) fs.writeFileSync(reply.writeFile.path, reply.writeFile.content);
 if (reply.stdout) process.stdout.write(reply.stdout);
 if (reply.stderr) process.stderr.write(reply.stderr);
 process.exit(reply.code || 0);

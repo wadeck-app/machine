@@ -243,22 +243,50 @@ export function entryKey(scope: string, entry: CommandRequest & { limits?: Limit
 
 export type Decision =
   | { allowed: true; entryKey: string; entry: PolicyEntry }
-  | { allowed: false; reason: 'invalid-request' | 'not-listed' | 'expired' | 'exhausted'; message: string };
+  | {
+      allowed: false;
+      reason: 'invalid-request' | 'not-listed' | 'expired' | 'exhausted';
+      message: string;
+      /** `not-listed` only: the other shells under which the SAME command string is listed for this peer (the message says so). */
+      allowedShells?: Shell[];
+    };
+
+/** A command as written in a command line the user can paste: quoted when it holds spaces or quotes (the same rule as `machine run`). */
+export const commandForHint = (command: string): string => (/[\s"'`]/.test(command) ? `"${command}"` : command);
+
+/** The list that applies to `peerUuid`: its own list when it has one (it replaces the default), else the default list. */
+export function effectiveList(body: PolicyBody, peerUuid: string): { entries: PolicyEntry[]; own: boolean } {
+  const own = Object.hasOwn(body.peers, peerUuid);
+  return { entries: own ? (body.peers[peerUuid] as PolicyEntry[]) : body.defaults, own };
+}
 
 /**
  * Exact match only (no normalization, no pattern). A peer with its own list uses only that list.
  * `usage` returns how many calls were already accepted for an entry key; the caller records a use after accepting.
+ * `selfName`: the name of this machine, written in the hint of a `not-listed` refusal (absent: `<machine>`).
  */
-export function authorize(body: PolicyBody, peerUuid: string, request: CommandRequest, now: number, usage: (key: string) => number, mode: PolicyMode = 'admin'): Decision {
+export function authorize(body: PolicyBody, peerUuid: string, request: CommandRequest, now: number, usage: (key: string) => number, mode: PolicyMode = 'admin', selfName?: string): Decision {
   const who = mode === 'local' ? 'the owner of this machine (`machine policy allow` here)' : 'the admin';
   if (!SHELLS.includes(request.shell) || typeof request.command !== 'string' || request.command.length === 0 || request.command.length > MAX_COMMAND || !PRINTABLE_ASCII.test(request.command)) {
     return { allowed: false, reason: 'invalid-request', message: 'request refused: the shell must be known and the command must be 1 to 2048 printable ASCII characters' };
   }
-  const own = Object.hasOwn(body.peers, peerUuid);
-  const list = own ? (body.peers[peerUuid] as PolicyEntry[]) : body.defaults;
+  const { entries: list, own } = effectiveList(body, peerUuid);
   const scope = own ? peerUuid : 'default';
   const entry = list.find(e => e.shell === request.shell && e.command === request.command);
   if (entry === undefined) {
+    // What this refusal reveals (T-03): only entries whose command string equals the one the caller just sent, in the list that applies to this
+    // very caller, and only their shell names. Never another command of the list: the caller learns nothing it did not already write.
+    const otherShells = [...new Set(list.filter((e) => e.command === request.command && e.shell !== request.shell).map((e) => e.shell))];
+    if (otherShells.length > 0) {
+      const name = selfName ?? '<machine>';
+      const first = otherShells[0] as Shell;
+      return {
+        allowed: false,
+        reason: 'not-listed',
+        allowedShells: otherShells,
+        message: `"${request.command}" is allowed with shell ${otherShells.join(' or ')}, not with ${request.shell}: run machine run ${name} --shell ${first} -- ${commandForHint(request.command)} (or: machine peer connect ${name} --shell ${first} to make it the default)`,
+      };
+    }
     return {
       allowed: false,
       reason: 'not-listed',

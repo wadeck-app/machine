@@ -7,7 +7,7 @@ import { join } from 'node:path';
 // The token is read per call, kept in a local variable and never part of an error.
 
 const TIMEOUT_MS = 5000;
-const COMMAND = /^[a-z][a-z0-9-]*$/;
+const COMMAND = /^[a-z][a-zA-Z0-9-]*$/;
 
 /** The daemon cannot be reached: not running, stale or corrupt port file, missing token file. Status 503 for the page. */
 export class DaemonUnreachableError extends Error {
@@ -71,14 +71,15 @@ function readToken(configDir: string): string {
   }
 }
 
-function post(port: number, command: string, token: string, timeoutMs: number): Promise<{ status: number; text: string }> {
+function post(port: number, command: string, token: string, timeoutMs: number, payload?: unknown): Promise<{ status: number; text: string }> {
+  const body = payload === undefined ? '' : JSON.stringify(payload);
   return new Promise((resolve, reject) => {
     const req = request({
       hostname: '127.0.0.1',
       port,
       method: 'POST',
       path: `/${command}`,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': 0 },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     }, (res) => {
       let text = '';
       res.on('data', (chunk: Buffer) => { text += chunk.toString(); });
@@ -86,17 +87,17 @@ function post(port: number, command: string, token: string, timeoutMs: number): 
     });
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)));
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
 }
 
-export async function callDaemon(configDir: string, command: string, timeoutMs: number = TIMEOUT_MS): Promise<unknown> {
-  if (!COMMAND.test(command)) throw new Error(`invalid daemon command "${command}": expected a lower-case word`);
+export async function callDaemon(configDir: string, command: string, timeoutMs: number = TIMEOUT_MS, payload?: unknown): Promise<unknown> {
+  if (!COMMAND.test(command)) throw new Error(`invalid daemon command "${command}": expected a word starting with a lower-case letter (letters, digits, hyphens)`);
   const port = readPort(configDir);
   const token = readToken(configDir);
   let answer: { status: number; text: string };
   try {
-    answer = await post(port, command, token, timeoutMs);
+    answer = await post(port, command, token, timeoutMs, payload);
   } catch (e) {
     throw new DaemonUnreachableError(`the machine daemon does not answer on 127.0.0.1:${port} (${(e as Error).message}): the port file may be stale; ${START_ADVICE}`);
   }

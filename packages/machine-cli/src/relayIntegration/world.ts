@@ -142,7 +142,8 @@ export async function startWorld(name: string, relayOptions: { maxMachinesPerTok
           return answer;
         },
         ask: async (label) => {
-          const answer = visible.shift();
+          // The "Allow list" question of join and setup (decision 70) is the last one of those commands: unplanned, the person presses Enter (the admin).
+          const answer = visible.shift() ?? (label.startsWith('Choice [1]') ? '' : undefined);
           if (answer === undefined) throw new Error(`unexpected question in \`machine ${args.join(' ')}\`: "${label}" (no answer was planned)`);
           asked.push(`${label.trim()} ${answer}`);
           return answer;

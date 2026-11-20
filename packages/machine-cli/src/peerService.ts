@@ -1,7 +1,12 @@
 import {
   ReplayCache,
+  MAX_REQUESTS_LISTS_PER_MINUTE,
+  buildRequestsListAnswer,
+  verifyRequestsList,
   parseRevocationHello,
   shouldSendRevocations,
+  type RequestsListAnswer,
+  type RequestsListData,
   authorize,
   newRequest,
   signRequest,
@@ -14,11 +19,12 @@ import {
   type SigningKeyPair,
 } from '@wadeck-app/machine-core';
 import { runCommand, type RunOptions, type RunResult } from '@wadeck-app/machine-exec';
-import { listenForPeers, type PeerListener, type PeerSession } from '@wadeck-app/machine-transport';
+import { DEFAULT_MAX_FRAME_BYTES, listenForPeers, type PeerListener, type PeerSession } from '@wadeck-app/machine-transport';
 import type { PeerRecord } from './directory.js';
 import type { MachineIdentity } from './identity.js';
 import { MAX_CATCHUPS_PER_MINUTE, RATE_LIMITED_MESSAGE, UNAVAILABLE_FRAME_MESSAGE, listsOfFrame, type RevocationSyncDeps } from './revocationSync.js';
 import { MAX_FUTURE_SECONDS } from './network.js';
+import { noPolicyMessage } from './noPolicy.js';
 
 // The peer service: what a machine does with an authenticated peer connection. Every request goes through the same
 // gates, in this order: signature and addressing, start time, authenticated source, replay, policy, concurrency, audit,
@@ -65,14 +71,24 @@ export interface PeerServiceDeps {
   revocation?: RevocationSyncDeps;
   /** Frame cap of the peer channel (default: the transport's). Also bounds the revocation list a peer can hand over. */
   maxFrameBytes?: number;
+  /** The read-only `requests-list` exchange (decision 74). Absent: it is an unknown message, as with an older build. */
+  requests?: RequestsListDeps;
+}
+
+export interface RequestsListDeps {
+  /** The pinned admin public key; undefined when this machine is not enrolled. */
+  adminPublicKey: () => string | undefined;
+  /** The pending groups of this machine's audit log, at most `limit` (the reader of machine-core, over audit.log). */
+  list: (limit: number) => Omit<RequestsListData, 'id' | 'now'>;
 }
 
 export type PeerAnswer =
-  | { type: 'result'; id: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean; outputNotUtf8: boolean; durationMs: number }
-  | { type: 'refused'; id?: string; reason: string; message: string };
+  | { type: 'result'; id: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean; outputNotUtf8: boolean; decodedFrom?: string; durationMs: number }
+  | { type: 'refused'; id?: string; reason: string; message: string; allowedShells?: string[] };
 
-const NO_LOCAL_POLICY_MESSAGE = 'no policy is installed on this machine: it manages its own allow list and every command is refused until its owner allows one (`machine policy allow -- <command>` on this machine)';
-const NO_POLICY_MESSAGE ='no policy is installed on this machine: every command is refused until the admin signs and installs one (`machine admin sign-policy`)';
+/** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
+type ServiceAnswer = PeerAnswer | RequestsListAnswer;
+
 
 interface SyncState {
   helloSeen: boolean;
@@ -160,7 +176,7 @@ class PeerService {
         this.helloMissing.add(session.peerId);
         this.recordQuiet({ event: 'revocation-hello-missing', source: session.peerId });
       }
-      let answer: PeerAnswer;
+      let answer: ServiceAnswer;
       try {
         answer = await this.handle(session, message);
       } catch (e) {
@@ -304,14 +320,64 @@ class PeerService {
     }
   }
 
-  private refuse(session: PeerSession, id: string | undefined, reason: string, message: string, detail: Record<string, Json> = {}): PeerAnswer {
+  private refuse(session: PeerSession, id: string | undefined, reason: string, message: string, detail: Record<string, Json> = {}, allowedShells?: string[]): PeerAnswer {
     this.recordQuiet({ event: 'refused', source: session.peerId, reason, ...(id ? { id } : {}), ...detail });
-    return { type: 'refused', ...(id ? { id } : {}), reason, message };
+    return { type: 'refused', ...(id ? { id } : {}), reason, message, ...(allowedShells !== undefined ? { allowedShells } : {}) };
   }
 
-  private async handle(session: PeerSession, message: unknown): Promise<PeerAnswer> {
+  /** Starts of `requests-list` exchanges per peer in the last minute, and the minute in which a limit was last audited. */
+  private readonly listExchanges = new Map<string, number[]>();
+  private readonly listRateAudited = new Map<string, number>();
+
+  private listRateLimited(peerId: string): boolean {
+    const now = this.deps.now();
+    const recent = (this.listExchanges.get(peerId) ?? []).filter((t) => now - t < 60);
+    if (recent.length >= MAX_REQUESTS_LISTS_PER_MINUTE) {
+      this.listExchanges.set(peerId, recent);
+      const last = this.listRateAudited.get(peerId);
+      if (last === undefined || now - last >= 60) {
+        this.listRateAudited.set(peerId, now);
+        this.recordQuiet({ event: 'requests-list-rate-limited', source: peerId, limit: MAX_REQUESTS_LISTS_PER_MINUTE });
+      }
+      return true;
+    }
+    recent.push(now);
+    this.listExchanges.set(peerId, recent);
+    return false;
+  }
+
+  /** The gates of a `requests-list` request: admin signature, target, connection, start time, replay, rate, audit, then the read. */
+  private requestsList(session: PeerSession, message: unknown, requests: RequestsListDeps): ServiceAnswer {
+    const now = this.deps.now();
+    const request = (message as { request?: unknown }).request;
+    const claimedId = (request as { body?: { id?: unknown } } | null)?.body?.id;
+    const id = typeof claimedId === 'string' ? claimedId : undefined;
+    const adminPublicKey = requests.adminPublicKey();
+    if (adminPublicKey === undefined) return this.refuse(session, id, 'no-admin', 'this machine has no admin key pinned: it cannot tell who may list its requests');
+    const verified = verifyRequestsList(request, { adminPublicKey, selfUuid: this.deps.self.uuid, peerUuid: session.peerId, now });
+    if (!verified.ok) return this.refuse(session, id, verified.reason, verified.message);
+    const { body } = verified;
+    if (body.issuedAt < this.startedAt) return this.refuse(session, body.id, 'predates-start', 'request refused: it was issued before this machine\'s daemon started; send it again');
+    const fresh = this.replay.accept(session.peerId, body.nonce, body.expiresAt, now);
+    if (!fresh.ok) return this.refuse(session, body.id, fresh.reason, fresh.message);
+    if (this.listRateLimited(session.peerId)) return this.refuse(session, body.id, 'rate-limited', `too many requests lists from this peer (limit ${MAX_REQUESTS_LISTS_PER_MINUTE} per minute): try again in a minute`);
+    // No audit, no disclosure: the exchange is recorded BEFORE the log is read. The commands are not recorded here (they are already in the log).
+    try {
+      this.recordStrict({ event: 'requests-list', source: session.peerId, id: body.id, limit: body.limit });
+    } catch (e) {
+      this.problem(`cannot write the audit log (${(e as Error).message}): the requests list is refused until it works again`);
+      return this.refuse(session, body.id, 'audit-unavailable', 'this machine cannot write its audit log; nothing was sent. Fix the disk or permissions of the machine\'s audit log');
+    }
+    return buildRequestsListAnswer({ id: body.id, now, ...requests.list(body.limit) }, (this.deps.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES) - 1024);
+  }
+
+  private async handle(session: PeerSession, message: unknown): Promise<ServiceAnswer> {
     const { deps } = this;
     const now = deps.now();
+    // `requests-list` (decision 74): read-only, admin-signed. Without `deps.requests` it is an unknown message, exactly as for an older build.
+    if (deps.requests && typeof message === 'object' && message !== null && (message as { type?: unknown }).type === 'requests-list') {
+      return this.requestsList(session, message, deps.requests);
+    }
     if (typeof message !== 'object' || message === null || (message as { type?: unknown }).type !== 'run') {
       return this.refuse(session, undefined, 'unknown-message', 'this machine only understands {"type":"run"} requests');
     }
@@ -335,11 +401,12 @@ class PeerService {
 
     const policy = deps.policy();
     const policyMode = deps.policyMode?.() ?? 'admin';
-    if (!policy) return this.refuse(session, body.id, 'no-policy', policyMode === 'local' ? NO_LOCAL_POLICY_MESSAGE : NO_POLICY_MESSAGE);
+    // The shell and the command are recorded (they passed verifyRequest: known shell, 1 to 2048 printable ASCII): `machine requests` lists them.
+    if (!policy) return this.refuse(session, body.id, 'no-policy', noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), { shell: body.shell, command: body.command });
 
-    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode);
+    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode, deps.self.name);
     if (!decision.allowed) {
-      return this.refuse(session, body.id, decision.reason, decision.message, { shell: body.shell, command: body.command });
+      return this.refuse(session, body.id, decision.reason, decision.message, { shell: body.shell, command: body.command }, decision.allowedShells);
     }
     if (this.inFlight >= (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)) {
       return this.refuse(session, body.id, 'busy', 'this machine is already running its maximum number of commands; retry shortly');

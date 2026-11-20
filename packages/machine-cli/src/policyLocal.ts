@@ -6,6 +6,7 @@ import {
   adminKeyHint,
   checkHint,
   checkPassphrase,
+  commandForHint,
   decryptAdminKey,
   encryptAdminKey,
   generateSigningKeyPair,
@@ -358,5 +359,9 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
   const signed = signPolicy(body, pair.privateKeyPkcs8, 'local');
   installPolicy(configDir, signed, { now: o.now() });
   o.say(`[ok] policy version ${body.version} signed with the local policy key and installed on this machine: \`machine policy allow --list\` shows it, the daemon applies it within seconds\n`);
+  // The shell is part of the exact entry and the caller may run another platform: the peer types it (decision 71).
+  if (o.mode === 'allow') {
+    o.say(`Then, from another machine: machine run ${self.name} --shell ${shell} -- ${commandForHint(command)} (or make ${shell} its default there: machine peer connect ${self.name} --shell ${shell})\n`);
+  }
   return { kind: 'signed', version: body.version, keyId: mode.localKeyId };
 }

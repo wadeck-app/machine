@@ -40,13 +40,14 @@ The name of a machine is its computer name in lowercase (`Midgard2.local` become
 machine setup relay.example.org
 ```
 
-`setup` prints `Step n/5` headers:
+`setup` prints `Step n/6` headers:
 
 1. Identity: created from the computer name.
 2. Admin passphrase: typed twice (12 characters minimum, a warning below 20), then an optional hint (Enter = none). `--generate` makes a random one, shown once. The passphrase cannot be recovered.
 3. Relay login: prints a relay login code such as `X35M-M87M`. Open the relay console (Tokens page), compare the code and the source address, then approve once. This gives MACHINE ADMIN rights (can approve machines, cannot manage tokens).
 4. Enrolment of this machine: it approves itself with the passphrase just chosen.
-5. Summary and next steps.
+5. Allow list: who manages what peers may run on this machine. `[1]` the admin (default, Enter): nothing to set up here, `machine admin allow <this machine> -- <command>` on the admin machine. `[2]` this machine itself: independent of any other machine, a local passphrase is chosen now (the `machine policy local enable` flow). `--policy admin|local` answers without a question (required in scripts; without a terminal and without the flag the default is `admin`, with a warning). The summary and `machine status` show the mode.
+6. Summary and next steps.
 
 Run it again after an interruption: what exists is kept.
 
@@ -64,7 +65,7 @@ It prints a relay login code (machine level: it only gives this machine access t
 machine admin approve
 ```
 
-It shows the new machine, asks y/N and the admin passphrase, then prints a security code. With several pending machines it lists them: pass the id (`machine admin approve <id>`). A candidacy expires after 15 minutes. After Ctrl-C or a timeout: `machine join --resume`.
+Once enrolled, `join` asks the same "Allow list" question as `setup` (step before the end; `--policy admin|local` answers it; not asked with `--no-wait`). On the admin machine, `approve` shows the new machine, asks y/N and the admin passphrase, then prints a security code. With several pending machines it lists them: pass the id (`machine admin approve <id>`). A candidacy expires after 15 minutes. After Ctrl-C or a timeout: `machine join --resume`.
 
 ### The three kinds of code
 
@@ -87,7 +88,15 @@ machine startup enable
 machine startup status
 ```
 
-`join` and `setup` never do it by themselves unless you pass `--auto-startup`.
+`enable` registers the orch job and starts the daemon now when it is not running (a startup job alone only starts at the next login of orch). Expect `[ok] daemon started (peer port N)`; a daemon that already runs is left alone. `--no-start` registers the job only. On Linux (and everywhere) check it with `machine status` (`daemon: running ...`) or `machine startup status`.
+
+If you see `[warn] the job is registered but the daemon did not start ...`, or `machine status` says `daemon: NOT running`:
+
+- Run `machine daemon` in a terminal: it shows the error that stopped it (Ctrl-C to end it).
+- Read `machine cli logs` and `orch logs --job machine`.
+- Once fixed, start it with `orch restart-job machine` (or `machine startup enable` again). Do not use `orch trigger machine`: it ignores the liveness check and starts a second daemon.
+
+`join` and `setup` never do it by themselves unless you pass `--auto-startup` (which also starts the daemon; `--no-start` skips that).
 
 ## 3. Allow commands
 
@@ -103,6 +112,7 @@ machine admin allow laptop --remove -- uptime
 - It shows the difference, asks y/N and the admin passphrase, signs, and sends the policy through the relay inbox.
 - `--shell cmd|ps|bash|sh`: when omitted, the shell is the one of the platform of the ADMIN machine (the command says so with an `[info]` line). From Windows to a Linux target, pass `--shell sh`.
 - The command is matched exactly as written: a different spacing or a different shell is a different entry.
+- `machine allowed laptop` shows what is allowed there per the last policy signed on this machine (entries per shell, version, date). Read-only, no passphrase. The list installed on the target is asked there: `machine policy allow --list`.
 - `--out <file>` writes the signed policy to a file instead of sending it (no admin relay token needed); install it on the target with `machine policy install <signed.json>` or send it with `machine admin distribute --policy <signed.json>`.
 - `machine admin allow` assumes the target has no policy signed elsewhere. A target that holds one signed from another machine refuses with `policy changed, reload`.
 
@@ -120,6 +130,17 @@ machine admin sign-policy draft.json --out signed.json
 ```
 
 `version` must be `baseVersion + 1`, and `baseVersion` the version currently applied on the target. `machine resolve <machine>` shows which machine a reference means.
+
+### Requests: what peers asked and could not run
+
+```
+machine requests                      this machine: commands refused because they are not allowed, newest first, with the command that allows each
+machine requests --history [--peer laptop] [--since 3h] [--event refused] [--limit 100]   runs (exit code, duration), refusals, session events
+machine requests laptop               admin machine: the pending list of a peer (admin passphrase; nothing runs on the peer)
+machine requests --all                every peer, one passphrase; unreachable peers are reported
+```
+
+`machine requests` reads the hash-chained audit log of this machine (no daemon needed). A command the policy allows now is not listed. A broken log is a warning with its line, and what follows is marked `[UNVERIFIED]`. The remote list needs the admin key here and peers that run this version; it shows the pending requests only (the history is read on each machine). The Requests page of the app-core module shows the same for this machine.
 
 ### Who manages the allow list of a machine
 
@@ -150,6 +171,8 @@ machine policy delegate               # give the list back to the admin
 ```
 machine run laptop -- ls /var/log               # runs one allowed command on a peer
 machine run laptop --shell sh -- uptime
+machine peer connect laptop --shell sh          # once: the default shell of laptop on this machine
+machine allowed laptop                          # what is allowed there (policy signed here)
 machine run laptop --address 192.168.1.50:47921 -- uptime   # skip the relay record
 machine ping                                    # this machine -> relay, one line per step
 machine ping laptop                             # real authenticated channel to a peer; runs nothing
@@ -157,6 +180,8 @@ machine ping laptop --count 3
 machine list                                    # this machine and its peers, online state per the relay
 machine status                                  # identity, enrollment, policy, revocations
 ```
+
+The shell is part of the exact entry. `run` uses `--shell`, else the default set with `machine peer connect <machine> --shell` (said on stderr), else the platform of the caller (cmd on Windows, sh elsewhere). A Windows caller reaching a Linux target therefore needs `--shell sh` or the default. When a command is refused as `not-listed` but exists under another shell, the refusal names that shell (only the command you sent, never the list); the caller also prints what the policy signed here allows (10 entries at most).
 
 - `run` needs no local daemon, but the daemon of the TARGET must run (`machine startup enable` there). `machine list` says so per peer.
 - `run` returns the exit code of the remote command. Its own failures (refused, unknown machine, no connection) are 255 with the reason on stderr.
@@ -311,6 +336,7 @@ machine startup disable     # stop starting at login, and end the running daemon
 | Connection refused (`ECONNREFUSED`) | The host answered, no daemon listens | Start the daemon there: `machine startup enable` |
 | Timeout, no answer | Host asleep, firewall, or wrong address | Wake it (section 5), check the firewall and the address; `--address` or `peer connect --address` to pin a good one |
 | Another key answers | Wrong address | Pin the right one with `machine peer connect <machine> --address ...` |
+| `refused by <machine>: no-policy: no policy is installed on this machine yet` | The target has no policy yet. Right after `machine admin allow` the policy is still in the relay inbox of the target: its daemon reads it within about a minute (10 s for the first 5 minutes after its daemon starts) | Retry shortly. `machine run` says `a policy (version N) ... was signed here ... it is not installed yet` when it knows one is on its way. Still refused after a few minutes: is the daemon running there (`machine list`, `machine startup enable` on the target)? Is the target in mode local (`machine status` there)? Otherwise `machine admin allow <machine> -- <command>` on the admin machine |
 | Refused during authentication | Not registered there, revoked, clocks apart, or pair secret mismatch | `machine status` on both machines, check the clocks, approve again if revoked |
 | `policy changed, reload: this machine is at version N, the document was edited from version M` | The target holds a policy signed from another machine | Read its version with `machine status` there, then sign a draft whose `baseVersion` is that version (section 3) |
 | `policy refused (wrong-mode): this machine manages its own allow list` | The target is in policy mode local: it refuses admin-signed policies | On the target, `machine policy allow -- <command>`, or `machine policy delegate` to give the list back to the admin |
@@ -319,6 +345,7 @@ machine startup disable     # stop starting at login, and end the running daemon
 | `too_many_machines` at `admin approve` | The relay limit per token (10 by default) | `machine admin forget-relay-record <machine>` for machines that are gone |
 | Security codes differ | Possible interference on the relay | Answer `N`, then `machine admin revoke <name>` on the admin machine |
 | Wake does nothing although `Wake-on: g` | No physical link: `ip -br link` shows `NO-CARRIER`, or `cat /sys/class/net/<iface>/carrier` prints `0`. Wake-on-LAN cannot work without a link | Check the cable, the port and the router. `sudo dmesg \| grep -i <driver or iface>` shows the link up and down events |
+| Accents come out as `?` or U+FFFD, `[warn] the output is not valid UTF-8 (probably an OEM code page)` | A Windows target writes its output in a code page that is not UTF-8 and is not one the daemon knows (or its page could not be read). Normally the daemon converts the OEM page of the target (437, 850, 852, 858, 860, 863, 865, 1252) and the caller prints `[info] output decoded from the target's code page cp850` instead | Nothing to do for the `[info]` line. For the `[warn]`: the command may set its own encoding (`chcp 65001`, or `[Console]::OutputEncoding` in `ps`), with the policy entry naming that exact string |
 | A woken machine does not answer | See section 5 | `machine wake-info <machine>`; check `Wake-on: g`, the wired MAC, suspend rather than shutdown, the BIOS setting |
 
 ## 8. Where things are stored

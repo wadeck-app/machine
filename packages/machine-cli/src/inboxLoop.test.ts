@@ -801,6 +801,59 @@ describe('the inbox loop: the relay misbehaves or is not ready', () => {
     loop.stop();
     expect(timer.pending()).toBe(0);
   });
+
+  // Decision 70: a machine without policy polls faster, for a bounded time.
+  describe('fast cadence while a policy is awaited', () => {
+    function fastLoop(needs: () => boolean, clock: { t: number }) {
+      const timer = fakeTimer();
+      const loop = startInboxLoop({
+        configDir: dirOf('laptop'),
+        self: readMachine(dirOf('laptop')),
+        client: createRelayClient({ baseUrl: relay.url, token: relay.token }),
+        audit: new FileAuditLog(join(dirOf('laptop'), 'audit.log')),
+        now: () => clock.t,
+        log: (line) => logs.push(line),
+        timer,
+        needsPolicy: needs,
+      });
+      loops.push(loop);
+      return { loop, timer };
+    }
+
+    it('10 s while a policy is needed, 60 s once the 5 minute window is over, 60 s when none is needed', async () => {
+      const clock = { t: nowSeconds() };
+      let needs = true;
+      const { loop, timer } = fastLoop(() => needs, clock);
+      await loop.ready;
+      expect(timer.delays).toEqual([10_000]);
+      clock.t += 120;
+      timer.fire();
+      await loop.runOnce();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(timer.delays.at(-1)).toBe(10_000);
+      clock.t += 200;
+      timer.fire();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(timer.delays.at(-1)).toBe(60_000);
+      loop.stop();
+      needs = false;
+    });
+
+    it('60 s when the policy arrived (needsPolicy false)', async () => {
+      const { loop, timer } = fastLoop(() => false, { t: nowSeconds() });
+      await loop.ready;
+      expect(timer.delays).toEqual([60_000]);
+    });
+
+    it('a needsPolicy that throws: normal cadence, said once', async () => {
+      const { loop, timer } = fastLoop(() => {
+        throw new Error('policy.json unreadable');
+      }, { t: nowSeconds() });
+      await loop.ready;
+      expect(timer.delays).toEqual([60_000]);
+      expect(logs.filter((l) => /cannot tell whether a policy is installed \(policy.json unreadable\)/.test(l))).toHaveLength(1);
+    });
+  });
 });
 
 describe('the daemon starts the loop only when the machine joined a relay', () => {

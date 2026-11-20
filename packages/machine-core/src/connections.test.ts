@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseConnections, serializeConnections, type Connections } from './connections.js';
+import { parseConnections, resolveRunShell, serializeConnections, type Connections } from './connections.js';
 
 const UUID = '3f2a9c10-1b2c-4d3e-8f40-0123456789ab';
 
@@ -12,6 +12,35 @@ const valid = (): unknown => ({
       wake: { mac: 'AA-BB-CC-DD-EE-01', broadcast: '192.168.1.255', waitSeconds: 120 },
     },
   },
+});
+
+describe('default shell of a peer', () => {
+  it('reads and serializes a valid shell', () => {
+    const c = parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', shell: 'sh' } } });
+    expect(c.peers[UUID]).toEqual({ type: 'direct', shell: 'sh' });
+    expect(parseConnections(JSON.parse(serializeConnections(c)) as unknown)).toEqual(c);
+  });
+
+  it.each(['zsh', 'SH', '', 7, null])('refuses the shell %j, naming the allowed ones', (shell) => {
+    expect(() => parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', shell } } })).toThrow(/shell.*cmd, ps, bash, sh/);
+  });
+});
+
+describe('resolveRunShell (precedence: --shell, the default of the peer, the platform of the caller)', () => {
+  it('an explicit --shell wins over the default of the peer', () => {
+    expect(resolveRunShell({ explicit: 'ps', peerDefault: 'sh', platform: 'win32' })).toEqual({ shell: 'ps', source: 'explicit' });
+  });
+  it('the default of the peer wins over the platform', () => {
+    expect(resolveRunShell({ peerDefault: 'sh', platform: 'win32' })).toEqual({ shell: 'sh', source: 'peer-default' });
+  });
+  it('the platform of the caller is the last resort', () => {
+    expect(resolveRunShell({ platform: 'win32' })).toEqual({ shell: 'cmd', source: 'platform' });
+    expect(resolveRunShell({ platform: 'linux' })).toEqual({ shell: 'sh', source: 'platform' });
+    expect(resolveRunShell({ platform: 'darwin' })).toEqual({ shell: 'sh', source: 'platform' });
+  });
+  it('refuses an unknown explicit shell instead of falling back', () => {
+    expect(() => resolveRunShell({ explicit: 'zsh', peerDefault: 'sh', platform: 'linux' })).toThrow(/unknown shell "zsh": expected one of cmd, ps, bash, sh/);
+  });
 });
 
 describe('parseConnections', () => {

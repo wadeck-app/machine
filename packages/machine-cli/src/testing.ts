@@ -13,7 +13,16 @@ import { sealTo } from '@wadeck-app/machine-core';
 
 // Test helpers (not shipped logic): drive the CLI in-process, and provision two machines that trust each other.
 
+/**
+ * Like `cliRaw`, but `join` and `setup` get `--policy admin` unless the test names one (or posts only, `--no-wait`): the "Allow list" question
+ * (decision 70) is not what most tests are about. The tests of that question call `cliRaw`.
+ */
 export async function cli(configDir: string, args: string[], prompt?: (label: string) => Promise<string>, extraIo: Partial<CliIo> = {}): Promise<{ code: number; out: string; err: string }> {
+  const asksAllowList = (args[0] === 'join' || args[0] === 'setup') && !args.includes('--policy') && !args.includes('--no-wait');
+  return cliRaw(configDir, asksAllowList ? [...args.slice(0, args.includes('--') ? args.indexOf('--') : args.length), '--policy', 'admin', ...args.slice(args.includes('--') ? args.indexOf('--') : args.length)] : args, prompt, extraIo);
+}
+
+export async function cliRaw(configDir: string, args: string[], prompt?: (label: string) => Promise<string>, extraIo: Partial<CliIo> = {}): Promise<{ code: number; out: string; err: string }> {
   let out = '';
   let err = '';
   // Everything after "--" is the remote command: options must come before it.

@@ -143,6 +143,15 @@ describe('machine policy allow (mode local)', () => {
     expect(JSON.parse(readFileSync(join(b, 'policy.json'), 'utf8')).body.version).toBe(1);
   });
 
+  it('ends with the exact `machine run` a PEER types: the shell is named, because the peer may run another platform (decision 71)', async () => {
+    const r = await allow(['--shell', 'sh', '--', 'ls -la']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('Then, from another machine: machine run laptop --shell sh -- "ls -la" (or make sh its default there: machine peer connect laptop --shell sh)');
+    // A removal has nothing to run.
+    const removed = await allow(['--remove', '--shell', 'sh', '--', 'ls -la']);
+    expect(removed.out).not.toContain('Then, from another machine');
+  });
+
   it('the shell defaults to the platform of THIS machine and says so', async () => {
     const r = await allow(['--', 'whoami']);
     expect(r.code, r.err).toBe(0);

@@ -25,6 +25,8 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+const PLATFORM_SHELL = process.platform === 'win32' ? 'cmd' : 'sh';
+const OTHER_SHELL = PLATFORM_SHELL === 'cmd' ? 'sh' : 'cmd';
 const connect = (args: string[]) => cli(a, ['peer', 'connect', ...args]);
 const fileOf = (): { v: number; peers: Record<string, Record<string, unknown>> } => JSON.parse(readFileSync(connectionsFile(a), 'utf8')) as never;
 
@@ -46,6 +48,7 @@ describe('machine peer connect <machine> --show', () => {
         `laptop (${laptop})  ${connectionsFile(a)}`,
         '  type              ping-if-not-reachable-magic-packet',
         '  addresses         192.168.1.40:47921 (pinned: the relay record is not used)',
+        `  shell             (default) ${PLATFORM_SHELL}, the platform of this machine: machine peer connect laptop --shell <cmd|ps|bash|sh>`,
         '  wake mac          aa:bb:cc:dd:ee:01',
         '  wake broadcast    (default) the directed broadcast of the local network shared with the peer',
         '  probe window      8 s  --wake-probe: how long the connection is probed after each packet before the next one',
@@ -205,6 +208,75 @@ describe('machine peer connect <machine> (set)', () => {
     const ping = await cli(a, ['ping', 'laptop']);
     expect(ping.code).toBe(1);
     expect(ping.err).toMatch(/unknown field "proxyCommand"/);
+  });
+});
+
+describe('machine peer connect <machine> --shell (the default shell of a peer)', () => {
+  it('stores the shell, shows it in --show and in --json, and keeps the other settings', async () => {
+    await connect(['laptop', '--address', '192.168.1.40:47921']);
+    const r = await connect(['laptop', '--shell', 'bash']);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/\[ok\] "laptop": connection settings saved/);
+    expect(fileOf().peers[laptop]).toEqual({ type: 'direct', shell: 'bash', addresses: [{ host: '192.168.1.40', port: 47921 }] });
+    expect(r.err).toMatch(/\[info\] shell: none -> bash/);
+    const show = await connect(['laptop', '--show']);
+    expect(show.out).toContain('  shell             bash (machine run laptop uses it unless --shell is given)');
+    const doc = JSON.parse((await connect(['laptop', '--show', '--json'])).out) as { entry: { shell: string }; shell: { effective: string; source: string } };
+    expect(doc.entry.shell).toBe('bash');
+    expect(doc.shell).toEqual({ effective: 'bash', source: 'peer-default' });
+  });
+
+  it('works alone on a peer with no settings (type direct), and a later setting keeps it', async () => {
+    expect((await connect(['laptop', '--shell', 'sh'])).code).toBe(0);
+    expect(fileOf().peers[laptop]).toEqual({ type: 'direct', shell: 'sh' });
+    await connect(['laptop', '--wake-mac', 'aa:bb:cc:dd:ee:01']);
+    expect(fileOf().peers[laptop]).toMatchObject({ shell: 'sh', wake: { mac: 'aa:bb:cc:dd:ee:01' } });
+  });
+
+  it('--no-shell removes only the default shell', async () => {
+    await connect(['laptop', '--shell', 'sh', '--address', '192.168.1.40:47921']);
+    const r = await connect(['laptop', '--no-shell']);
+    expect(r.code).toBe(0);
+    expect(fileOf().peers[laptop]).toEqual({ type: 'direct', addresses: [{ host: '192.168.1.40', port: 47921 }] });
+    expect(r.err).toMatch(/\[info\] shell: sh -> none/);
+  });
+
+  it('--no-shell with no default shell says so and writes nothing', async () => {
+    const r = await connect(['laptop', '--no-shell']);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/\[info\] "laptop" has no default shell: nothing to remove/);
+    expect(existsSync(connectionsFile(a))).toBe(false);
+  });
+
+  it('--remove forgets the shell with the rest of the settings', async () => {
+    await connect(['laptop', '--shell', 'sh']);
+    expect((await connect(['laptop', '--remove'])).code).toBe(0);
+    expect(fileOf().peers).toEqual({});
+  });
+
+  it('refuses an unknown shell, --shell with --no-shell, and --shell with --show or --remove, writing nothing', async () => {
+    const unknown = await connect(['laptop', '--shell', 'zsh']);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err).toMatch(/unknown shell "zsh": expected one of cmd, ps, bash, sh/);
+    const both = await connect(['laptop', '--shell', 'sh', '--no-shell']);
+    expect(both.code).toBe(2);
+    expect(both.err).toMatch(/--shell and --no-shell cannot be combined/);
+    expect((await connect(['laptop', '--show', '--shell', 'sh'])).code).toBe(2);
+    expect((await connect(['laptop', '--remove', '--no-shell'])).code).toBe(2);
+    expect(existsSync(connectionsFile(a))).toBe(false);
+  });
+
+  it('an invalid shell written by hand in connections.json stops every command that reads the file, naming the field', async () => {
+    writeFileSync(connectionsFile(a), JSON.stringify({ v: 1, peers: { [laptop]: { type: 'direct', shell: 'zsh' } } }));
+    const r = await connect(['laptop', '--show']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/shell: expected one of cmd, ps, bash, sh, got "zsh"/);
+  });
+
+  it('--no-shell is refused outside `machine peer connect`', async () => {
+    const r = await cli(a, ['run', 'laptop', '--no-shell', '--', 'echo']);
+    expect(r.code === 2 || r.code === 255).toBe(true);
+    expect(r.err).toMatch(/--no-shell only applies to `machine peer connect`/);
   });
 });
 

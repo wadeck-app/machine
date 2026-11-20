@@ -23,6 +23,17 @@
     {
       "kind": "page",
       "slot": "nav",
+      "label": "Requests",
+      "path": "/requests",
+      "count": { "route": "/requests", "field": "count" },
+      "view": {
+        "type": "path",
+        "value": "./src/dsl-views/requests.yaml"
+      }
+    },
+    {
+      "kind": "page",
+      "slot": "nav",
       "label": "Candidacies",
       "path": "/candidacies",
       "count": { "route": "/candidacies", "field": "count" },
