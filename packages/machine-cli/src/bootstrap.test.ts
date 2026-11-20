@@ -264,7 +264,8 @@ describe('one command per machine', () => {
       const h2 = human();
       const again = await cli(a, ['setup', relay.url], h2.prompt, { timing: fakeTiming(consoleApprovesAll), ask: h2.ask, hostname: () => 'desktop' });
       expect(again.code, again.err).toBe(0);
-      expect(again.out).toMatch(/already holds the admin key/);
+      // Decision 67: what exists is one "(already done)" line, the total stays 5.
+      expect(again.out).toContain('Step 2/5: Admin passphrase (already done)');
       // The key already exists: the passphrase is asked once, to sign (no choice, no confirmation).
       expect(h2.hidden).toHaveLength(1);
       expect(h2.visible).toHaveLength(0);

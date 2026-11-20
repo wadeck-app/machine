@@ -177,3 +177,16 @@ describe('passphrase hint (decision 57)', () => {
     expect(() => decryptAdminKey({ ...envelope, v: 1 } as never, STRONG)).toThrow(/admin key file: .*hint/);
   });
 });
+
+describe('the same envelope for another key (the local policy key)', () => {
+  it('names the key in decryption errors and offers no admin-only advice when asked', async () => {
+    const { generateSigningKeyPair } = await import('./keys.js');
+    const envelope = encryptAdminKey(generateSigningKeyPair(), 'correct horse battery staple');
+    expect(() => decryptAdminKey(envelope, 'not the passphrase at all', 'local policy key file')).toThrow(/^local policy key file: wrong passphrase or damaged key file/);
+    expect(() => decryptAdminKey(envelope, 'not the passphrase at all')).toThrow(/^admin key file: wrong passphrase/);
+    const short = checkPassphrase('short', 'type a longer one');
+    expect(short.ok).toBe(false);
+    expect((short as { message: string }).message).toMatch(/at least 12 characters \(20 or more is recommended\): type a longer one$/);
+    expect((short as { message: string }).message).not.toMatch(/admin init/);
+  });
+});

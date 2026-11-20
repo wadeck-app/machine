@@ -7,11 +7,12 @@ import { enableAfterJoin } from './cliStartup.js';
 import { expiryText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { NotInitializedError } from './errors.js';
-import { ensureMachine, readMachine } from './identity.js';
+import { ensureMachine, machineExists, readMachine } from './identity.js';
+import { createSteps, trackedSay, type StepDef } from './steps.js';
 import { classifyJoinArgument, DEFAULT_TIMEOUT_SECONDS, realTiming, runJoin } from './join.js';
 import { PromptTimeoutError } from './prompt.js';
 import { AccessLoginUnsupportedError, normalizeRelayUrl, RelayError } from './relayClient.js';
-import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
+import { readCandidacy, readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 
 // `machine join` and `machine setup` (decision 53): one command per machine. The identity is created on the way; the machine that
 // holds the admin key approves its own enrollment; `setup` also creates the admin key and does ONE login in the relay console (decision 59): the
@@ -21,13 +22,19 @@ import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
  * Create the admin key (decision 51): the passphrase is chosen at the hidden prompt (typed twice) or generated. The
  * existing-key check comes before any question. Nothing secret reaches stdout: a generated passphrase goes to stderr once.
  */
-export async function createAdminKey(ctx: CommandContext, prompt: Prompt, ask: (label: string) => Promise<string>): Promise<ReturnType<typeof adminInit>> {
+export async function createAdminKey(
+  ctx: CommandContext,
+  prompt: Prompt,
+  ask: (label: string) => Promise<string>,
+  /** The output of the prose (default: stdout, or stderr with --json); the caller passes its tracked one so that the step headers see it. */
+  say: (text: string) => void = ctx.args.json ? ctx.io.stderr : ctx.io.stdout,
+): Promise<ReturnType<typeof adminInit>> {
   const { args, io, configDir } = ctx;
   assertCanInitAdminKey(configDir);
   const { chosen, advice, hint } = await askAdminPassphrase(prompt, {
     generate: args.generate,
     ...(args.hint !== undefined ? { hint: args.hint } : {}),
-    say: args.json ? io.stderr : io.stdout,
+    say,
     warn: io.stderr,
     ask,
   });
@@ -54,7 +61,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const { args, rest, io, configDir, fail, emit } = ctx;
   const epochSeconds = () => Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
   // With --json stdout carries the final JSON only: the human progress goes to stderr.
-  const say = args.json ? io.stderr : io.stdout;
+  const say = trackedSay(args.json ? io.stderr : io.stdout);
   const verb = o.setup ? 'setup' : 'join';
 
   let code: string | undefined;
@@ -101,14 +108,49 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const timeoutSeconds = args.timeout === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(args.timeout);
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) return fail(`--timeout must be a whole number of seconds from 1 to 86400, got "${args.timeout}"`, EXIT.usage);
 
+  // The steps of the path this command takes (decision 67): known now, so that the total is exact. A step already done is shown as one line.
+  const holdsKey = existsSync(adminKeyFile(configDir));
+  const selfApproving = o.setup || (holdsKey && !args.noWait);
+  const identityDone = machineExists(configDir);
+  const approvalKept = args.resume && readCandidacy(configDir)?.approval !== undefined;
+  const plan: StepDef[] = o.setup
+    ? [
+        { key: 'identity', title: 'Identity', ...(identityDone ? { skipped: true as const } : {}) },
+        { key: 'admin-key', title: 'Admin passphrase', ...(holdsKey ? { skipped: true as const } : {}) },
+        { key: 'login', title: 'Relay login', ...(readRelayAdminConfig(configDir) !== undefined ? { skipped: true as const } : {}) },
+        { key: 'candidacy', title: 'Enrolment of this machine' },
+        { key: 'done', title: 'Summary and next steps' },
+      ]
+    : [
+        { key: 'identity', title: 'Identity', ...(identityDone ? { skipped: true as const } : {}) },
+        { key: 'login', title: 'Relay login', ...(args.resume ? { skipped: true as const } : {}) },
+        {
+          key: 'candidacy',
+          title: args.noWait ? 'Candidacy posted' : selfApproving ? 'Candidacy posted and approved by this machine' : 'Candidacy posted, waiting for the admin',
+          ...(approvalKept ? { skipped: true as const } : {}),
+        },
+        // Nothing to compare when this machine approves itself, and no approval to compare before the admin acted.
+        ...(selfApproving || args.noWait ? [] : [{ key: 'compare', title: 'Security code comparison' }]),
+        { key: 'done', title: args.noWait ? 'Next steps' : 'Done' },
+      ];
+  const steps = createSteps(say, plan);
+  const skippedKeys = new Set(plan.filter((d) => d.skipped !== undefined).map((d) => d.key));
+  // A step that is not on this path (or is already done) is not entered: the callers of runJoin do not know which path they are on.
+  const enter = (key: string): void => {
+    if (steps.has(key) && !skippedKeys.has(key)) steps.begin(key);
+  };
+
   // The identity: created here when there is none (name from --name or from the computer name, decision 52). Before any one-shot code is spent.
   try {
+    if (!identityDone) enter('identity');
     if (args.resume) {
       readMachine(configDir);
       if (args.name !== undefined) ensureMachine(configDir, { name: args.name });
     } else {
       const ensured = ensureMachine(configDir, { ...(args.name !== undefined ? { name: args.name } : {}), ...(io.hostname ? { hostname: io.hostname } : {}) });
       if (ensured.note !== undefined) io.stderr(`[info] ${ensured.note}\n\n`);
+      // The step says what it did (an identity that already existed is "(already done)" and says nothing).
+      if (ensured.created) say(`[ok] identity created: "${ensured.machine.name}" (${ensured.machine.uuid})\n`);
     }
   } catch (e) {
     if (e instanceof NotInitializedError) return fail(e.message);
@@ -125,15 +167,18 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   // `setup`: the admin key and the relay login, when this machine has none yet. Both are kept on a re-run.
   if (o.setup) {
     try {
-      if (!existsSync(adminKeyFile(configDir))) {
-        const created = await createAdminKey(ctx, o.prompt, o.ask);
+      if (!holdsKey) {
+        // The existing-key check comes before any question, and before the header.
+        assertCanInitAdminKey(configDir);
+        enter('admin-key');
+        const created = await createAdminKey(ctx, o.prompt, o.ask, say);
         passphrase = created.passphrase;
-        say(`[ok] admin key created (id ${created.adminKeyId})\n\n`);
-      } else {
-        say('[info] this machine already holds the admin key: it is kept\n\n');
-        if (args.hint !== undefined) io.stderr('[warn] --hint ignored: the admin key already exists on this machine, its hint cannot change here\n\n');
+        say(`[ok] admin key created (id ${created.adminKeyId})\n`);
+      } else if (args.hint !== undefined) {
+        io.stderr('[warn] --hint ignored: the admin key already exists on this machine, its hint cannot change here\n\n');
       }
       if (readRelayAdminConfig(configDir) === undefined) {
+        enter('login');
         // ONE login confirmed in the relay console (decision 59): a token of the machine-admin scope. Without a relay token yet it is also this machine's
         // relay token (relay.json), so the second login of the old flow is gone. A relay that predates the scope fails loudly, never falls back to full access.
         const alsoMachineToken = readRelayConfig(configDir) === undefined;
@@ -200,6 +245,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
       ...(io.now ? { now: io.now } : {}),
       ...(io.hostname ? { hostname: io.hostname } : {}),
       say,
+      step: enter,
       // Decision 55: the candidacy code is internal (the admin machine recomputes it and refuses a different one); a person compares the security code only.
       onPosted: (p) => {
         if (args.json && args.noWait) return;
@@ -263,6 +309,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
   const startupHint = args.autoStartup ? '' : 'To start machine at login run: machine startup enable\n';
   // A paragraph of its own (the human reads the next steps, then the optional one).
   const startupSpaced = startupHint === '' ? '' : `\n${startupHint}`;
+  enter('done');
   if (result.status === 'posted') {
     emit(result.posted, 'next: on the admin machine run `machine admin approve`; it prints a security code for this machine. Then run `machine join --resume` here: it shows the security code, which must read exactly the same on the admin machine\n' + startupSpaced);
   } else {
@@ -276,7 +323,7 @@ export async function runJoinCommand(ctx: CommandContext, o: JoinCommandOptions)
     const next = e.isAdminMachine
       ? `next:\n  another machine: run \`machine join ${result.posted.relayUrl}\` on it, then \`machine admin approve\` here\n  allow a command: \`machine admin allow <machine> -- <command>\` (this machine or another)\n`
       : 'next: the admin allows commands on this machine (`machine admin allow <this machine> -- <command>`, run on the admin machine), then `machine status`\n';
-    emit({ ...e, relayUrl: result.posted.relayUrl }, `${e.isAdminMachine ? '' : '\n'}[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}\n${next}${startupSpaced}`);
+    emit({ ...e, relayUrl: result.posted.relayUrl }, `[ok] enrolled "${e.self.name}" (${e.self.uuid})\nadmin key pinned: ${e.adminKeyId}\n${peerLines}\n${next}${startupSpaced}`);
   }
   if (args.json && startupHint) io.stderr(startupHint);
   if (args.autoStartup) {

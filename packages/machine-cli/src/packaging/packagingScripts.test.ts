@@ -95,7 +95,8 @@ describe('generate and pin scripts', () => {
       expect(files).toEqual(['package.json', (PLATFORM_TARGETS[key] as { fileName: string }).fileName].sort());
     }
     const wrapper = packList(join(root, 'out', 'machine-cli-dist'));
-    expect(wrapper).toEqual(['app-module/manifest.json', 'bin/machine.js', 'machine-updater.cjs', 'machine.cjs', 'package.json']);
+    // README.md is packed by npm whatever `files` says: it is the package page.
+    expect(wrapper).toEqual(['README.md', 'app-module/manifest.json', 'bin/machine.js', 'machine-updater.cjs', 'machine.cjs', 'package.json']);
   });
 });
 

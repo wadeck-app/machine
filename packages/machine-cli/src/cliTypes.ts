@@ -68,6 +68,8 @@ export interface Parsed {
   replace: boolean;
   force: boolean;
   name?: string;
+  /** `machine policy allow --peer <machine>`: edit the own list of that peer instead of the default list. */
+  peer?: string;
   out?: string;
   configDir?: string;
   address?: string;

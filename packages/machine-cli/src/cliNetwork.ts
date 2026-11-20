@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { SHELLS, parseAddress, type Shell } from '@wadeck-app/machine-core';
 import { whenText } from './humanTime.js';
 import { describeAddress, PeerAddressError } from './peerAddresses.js';
-import { adminKeyFile, pinAdminKey, signPolicyFile } from './admin.js';
+import { adminKeyFile, assertCanInitAdminKey, pinAdminKey, signPolicyFile } from './admin.js';
+import { createSteps, trackedSay, type Steps } from './steps.js';
 import { createAdminKey, runJoinCommand } from './cliJoin.js';
 import { recordSignedPolicy, runAllow } from './adminAllow.js';
 import { enableAfterJoin } from './cliStartup.js';
@@ -28,6 +29,7 @@ import { runOnPeer } from './peerService.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
 import { unknownSubcommandMessage } from './cliHelp.js';
+import { runPolicyModeCommand } from './cliPolicy.js';
 
 // The commands that deal with the network: admin signing, peers, policy and remote execution.
 
@@ -152,7 +154,16 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     }
     if (sub === 'init') {
       if (first !== undefined) return fail(`unexpected argument "${first}" for \`machine admin init\``, EXIT.usage);
-      const r = await createAdminKey(ctx, prompt, askLine);
+      // The existing-key check comes before any question, and before the first header.
+      assertCanInitAdminKey(configDir);
+      const say = trackedSay(args.json ? io.stderr : io.stdout);
+      const steps = createSteps(say, [
+        { key: 'passphrase', title: 'Admin passphrase' },
+        { key: 'done', title: 'Done' },
+      ]);
+      steps.begin('passphrase');
+      const r = await createAdminKey(ctx, prompt, askLine, say);
+      steps.begin('done');
       emit({ adminKeyId: r.adminKeyId, adminPublicKey: r.adminPublicKey }, `[ok] admin key created (id ${r.adminKeyId})\n\nnext: \`machine join <relay>\` enrolls this machine (it approves itself), \`machine setup <relay>\` does everything in one command\n`);
       return EXIT.ok;
     }
@@ -293,7 +304,8 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       const adminRelay = args.relay ?? readRelayAdminConfig(configDir)?.relayUrl;
       if (adminRelay === undefined) return fail('machine admin login needs the relay: `machine admin login --relay <host-or-url>`, for example --relay https://relay.example.com (the relay is named once, then the stored one is reused)', EXIT.usage);
       // `warnFull`: the console login already said it (a [warn] line); the pairing code path says it here.
-      const finish = (r: { relayUrl: string; label: string; scopes: string[] | null }, warnFull: boolean): number => {
+      const finish = (r: { relayUrl: string; label: string; scopes: string[] | null }, warnFull: boolean, steps?: Steps): number => {
+        steps?.begin('done');
         if (!existsSync(adminKeyFile(configDir))) io.stderr('[warn] this machine has no admin key yet: run `machine admin init` before `machine admin approve`\n');
         if (r.scopes === null && warnFull) io.stderr(`${FULL_ACCESS_WARNING}\n`);
         emit({ relayUrl: r.relayUrl, label: r.label, scopes: r.scopes }, `[ok] admin token "${r.label}" saved for ${r.relayUrl}${r.scopes === null ? '' : ' (MACHINE ADMIN: it cannot manage tokens)'}; next: \`machine admin approve\` lists the pending candidacies\n`);
@@ -310,19 +322,26 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         const controller = new AbortController();
         const onSigint = () => controller.abort();
         if (io.timing === undefined) process.once('SIGINT', onSigint);
+        // The pairing-code path above is one action and has no header; the console login is a request, a wait, then the result.
+        const say = trackedSay(args.json ? io.stderr : io.stdout);
+        const steps = createSteps(say, [
+          { key: 'login', title: 'Relay login' },
+          { key: 'done', title: 'Done' },
+        ]);
         try {
           const timing = io.timing ?? { ...realTiming(), signal: controller.signal };
+          steps.begin('login');
           const r = await adminLoginByConsole(configDir, {
             relayUrl: adminRelay,
             force: args.force,
             name: adminLoginName(configDir, io.hostname),
             timing,
-            say: args.json ? io.stderr : io.stdout,
+            say,
             askPairingCode: () => prompt('Full-access pairing code (8 digits): '),
             ...(args.fullAccess ? { access: 'full' as const } : {}),
             ...(io.now ? { now: io.now } : {}),
           });
-          return finish(r, false);
+          return finish(r, false, steps);
         } finally {
           process.removeListener('SIGINT', onSigint);
         }
@@ -348,6 +367,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           days,
           reject: args.reject,
           verbose: args.verbose,
+          headers: true,
           prompt,
           ask: askLine,
           // With --json stdout carries the final JSON only: the human text goes to stderr.
@@ -436,6 +456,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
 
   if (command === 'policy') {
     const [sub, first, second] = rest;
+    if (sub === 'local' || sub === 'delegate' || sub === 'allow') return await runPolicyModeCommand(ctx, { prompt, ask: askLine });
     if (sub !== 'install') return fail(unknownSubcommandMessage('policy', sub), EXIT.usage);
     if (first === undefined || second !== undefined) return fail('usage: machine policy install <signed-policy.json>; see `machine policy --help`', EXIT.usage);
     const body = installPolicy(configDir, readObject(first, 'policy') as never, { now });
@@ -516,8 +537,9 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   }
   if (answer.type === 'refused') {
     // The fix is the command to run on the admin machine, with this exact command (an exact match is the only rule).
+    // A peer that manages its own list (policy mode local) cannot be changed from here: its refusal message names the owner (the caller does not know the mode).
     const quoted = /[\s"'`]/.test(command) ? `"${command}"` : command;
-    const how = answer.reason === 'not-listed' ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted}` : '';
+    const how = answer.reason === 'not-listed' ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted} (if ${peer.name} manages its own allow list, run \`machine policy allow --shell ${shell} -- ${quoted}\` on ${peer.name} instead)` : '';
     return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}`, EXIT.peer);
   }
   if (args.json) {

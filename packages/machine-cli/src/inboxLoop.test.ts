@@ -301,6 +301,33 @@ describe('the inbox loop: documents from the admin', () => {
     expect(auditText('laptop')).toMatch(/already-installed/);
   });
 
+  it('policy mode local: an admin-signed policy from the inbox is refused, audited with the delegate advice and deleted; after `policy delegate` the next one installs', async () => {
+    await enroll('laptop');
+    const draft = (version: number) => {
+      const file = join(root, `draft-local-${version}.json`);
+      writeFileSync(file, JSON.stringify({ v: 1, target: uuidOf('laptop'), version, baseVersion: version - 1, defaults: [{ shell: 'sh', command: `echo v${version}` }], peers: {} }));
+      return file;
+    };
+    const localPass = 'local passphrase of the laptop';
+    const typed = [localPass, localPass];
+    const enable = await cli(dirOf('laptop'), ['policy', 'local', 'enable'], async () => typed.shift() ?? '', { ask: async () => '' });
+    expect(enable.code, enable.err).toBe(0);
+    await ok(adminDir, ['admin', 'sign-policy', draft(1), '--out', join(root, 'pl1.json')], pass);
+    const { loop } = loopFor('laptop');
+    await loop.ready;
+    expect(loadNetwork(dirOf('laptop'), nowSeconds()).policy).toBeUndefined();
+    expect(auditText('laptop')).toMatch(/document-rejected/);
+    expect(auditText('laptop')).toContain('this machine manages its own allow list (machine policy delegate to give it back to the admin)');
+    expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+
+    const delegate = await cli(dirOf('laptop'), ['policy', 'delegate'], async () => localPass, { ask: yes });
+    expect(delegate.code, delegate.err).toBe(0);
+    // The admin line has no version yet on this machine: the first admin policy is version 1, edited from 0.
+    await ok(adminDir, ['admin', 'sign-policy', draft(1), '--out', join(root, 'pl1b.json')], pass);
+    await loop.runOnce();
+    expect(loadNetwork(dirOf('laptop'), nowSeconds()).policy?.defaults.map((e) => e.command)).toEqual(['echo v1']);
+  });
+
   it('installs a revocation, after which an old peer document about the revoked machine is refused (revocation-aware)', async () => {
     await enroll('laptop');
     await enroll('server');

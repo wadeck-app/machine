@@ -105,6 +105,9 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     return { kind: 'listed', uuid: target.uuid, version: current.version };
   }
 
+  if (toSelf && network.policyMode === 'local') {
+    throw new Error(`this machine manages its own allow list (policy mode local): an admin signature would be refused here. Use \`machine policy allow -- <command>\` on this machine, or \`machine policy delegate\` to give the list back to the admin first. Nothing was signed`);
+  }
   const command = o.command as string;
   const defaultShell: Shell = process.platform === 'win32' ? 'cmd' : 'sh';
   const shell = o.shell ?? defaultShell;

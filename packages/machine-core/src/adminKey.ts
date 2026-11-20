@@ -37,11 +37,12 @@ export const HINT_MAX_LENGTH = 80;
 
 const charsOf = (passphrase: string): string[] => Array.from(passphrase.normalize('NFKC'));
 
-export function checkPassphrase(passphrase: string): PassphraseCheck {
+/** `fix` is what follows "type a longer one": the admin key offers a generated one, another key (the local policy key) may not. */
+export function checkPassphrase(passphrase: string, fix = 'type a longer one, or use `machine admin init --generate` for a random one (100 bits)'): PassphraseCheck {
   // Counted in characters (code points), not UTF-16 units.
   const chars = charsOf(passphrase);
   if (chars.length < PASSPHRASE_MIN_LENGTH) {
-    return { ok: false, message: `the passphrase must be at least ${PASSPHRASE_MIN_LENGTH} characters (${PASSPHRASE_RECOMMENDED_LENGTH} or more is recommended): type a longer one, or use \`machine admin init --generate\` for a random one (100 bits)` };
+    return { ok: false, message: `the passphrase must be at least ${PASSPHRASE_MIN_LENGTH} characters (${PASSPHRASE_RECOMMENDED_LENGTH} or more is recommended): ${fix}` };
   }
   if (new Set(chars).size < MIN_DISTINCT) return { ok: false, message: `the passphrase uses too few different characters (at least ${MIN_DISTINCT} are required)` };
   if (/^[0-9\s-]+$/.test(chars.join(''))) return { ok: false, message: 'the passphrase must not be digits only' };
@@ -142,7 +143,18 @@ function field<T>(read: () => T, name: string): T {
   }
 }
 
-export function decryptAdminKey(envelope: AdminKeyEnvelope, passphrase: string): SigningKeyPair {
+/** `label` replaces "admin key file" in every error: the same envelope holds the local policy key (policy mode `local`). */
+export function decryptAdminKey(envelope: AdminKeyEnvelope, passphrase: string, label = 'admin key file'): SigningKeyPair {
+  try {
+    return decryptEnvelope(envelope, passphrase);
+  } catch (e) {
+    const message = (e as Error).message;
+    if (label === 'admin key file' || !message.startsWith('admin key file')) throw e;
+    throw new Error(`${label}${message.slice('admin key file'.length)}`);
+  }
+}
+
+function decryptEnvelope(envelope: AdminKeyEnvelope, passphrase: string): SigningKeyPair {
   const version = (envelope as { v: unknown }).v;
   if (version !== 1 && version !== 2) {
     throw new Error(`admin key file: unsupported format version ${String(version)} (this build reads versions 1 and 2); update machine`);

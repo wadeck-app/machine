@@ -1,6 +1,8 @@
 # Getting started
 
-**Version:** v0.6 (2026-11-19). Implements decisions 51 to 62. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
+**Version:** v0.7 (2026-11-20). Implements decisions 51 to 62, 66 and 67. The flows were run against the real relay by `npm run test:relay` (see ux-audit-2026-11-15.md).
+
+The user-facing guide (install, quick start, allow, run, Wake-on-LAN, troubleshooting) is the root `README.md`; it is also the npm package page of `@wadeck-app/machine-cli` (copied into the wrapper by `generate-platform-packages`).
 
 ## Commands per case
 
@@ -66,6 +68,44 @@ Security code of "laptop" (admin key ab5e...):
 It must read exactly the same on "laptop". If it differs, run: machine admin revoke laptop
 ```
 
+## Why the security code is compared on the joining machine
+
+**What it is.** 25 digits computed from three values: the key of the new machine, the admin key and a random value of this enrollment. The admin machine computes it from its own key; the new machine computes it from the admin key it received in the approval.
+
+**The attack it catches.** The relay sits between the two machines. If it answers the new machine with its own admin key (and registrations signed by it), everything the new machine can check still looks valid. Only the code differs: the new machine shows a code for the relay's key, the admin machine shows the code for the real one. Two different codes mean the admin key offered to the new machine is not the admin's.
+
+**What you do.**
+
+1. Read the code on the new machine and the code on the admin machine (each names the other machine). Use your own eyes, or a channel the relay does not control (voice, in person, another device of yours).
+2. Same digits: answer `y` on the new machine. It then pins the admin key.
+3. Different digits: answer `N`. Nothing is pinned. On the admin machine run `machine admin revoke <name>` (the registration it signed for the new machine exists until then).
+
+**Why a message from the admin through the relay cannot replace it.** The new machine has no secret shared with the admin before the enrollment, so it cannot tell a real "the code is fine" from one the relay wrote. Any confirmation that travels through the relay can be forged by the relay. The decision is also taken on the new machine because that is where the key is pinned: an approval of the admin side alone cannot stop a pin the relay induced.
+
+**`y/N` versus `--yes-final-code`.** At the `[y/N]` question the machine cannot know that you compared. With `--yes-final-code "<code>"` (for a script or a run without terminal, on `join` or `join --resume`) you type the code read on the admin machine and the new machine checks it against its own: a mistyped code, or a code of another key, stops the pin. It still cannot know where the typed code came from: copying it from a message that crossed the relay brings the forgery back.
+
+**What is not protected if you answer `y` without reading.** The admin key you pin is the relay's. A pinned admin key signs the policies and registrations this machine accepts (threat model T-05, hard rule 4), so the relay becomes the administrator of this machine. No other check on the new machine can detect it: they verify against the admin key the approval itself carries. The prompt says it in one line: `Why: the relay could have swapped the admin key; only the same code on both screens proves it did not.` The first machine of a network (`setup`) created the admin key itself: there is no code to compare.
+
+Technical side: threat-model.md, T-05 and "Security code on the joining machine".
+
+## Step headers (decision 67)
+
+The multi-step commands print `Step n/N: <title>` between their steps, after a blank line and a line of 25 `=`. They go to the same stream as the text around them (stderr with `--json`), are plain ASCII and never reach the command log. There is no `--quiet` for these commands.
+
+Numbering rule, the same everywhere: N counts the steps of the path this run takes.
+
+- A step that is already done (identity, admin key, relay token or received approval already there) is counted and printed as one line, `Step 1/5: Identity (already done)`, with no separator.
+- A step that does not exist on this path is not counted: no code comparison when this machine approves itself or with `--no-wait`; no distribution when nobody is there to tell.
+- A path of one step prints no header: listing, `--reject`, `admin login <code>`, a usage error.
+
+| Command | Steps (full path) |
+|---|---|
+| `setup` | Identity, Admin passphrase, Relay login, Enrolment of this machine, Summary and next steps (5) |
+| `join` | Identity, Relay login, Candidacy posted (waiting for the admin, or approved by this machine), Security code comparison, Done (5; 4 without the comparison; `--no-wait` ends with Next steps) |
+| `admin approve` | Pending candidacy, Passphrase and signature, Security code, Documents distributed (4; 3 when nobody is left to tell) |
+| `admin init` | Admin passphrase, Done (2) |
+| `admin login` (console) | Relay login, Done (2) |
+
 ## Testing the connection (decision 61)
 
 ```
@@ -112,6 +152,26 @@ machine run <machine> --wake|--no-wake ...   force or forbid the wake for this c
 - Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A refused connection is not woken either: the machine answered, so it is awake and no daemon listens; the output says to start the daemon there (`machine startup enable`). A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits); `machine peer wake` is explicit and ignores that cooldown (the packet limits still apply).
 - The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable. `machine wake-info <machine>` prints this checklist for the target (macOS and Windows lines are marked UNVERIFIED).
 - Trace: `<configDir>/wake-audit.log` (who woke what, how many packets, hash-chained); the settings are in `connections.json` (no secret).
+
+## Who manages the allow list of a machine (decision 68)
+
+| Mode | Who signs the list | Edit with | Use for |
+|---|---|---|---|
+| `admin` (default) | the admin key | `machine admin allow <machine> -- <command>` on the admin machine | machines you administer from one place |
+| `local` | the machine's own policy key, local passphrase | `machine policy allow -- <command>` on that machine | a machine that must not depend on the admin machine (work laptop) |
+
+```
+machine policy local enable [--hint <text>]   this machine manages its own list: new policy key, passphrase typed twice; the list starts EMPTY
+machine policy allow [--shell s] [--peer <machine>] -- <command>   difference, y/N, local passphrase, signed and installed here (no relay)
+machine policy allow --remove -- <command>    withdraw        machine policy allow --list   read-only, no passphrase, any mode
+machine policy delegate                       give the list back to the admin: EMPTY until the admin signs one; local key archived
+machine status                                shows "policy mode"; machine list shows it for this machine (peers: unknown)
+```
+
+- The passphrase is asked every time; nothing is cached. It cannot be recovered.
+- Mode `local` refuses admin-signed policies (inbox or `policy install`, audited), mode `admin` refuses locally signed ones. It never enrols a machine and never lifts a revocation: trust still comes from the admin.
+- `machine admin allow <machine>` cannot tell that the target is in mode `local` (a peer's mode is not published): the target refuses the document and says why. Allow on the target itself: `machine policy allow`.
+- Forgotten local passphrase: the list stays as it is. To go back to the admin: stop the daemon (`machine startup disable`, or `orch kill machine`), delete `policy-mode.json` and `policy-local.json` in the config dir and `_secrets_/policy.key.json`, start the daemon, then have the admin sign a policy (`machine admin allow <this machine> -- <command>`).
 
 ## Rules a user meets
 

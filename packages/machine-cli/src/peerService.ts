@@ -8,6 +8,7 @@ import {
   verifyRequest,
   type Json,
   type PolicyBody,
+  type PolicyMode,
   type SignedRevocation,
   type Shell,
   type SigningKeyPair,
@@ -44,6 +45,8 @@ export interface PeerServiceDeps {
   directory: { lookup(identityPublicKey: string): PeerRecord | undefined };
   /** The policy currently in force on this machine, if any. */
   policy: () => PolicyBody | undefined;
+  /** Who manages the allow list of this machine; only the wording of a refusal depends on it. Absent: the admin. */
+  policyMode?: () => PolicyMode;
   usage: UsageStore;
   audit: AuditSink;
   /** Epoch seconds. */
@@ -68,7 +71,8 @@ export type PeerAnswer =
   | { type: 'result'; id: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean; outputNotUtf8: boolean; durationMs: number }
   | { type: 'refused'; id?: string; reason: string; message: string };
 
-const NO_POLICY_MESSAGE = 'no policy is installed on this machine: every command is refused until the admin signs and installs one (`machine admin sign-policy`)';
+const NO_LOCAL_POLICY_MESSAGE = 'no policy is installed on this machine: it manages its own allow list and every command is refused until its owner allows one (`machine policy allow -- <command>` on this machine)';
+const NO_POLICY_MESSAGE ='no policy is installed on this machine: every command is refused until the admin signs and installs one (`machine admin sign-policy`)';
 
 interface SyncState {
   helloSeen: boolean;
@@ -330,9 +334,10 @@ class PeerService {
     if (!fresh.ok) return this.refuse(session, body.id, fresh.reason, fresh.message);
 
     const policy = deps.policy();
-    if (!policy) return this.refuse(session, body.id, 'no-policy', NO_POLICY_MESSAGE);
+    const policyMode = deps.policyMode?.() ?? 'admin';
+    if (!policy) return this.refuse(session, body.id, 'no-policy', policyMode === 'local' ? NO_LOCAL_POLICY_MESSAGE : NO_POLICY_MESSAGE);
 
-    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key));
+    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode);
     if (!decision.allowed) {
       return this.refuse(session, body.id, decision.reason, decision.message, { shell: body.shell, command: body.command });
     }

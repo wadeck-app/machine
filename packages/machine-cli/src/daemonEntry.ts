@@ -18,6 +18,7 @@ import { registerOnStart, type RegisterOnStartOptions } from './appCoreRegistrat
 import { isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { fileURLToPath } from 'node:url';
 import { FileAuditLog, FileUsageStore } from './stores.js';
+import { policyFingerprint } from './policyMode.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
 export const DEFAULT_DAEMON_PORT = 47920;
@@ -108,12 +109,14 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     const audit = new FileAuditLog(join(configDir, 'audit.log'));
     const usage = new FileUsageStore(join(configDir, 'usage.json'));
 
-    let cached: { at: number; network: Network } | undefined;
+    let cached: { at: number; network: Network; policyKey: string } | undefined;
     const network = (): Network => {
-      if (!cached || now() - cached.at >= NETWORK_CACHE_SECONDS) {
+      // A change of the policy files (`machine policy allow`, `delegate`, `admin allow` on this machine) applies at once, not after the cache delay.
+      const policyKey = policyFingerprint(configDir);
+      if (!cached || cached.policyKey !== policyKey || now() - cached.at >= NETWORK_CACHE_SECONDS) {
         const loaded = loadNetwork(configDir, now());
         for (const problem of loaded.problems) if (!cached || !cached.network.problems.includes(problem)) log(`network: ${problem}`);
-        cached = { at: now(), network: loaded };
+        cached = { at: now(), network: loaded, policyKey };
       }
       return cached.network;
     };
@@ -125,6 +128,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         self,
         directory: { lookup: (key) => network().directory.lookup(key) },
         policy: () => network().policy,
+        policyMode: () => network().policyMode,
         usage,
         audit,
         now,

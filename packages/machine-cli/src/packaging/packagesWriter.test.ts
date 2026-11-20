@@ -13,6 +13,7 @@ let launchers: string;
 let bundle: string;
 let out: string;
 const SHIM = join(__dirname, '..', '..', 'ci', 'templates', 'bin-machine.cjs');
+const README = join(__dirname, '..', '..', '..', '..', 'README.md');
 
 function seed(): void {
   for (const [key, t] of Object.entries(PLATFORM_TARGETS)) {
@@ -25,7 +26,7 @@ function seed(): void {
   writeFileSync(join(bundle, 'app-module', 'manifest.json'), '{}');
 }
 const json = (p: string): Record<string, unknown> => JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
-const opts = (over = {}) => ({ outDir: out, version: BUILD, launcherDir: launchers, bundleDir: bundle, shimPath: SHIM, strict: true, ...over });
+const opts = (over = {}) => ({ outDir: out, version: BUILD, launcherDir: launchers, bundleDir: bundle, shimPath: SHIM, readmePath: README, strict: true, ...over });
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'machine-pkg-'));
@@ -55,6 +56,13 @@ describe('generatePackages', () => {
     expect(existsSync(join(wrapper, 'machine-updater.cjs'))).toBe(true);
     expect(existsSync(join(wrapper, 'app-module', 'manifest.json'))).toBe(true);
     expect(json(join(wrapper, 'package.json')).files).toEqual(['bin/machine.js', 'machine.cjs', 'machine-updater.cjs', 'app-module']);
+  });
+
+  it('copies the root README.md into the wrapper (the npm package page) and fails when it is missing', () => {
+    generatePackages(opts());
+    expect(readFileSync(join(out, 'machine-cli-dist', 'README.md'), 'utf8')).toBe(readFileSync(README, 'utf8'));
+    rmSync(out, { recursive: true });
+    expect(() => generatePackages(opts({ readmePath: join(root, 'absent.md') }))).toThrow(/absent\.md.*not found/s);
   });
 
   it.skipIf(process.platform === 'win32')('sets the exec bit on the Unix launchers', () => {

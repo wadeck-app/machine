@@ -1,4 +1,4 @@
-import { resolveMachineRef, type MachineEntry, type Resolution } from '@wadeck-app/machine-core';
+import { resolveMachineRef, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
@@ -21,6 +21,10 @@ export interface StatusAnswer {
   peers: number;
   /** Version of the policy in force on this machine; absent when there is none (everything is refused). */
   policyVersion?: number;
+  /** Who manages the allow list of this machine: the admin (default) or this machine itself (`machine policy local enable`). */
+  policyMode: PolicyMode;
+  /** Mode local: the id of the pinned local policy key. */
+  localPolicyKeyId?: string;
   /** Version (issuedAt of the newest admin-signed list) of the revocations held here; 0 when none. Present when enrolled. */
   revocationVersion?: number;
   /** Peers whose revocations, announced (digest) at their last handshake, differ from ours: they may still trust a revoked machine until they meet a peer that has the lists. The version is informational. */
@@ -41,6 +45,8 @@ export interface ListAnswer {
   /** Why the revocation versions are missing (unreadable state file). */
   revocationWarning?: string;
   enrolled: boolean;
+  /** The policy mode of THIS machine; the mode of a peer is not published (it is not in its registration nor in its address record), so it is not known here. */
+  policyMode: PolicyMode;
   note?: string;
 }
 
@@ -110,6 +116,8 @@ export function makeCommands(configDir: string, version: string | (() => string)
         enrolled: network.enrolled,
         peers: network.directory.machines().length,
         ...(network.policy ? { policyVersion: network.policy.version } : {}),
+        policyMode: network.policyMode,
+        ...(network.localPolicyKeyId !== undefined ? { localPolicyKeyId: network.localPolicyKeyId } : {}),
         ...revocation,
         ...(revoked.length > 0 ? { revoked } : {}),
         problems,
@@ -135,6 +143,7 @@ export function makeCommands(configDir: string, version: string | (() => string)
         })),
         ...(revocationWarning ? { revocationWarning } : {}),
         enrolled: network.enrolled,
+        policyMode: network.policyMode,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };
     },

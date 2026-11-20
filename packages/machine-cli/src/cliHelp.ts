@@ -191,11 +191,26 @@ const GROUPS: GroupHelp[] = [
   {
     name: 'policy',
     summary: 'the policy of THIS machine (what peers may run here)',
-    bare: 'prints this help: no read-only policy view exists yet (`machine status` shows the policy version, `machine admin allow <machine> --list` what is allowed)',
+    bare: 'prints this help (`machine policy allow --list` shows what is allowed here, `machine status` the policy version and mode)',
     subs: [
-      { name: 'install', usage: 'install <signed.json>', text: 'install a policy signed by the admin for this machine (file mode)', options: ['<signed.json>   written by `machine admin sign-policy --out`'], examples: ['machine policy install signed.json'] },
+      { name: 'install', usage: 'install <signed.json>', text: 'install a policy for this machine (file mode): signed by the admin in mode admin, by the local policy key in mode local', options: ['<signed.json>   written by `machine admin sign-policy --out` or `machine admin allow --out`'], examples: ['machine policy install signed.json'] },
+      {
+        name: 'allow',
+        usage: 'allow [--shell <s>] [--peer <machine>] -- <command> | allow --remove -- <command> | allow --list',
+        text: 'mode local: allow ONE exact command on THIS machine (signed with the local policy key, asks the local passphrase), withdraw it, or list what is allowed (read-only, any mode)',
+        options: ['--shell   the shell of the command (default: this machine platform, said)', '--peer <machine>   edit the own list of that registered peer (it then replaces the default list for that peer)', '--remove   withdraw the command', '--list   show what is allowed here (no passphrase)'],
+        examples: ['machine policy allow -- "ipconfig /all"', 'machine policy allow --peer desktop --shell ps -- "Get-Date"', 'machine policy allow --list'],
+      },
+      {
+        name: 'local',
+        usage: 'local [enable [--hint <text>]]',
+        text: 'who manages the allow list of this machine: bare shows the mode; enable makes THIS machine manage its own list with its own policy key and a local passphrase (admin-signed policies are then refused, the list starts EMPTY)',
+        options: ['enable   create the local policy key (passphrase typed twice, optional hint) and switch to mode local', '--hint <text>   the passphrase hint, no question'],
+        examples: ['machine policy local', 'machine policy local enable'],
+      },
+      { name: 'delegate', usage: 'delegate', text: 'mode local: give the allow list back to the admin (asks the local passphrase). The list becomes EMPTY until the admin signs one; the local key is archived', examples: ['machine policy delegate'] },
     ],
-    examples: ['machine policy install signed.json', 'machine status'],
+    examples: ['machine policy local enable', 'machine policy allow -- "ipconfig /all"', 'machine policy allow --list', 'machine policy delegate', 'machine policy install signed.json'],
   },
 ];
 

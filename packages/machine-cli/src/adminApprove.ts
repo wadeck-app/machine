@@ -6,6 +6,7 @@ import { sealBundle } from './approval.js';
 import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { expiryText, whenText } from './humanTime.js';
 import { PromptTimeoutError } from './prompt.js';
+import { createSteps, trackedSay } from './steps.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, importPeer, installedRevocations, loadNetwork, registerMachine, trustedRegistrations, type MachineInfo, type PeerBundle } from './network.js';
 import { viaAdminToken } from './adminRelay.js';
@@ -236,6 +237,8 @@ export interface ApproveOptions {
   verbose?: boolean;
   /** Hidden passphrase prompt. */
   prompt: Prompt;
+  /** Print the step headers of `machine admin approve` (decision 67). Off for the approval inside `join` and `setup`, which have their own steps. */
+  headers?: boolean;
   /** Replaces the line that announces the passphrase prompt (the caller already holds the passphrase and says so itself). */
   signingNote?: string;
   /** Visible question; rejects without a terminal. */
@@ -272,7 +275,9 @@ function pick(views: CandidacyView[], id: string): CandidacyView {
   return matches[0] as CandidacyView;
 }
 
-export async function runApprove(configDir: string, o: ApproveOptions): Promise<ApproveResult> {
+export async function runApprove(configDir: string, options: ApproveOptions): Promise<ApproveResult> {
+  // The step headers see how the prose ended (one blank line between, never two).
+  const o: ApproveOptions = { ...options, say: trackedSay(options.say) };
   if (!existsSync(adminKeyFile(configDir))) {
     throw new Error(`this machine has no admin key (${adminKeyFile(configDir)} does not exist): run \`machine admin init\` here, or run this command on the machine that holds the admin key`);
   }
@@ -291,6 +296,8 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
 
   // Without an id: none or several are listed; exactly ONE goes straight to its details (no id to copy).
   let wanted = o.id ?? o.selfJoin?.id;
+  // Said after the header of the first step, when there is one.
+  let autoPicked = false;
   if (wanted === undefined) {
     if (o.listOnly === true) {
       o.say(views.length === 0 ? 'no pending candidacy: nothing waits for approval. A new machine asks to join with `machine join <relay>` (its candidacy appears here at once)\n' : formatList(views, o.now(), o.verbose === true, true));
@@ -305,7 +312,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       return { kind: 'list', candidacies: views };
     }
     wanted = (views[0] as CandidacyView).id;
-    o.say('One pending candidacy: showing it (with several, `machine admin approve <id>` picks one).\n');
+    autoPicked = true;
   }
 
   const view = pick(views, wanted);
@@ -320,6 +327,28 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       throw new Error(`the candidacy ${printable(view.id)} ${expiryText(view.expiresAt, o.now())}, ${when}: nothing was signed or sent. Ask the candidate to run \`machine join --resume\` and approve the new candidacy`);
     }
   };
+  // The very first machine of a network is its admin machine: its own candidacy is approved here, and it is no peer of itself.
+  let adminInfo: MachineInfo | undefined;
+  try {
+    adminInfo = exportMachineInfo(configDir);
+  } catch (e) {
+    if (!(e instanceof NotInitializedError)) throw e;
+  }
+  const selfApproval = adminInfo !== undefined && adminInfo.uuid === view.uuid;
+  // The steps of this path (decision 67), known before the first one: the other peers are told only when there is somebody to tell. A rejection and
+  // the approval inside `join`/`setup` (the caller's own steps) print no header.
+  const nobodyToTell = selfApproval && trustedRegistrations(configDir, o.now()).length === 0;
+  const stepsOf =
+    o.headers === true && joining === undefined && !o.reject
+      ? createSteps(o.say, [
+          { key: 'candidacy', title: 'Pending candidacy' },
+          { key: 'sign', title: 'Passphrase and signature' },
+          { key: 'code', title: 'Security code' },
+          ...(nobodyToTell ? [] : [{ key: 'distribute', title: 'Documents distributed' }]),
+        ])
+      : undefined;
+  stepsOf?.begin('candidacy');
+  if (autoPicked) o.say('One pending candidacy: showing it (with several, `machine admin approve <id>` picks one).\n');
   // The details of a candidacy this very command just posted are the machine's own: not repeated.
   if (joining === undefined) o.say(formatDetail(view, o.now(), o.verbose === true));
   else {
@@ -338,15 +367,7 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   }
   const uuid = view.uuid as string;
 
-  // The very first machine of a network is its admin machine: its own candidacy is approved here, and it is no peer of itself.
   // A candidacy that takes the uuid of this machine with another key or name is not this machine (a squatter): refused before anything is asked or signed.
-  let adminInfo: MachineInfo | undefined;
-  try {
-    adminInfo = exportMachineInfo(configDir);
-  } catch (e) {
-    if (!(e instanceof NotInitializedError)) throw e;
-  }
-  const selfApproval = adminInfo !== undefined && adminInfo.uuid === uuid;
   if (joining !== undefined && !selfApproval) throw new Error('internal: a self-join approval was requested for a uuid that is not this machine: nothing was signed or sent');
   if (adminInfo !== undefined && selfApproval && (adminInfo.identityPublicKey !== view.identityPublicKey || adminInfo.name !== view.name)) {
     throw new Error(
@@ -388,7 +409,8 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   // One passphrase typed, used for both registrations of this command, then dropped with the process.
   let typed: string | undefined;
   const prompt: Prompt = async (label) => (typed ??= await o.prompt(label));
-  o.say(o.signingNote ?? '\nEnter the admin passphrase to sign this registration, Ctrl-C to cancel.\n');
+  stepsOf?.begin('sign');
+  o.say(o.signingNote ?? `${stepsOf === undefined ? '\n' : ''}Enter the admin passphrase to sign this registration, Ctrl-C to cancel.\n`);
   const self = await registerMachine(configDir, { v: 1, uuid, name: view.name, identityPublicKey: view.identityPublicKey }, { now: o.now, prompt, validForDays: o.days });
 
   // The candidate also gets this machine as a peer, with the SAME pair secret, and this machine trusts the candidate with it
@@ -431,11 +453,12 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   }
 
   const code = finalCode(view.identityPublicKey, pin.adminPublicKey, view.random);
+  stepsOf?.begin('code');
   if (joining !== undefined) {
     o.say(`\n[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n\n`);
   } else {
     o.say(
-      `\n[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n\n` +
+      `${stepsOf === undefined ? '\n' : ''}[ok] "${printable(view.name)}" approved for ${o.days} day(s), registered with admin key ${pin.adminKeyId}.\n\n` +
         `Security code of "${printable(view.name)}" (admin key ${pin.adminKeyId}):\n\n  ${code}\n\n` +
         (selfApproval
           ? 'This machine is the admin machine: it created the admin key it enrolls with, so there is no other machine to compare the code with. Run `machine join --resume` here to finish.\n'
@@ -452,9 +475,10 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
     // A renewal of the registration of this machine: the peers must learn the new one (they learned the first when they were approved).
     // The very first approval has nobody to tell, and says nothing about it.
     const retryRenewal = 'machine join --resume, then `machine admin approve <id>` again';
-    if (trustedRegistrations(configDir, o.now()).length === 0) {
+    if (nobodyToTell) {
       formatted = { out: '', err: '', failed: false };
     } else {
+      stepsOf?.begin('distribute');
       try {
         const unlocked = await unlockAdminKey(configDir, prompt);
         report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });
@@ -468,12 +492,14 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
       }
     }
   } else if (!adminSelfImported) {
+    stepsOf?.begin('distribute');
     formatted = {
       out: '',
       err: `[warn] the other peers were NOT told about "${printable(view.name)}": this machine has no identity (\`machine init\`), so the new machine is not in its peer list. They learn it only through the manual flow (\`machine admin register\`, then \`machine peer import\` on each machine)\n`,
       failed: false,
     };
   } else {
+    stepsOf?.begin('distribute');
     try {
       const unlocked = await unlockAdminKey(configDir, prompt);
       report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });

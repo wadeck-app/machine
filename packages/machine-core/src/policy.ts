@@ -4,6 +4,20 @@ import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 
 export const POLICY_DOMAIN = 'machine/policy/v1';
+/**
+ * Policy mode `local` (hard rule 4 as amended): a policy signed by the policy key of the machine itself. A DISTINCT domain string, so that a
+ * signature made for one mode never verifies in the other, even with the same private key (the signed bytes begin with the domain).
+ */
+export const LOCAL_POLICY_DOMAIN = 'machine/policy-local/v1';
+
+/** Who manages the allow list of a machine: `admin` (delegation, the default) or `local` (the machine itself, with its own policy key). */
+export type PolicyMode = 'admin' | 'local';
+export const POLICY_MODES: readonly PolicyMode[] = ['admin', 'local'];
+
+const domainOf = (mode: PolicyMode): string => (mode === 'local' ? LOCAL_POLICY_DOMAIN : POLICY_DOMAIN);
+
+/** The exact refusal shown, audited and returned when an admin-signed policy reaches a machine that manages its own list. */
+export const MANAGED_LOCALLY_MESSAGE = 'this machine manages its own allow list (machine policy delegate to give it back to the admin)';
 
 export const SHELLS = ['cmd', 'ps', 'bash', 'sh'] as const;
 export type Shell = (typeof SHELLS)[number];
@@ -44,7 +58,7 @@ export interface SignedPolicy {
   signature: string;
 }
 
-export type PolicyFailure = 'malformed' | 'invalid-admin-key' | 'wrong-admin-key' | 'bad-signature' | 'wrong-target' | 'not-yet-valid' | 'expired' | 'stale-base' | 'rollback';
+export type PolicyFailure = 'malformed' | 'invalid-admin-key' | 'wrong-admin-key' | 'wrong-mode' | 'bad-signature' | 'wrong-target' | 'not-yet-valid' | 'expired' | 'stale-base' | 'rollback';
 export type PolicyResult = { ok: true; body: PolicyBody } | { ok: false; reason: PolicyFailure; message: string };
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -131,9 +145,15 @@ export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
   }
 }
 
-export function signPolicy(body: PolicyBody, adminPrivateKeyPkcs8: Uint8Array): SignedPolicy {
+/** Sign with the admin key (mode `admin`, the default) or with the local policy key of the target machine (mode `local`). */
+export function signPolicy(body: PolicyBody, privateKeyPkcs8: Uint8Array, mode: PolicyMode = 'admin'): SignedPolicy {
   assertPolicyBody(body);
-  return { body, signature: signDocument(POLICY_DOMAIN, body as unknown as Json, adminPrivateKeyPkcs8) };
+  return { body, signature: signDocument(domainOf(mode), body as unknown as Json, privateKeyPkcs8) };
+}
+
+/** True when `signed` carries a valid signature of `publicKey` in the domain of `mode`. */
+export function verifyPolicySignature(signed: SignedPolicy, publicKey: string, mode: PolicyMode): boolean {
+  return typeof signed.signature === 'string' && verifyDocument(domainOf(mode), signed.body as unknown as Json, publicKey, signed.signature);
 }
 
 export interface PolicyState {
@@ -144,7 +164,12 @@ export interface PolicyState {
 }
 
 export interface ApplyPolicyContext {
+  /** The mode of THIS machine (default `admin`): it alone chooses the accepted signer and the signature domain. */
+  mode?: PolicyMode;
+  /** Mode `admin`: the pinned admin public key. */
   adminPublicKey: string;
+  /** Mode `local`: the pinned public key of the local policy key. Absent in mode `local` is a failure, never a fallback to the admin key. */
+  localPublicKey?: string;
   now: number;
   targetUuid: string;
 }
@@ -158,13 +183,26 @@ export function applyPolicy(state: PolicyState, signed: SignedPolicy, ctx: Apply
     return { ok: false, reason: 'malformed', message: (e as Error).message };
   }
   const { body } = signed;
-  const pinned = tryKeyId(ctx.adminPublicKey);
-  if (pinned === undefined) return { ok: false, reason: 'invalid-admin-key', message: INVALID_ADMIN_KEY_MESSAGE };
-  if (body.adminKeyId !== pinned) {
-    return { ok: false, reason: 'wrong-admin-key', message: `policy is certified by admin key ${body.adminKeyId}, but this machine pins ${pinned}` };
+  const mode = ctx.mode ?? 'admin';
+  const signerKey = mode === 'local' ? ctx.localPublicKey : ctx.adminPublicKey;
+  const pinned = signerKey === undefined ? undefined : tryKeyId(signerKey);
+  if (signerKey === undefined || pinned === undefined) {
+    return {
+      ok: false,
+      reason: 'invalid-admin-key',
+      message: mode === 'local' ? 'the local policy key of this machine is missing or invalid (policy-mode.json): restore it, or run `machine policy delegate` to give the allow list back to the admin' : INVALID_ADMIN_KEY_MESSAGE,
+    };
   }
-  if (!verifyDocument(POLICY_DOMAIN, body as unknown as Json, ctx.adminPublicKey, signed.signature)) {
-    return { ok: false, reason: 'bad-signature', message: 'policy has an invalid signature; it was altered or not signed by the admin key' };
+  if (body.adminKeyId !== pinned) {
+    if (mode === 'local') return { ok: false, reason: 'wrong-mode', message: MANAGED_LOCALLY_MESSAGE };
+    return {
+      ok: false,
+      reason: 'wrong-admin-key',
+      message: `policy is certified by key ${body.adminKeyId}, but this machine pins admin key ${pinned}; if it was signed by the local policy key of a machine, this machine is in admin mode (\`machine policy local enable\` makes it manage its own list)`,
+    };
+  }
+  if (!verifyDocument(domainOf(mode), body as unknown as Json, signerKey, signed.signature)) {
+    return { ok: false, reason: 'bad-signature', message: `policy has an invalid signature; it was altered or not signed by the ${mode === 'local' ? 'local policy key of this machine' : 'admin key'}` };
   }
   if (body.target !== ctx.targetUuid) {
     return { ok: false, reason: 'wrong-target', message: `policy is written for machine ${body.target}, not for this machine (${ctx.targetUuid})` };
@@ -211,7 +249,8 @@ export type Decision =
  * Exact match only (no normalization, no pattern). A peer with its own list uses only that list.
  * `usage` returns how many calls were already accepted for an entry key; the caller records a use after accepting.
  */
-export function authorize(body: PolicyBody, peerUuid: string, request: CommandRequest, now: number, usage: (key: string) => number): Decision {
+export function authorize(body: PolicyBody, peerUuid: string, request: CommandRequest, now: number, usage: (key: string) => number, mode: PolicyMode = 'admin'): Decision {
+  const who = mode === 'local' ? 'the owner of this machine (`machine policy allow` here)' : 'the admin';
   if (!SHELLS.includes(request.shell) || typeof request.command !== 'string' || request.command.length === 0 || request.command.length > MAX_COMMAND || !PRINTABLE_ASCII.test(request.command)) {
     return { allowed: false, reason: 'invalid-request', message: 'request refused: the shell must be known and the command must be 1 to 2048 printable ASCII characters' };
   }
@@ -223,15 +262,15 @@ export function authorize(body: PolicyBody, peerUuid: string, request: CommandRe
     return {
       allowed: false,
       reason: 'not-listed',
-      message: `"${request.command}" (shell ${request.shell}) is not allowed for this peer; the admin must add this exact string to the ${own ? 'peer list' : 'default list'}`,
+      message: `"${request.command}" (shell ${request.shell}) is not allowed for this peer; ${who} must add this exact string to the ${own ? 'peer list' : 'default list'}`,
     };
   }
   const key = entryKey(scope, entry);
   if (entry.limits?.expiresAt !== undefined && now > entry.limits.expiresAt) {
-    return { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask the admin to renew it` };
+    return { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask ${who} to renew it` };
   }
   if (entry.limits?.maxCalls !== undefined && usage(key) >= entry.limits.maxCalls) {
-    return { allowed: false, reason: 'exhausted', message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask the admin to renew it` };
+    return { allowed: false, reason: 'exhausted', message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask ${who} to renew it` };
   }
   return { allowed: true, entryKey: key, entry };
 }

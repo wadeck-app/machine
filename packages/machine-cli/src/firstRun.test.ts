@@ -176,7 +176,8 @@ describe('machine admin init chooses a passphrase (decision 51)', () => {
     expect(warnings(r.err)).toEqual([]);
     // The prompts are short: the explanation is a separate paragraph above them (a long prompt line hides that something must be typed).
     expect(s.labels).toEqual(['Admin passphrase: ', 'Confirm passphrase: ']);
-    expect(r.out).toMatch(/^\nThe admin passphrase[^\n]*\nAt least 12 characters[^\n]*Enter[^\n]*random[^\n]*\n\n\[ok\]/);
+    // Under the header of the step (decision 67); the next header closes it.
+    expect(r.out).toMatch(/^={25}\nStep 1\/2: Admin passphrase\n\nThe admin passphrase[^\n]*\nAt least 12 characters[^\n]*Enter[^\n]*random[^\n]*\n\n={25}\nStep 2\/2: Done\n\n\[ok\]/);
     expect(r.out).toMatch(/\[ok\] admin key created/);
     // The chosen passphrase really protects the key: a registration is signed with it.
     await ok(a, ['init', '--name', 'desktop']);
@@ -413,7 +414,7 @@ describe('passphrase hint (decision 57)', () => {
   it('--hint is refused anywhere else', async () => {
     const r = await cli(a, ['status', '--hint', 'x']);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/--hint only applies to `machine admin init` and `machine setup`/);
+    expect(r.err).toMatch(/--hint only applies to `machine admin init`, `machine setup` and `machine policy local enable`/);
   });
 
   it('a malformed hint in the key file stops the unlock before the prompt, naming the file', async () => {

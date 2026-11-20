@@ -31,6 +31,8 @@ export interface GenerateOptions {
   bundleDir: string;
   /** ci/templates/bin-machine.cjs */
   shimPath: string;
+  /** README.md of the repository root: copied into the wrapper, npm shows it as the package page (npm packs README.md whatever `files` says). */
+  readmePath: string;
   /** CI: a missing updater or app-module is an error; locally it is a warning and the file is left out. */
   strict: boolean;
 }
@@ -45,6 +47,7 @@ export function generatePackages(options: GenerateOptions): { warnings: string[]
     throw new Error(`${options.outDir} already exists: delete it first, generated folders are never merged`);
   }
   if (!existsSync(options.shimPath)) throw new Error(`shim ${options.shimPath} not found: it ships at packages/machine-cli/ci/templates/bin-machine.cjs`);
+  if (!existsSync(options.readmePath)) throw new Error(`readme ${options.readmePath} not found: the wrapper package page is the README.md at the repository root`);
   const bundle = join(options.bundleDir, 'machine.cjs');
   if (!existsSync(bundle)) throw new Error(`${bundle} not found: run npm run bundle (BUNDLE_VERSION=<version> node packages/machine-cli/scripts/bundle.mjs --out ${bundle})`);
 
@@ -78,6 +81,7 @@ export function generatePackages(options: GenerateOptions): { warnings: string[]
   writeJson(join(wrapperDir, 'package.json'), wrapperPackageJson({ version: options.version, files }));
   copyFileSync(options.shimPath, join(wrapperDir, 'bin', 'machine.js'));
   chmodSync(join(wrapperDir, 'bin', 'machine.js'), 0o755);
+  copyFileSync(options.readmePath, join(wrapperDir, 'README.md'));
   for (const f of files) cpSync(join(options.bundleDir, f), join(wrapperDir, f), { recursive: true });
   return { warnings };
 }

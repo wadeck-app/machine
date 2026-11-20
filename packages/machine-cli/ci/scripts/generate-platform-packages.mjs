@@ -46,6 +46,7 @@ try {
     launcherDir: opts.launchers,
     bundleDir: opts.bundleDir,
     shimPath: resolve(packageDir, 'ci', 'templates', 'bin-machine.cjs'),
+    readmePath: resolve(packageDir, '..', '..', 'README.md'),
     strict: opts.strict,
   });
   for (const w of warnings) process.stderr.write(`[warn] ${w}\n`);

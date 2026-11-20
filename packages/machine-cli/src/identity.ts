@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hostname as osHostname } from 'node:os';
-import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeBase64urlStrict, generateSigningKeyPair, machineNameProblem, normalizeMachineName, signBytes, verifyBytes, type SigningKeyPair } from '@wadeck-app/machine-core';
 import { MachineNameError, NotInitializedError } from './errors.js';
@@ -54,6 +54,11 @@ export function chooseMachineName(typed: string | undefined, hostname: () => str
     name: r.name,
     note: `name "${r.name}" taken from the computer name "${raw}" (it is the stable reference of this machine, signed at enrollment; for a friendlier local label later: machine alias set <label> ${r.name})`,
   };
+}
+
+/** True when this machine already has its identity file (`readMachine` would not throw NotInitializedError). */
+export function machineExists(configDir: string): boolean {
+  return existsSync(identityFile(configDir));
 }
 
 /** The identity of this machine, created when there is none (the name from `chooseMachineName`). `--name` on an existing identity is refused, never ignored. */

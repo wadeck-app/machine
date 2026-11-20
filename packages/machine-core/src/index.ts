@@ -30,8 +30,13 @@ export {
 } from './revocation.js';
 export { parseRevocationHello, shouldSendRevocations, type HelloResult, type RevocationHello } from './revocationCatchup.js';
 export {
+  LOCAL_POLICY_DOMAIN,
+  MANAGED_LOCALLY_MESSAGE,
   POLICY_DOMAIN,
+  POLICY_MODES,
   SHELLS,
+  verifyPolicySignature,
+  type PolicyMode,
   applyPolicy,
   assertPolicyBody,
   authorize,

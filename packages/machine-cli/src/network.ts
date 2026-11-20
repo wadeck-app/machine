@@ -3,7 +3,6 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DOCUMENT_SKEW_SECONDS,
-  POLICY_DOMAIN,
   applyPolicy,
   applyRevocation,
   canonicalSignedRevocation,
@@ -15,9 +14,10 @@ import {
   verifyRevocation,
   signRegistration,
   tryKeyId,
-  verifyDocument,
+  verifyPolicySignature,
   verifyRegistration,
   type PolicyBody,
+  type PolicyMode,
   type RegistrationBody,
   type RevocationEntry,
   type SignedPolicy,
@@ -29,6 +29,7 @@ import { buildDirectory, type Directory, type PairedRegistration } from './direc
 import { withFileLock, writeFileAtomic } from './fsutil.js';
 import { readMachine } from './identity.js';
 import { SECRETS_DIRNAME } from './paths.js';
+import { policyFiles, readPolicyMode, type ModeInfo } from './policyMode.js';
 
 // What this machine knows about the network: the pinned admin key, the registrations of its peers with their pair
 // secrets, the revocations and the policy in force. Every piece is admin-signed and re-verified when loaded.
@@ -56,8 +57,9 @@ const revocationSeenFile = (configDir: string) => join(configDir, 'revocation-se
 // When each revocation was installed on THIS machine (epoch seconds, the first time): the revocation entries carry only uuid and serial, and the
 // signed lists are pruned, so the date of a revocation is not derivable from them. Informational: shown by `machine status`.
 const revocationTimesFile = (configDir: string) => join(configDir, 'revocation-times.json');
-const policyFile = (configDir: string) => join(configDir, 'policy.json');
-const policyStateFile = (configDir: string) => join(configDir, 'policy-state.json');
+// The policy files of the line of the current mode (policyMode.ts): admin-signed (policy.json) or signed by the local policy key (policy-local.json).
+const policyFile = (configDir: string, mode: PolicyMode) => policyFiles(configDir, mode).policy;
+const policyStateFile = (configDir: string, mode: PolicyMode) => policyFiles(configDir, mode).state;
 
 function readJsonObject(file: string, what: string): Record<string, unknown> | undefined {
   let text: string;
@@ -437,27 +439,46 @@ interface PolicyState {
   highestSeen: number;
 }
 
-function readPolicyState(configDir: string): PolicyState {
-  const raw = readJsonObject(policyStateFile(configDir), 'delete it only if you accept that an older policy could be installed again');
+function readPolicyState(configDir: string, mode: PolicyMode): PolicyState {
+  const file = policyStateFile(configDir, mode);
+  const raw = readJsonObject(file, 'delete it only if you accept that an older policy could be installed again');
   if (!raw) return { version: 0, highestSeen: 0 };
   if (raw.v !== 1 || !Number.isSafeInteger(raw.version) || !Number.isSafeInteger(raw.highestSeen)) {
-    throw new Error(`${policyStateFile(configDir)} is corrupt or invalid (unexpected shape): it protects against installing an older policy`);
+    throw new Error(`${file} is corrupt or invalid (unexpected shape): it protects against installing an older policy`);
   }
   return { version: raw.version as number, highestSeen: raw.highestSeen as number };
 }
 
-/** Install a policy signed by the pinned admin for THIS machine. Nothing changes when it is refused. */
+/** The version counters of the policy line of the current mode (0 and 0 when none was ever installed): the base of the next local edit. */
+export function activePolicyState(configDir: string): PolicyState & { mode: PolicyMode } {
+  const info = readPolicyMode(configDir);
+  return { mode: info.mode, ...readPolicyState(configDir, info.mode) };
+}
+
+/**
+ * Install a policy for THIS machine, signed by whoever the mode of this machine says: the pinned admin key (mode admin) or the local
+ * policy key (mode local). A document of the other kind is refused (applyPolicy). Nothing changes when it is refused.
+ */
 export function installPolicy(configDir: string, signed: SignedPolicy, options: { now: number }): PolicyBody {
-  const pin = readAdminPin(configDir);
+  const info = readPolicyMode(configDir);
   const self = readMachine(configDir);
-  const state = readPolicyState(configDir);
-  const applied = applyPolicy(state, signed, { adminPublicKey: pin.adminPublicKey, now: options.now, targetUuid: self.uuid });
+  const state = readPolicyState(configDir, info.mode);
+  // Mode local needs no admin pin to verify (a machine can be local before it ever joined a network); mode admin does.
+  const adminPublicKey = info.mode === 'admin' ? readAdminPin(configDir).adminPublicKey : existsSync(adminPinFile(configDir)) ? readAdminPin(configDir).adminPublicKey : '';
+  const applied = applyPolicy(state, signed, {
+    mode: info.mode,
+    adminPublicKey,
+    ...(info.mode === 'local' ? { localPublicKey: info.localPublicKey } : {}),
+    now: options.now,
+    targetUuid: self.uuid,
+  });
   if (!applied.ok) throw new Error(`policy refused (${applied.reason}): ${applied.message}`);
   // Order matters: highestSeen first (a version once started can never be applied again), then the policy, then the version.
   const highestSeen = Math.max(state.highestSeen, applied.body.version);
-  writeFileAtomic(policyStateFile(configDir), `${JSON.stringify({ v: 1, version: state.version, highestSeen }, null, 2)}\n`, 0o644);
-  writeFileAtomic(policyFile(configDir), `${JSON.stringify(signed, null, 2)}\n`, 0o644);
-  writeFileAtomic(policyStateFile(configDir), `${JSON.stringify({ v: 1, version: applied.body.version, highestSeen }, null, 2)}\n`, 0o644);
+  const stateFile = policyStateFile(configDir, info.mode);
+  writeFileAtomic(stateFile, `${JSON.stringify({ v: 1, version: state.version, highestSeen }, null, 2)}\n`, 0o644);
+  writeFileAtomic(policyFile(configDir, info.mode), `${JSON.stringify(signed, null, 2)}\n`, 0o644);
+  writeFileAtomic(stateFile, `${JSON.stringify({ v: 1, version: applied.body.version, highestSeen }, null, 2)}\n`, 0o644);
   return applied.body;
 }
 
@@ -466,18 +487,34 @@ export interface Network {
   enrolled: boolean;
   directory: Directory;
   policy: PolicyBody | undefined;
+  /** Who manages the allow list of this machine (hard rule 4 as amended): the admin (default) or this machine itself. */
+  policyMode: PolicyMode;
+  /** Mode local: the id of the pinned local policy key. */
+  localPolicyKeyId?: string;
   revocations: RevocationEntry[];
   /** Everything that was left out and why: shown by `machine status`, never silent. */
   problems: string[];
 }
 
-function loadPolicy(configDir: string, adminPublicKey: string, problems: string[]): PolicyBody | undefined {
-  const raw = readJsonObject(policyFile(configDir), 'reinstall the policy');
+/** The mode of this machine for a reader that must not fail: a damaged mode file is a problem line and an EMPTY list (fail closed), never mode admin. */
+function modeForLoad(configDir: string, problems: string[]): ModeInfo | 'damaged' {
+  try {
+    return readPolicyMode(configDir);
+  } catch (e) {
+    problems.push(`${(e as Error).message}: every command is refused until it is fixed`);
+    return 'damaged';
+  }
+}
+
+function loadPolicy(configDir: string, info: ModeInfo, adminPublicKey: string, problems: string[]): PolicyBody | undefined {
+  const file = policyFile(configDir, info.mode);
+  const raw = readJsonObject(file, 'reinstall the policy');
   if (!raw) return undefined;
   const signed = raw as unknown as SignedPolicy;
+  const publicKey = info.mode === 'local' ? info.localPublicKey : adminPublicKey;
   // Re-verified at every load: a policy file edited by hand is not a policy.
-  if (typeof signed.signature !== 'string' || typeof signed.body !== 'object' || signed.body === null || !verifyDocument(POLICY_DOMAIN, signed.body as never, adminPublicKey, signed.signature)) {
-    problems.push(`${policyFile(configDir)} does not match its admin signature: it is ignored and every command is refused until a valid policy is installed`);
+  if (typeof signed.signature !== 'string' || typeof signed.body !== 'object' || signed.body === null || !verifyPolicySignature(signed, publicKey, info.mode)) {
+    problems.push(`${file} does not match its ${info.mode === 'local' ? 'local policy key' : 'admin'} signature: it is ignored and every command is refused until a valid policy is installed`);
     return undefined;
   }
   return signed.body;
@@ -485,21 +522,29 @@ function loadPolicy(configDir: string, adminPublicKey: string, problems: string[
 
 export function loadNetwork(configDir: string, now: number): Network {
   const self = readMachine(configDir);
+  const modeProblems: string[] = [];
+  const info = modeForLoad(configDir, modeProblems);
+  // A damaged mode file: nothing is allowed, and the mode shown is the safer one (local: a machine that left it must say so).
+  const policyMode: PolicyMode = info === 'damaged' ? 'local' : info.mode;
+  const localKey = info !== 'damaged' && info.mode === 'local' ? { localPolicyKeyId: info.localKeyId } : {};
   if (!existsSync(adminPinFile(configDir))) {
+    // Not enrolled: no peer can call, so the policy does not matter yet; the mode is still reported.
     return {
       enrolled: false,
       directory: buildDirectory([], { adminPublicKey: '', now, revocations: [], selfUuid: self.uuid }),
       policy: undefined,
+      policyMode,
+      ...localKey,
       revocations: [],
-      problems: [],
+      problems: modeProblems,
     };
   }
   const pin = readAdminPin(configDir);
   const revocations = readRevocations(configDir);
   const directory = buildDirectory(readPeers(configDir), { adminPublicKey: pin.adminPublicKey, now, revocations, selfUuid: self.uuid });
-  const problems = [...directory.problems];
-  const policy = loadPolicy(configDir, pin.adminPublicKey, problems);
-  return { enrolled: true, directory, policy, revocations, problems };
+  const problems = [...directory.problems, ...modeProblems];
+  const policy = info === 'damaged' ? undefined : loadPolicy(configDir, info, pin.adminPublicKey, problems);
+  return { enrolled: true, directory, policy, policyMode, ...localKey, revocations, problems };
 }
 
 /** The highest serial among the registrations stored here for `uuid`: what a revocation of that machine must cover. */

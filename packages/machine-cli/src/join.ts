@@ -354,6 +354,8 @@ export interface FlowOptions {
    * admin key approves itself there (it returns true when it did): the wait then ends at once and nobody else is asked.
    */
   beforeWait?: (state: CandidacyState) => Promise<boolean>;
+  /** Announces the step that begins (decision 67); the caller prints the header, or nothing when that step is not on its path. */
+  step?: (key: 'login' | 'candidacy' | 'compare') => void;
 }
 
 export interface Enrolled {
@@ -369,6 +371,9 @@ export interface Enrolled {
 export type FlowResult = { status: 'posted'; posted: JoinResult } | { status: 'enrolled'; posted: JoinResult; enrolled: Enrolled };
 
 const normalizeCode = (code: string) => code.toUpperCase().replace(/[\s-]/g, '');
+
+/** One line above the pin question: why a person compares the code instead of trusting a message (T-05). */
+export const PIN_WHY = 'Why: the relay could have swapped the admin key; only the same code on both screens proves it did not.';
 
 export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowResult> {
   const info = exportMachineInfo(configDir);
@@ -406,6 +411,7 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
       ...(o.now ? { now: o.now } : {}),
       hostname,
     };
+    o.step?.('login');
     // No pairing code: device login, the user approves in the relay console.
     const joined = o.code !== undefined ? await joinRelay(configDir, { ...common, code: o.code }) : await joinWithDeviceLogin(configDir, { ...common, timing: o.timing, say: o.say });
     relayUrl = joined.relayUrl;
@@ -414,6 +420,7 @@ export async function runJoin(configDir: string, o: FlowOptions): Promise<FlowRe
     state = readCandidacy(configDir) as CandidacyState;
   }
 
+  o.step?.('candidacy');
   o.onPosted({ ...resultOf(relayUrl, label, state), resumed });
   const posted = resultOf(relayUrl, label, state);
   if (!o.wait) return { status: 'posted', posted };
@@ -501,6 +508,7 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
   const adminRef = adminName !== undefined ? `"${printable(adminName)}"` : 'the admin machine';
   // Throws when another admin key is already pinned: before the human is asked anything.
   const alreadyPinned = isAlreadyPinned(configDir, checked);
+  o.step?.('compare');
   if (alreadyPinned) {
     // Never silent: the human sees why no code is compared (the first machine of a network created this admin key itself).
     o.say(`The admin key ${checked.admin.adminKeyId} is already pinned here (this machine created it or pinned it earlier): no security code to compare.\n\n`);
@@ -514,7 +522,8 @@ async function enroll(configDir: string, state: CandidacyState, info: MachineInf
     } else {
       let answer: string;
       try {
-        answer = await o.ask(`Does ${adminRef} show exactly this security code? If yes, pin its admin key ${checked.admin.adminKeyId}? [y/N] `);
+        // The reason is in the question itself (docs: "Why the security code is compared on the joining machine"; threat-model T-05).
+        answer = await o.ask(`${PIN_WHY}\nDoes ${adminRef} show exactly this security code? If yes, pin its admin key ${checked.admin.adminKeyId}? [y/N] `);
       } catch (e) {
         if (e instanceof PromptTimeoutError) throw e;
         throw new Error(`no terminal to confirm the security code ${code}: the admin key was NOT pinned. Compare it with the one on ${adminRef}, then run \`machine join --resume --yes-final-code "${code}"\` (keep the quotes). ${keep}`);

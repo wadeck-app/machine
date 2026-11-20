@@ -39,7 +39,7 @@ export interface PolicyDraftEntry {
  * A is the admin machine ("desktop"), B receives commands ("laptop"): initialized, registered with each other through
  * bundles, B pins the admin key and has the policy installed. No daemon is started.
  */
-export async function provision(root: string, a: string, b: string, policy: PolicyDraftEntry[]): Promise<void> {
+export async function provision(root: string, a: string, b: string, policy: PolicyDraftEntry[]): Promise<string> {
   await ok(a, ['init', '--name', 'desktop']);
   await ok(b, ['init', '--name', 'laptop']);
   const init = await ok(a, ['admin', 'init', '--generate']);
@@ -59,6 +59,8 @@ export async function provision(root: string, a: string, b: string, policy: Poli
   writeFileSync(join(root, 'draft.json'), JSON.stringify({ v: 1, target, version: 1, baseVersion: 0, defaults: policy, peers: {} }));
   await ok(a, ['admin', 'sign-policy', join(root, 'draft.json'), '--out', join(root, 'policy-b.json')], prompt);
   await ok(b, ['policy', 'install', join(root, 'policy-b.json')]);
+  // The admin passphrase, for tests that sign again from the admin machine.
+  return passphrase;
 }
 
 export interface TestAdmin {

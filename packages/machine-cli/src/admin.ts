@@ -139,7 +139,7 @@ export async function askAdminPassphrase(
 ): Promise<{ chosen: string | undefined; advice: string | undefined; hint: string | undefined }> {
   if (options.generate) return { chosen: undefined, advice: undefined, hint: options.hint };
   options.say(
-    '\nThe admin passphrase protects the key that signs every machine and policy of your network (an encrypted copy of it goes to every machine).\n' +
+    'The admin passphrase protects the key that signs every machine and policy of your network (an encrypted copy of it goes to every machine).\n' +
       `At least ${PASSPHRASE_MIN_LENGTH} characters, ${PASSPHRASE_RECOMMENDED_LENGTH} or more recommended. Press Enter at the first prompt to get a random one instead.\n\n`,
   );
   const again = (reason: string, attempt: number, final: string): void => {
@@ -173,7 +173,7 @@ export async function askAdminPassphrase(
 }
 
 /** The optional hint (decision 57): the flag when given, else a visible question (Enter = none). A hint that gives the passphrase away is refused. */
-async function askHint(passphrase: string, options: { hint?: string } & PassphraseIo): Promise<string | undefined> {
+export async function askHint(passphrase: string, options: { hint?: string } & PassphraseIo): Promise<string | undefined> {
   if (options.hint !== undefined) {
     const check = checkHint(options.hint, passphrase);
     if (!check.ok) throw new Error(`--hint: ${check.message}. Nothing was created`);

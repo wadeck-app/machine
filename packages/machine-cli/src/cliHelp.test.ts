@@ -14,7 +14,7 @@ const GROUPS: Record<string, string[]> = {
   startup: ['status', 'enable', 'disable'],
   cli: ['version', 'update', 'rollback', 'self-check', 'logs', 'post-update', 'register'],
   alias: ['list', 'set', 'rm'],
-  policy: ['install'],
+  policy: ['install', 'allow', 'local', 'delegate'],
 };
 
 let root: string;

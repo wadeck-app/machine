@@ -241,7 +241,18 @@ Administration (enrollment through the relay, or by files):
                                      Plain text, reads local files only, sends nothing. Exit 0, 3 unknown machine
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
-  policy install <signed.json>       install a policy signed by the admin for this machine
+  policy install <signed.json>       install a policy for this machine: signed by the admin (mode admin, the default) or by the local policy key (mode local)
+  policy local [enable [--hint <text>]]
+                                     who manages the allow list of THIS machine. Bare: shows the mode. enable: this machine manages
+                                     its own list with its own policy key and a LOCAL passphrase (typed twice, asked every time you
+                                     change the list, nothing is cached); admin-signed policies are then refused and the list starts
+                                     EMPTY. It never enrols a machine and never lifts a revocation: those stay with the admin
+  policy allow [--shell <s>] [--peer <machine>] -- <command>
+                                     mode local: allow ONE exact command on THIS machine (difference, y/N, local passphrase, signed with
+                                     the local key, installed here, no relay); --remove withdraws it; --peer edits the own list of one
+                                     registered peer; --list shows what is allowed (read-only, no passphrase, any mode)
+  policy delegate                    mode local: give the list back to the admin (asks the local passphrase). The list becomes EMPTY
+                                     until the admin signs one; the local key is archived next to its place
 
 Options:
   --json                 machine-readable output
@@ -254,7 +265,7 @@ Options:
   --out <file>           write a signed document or bundle to a file (--force to overwrite)
   --name <name>          machine name for init, join, setup when the identity is created (normalised: lowercase letters, digits, hyphens)
   --generate             random admin passphrase for admin init and setup (no question)
-  --hint <text>          hint shown at every passphrase prompt, for admin init and setup (optional, max 80 printable ASCII characters, stored in clear in the key file: never write the passphrase in it)
+  --hint <text>          hint shown at every passphrase prompt, for admin init, setup and policy local enable (optional, max 80 printable ASCII characters, stored in clear in the key file: never write the passphrase in it)
   --config-dir <path>    configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)
   --help, -h             this help
   --version              print the version of this build (stamped in a release bundle) and exit
@@ -316,6 +327,7 @@ function parse(argv: string[]): Parsed {
     }
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--hint') out.hint = valueOf('--hint');
+    else if (a === '--peer') out.peer = valueOf('--peer');
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
     else if (a === '--address') {
@@ -424,12 +436,16 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
   }
-  if (args.passthrough.length > 0 && command !== 'run' && !(command === 'admin' && rest[0] === 'allow')) {
-    return fail('"--" is only used by `machine run` and `machine admin allow` (it introduces the command line)', EXIT.usage);
+  const policyAllow = command === 'policy' && rest[0] === 'allow';
+  if (args.passthrough.length > 0 && command !== 'run' && !(command === 'admin' && rest[0] === 'allow') && !policyAllow) {
+    return fail('"--" is only used by `machine run`, `machine admin allow` and `machine policy allow` (it introduces the command line)', EXIT.usage);
   }
   const peerConnect = command === 'peer' && rest[0] === 'connect';
-  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !(peerConnect && args.remove && !args.list)) {
-    return fail('--list and --remove only apply to `machine admin allow` (`machine admin allow <machine> --list`, `machine admin allow <machine> --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
+  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !policyAllow && !(peerConnect && args.remove && !args.list)) {
+    return fail('--list and --remove only apply to `machine admin allow` and `machine policy allow` (`machine admin allow <machine> --list`, `machine policy allow --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
+  }
+  if (args.peer !== undefined && !policyAllow) {
+    return fail('--peer only applies to `machine policy allow` (`machine policy allow --peer <machine> -- <command>` edits the own list of a peer)', EXIT.usage);
   }
   if (args.wake && args.noWake) return fail('--wake and --no-wake cannot be combined: --wake forces the wake of a peer that cannot be reached, --no-wake forbids it', EXIT.usage);
   if ((args.wake || args.noWake) && command !== 'run' && command !== 'ping') {
@@ -446,7 +462,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
 
   if (args.hint !== undefined) {
-    if (!(command === 'setup' || (command === 'admin' && rest[0] === 'init'))) return fail('--hint only applies to `machine admin init` and `machine setup` (a hint shown at every passphrase prompt)', EXIT.usage);
+    if (!(command === 'setup' || (command === 'admin' && rest[0] === 'init') || (command === 'policy' && rest[0] === 'local' && rest[1] === 'enable'))) return fail('--hint only applies to `machine admin init`, `machine setup` and `machine policy local enable` (a hint shown at every passphrase prompt)', EXIT.usage);
     // The rules that do not depend on the passphrase fail now, before anything is asked.
     const problem = checkHint(args.hint);
     if (!problem.ok) return fail(`--hint: ${problem.message}`, EXIT.usage);
@@ -470,8 +486,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || command === 'setup' || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record'));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
+    const prompts = command === 'join' || command === 'setup' || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable', EXIT.usage);
   }
 
   // `machine policy` alone: no read-only view of the policy exists, so the help of the group (decision 66). Needs no configuration directory.
@@ -561,6 +577,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           `version: ${r.version}`,
           `config: ${r.configDir}`,
           r.enrolled ? `enrolled, ${r.peers} peer(s), ${r.policyVersion === undefined ? 'no policy (every command is refused)' : `policy version ${r.policyVersion}`}` : (r.note ?? 'not enrolled'),
+          r.policyMode === 'local'
+            ? `policy mode: local (this machine manages its own allow list, policy key ${r.localPolicyKeyId ?? 'unknown: policy-mode.json is damaged'})`
+            : 'policy mode: admin (allow list signed by the admin)',
           ...(r.revocationVersion === undefined ? [] : [`revocations: version ${r.revocationVersion}`]),
           ...revokedBlock(r.revoked ?? [], Math.floor((io.now?.() ?? new Date()).getTime() / 1000)),
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
@@ -575,7 +594,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
         const nowSeconds = Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
         const view = await addRelayView(configDir, r, nowSeconds, undefined, { allowLocal: io.allowLoopbackPeers === true });
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''}`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds)])];
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''} policy: ${r.policyMode}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''} policy: unknown`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds)])];
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
