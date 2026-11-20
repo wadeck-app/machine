@@ -10,6 +10,7 @@
 | Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | compare the relay login code with the one in the relay console and approve (nothing is typed); on the admin machine: y/N and the passphrase; on both machines: compare the security code |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine | y/N and the passphrase |
 | Start at login (each machine) | `machine startup enable` | none; never automatic unless `--auto-startup` |
+| Stop starting at login | `machine startup disable` | none; also ends the running daemon of the job |
 | Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
 | Reach a machine that sleeps (same LAN) | `machine peer connect <machine> --address <ip>:<port> --wake-mac <mac>` once, then `machine run` / `machine ping` as usual; `machine peer wake <machine>` to wake now | type the MAC of the target (never learned from the relay) |
 

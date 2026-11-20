@@ -521,7 +521,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         }
         await (client as unknown as { send(command: string): Promise<unknown> }).send('quit');
         for (let i = 0; i < 50 && (await client.isRunning()); i++) await new Promise((r) => setTimeout(r, 100));
-        if (await client.isRunning()) return fail('the daemon did not stop within 5 seconds: stop its process (orch: `orch stop` on the machine job)');
+        if (await client.isRunning()) return fail('the daemon did not stop within 5 seconds: end it with `orch kill machine` if orch runs it (`orch stop` would stop the orch daemon, not this job)');
         emit({ stopped: true }, '[ok] daemon stopped\n');
         return EXIT.ok;
       }

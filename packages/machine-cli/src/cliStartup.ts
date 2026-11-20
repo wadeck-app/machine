@@ -61,7 +61,7 @@ export async function runStartupCommand(ctx: CommandContext): Promise<number> {
     }
     if (sub === 'disable') {
       const r = await disableStartup(sctx);
-      emit(r, `[ok] startup job "${r.id}" ${r.outcome}\n`);
+      emit(r, `[ok] ${r.stopped ? 'running daemon stopped, ' : ''}startup job "${r.id}" ${r.outcome}\n`);
       return EXIT.ok;
     }
     const s = await startupStatus(sctx);

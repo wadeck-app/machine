@@ -128,7 +128,7 @@ describe('enableStartup', () => {
   });
 
   it('library-only options: another job id, and no restart-on-exit (used by a safety check against the real orch, no CLI flag)', async () => {
-    stub.script({ ensure: { stdout: 'added zz-other\n' }, remove: { stdout: 'removed zz-other\n' }, show: { stdout: ownedJob('zz-other') }, list: { stdout: '[]' } });
+    stub.script({ ensure: { stdout: 'added zz-other\n' }, remove: { stdout: 'removed zz-other\n' }, show: { stdout: ownedJob('zz-other') }, kill: { stdout: 'Job "zz-other" is not running.\n' }, list: { stdout: '[]' } });
     const r = await enableStartup({ ...ctx(), id: 'zz-other', restartOnExit: false });
     expect(r.id).toBe('zz-other');
     const expected = ensureArgs(currentCommand());
@@ -136,7 +136,7 @@ describe('enableStartup', () => {
     expected.splice(expected.indexOf('--restart-on-exit'), 1);
     await disableStartup({ ...ctx(), id: 'zz-other' });
     expect((await startupStatus({ ...ctx(), id: 'zz-other' })).id).toBe('zz-other');
-    expect(stub.calls()).toEqual([expected, ['show', 'zz-other', '--json'], ['remove', 'zz-other', '--if-exists'], ['show', 'zz-other', '--json'], ['list', '--json']]);
+    expect(stub.calls()).toEqual([expected, ['show', 'zz-other', '--json'], ['kill', 'zz-other'], ['remove', 'zz-other', '--if-exists'], ['show', 'zz-other', '--json'], ['list', '--json']]);
   });
 
   it.each([
@@ -196,22 +196,51 @@ describe('disableStartup', () => {
     ['absent machine\n', 'absent'],
     ['{"result":"absent","id":"machine"}', 'absent'],
   ])('reports %j as %s (the job is shown first, then removed)', async (stdout, outcome) => {
-    stub.script({ show: { stdout: ownedJob() }, remove: { stdout } });
-    expect(await disableStartup(ctx())).toEqual({ outcome, id: 'machine' });
-    expect(stub.calls()).toEqual([['show', 'machine', '--json'], ['remove', 'machine', '--if-exists']]);
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" is not running.\n' }, remove: { stdout } });
+    expect(await disableStartup(ctx())).toEqual({ outcome, id: 'machine', stopped: false });
+    expect(stub.calls()).toEqual([['show', 'machine', '--json'], ['kill', 'machine'], ['remove', 'machine', '--if-exists']]);
+  });
+
+  it('a running instance is killed BEFORE the job is removed (remove alone leaves the tree running), and the result says so', async () => {
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" killed.\n' }, remove: { stdout: 'removed machine\n' } });
+    expect(await disableStartup(ctx())).toEqual({ outcome: 'removed', id: 'machine', stopped: true });
+    expect(stub.calls().map((c) => c[0])).toEqual(['show', 'kill', 'remove']);
+  });
+
+  it('several instances and a cancelled pending restart still count as stopped; "not running" with a cancelled restart does not', async () => {
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" killed (2 instances) (its pending restart was cancelled).\n' }, remove: { stdout: 'removed machine\n' } });
+    expect((await disableStartup(ctx())).stopped).toBe(true);
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" is not running; its pending restart was cancelled.\n' }, remove: { stdout: 'removed machine\n' } });
+    expect((await disableStartup(ctx())).stopped).toBe(false);
+  });
+
+  it('a failed kill leaves the job in place: remove is not called and the message says nothing was removed and what to do', async () => {
+    stub.script({ show: { stdout: ownedJob() }, kill: { code: 1, stderr: 'cannot end pid 42: access denied\n' }, remove: { stdout: 'removed machine\n' } });
+    const e = (await disableStartup(ctx()).catch((x: unknown) => x)) as Error;
+    expect(e).toBeInstanceOf(StartupError);
+    expect(e.message).toContain('access denied');
+    expect(e.message).toMatch(/NOT removed.*machine startup disable/s);
+    expect(stub.calls().map((c) => c[0])).toEqual(['show', 'kill']);
+  });
+
+  it('a kill answer that says neither killed nor not running fails loudly with orch output, job kept', async () => {
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'something odd\n' }, remove: { stdout: 'removed machine\n' } });
+    await expect(disableStartup(ctx())).rejects.toThrow(/did not say.*something odd.*NOT removed/s);
+    expect(stub.calls().map((c) => c[0])).toEqual(['show', 'kill']);
   });
 
   it('no such job (orch show exit 3): absent, nothing removed', async () => {
     stub.script({ show: { code: 3 } });
-    expect(await disableStartup(ctx())).toEqual({ outcome: 'absent', id: 'machine' });
+    expect(await disableStartup(ctx())).toEqual({ outcome: 'absent', id: 'machine', stopped: false });
     expect(stub.calls()).toEqual([['show', 'machine', '--json']]);
   });
 
   it('maps the failures like enable does (not installed, exit 2, exit 1)', async () => {
     await expect(disableStartup({ ...ctx(), orch: missingOrch() })).rejects.toThrow(/orch is not installed/);
-    stub.script({ show: { stdout: ownedJob() }, remove: { code: 2 } });
+    const killed = { kill: { stdout: 'Job "machine" is not running.\n' } };
+    stub.script({ show: { stdout: ownedJob() }, ...killed, remove: { code: 2 } });
     await expect(disableStartup(ctx())).rejects.toThrow(/run `orch status`/);
-    stub.script({ show: { stdout: ownedJob() }, remove: { code: 1, stderr: 'nope' } });
+    stub.script({ show: { stdout: ownedJob() }, ...killed, remove: { code: 1, stderr: 'nope' } });
     await expect(disableStartup(ctx())).rejects.toThrow(/nope/);
     stub.script({ show: { code: 1, stderr: 'broken' } });
     await expect(disableStartup(ctx())).rejects.toThrow(/broken/);
@@ -236,9 +265,9 @@ describe('disableStartup', () => {
 
   it('an older machine job (wscript wrapper with a hash, or without) and the development form are owned', async () => {
     const wrapper = '"C:\\Windows\\System32\\wscript.exe" //B //Nologo "C:\\c\\bin\\1\\machine-daemon.vbs" 0123456789ab';
-    stub.script({ show: { stdout: ownedJob('machine', wrapper) }, remove: { stdout: 'removed machine\n' } });
+    stub.script({ show: { stdout: ownedJob('machine', wrapper) }, kill: { stdout: 'Job "machine" killed.\n' }, remove: { stdout: 'removed machine\n' } });
     expect((await disableStartup(ctx())).outcome).toBe('removed');
-    stub.script({ show: { stdout: ownedJob('machine', "'/usr/bin/node' '/x/machine.cjs' daemon") }, remove: { stdout: 'removed machine\n' } });
+    stub.script({ show: { stdout: ownedJob('machine', "'/usr/bin/node' '/x/machine.cjs' daemon") }, kill: { stdout: 'Job "machine" is not running.\n' }, remove: { stdout: 'removed machine\n' } });
     expect((await disableStartup(ctx())).outcome).toBe('removed');
   });
 });
@@ -326,6 +355,17 @@ describe('machine startup (CLI)', () => {
     const r = await run(['startup', 'disable']);
     expect(r.code).toBe(0);
     expect(r.out).toContain('absent');
+  });
+
+  it('disable says whether a running daemon was stopped', async () => {
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" killed.\n' }, remove: { stdout: 'removed machine\n' } });
+    const running = await run(['startup', 'disable']);
+    expect(running.out).toBe('[ok] running daemon stopped, startup job "machine" removed\n');
+    stub.script({ show: { stdout: ownedJob() }, kill: { stdout: 'Job "machine" is not running.\n' }, remove: { stdout: 'removed machine\n' } });
+    const idle = await run(['startup', 'disable']);
+    expect(idle.out).toBe('[ok] startup job "machine" removed\n');
+    const json = await run(['startup', 'disable', '--json']);
+    expect(JSON.parse(json.out)).toEqual({ outcome: 'removed', id: 'machine', stopped: false });
   });
 
   it('disable of a foreign job: exit 1, stderr says why and how to remove it by hand', async () => {

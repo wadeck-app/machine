@@ -424,6 +424,24 @@ function findPortFile(json: unknown): string | undefined {
 export interface DisableResult {
   outcome: 'removed' | 'absent';
   id: string;
+  /** A running instance of the job (the daemon and its launcher tree) was ended before the job was removed. */
+  stopped: boolean;
+}
+
+/**
+ * `orch kill <id>` (orch cli.ts): text only, no --json. Exit 0 with `Job "<id>" killed[ (N instances)]` or `Job "<id>" is not running` (idempotent);
+ * exit 1 for an unknown job or a failure. A manual kill is not restarted by restartOnExit. `orch remove` alone removes the job but NOT its running instance.
+ */
+async function stopInstance(ctx: StartupContext, id: string): Promise<boolean> {
+  const args = ['kill', id];
+  const kept = `the startup job "${id}" was NOT removed and its daemon may still be running: fix the cause, then run \`machine startup disable\` again`;
+  const result = await runOrch(ctx, args);
+  if (result.code !== 0) throw new StartupError(`${orchFailure(result, args, 'machine startup disable').message}\n${kept}`);
+  const text = result.stdout.trim();
+  // "not running" first: its text can add "pending restart was cancelled", which is not the end of an instance.
+  if (/\bis not running\b/.test(text)) return false;
+  if (/\bkilled\b/.test(text)) return true;
+  throw new StartupError(`orch did not say whether the job "${id}" was killed or not running. Its output was: ${text || '(empty)'}\n${kept}`);
 }
 
 export async function disableStartup(ctx: StartupContext): Promise<DisableResult> {
@@ -431,7 +449,7 @@ export async function disableStartup(ctx: StartupContext): Promise<DisableResult
   const showArgs = ['show', id, '--json'];
   const shown = await runOrch(ctx, showArgs);
   // Exit 3 of orch show: no such job, nothing to remove.
-  if (shown.code === 3) return { outcome: 'absent', id };
+  if (shown.code === 3) return { outcome: 'absent', id, stopped: false };
   if (shown.code !== 0) throw orchFailure(shown, showArgs, 'machine startup disable');
   const command = findCommand(shown.stdout);
   if (command === undefined) {
@@ -442,10 +460,12 @@ export async function disableStartup(ctx: StartupContext): Promise<DisableResult
       `the orch job "${id}" was not created by machine (its command is: ${command}; machine's job runs its daemon with the liveness port file ${daemonPortFile(resolve(ctx.configDir))}), so it was NOT removed. If it is yours, remove it with \`orch remove ${id}\`; otherwise leave it`,
     );
   }
+  // `orch remove` leaves the running instance alive: end it first, and remove the job only once that worked (nothing half done).
+  const stopped = await stopInstance(ctx, id);
   const args = ['remove', id, '--if-exists'];
   const result = await runOrch(ctx, args);
   if (result.code !== 0) throw orchFailure(result, args, 'machine startup disable');
-  return { outcome: parseOutcome(result.stdout, ['removed', 'absent'] as const, 'removed or absent'), id };
+  return { outcome: parseOutcome(result.stdout, ['removed', 'absent'] as const, 'removed or absent'), id, stopped };
 }
 
 export interface StatusResult {
