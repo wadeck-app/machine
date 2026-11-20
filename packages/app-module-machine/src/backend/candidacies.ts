@@ -43,9 +43,10 @@ export interface CandidacyListView {
   hostname: string;
   observedIp: string;
   uuid: string | undefined;
-  createdAt: number;
-  expiresAt: number;
-  ageSeconds: number;
+  /** Epoch seconds; undefined when the relay sent no usable date (a problem says so). */
+  createdAt: number | undefined;
+  expiresAt: number | undefined;
+  ageSeconds: number | undefined;
   /** The relay says the uuid is already bound to a token (approving replaces the binding). Absent: the relay did not say. */
   uuidBound: boolean | undefined;
   /** The token the uuid is bound to may be revoked: the relay then sends the label "(revoked token)". */
@@ -116,6 +117,27 @@ const RELAY_CODE_FIELDS = ['code', 'verificationCode', 'candidacyCode'];
 
 const asObject = (value: unknown): Record<string, unknown> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
 
+const typeName = (value: unknown): string => (value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value);
+
+/** Epoch seconds of an ISO 8601 string (strict start `YYYY-MM-DDT`) or of a positive finite number; undefined for anything else. Same rule as machine-cli relayClient.ts. */
+function epochSecondsOf(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+}
+
+/** "now", "45 s", "10 min", "3 h", "3 days": the wording of machine-cli humanTime.ts without the "ago". No age: "unknown", never a number made up. */
+export function ageText(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds)) return 'unknown';
+  const abs = Math.max(0, Math.round(seconds));
+  if (abs < 5) return 'now';
+  if (abs < 120) return `${abs} s`;
+  if (abs < 120 * 60) return `${Math.round(abs / 60)} min`;
+  if (abs < 48 * 3600) return `${Math.round(abs / 3600)} h`;
+  return `${Math.round(abs / 86_400)} days`;
+}
+
 function review(raw: unknown, nowSeconds: number): CandidacyListView {
   const o = asObject(raw);
   const problems: string[] = [];
@@ -127,13 +149,18 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
     }
     return v;
   };
-  const num = (key: string): number => {
+  // The REAL relay dates a candidacy with ISO 8601 strings (poc-node store.js publicCandidacy); epoch seconds numbers are also accepted.
+  const epoch = (key: string): number | undefined => {
     const v = o[key];
-    if (typeof v !== 'number' || !Number.isFinite(v)) {
+    if (v === undefined) {
       problems.push(`the relay sent no "${key}"`);
-      return 0;
+      return undefined;
     }
-    return v;
+    const seconds = epochSecondsOf(v);
+    if (seconds === undefined) {
+      problems.push(`the relay sent an unusable "${key}" (${typeName(v)}, expected an ISO 8601 date or epoch seconds): it may be an incompatible version`);
+    }
+    return seconds;
   };
   const id = text('id');
   const name = text('name');
@@ -141,8 +168,8 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
   const identityPublicKey = text('identityPublicKey');
   const random = text('random');
   const observedIp = typeof o['observedIp'] === 'string' ? o['observedIp'] : '';
-  const createdAt = num('createdAt');
-  const expiresAt = num('expiresAt');
+  const createdAt = epoch('createdAt');
+  const expiresAt = epoch('expiresAt');
 
   if (name !== '') {
     const problem = machineNameProblem(name);
@@ -187,7 +214,7 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
   const bindingNote = rebind && boundToCandidateToken === undefined ? 'the relay did not say whether the binding is for the token of this candidacy: read as a rebind' : undefined;
   const label = o['boundTokenLabel'];
   const boundTokenLabel = typeof label === 'string' && label.length > 0 ? printable(label) : undefined;
-  if (expiresAt !== 0 && nowSeconds >= expiresAt) problems.push('this candidacy is expired: the candidate must post a new one (`machine join --resume`)');
+  if (expiresAt !== undefined && nowSeconds >= expiresAt) problems.push('this candidacy is expired: the candidate must post a new one (`machine join --resume`)');
 
   return {
     id: printable(id),
@@ -197,7 +224,7 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
     uuid,
     createdAt,
     expiresAt,
-    ageSeconds: Math.max(0, nowSeconds - createdAt),
+    ageSeconds: createdAt === undefined ? undefined : Math.max(0, nowSeconds - createdAt),
     uuidBound,
     boundTokenLabel,
     boundToCandidateToken,

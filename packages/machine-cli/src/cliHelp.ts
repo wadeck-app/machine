@@ -1,0 +1,275 @@
+// Contextual help of the command groups (admin, peer, startup, cli, alias, policy): `machine <group> --help`, `machine <group> help`,
+// `machine help <group>` and `machine <group> <sub> --help`. Pure text: no configuration directory, no daemon, no relay (decision 66).
+
+interface SubHelp {
+  name: string;
+  /** What follows `machine <group> `. */
+  usage: string;
+  /** One line: what it does. */
+  text: string;
+  /** The arguments and options that apply, one line each. */
+  options?: string[];
+  examples: string[];
+}
+
+interface GroupHelp {
+  name: string;
+  summary: string;
+  /** What `machine <group>` alone does. */
+  bare: string;
+  subs: SubHelp[];
+  /** 2 or 3 examples of the group, shown by the group help. */
+  examples: string[];
+}
+
+const GLOBAL = ['--config-dir <path>   configuration directory (default: MACHINE_CONFIG_DIR or ~/.config/machine)', '--json               machine-readable output, one JSON document (where the command supports it)'];
+
+const GROUPS: GroupHelp[] = [
+  {
+    name: 'admin',
+    summary: 'administration of the network, on the machine that holds the admin key',
+    bare: 'lists the candidacies waiting for approval (read-only: nothing is asked, nothing is approved)',
+    subs: [
+      {
+        name: 'init',
+        usage: 'init [--generate] [--hint <text>]',
+        text: 'create the admin key on this machine (you choose its passphrase)',
+        options: ['--generate   a random passphrase (100 bits, shown once) instead of a chosen one', '--hint <text>   hint shown above every passphrase prompt (max 80 printable ASCII characters, stored in clear)'],
+        examples: ['machine admin init', 'machine admin init --generate'],
+      },
+      {
+        name: 'login',
+        usage: 'login [<code>] [--relay <url>] [--force] [--full-access]',
+        text: 'get the admin token of the relay (confirmed once in the relay console)',
+        options: ['<code>   a pairing code of the relay console (scripts); without it a code is shown to confirm in the console', '--relay <url>   the relay (named once, then the stored one is reused)', '--force   replace the saved admin token', '--full-access   explicit opt-in to a FULL-ACCESS token (it can also manage tokens)'],
+        examples: ['machine admin login --relay relay.example.com', 'machine admin login 12345678 --relay relay.example.com'],
+      },
+      {
+        name: 'approve',
+        usage: 'approve [<id>] [--relay <url>] [--days <n>] [--reject] [--verbose]',
+        text: 'list the pending candidacies, or approve one (details, y/N, passphrase, security code)',
+        options: ['<id>   the candidacy (a unique prefix is enough); with exactly one pending it is optional', '--days <n>   validity of the registration, 1 to 3650 (default 365)', '--reject   refuse the candidacy (needs the id, no passphrase)', '--verbose   also show the candidacy code'],
+        examples: ['machine admin approve', 'machine admin approve k3Fz', 'machine admin approve k3Fz --reject'],
+      },
+      {
+        name: 'revoke',
+        usage: 'revoke <machine>',
+        text: 'revoke a trusted machine (y/N, passphrase), tell the other machines through the relay',
+        options: ['<machine>   name, alias, uuid or unique uuid prefix'],
+        examples: ['machine admin revoke laptop'],
+      },
+      {
+        name: 'allow',
+        usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] [--list | --remove] -- <command...>',
+        text: 'allow ONE exact command on a machine (signed policy), list or withdraw what is allowed',
+        options: ['--shell   the shell of the command (default: this machine platform, said)', '--out <file>   write the signed policy to a file instead of sending it', '--list   show what is allowed on the machine (no command)', '--remove   withdraw the command'],
+        examples: ['machine admin allow laptop -- "ipconfig /all"', 'machine admin allow laptop --list', 'machine admin allow laptop --remove -- "ipconfig /all"'],
+      },
+      {
+        name: 'distribute',
+        usage: 'distribute <machine|uuid> | distribute --policy <signed.json>',
+        text: 'send again what an approval, a revocation or a signed policy sends (safe to repeat)',
+        options: ['<machine|uuid>   a trusted machine, or the uuid of a machine revoked here', '--policy <file>   a policy signed earlier (admin sign-policy --out)'],
+        examples: ['machine admin distribute laptop', 'machine admin distribute --policy policy-laptop.json'],
+      },
+      {
+        name: 'forget-relay-record',
+        usage: 'forget-relay-record <machine|uuid>',
+        text: 'remove a machine record, token binding and inbox from the relay (makes room under the limit)',
+        options: ['<machine|uuid>   the machine to forget (y/N, needs the admin relay token, no passphrase)'],
+        examples: ['machine admin forget-relay-record old-laptop'],
+      },
+      {
+        name: 'pin',
+        usage: 'pin <admin.json>',
+        text: 'trust the admin key of another machine (file mode, no relay)',
+        options: ['<admin.json>   the public admin key file'],
+        examples: ['machine admin pin admin.json'],
+      },
+      {
+        name: 'register',
+        usage: 'register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]',
+        text: 'sign the registration of a machine (file mode, no relay); the bundle holds a secret',
+        options: ['<info.json>   written by `machine peer info` on the other machine', '--out <file>   the bundle to write (required, never printed)', '--days <n>   validity, 1 to 3650 (default 365)', '--secret-from <bundle.json>   reuse the pair secret of another bundle'],
+        examples: ['machine admin register laptop-info.json --out laptop-bundle.json'],
+      },
+      {
+        name: 'sign-policy',
+        usage: 'sign-policy <draft.json> [--out <file>]',
+        text: 'sign a policy draft after showing it; sent to its target machine when an admin token exists',
+        options: ['<draft.json>   the policy draft', '--out <file>   write the signed policy to a file (default: stdout)'],
+        examples: ['machine admin sign-policy draft.json --out signed.json'],
+      },
+    ],
+    examples: ['machine admin', 'machine admin approve', 'machine admin allow laptop -- "ipconfig /all"'],
+  },
+  {
+    name: 'peer',
+    summary: 'the other machines: trust them, tell how to reach and wake them',
+    bare: 'shows the peers this machine knows, like `machine list`',
+    subs: [
+      {
+        name: 'info',
+        usage: 'info [--out <file>]',
+        text: 'print this machine public identity, to give to the admin (file mode)',
+        options: ['--out <file>   write it to a file (--force to overwrite)'],
+        examples: ['machine peer info --out my-info.json'],
+      },
+      {
+        name: 'import',
+        usage: 'import <bundle.json>',
+        text: 'trust a peer from an admin-signed bundle (file mode)',
+        options: ['<bundle.json>   written by `machine admin register`'],
+        examples: ['machine peer import laptop-bundle.json'],
+      },
+      {
+        name: 'connect',
+        usage: 'connect <machine> [--address <host:port>]... [--type direct|ping-if-not-reachable-magic-packet] [--wake-mac <mac>] [--show | --remove]',
+        text: 'how THIS machine reaches a peer: pinned addresses, Wake-on-LAN (stored locally, no secret)',
+        options: [
+          '--address <host:port>   pin an address (repeatable, up to 8); wins over the relay record',
+          '--wake-mac <aa:bb:cc:dd:ee:ff>   the MAC to wake (typed by you, never taken from the relay)',
+          '--wake-broadcast <ipv4>, --wake-probe <s>, --wake-wait <s>, --wake-max-unicast <n>, --wake-max-broadcast <n>, --wake-connect-timeout <ms>, --wake-settle <s>   wake tuning (see `machine --help`)',
+          '--show   the effective values; --remove   forget the settings of that peer',
+        ],
+        examples: ['machine peer connect laptop --address 192.168.1.20:47921 --wake-mac aa:bb:cc:dd:ee:ff', 'machine peer connect laptop --show'],
+      },
+      {
+        name: 'wake',
+        usage: 'wake <machine>',
+        text: 'wake the peer now (Wake-on-LAN, same LAN) and wait for it to answer',
+        options: ['<machine>   a peer with a MAC set by `machine peer connect`'],
+        examples: ['machine peer wake laptop'],
+      },
+      {
+        name: 'forget-record',
+        usage: 'forget-record <peer>',
+        text: 'forget the highest address record seen for ONE peer (only after it was reinstalled)',
+        options: ['<peer>   name, alias, uuid or prefix (y/N)'],
+        examples: ['machine peer forget-record laptop'],
+      },
+    ],
+    examples: ['machine peer', 'machine peer connect laptop --address 192.168.1.20:47921', 'machine peer wake laptop'],
+  },
+  {
+    name: 'startup',
+    summary: 'start the daemon at login through an orch startup job named "machine"',
+    bare: 'shows the status of the startup job (the same as `machine startup status`)',
+    subs: [
+      { name: 'status', usage: 'status', text: 'does the job exist, its command, the form registered, is it up to date (exit 0 either way)', examples: ['machine startup status', 'machine startup status --json'] },
+      { name: 'enable', usage: 'enable', text: 'create or refresh the job (run it again after moving machine); never runs `orch install`', examples: ['machine startup enable'] },
+      { name: 'disable', usage: 'disable', text: 'end the running daemon and remove the job', examples: ['machine startup disable'] },
+    ],
+    examples: ['machine startup', 'machine startup enable'],
+  },
+  {
+    name: 'cli',
+    summary: 'this installation: version, update, logs',
+    bare: 'shows the installed and the latest published version (the same as `machine cli version`)',
+    subs: [
+      { name: 'version', usage: 'version', text: 'installed version and the latest published one', examples: ['machine cli version'] },
+      { name: 'update', usage: 'update [--force]', text: 'install the latest published version now, refresh the startup job, restart the daemon', options: ['--force   passed to the updater'], examples: ['machine cli update'] },
+      { name: 'rollback', usage: 'rollback', text: 'reinstall the version that preceded the last update', examples: ['machine cli rollback'] },
+      { name: 'self-check', usage: 'self-check [--quiet]', text: 'check the install (version, Node, platform package, writable folders); exit 1 when a check fails', options: ['--quiet   show only the failed checks'], examples: ['machine cli self-check', 'machine cli self-check --quiet'] },
+      { name: 'logs', usage: 'logs [--follow | -f]', text: 'the updater and daemon log of today', options: ['--follow, -f   keep printing new lines'], examples: ['machine cli logs', 'machine cli logs -f'] },
+      { name: 'post-update', usage: 'post-update', text: 'run by the updater after an update: refresh the startup job, restart an older daemon', examples: ['machine cli post-update'] },
+      { name: 'register', usage: 'register [--force-register]', text: 'offer the admin page module to app-core now (the daemon does it at each start)', options: ['--force-register   register even when the config dir is under the OS temporary folder'], examples: ['machine cli register'] },
+    ],
+    examples: ['machine cli', 'machine cli update', 'machine cli logs -f'],
+  },
+  {
+    name: 'alias',
+    summary: 'local labels for machines (a reference is a name, an alias, a uuid or a unique uuid prefix)',
+    bare: 'lists the aliases (the same as `machine alias list`)',
+    subs: [
+      { name: 'list', usage: 'list', text: 'the aliases of this machine', examples: ['machine alias list', 'machine alias list --json'] },
+      { name: 'set', usage: 'set <alias> <reference> [--replace]', text: 'point an alias at a machine', options: ['--replace   replace an alias that already points elsewhere'], examples: ['machine alias set home desktop'] },
+      { name: 'rm', usage: 'rm <alias>', text: 'remove an alias', examples: ['machine alias rm home'] },
+    ],
+    examples: ['machine alias', 'machine alias set home desktop', 'machine alias rm home'],
+  },
+  {
+    name: 'policy',
+    summary: 'the policy of THIS machine (what peers may run here)',
+    bare: 'prints this help: no read-only policy view exists yet (`machine status` shows the policy version, `machine admin allow <machine> --list` what is allowed)',
+    subs: [
+      { name: 'install', usage: 'install <signed.json>', text: 'install a policy signed by the admin for this machine (file mode)', options: ['<signed.json>   written by `machine admin sign-policy --out`'], examples: ['machine policy install signed.json'] },
+    ],
+    examples: ['machine policy install signed.json', 'machine status'],
+  },
+];
+
+export const GROUP_NAMES: string[] = GROUPS.map((g) => g.name);
+
+const find = (name: string | undefined): GroupHelp | undefined => GROUPS.find((g) => g.name === name);
+
+/** The usage error of an unknown subcommand: names it, the one-line list of the group and where the help is. */
+export function unknownSubcommandMessage(group: string, sub: string | undefined): string {
+  const g = find(group);
+  if (g === undefined) throw new Error(`no help for the command group "${group}"`);
+  const what = sub === undefined ? `${group} needs a subcommand` : `unknown ${group} subcommand "${sub}"`;
+  return `${what}: machine ${group} ${g.subs.map((s) => s.name).join(' | ')}; see \`machine ${group} --help\``;
+}
+
+function indentLines(lines: string[], indent: string): string[] {
+  return lines.map((l) => `${indent}${l}`);
+}
+
+function groupText(g: GroupHelp): string {
+  const lines = [
+    `machine ${g.name} - ${g.summary}`,
+    '',
+    `Usage: machine ${g.name} [<subcommand>] [options]`,
+    `Without a subcommand, \`machine ${g.name}\` ${g.bare}.`,
+    '',
+    'Subcommands:',
+  ];
+  for (const s of g.subs) {
+    lines.push('', `  ${s.usage}`, `      ${s.text}`);
+    for (const o of s.options ?? []) lines.push(`        ${o}`);
+  }
+  lines.push('', 'Options of every command:', ...indentLines(GLOBAL, '  '), '', 'Examples:', ...indentLines(g.examples, '  '), '', `One subcommand: machine ${g.name} <subcommand> --help. All commands: machine --help`);
+  return `${lines.join('\n')}\n`;
+}
+
+function subText(g: GroupHelp, s: SubHelp): string {
+  const lines = [`machine ${g.name} ${s.usage}`, '', s.text, ''];
+  if (s.options !== undefined && s.options.length > 0) lines.push('Arguments and options:', ...indentLines(s.options, '  '), '');
+  lines.push('Options of every command:', ...indentLines(GLOBAL, '  '), '', 'Examples:', ...indentLines(s.examples, '  '), '', `All subcommands: machine ${g.name} --help`);
+  return `${lines.join('\n')}\n`;
+}
+
+/** The answer of a help request: text for stdout (exit 0), or a usage error for stderr (exit 2). */
+export type HelpAnswer = { kind: 'global' } | { kind: 'text'; text: string } | { kind: 'error'; message: string };
+
+function topic(group: string | undefined, sub: string | undefined): HelpAnswer {
+  const g = find(group);
+  if (g === undefined) {
+    return { kind: 'error', message: `unknown help topic "${group}": the command groups are ${GROUP_NAMES.join(', ')}; \`machine --help\` lists every command` };
+  }
+  if (sub === undefined) return { kind: 'text', text: groupText(g) };
+  const s = g.subs.find((x) => x.name === sub);
+  if (s === undefined) return { kind: 'error', message: unknownSubcommandMessage(g.name, sub) };
+  return { kind: 'text', text: subText(g, s) };
+}
+
+/** The help of a group, for a bare group that has no read-only view of its own. */
+export function groupHelpText(group: string): string {
+  const answer = topic(group, undefined);
+  if (answer.kind !== 'text') throw new Error(`no help for the command group "${group}"`);
+  return answer.text;
+}
+
+/**
+ * Is this command line a help request, and what does it ask? `--help`, `machine help [<group> [<sub>]]`,
+ * `machine <group> help [<sub>]`, `machine <group> <sub> --help`. Anything else: undefined.
+ */
+export function helpRequest(positional: string[], helpFlag: boolean): HelpAnswer | undefined {
+  const [first, second, third] = positional;
+  if (first === 'help') return second === undefined ? { kind: 'global' } : topic(second, third);
+  if (find(first) !== undefined) {
+    if (second === 'help') return topic(first, third);
+    if (helpFlag) return topic(first, second);
+  }
+  return helpFlag ? { kind: 'global' } : undefined;
+}

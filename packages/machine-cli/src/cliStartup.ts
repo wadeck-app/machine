@@ -7,7 +7,7 @@ import { disableStartup, enableStartup, startupStatus, StartupError, type Daemon
 // `machine startup enable | disable | status`: thin front-end over startup.ts.
 
 export const ORCH_INSTALL_HINT = 'if orch does not start at login, run: orch install';
-const USAGE = 'usage: machine startup enable | disable | status';
+const USAGE = 'usage: machine startup [status] | enable | disable (without a subcommand it shows the status); see `machine startup --help`';
 
 /** Tests inject the orch stub and the daemon source through `io.startup`; there is no command line option for it. */
 function startupContext(ctx: CommandContext): StartupContext {
@@ -47,9 +47,10 @@ export async function enableAfterJoin(ctx: CommandContext, say: (text: string) =
 
 export async function runStartupCommand(ctx: CommandContext): Promise<number> {
   const { rest, args, io, emit, fail } = ctx;
-  const sub = rest[0];
-  if (rest.length !== 1 || (sub !== 'enable' && sub !== 'disable' && sub !== 'status')) {
-    return fail(`${rest.length === 0 ? 'startup needs a subcommand' : `unknown startup argument "${rest.join(' ')}"`}: ${USAGE}`, EXIT.usage);
+  // `machine startup` alone is the read-only question the user asks first: it shows the status.
+  const sub = rest.length === 0 ? 'status' : rest[0];
+  if (rest.length > 1 || (sub !== 'enable' && sub !== 'disable' && sub !== 'status')) {
+    return fail(`unknown startup argument "${rest.join(' ')}": ${USAGE}`, EXIT.usage);
   }
   try {
     const sctx = startupContext(ctx);

@@ -263,6 +263,95 @@ describe('machine admin approve: listing', () => {
   });
 });
 
+describe('machine admin (bare, decision 66): the read-only list of what waits for approval', () => {
+  const bare = (args: string[] = []) => cli(adminDir, ['admin', ...args, '--relay', relay.url], forbidden('the passphrase'), { ask: forbidden('a question') });
+
+  it('without a token: the actionable message of the approve path (machine admin login), nothing sent', async () => {
+    const r = await bare();
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/machine admin login/);
+    expect(r.out).toBe('');
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it('none pending: says so and how a machine asks to join, exit 0', async () => {
+    await login();
+    const r = await bare();
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/no pending candidacy/);
+    expect(r.out).toContain('machine join <relay>');
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('exactly one pending: LISTED (never the details, never a question, never an approval), ends with the approve hint', async () => {
+    await login();
+    const { id } = await candidatePosts();
+    const r = await bare();
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(id);
+    expect(r.out).toContain('laptop');
+    expect(r.out).toMatch(/1 pending candidacy.*waiting for approval/);
+    // The detail view of `approve` has a "uuid" line and the security code announcement.
+    expect(r.out).not.toMatch(/security code/);
+    expect(r.out.trimEnd().split('\n').at(-1)).toMatch(/machine admin approve \[<id>\]/);
+    expect(decisions()).toHaveLength(0);
+    expect(relay.candidacies.has(id)).toBe(true);
+    noToken(r.out, r.err);
+  });
+
+  it('several pending: all listed, the candidacy code only with --verbose', async () => {
+    await login();
+    const { id, code } = await candidatePosts();
+    const stray = await strayPosts();
+    const r = await bare();
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(id);
+    expect(r.out).toContain(stray);
+    expect(r.out).not.toContain(code);
+    expect((await bare(['--verbose'])).out).toContain(code);
+    expect(decisions()).toHaveLength(0);
+  });
+
+  it('--json: one document, the same as `machine admin approve --json`', async () => {
+    await login();
+    await candidatePosts();
+    const r = await bare(['--json']);
+    expect(r.code, r.err).toBe(0);
+    const parsed = JSON.parse(r.out) as { id: string }[];
+    expect(parsed).toHaveLength(1);
+    // With exactly one pending, `approve` would go on to the details: a second candidacy makes it list too.
+    await strayPosts();
+    const again = JSON.parse((await bare(['--json'])).out) as { id: string }[];
+    expect(again).toHaveLength(2);
+    const asApprove = await cli(adminDir, ['admin', 'approve', '--json', '--relay', relay.url]);
+    expect(again).toEqual(JSON.parse(asApprove.out));
+  });
+
+  it('--json with none pending: an empty array, the text on stderr', async () => {
+    await login();
+    const r = await bare(['--json']);
+    expect(r.code, r.err).toBe(0);
+    expect(JSON.parse(r.out)).toEqual([]);
+    expect(r.err).toMatch(/no pending candidacy/);
+  });
+
+  it('a relay that contradicts itself is a failure, as in the approve list', async () => {
+    await login();
+    const { id } = await candidatePosts();
+    (relay.candidacies.get(id) as Record<string, unknown>).code = 'AAAA-AAAA-AAAA-AAAA';
+    const r = await bare();
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/does not match the key and random/);
+  });
+
+  it('options that belong to the approval are refused, not ignored', async () => {
+    await login();
+    expect((await bare(['--reject'])).code).toBe(2);
+    expect((await bare(['--days', '30'])).code).toBe(2);
+    expect((await bare(['--prompt-timeout', '5'])).code).toBe(2);
+  });
+});
+
 describe('machine admin approve: deciding', () => {
   let id: string;
   let candidateCode: string;

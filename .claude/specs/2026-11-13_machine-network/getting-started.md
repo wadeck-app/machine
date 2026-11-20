@@ -115,6 +115,8 @@ machine run <machine> --wake|--no-wake ...   force or forbid the wake for this c
 
 ## Rules a user meets
 
+- Command groups (decision 66): `machine <group>` alone shows the current state, read-only: `admin` the candidacies waiting for approval (never asks, never approves; `machine admin approve [<id>]` does), `peer` the peers, `startup` the job status, `cli` the versions, `alias` the aliases, `policy` its help. `machine <group> --help` (or `machine <group> help`, `machine help <group>`) is the help of the group, `machine <group> <subcommand> --help` of one subcommand. An unknown subcommand is a usage error (exit 2) with the list.
+
 - Name: the computer name, lowercase (`Midgard2.local` becomes `midgard2`); `--name` overrides it at creation. It is the signed reference. A friendlier label: `machine alias set <label> <name>`, accepted wherever a machine is named.
 - Passphrase: 12 characters minimum, a warning below 20; a typo or a too-short entry is asked again (3 attempts, then nothing is created); prompts are short, the explanation is printed above them; `--generate` or an empty answer gives a random one, shown once. It cannot be recovered.
 - Passphrase hint (decision 57): optional, asked after the confirmation (Enter = none) or `--hint <text>` (admin init, setup); 80 printable ASCII characters, never the passphrase itself (refused if it contains it). Shown as `Hint: ...` above every unlock prompt on every machine. Stored in clear in the key file: see the threat model.

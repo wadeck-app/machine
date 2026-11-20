@@ -384,6 +384,23 @@ describe('machine startup (CLI)', () => {
     expect(JSON.parse(j.out).conflicts).toEqual([{ id: 'copy', command: 'machine daemon' }]);
   });
 
+  it('`machine startup` alone shows the status, like `machine startup status`', async () => {
+    stub.script({ show: { code: 3 }, list: { stdout: '[]' } });
+    const bare = await run(['startup']);
+    const explicit = await run(['startup', 'status']);
+    expect(bare.code).toBe(0);
+    expect(bare.out).toBe(explicit.out);
+    expect(bare.out).toMatch(/absent.*machine startup enable/);
+    // --json works the same way
+    expect(JSON.parse((await run(['startup', '--json'])).out).exists).toBe(false);
+  });
+
+  it('an unknown startup argument is still a usage error that lists the subcommands', async () => {
+    const r = await run(['startup', 'frobnicate']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/unknown startup argument "frobnicate".*\[status\] \| enable \| disable/);
+  });
+
   it('status exits 0 whether the job exists or not, and tells what to do when outdated', async () => {
     stub.script({ show: { code: 3 }, list: { stdout: '[]' } });
     const absent = await run(['startup', 'status']);
@@ -396,11 +413,11 @@ describe('machine startup (CLI)', () => {
     expect(outdated.out).toContain('outdated: run machine startup enable');
   });
 
-  it('a missing or unknown subcommand, or an extra word, is a usage error and orch is not called', async () => {
-    for (const args of [['startup'], ['startup', 'start'], ['startup', 'enable', 'now']]) {
+  it('an unknown subcommand, or an extra word, is a usage error and orch is not called', async () => {
+    for (const args of [['startup', 'start'], ['startup', 'enable', 'now']]) {
       const r = await run(args);
       expect(r.code, args.join(' ')).toBe(2);
-      expect(r.err).toMatch(/machine startup enable \| disable \| status/);
+      expect(r.err).toMatch(/machine startup \[status\] \| enable \| disable/);
     }
     expect(stub.calls()).toEqual([]);
   });

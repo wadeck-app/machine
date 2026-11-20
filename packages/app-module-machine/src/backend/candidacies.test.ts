@@ -123,6 +123,73 @@ describe('listCandidacies', () => {
     expect(views[1]?.problems.join(' ')).toContain('expired');
   });
 
+  describe('dates of the relay', () => {
+    // The shape of poc-node lib/machines/store.js publicCandidacy: createdAt and expiresAt are ISO 8601 strings (iso(ms)), not numbers.
+    const realShape = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+      candidate({ createdAt: new Date((NOW - 90) * 1000).toISOString(), expiresAt: new Date((NOW + 810) * 1000).toISOString(), ...overrides });
+
+    async function listOne(entry: Record<string, unknown>) {
+      const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [entry] } }));
+      writeAdminConfig(relay.url);
+      const [view] = await listCandidacies(configDir, NOW);
+      if (view === undefined) throw new Error('no candidacy listed');
+      return view;
+    }
+
+    it('reads the ISO 8601 strings of the REAL relay: approvable, epoch seconds, a sensible age', async () => {
+      const view = await listOne(realShape());
+      expect(view.problems).toEqual([]);
+      expect(view.createdAt).toBe(NOW - 90);
+      expect(view.expiresAt).toBe(NOW + 810);
+      expect(view.ageSeconds).toBe(90);
+    });
+
+    it('still reads epoch seconds numbers', async () => {
+      const view = await listOne(candidate());
+      expect(view.problems).toEqual([]);
+      expect(view.createdAt).toBe(NOW - 90);
+      expect(view.ageSeconds).toBe(90);
+    });
+
+    it('flags an ISO expiresAt in the past as expired', async () => {
+      const view = await listOne(realShape({ expiresAt: new Date((NOW - 5) * 1000).toISOString() }));
+      expect(view.problems.join(' ')).toContain('expired');
+    });
+
+    it.each([
+      ['a string that is not a date', 'yesterday', 'string'],
+      ['a date without time', '2026-11-20', 'string'],
+      ['an ISO-looking string that does not parse', '2026-13-45T99:99:99Z', 'string'],
+      ['null', null, 'null'],
+      ['a boolean', true, 'boolean'],
+      ['an object', { a: 1 }, 'object'],
+    ])('flags %s as a problem naming the field and the type received, with no age', async (_label, value, type) => {
+      const view = await listOne(realShape({ createdAt: value }));
+      expect(view.createdAt).toBeUndefined();
+      expect(view.ageSeconds).toBeUndefined();
+      const text = view.problems.join(' ');
+      expect(text).toContain('"createdAt"');
+      expect(text).toContain(type);
+      expect(text).not.toContain('1970');
+    });
+
+    it('flags a missing createdAt and expiresAt as "sent no"', async () => {
+      const entry = realShape();
+      delete entry.createdAt;
+      delete entry.expiresAt;
+      const view = await listOne(entry);
+      expect(view.problems.join(' ')).toContain('the relay sent no "createdAt"');
+      expect(view.problems.join(' ')).toContain('the relay sent no "expiresAt"');
+      expect(view.ageSeconds).toBeUndefined();
+    });
+
+    it('flags NaN-like numbers (a JSON number that is not finite cannot exist; a negative one is refused)', async () => {
+      const view = await listOne(realShape({ createdAt: -5 }));
+      expect(view.createdAt).toBeUndefined();
+      expect(view.problems.join(' ')).toContain('"createdAt"');
+    });
+  });
+
   it('shows text from the relay with printable ASCII only (no escape sequence reaches the page)', async () => {
     const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [candidate({ name: 'lap\u001b[31mtop', hostname: 'h\u0007ost' })] } }));
     writeAdminConfig(relay.url);

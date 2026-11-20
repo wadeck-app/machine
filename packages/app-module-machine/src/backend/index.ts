@@ -1,5 +1,5 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
-import { listCandidacies, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
+import { ageText, listCandidacies,RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
@@ -60,8 +60,6 @@ function machineRows(answer: ListAnswerLike): Array<{ uuid: string; name: string
   }
   return rows;
 }
-
-const ageText = (seconds: number): string => (seconds < 120 ? `${seconds} s` : `${Math.round(seconds / 60)} min`);
 
 function candidacyRow(view: CandidacyListView): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
   let bindingText = '';

@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ageText } from './candidacies.js';
 import register from './index.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
@@ -182,6 +183,37 @@ describe('GET /candidacies', () => {
     expect(row.ageText).toMatch(/s$/);
     expect(row.bindingText).toContain('old laptop');
     expect(row.statusText).toContain('bound');
+  });
+
+  it('shows the age of a candidacy dated with the ISO strings of the real relay, and never a number of minutes since 1970', async () => {
+    const now = Date.now();
+    await withRelay([{ ...pending(), createdAt: new Date(now - 3 * 60_000).toISOString(), expiresAt: new Date(now + 12 * 60_000).toISOString() }]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.ageText).toBe('3 min');
+    expect(row.statusText).toBe('Pending');
+  });
+
+  it('says "unknown" for the age and keeps the problem when the date of the relay is unusable', async () => {
+    await withRelay([{ ...pending(), createdAt: 'yesterday' }]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.ageText).toBe('unknown');
+    expect(row.statusText).toContain('Cannot be approved');
+    expect(row.statusText).toContain('"createdAt"');
+  });
+
+  it.each([
+    [2, 'now'],
+    [45, '45 s'],
+    [119, '119 s'],
+    [600, '10 min'],
+    [3 * 3600, '3 h'],
+    [3 * 86_400, '3 days'],
+  ])('formats an age of %i s as "%s" (wording of machine-cli humanTime)', async (seconds, text) => {
+    expect(ageText(seconds)).toBe(text);
+  });
+
+  it('formats no age as "unknown"', () => {
+    expect(ageText(undefined)).toBe('unknown');
   });
 
   it('returns the binding fields and shows no rebind warning for a re-approval (bound to the token of the candidacy)', async () => {

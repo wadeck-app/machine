@@ -7,6 +7,7 @@ import { cliLogsCommand, cliRollbackCommand, cliUpdateCommand, cliVersionCommand
 import { execNpm } from '@wadeck-app/shared-cli/NpmRunner';
 import { devBuildRefusalMessage, isReleaseVersion } from '@wadeck-app/shared-cli/ReleaseVersion';
 import { EXIT, type CommandContext } from './cliTypes.js';
+import { unknownSubcommandMessage } from './cliHelp.js';
 import { makeCommands } from './commands.js';
 import { postUpdate, type PostUpdateDeps } from './postUpdate.js';
 import { findLauncher } from './platformBinary.js';
@@ -24,8 +25,7 @@ import { appVersion } from './version.js';
 // bundle (src/updater/entry.ts); the shared-cli commands do the version / update / rollback / logs plumbing.
 
 export const PACKAGE_NAME = '@wadeck-app/machine-cli';
-const SUBCOMMANDS = 'version | update | rollback | self-check | logs | post-update | register';
-const USAGE = `usage: machine cli ${SUBCOMMANDS}`;
+const USAGE = 'see `machine cli --help`';
 
 /** Everything that touches the world, injectable through `io.cliMeta` (tests only: there is no command line option for it). */
 export interface CliMetaDeps {
@@ -166,9 +166,11 @@ async function withConfigDirEnv<T>(configDir: string, fn: () => Promise<T>): Pro
 
 export async function runCliMeta(ctx: CommandContext): Promise<number> {
   const { rest, args, io, emit, fail, configDir } = ctx;
-  const [sub, ...extra] = rest;
-  if (sub === undefined || !['version', 'update', 'rollback', 'self-check', 'logs', 'post-update', 'register'].includes(sub)) {
-    return fail(`${sub === undefined ? 'cli needs a subcommand' : `unknown cli subcommand "${sub}"`}: ${USAGE}`, EXIT.usage);
+  // `machine cli` alone (decision 66) is the read-only question: which version is installed and which is the latest.
+  const bare = rest.length === 0;
+  const [sub = 'version', ...extra] = rest;
+  if (!['version', 'update', 'rollback', 'self-check', 'logs', 'post-update', 'register'].includes(sub)) {
+    return fail(unknownSubcommandMessage('cli', sub), EXIT.usage);
   }
   if (extra.length > 0) return fail(`unexpected argument "${extra[0]}" for \`machine cli ${sub}\`: ${USAGE}`, EXIT.usage);
   if (args.quiet && sub !== 'self-check') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
@@ -182,6 +184,7 @@ export async function runCliMeta(ctx: CommandContext): Promise<number> {
     switch (sub) {
       case 'version':
         await deps.showVersion(PACKAGE_NAME, deps.version);
+        if (bare) io.stdout('more: machine cli --help (update, rollback, logs, self-check, ...)\n');
         return EXIT.ok;
       case 'register': {
         // Explicit request: no development-build skip here, the user asked for it. Every outcome of registerOnStart is a log line.

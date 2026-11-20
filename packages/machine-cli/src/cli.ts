@@ -6,6 +6,7 @@ import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { runStartupCommand } from './cliStartup.js';
+import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWakeInfo } from './cliWake.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
@@ -23,6 +24,11 @@ export { EXIT, type CliIo } from './cliTypes.js';
 const HELP = `machine - private network between your machines
 
 Usage: machine <command> [options]
+
+Command groups (admin, peer, startup, cli, alias, policy):
+  machine <group>                    shows the current state of the group, read-only (admin: the candidacies waiting for approval;
+                                     peer: the peers; startup: the job status; cli: the versions; alias: the aliases; policy: its help)
+  machine <group> --help             the help of that group (also \`machine help <group>\`); \`machine <group> <subcommand> --help\` for one
 
 Getting started (one command per machine; the name of a machine is the computer name, lowercase):
   first machine (it also becomes the admin machine):
@@ -130,7 +136,7 @@ Commands:
                                      join never starts anything at login by itself; it ends by suggesting
                                      \`machine startup enable\`. --auto-startup runs it as the last step (a failure
                                      there is reported and makes join exit 1; the join itself is not undone)
-  startup enable | disable | status  start the daemon at login through an orch startup job named "machine"
+  startup [status | enable | disable]  start the daemon at login through an orch startup job named "machine"
                                      (needs orch: npm i -g @wadeck-app/orchestrator-cli). enable creates or refreshes
                                      the job (run it again after moving machine); disable removes it; status shows
                                      whether it exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
@@ -358,7 +364,7 @@ export async function runCli(argv: string[], io: CliIo, env: Record<string, stri
     // A command line that does not parse has no configuration directory to write to: the command itself reports it.
     // --help and --version need no configuration directory and say nothing worth diagnosing.
     const parsed = parse(argv);
-    log = parsed.help || parsed.version ? undefined : openCliLog(resolveConfigDir(parsed.configDir, env), argv, io.stderr);
+    log = parsed.help || parsed.version || helpRequest(parsed.positional, parsed.help) !== undefined ? undefined : openCliLog(resolveConfigDir(parsed.configDir, env), argv, io.stderr);
   } catch {
     log = undefined;
   }
@@ -385,8 +391,14 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     io.stderr(`[fail] ${(e as Error).message}\n`);
     return EXIT.usage;
   }
-  if (args.help) {
-    io.stdout(HELP);
+  // `--help`, `help`, `<group> help`, `help <group>`, `<group> <sub> --help`: no configuration directory, nothing logged.
+  const help = helpRequest(args.positional, args.help);
+  if (help !== undefined) {
+    if (help.kind === 'error') {
+      io.stderr(`[fail] ${help.message}\n`);
+      return EXIT.usage;
+    }
+    io.stdout(help.kind === 'text' ? help.text : HELP);
     return EXIT.ok;
   }
   // Before everything else (no config folder, no daemon, no update notice): CI reads it from the generated bundle.
@@ -441,8 +453,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (args.count !== undefined && command !== 'ping') return fail('--count only applies to `machine ping <machine>` (the number of rounds, 1 to 10)', EXIT.usage);
   if (args.advertise.length > 0 && command !== 'daemon') return fail('--advertise only applies to `machine daemon` (it chooses the addresses the daemon publishes in its address record)', EXIT.usage);
-  if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && rest[0] === 'approve'))) {
-    return fail('--verbose only applies to `machine join`, `machine setup` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);
+  if (args.verbose && !(command === 'join' || command === 'setup' || (command === 'admin' && (rest[0] === 'approve' || rest.length === 0)))) {
+    return fail('--verbose only applies to `machine join`, `machine setup`, `machine admin` and `machine admin approve` (it also shows the candidacy code, which is internal by default)', EXIT.usage);
   }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.forceRegister && command !== 'cli') return fail('--force-register only applies to `machine cli register`', EXIT.usage);
@@ -460,6 +472,12 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
     const prompts = command === 'join' || command === 'setup' || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record'));
     if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record', EXIT.usage);
+  }
+
+  // `machine policy` alone: no read-only view of the policy exists, so the help of the group (decision 66). Needs no configuration directory.
+  if (command === 'policy' && rest.length === 0) {
+    io.stdout(groupHelpText('policy'));
+    return EXIT.ok;
   }
 
   try {
@@ -511,14 +529,19 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'cli') return await runCliMeta(ctx);
     if (command === 'wake-info') return runWakeInfo(ctx);
 
-    const handled = await runNetworkCommand(command, ctx);
-    if (handled !== undefined) return handled;
+    // Bare groups (decision 66): `machine peer` shows what `machine list` shows, `machine alias` what `machine alias list` shows.
+    const bareView = command === 'peer' && rest.length === 0;
+    const effective = bareView ? 'list' : command;
+    if (!bareView) {
+      const handled = await runNetworkCommand(command, ctx);
+      if (handled !== undefined) return handled;
+    }
 
     // Everything else goes through the daemon when it runs and through the same code in-process when it does not.
     const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
     const notInitialized = (r: { initialized?: boolean; message?: string }): r is NotInitialized => r.initialized === false;
 
-    switch (command) {
+    switch (effective) {
       case 'stop': {
         if (!(await client.isRunning())) {
           emit({ stopped: false }, '[ok] daemon was not running\n');
@@ -556,7 +579,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
-        emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}`);
+        emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}${bareView ? 'more: machine peer --help (info, import, connect, wake, forget-record)\n' : ''}`);
         return EXIT.ok;
       }
       case 'resolve': {
@@ -569,13 +592,15 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         return EXIT.ok;
       }
       case 'alias': {
-        const [sub, a, b] = rest;
+        // `machine alias` alone (decision 66) is `machine alias list`, with the way to the other subcommands.
+        const bareAlias = rest.length === 0;
+        const [sub = 'list', a, b] = rest;
         const arity: Record<string, number> = { list: 0, set: 2, rm: 1 };
         const expected = sub === undefined ? undefined : arity[sub];
         if (expected !== undefined && rest.length - 1 > expected) return fail(`unexpected argument "${rest[expected + 1]}" for \`machine alias ${sub}\``, EXIT.usage);
         if (sub === 'list') {
           const aliases = (await client.send('aliasList')) as Record<string, string>;
-          emit(aliases, Object.keys(aliases).length ? `${Object.entries(aliases).map(([k, v]) => `${k} -> ${v}`).join('\n')}\n` : 'no alias\n');
+          emit(aliases, `${Object.keys(aliases).length ? `${Object.entries(aliases).map(([k, v]) => `${k} -> ${v}`).join('\n')}\n` : 'no alias\n'}${bareAlias ? 'more: machine alias --help (set, rm)\n' : ''}`);
           return EXIT.ok;
         }
         if (sub === 'set') {
@@ -595,7 +620,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           emit(r, `[ok] removed ${a.toLowerCase()}\n`);
           return EXIT.ok;
         }
-        return fail('usage: machine alias list | set <alias> <reference> | rm <alias>', EXIT.usage);
+        return fail(unknownSubcommandMessage('alias', sub), EXIT.usage);
       }
       default:
         return fail(`unknown command "${command}": see \`machine --help\``, EXIT.usage);

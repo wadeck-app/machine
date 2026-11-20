@@ -27,6 +27,7 @@ import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidde
 import { runOnPeer } from './peerService.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
+import { unknownSubcommandMessage } from './cliHelp.js';
 
 // The commands that deal with the network: admin signing, peers, policy and remote execution.
 
@@ -120,6 +121,33 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
     for (const name of ['MACHINE_PASSPHRASE', 'MACHINE_ADMIN_PASSPHRASE']) {
       if (env[name] !== undefined) {
         io.stderr(`[warn] ${name} is set but ignored: passphrases are only read from the terminal prompt, never from the environment. Unset it\n`);
+      }
+    }
+    if (sub === undefined) {
+      // `machine admin` alone (decision 66): what waits for approval, read-only. The list of `admin approve`, without any question and without an approval.
+      if (args.reject) return fail('--reject needs the id of the candidacy: `machine admin approve <id> --reject` (`machine admin` alone only lists)', EXIT.usage);
+      if (args.days !== undefined) return fail('--days belongs to `machine admin approve <id> --days <n>` (`machine admin` alone only lists)', EXIT.usage);
+      const never = (what: string) => async (): Promise<string> => {
+        throw new Error(`internal error: \`machine admin\` alone must not ask ${what}`);
+      };
+      try {
+        const result = await runApprove(configDir, {
+          listOnly: true,
+          ...(args.relay !== undefined ? { relayUrl: args.relay } : {}),
+          days: 365,
+          reject: false,
+          verbose: args.verbose,
+          prompt: never('the passphrase'),
+          ask: never('a question'),
+          say: args.json ? io.stderr : io.stdout,
+          now: epochSeconds,
+        });
+        if (result.kind !== 'list') throw new Error('internal error: `machine admin` alone must only list');
+        emit(result.candidacies, '');
+        return result.candidacies.some((c) => c.blockers.some((b) => b.startsWith('the relay sent a verification code'))) ? EXIT.failure : EXIT.ok;
+      } catch (e) {
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
       }
     }
     if (sub === 'init') {
@@ -363,7 +391,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         throw e;
       }
     }
-    return fail('usage: machine admin init | login [<code>] | approve [<id>] | revoke <machine> | allow <machine> <command> | distribute <machine> | forget-relay-record <machine> | pin <admin.json> | register <info.json> --out <bundle> | sign-policy <draft.json>', EXIT.usage);
+    return fail(unknownSubcommandMessage('admin', sub), EXIT.usage);
   }
 
   if (command === 'peer') {
@@ -403,12 +431,13 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         throw e;
       }
     }
-    return fail('usage: machine peer info [--out <file>] | import <bundle.json> | forget-record <peer> | connect <machine> [settings] | wake <machine>', EXIT.usage);
+    return fail(unknownSubcommandMessage('peer', sub), EXIT.usage);
   }
 
   if (command === 'policy') {
     const [sub, first, second] = rest;
-    if (sub !== 'install' || first === undefined || second !== undefined) return fail('usage: machine policy install <signed-policy.json>', EXIT.usage);
+    if (sub !== 'install') return fail(unknownSubcommandMessage('policy', sub), EXIT.usage);
+    if (first === undefined || second !== undefined) return fail('usage: machine policy install <signed-policy.json>; see `machine policy --help`', EXIT.usage);
     const body = installPolicy(configDir, readObject(first, 'policy') as never, { now });
     emit({ version: body.version }, `[ok] policy version ${body.version} installed (${body.defaults.length} default entries, ${Object.keys(body.peers).length} peer-specific lists)\n`);
     return EXIT.ok;

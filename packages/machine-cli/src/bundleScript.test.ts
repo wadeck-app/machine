@@ -119,7 +119,7 @@ describe('the bundle script', () => {
 
   it('runs --help', async () => {
     const r = await machine('--help');
-    expect(r.stdout).toContain('startup enable | disable | status');
+    expect(r.stdout).toContain('startup [status | enable | disable]');
   });
 
   it('has an npm run bundle in the package and at the root', () => {

@@ -175,11 +175,22 @@ describe('a candidacy that is rejected, interrupted or cut short', () => {
     expect(cut.err).toMatch(/join --resume/);
     const pending = await relayGet(w, '/api/machines/candidacies', w.relay.adminToken);
     expect((pending.body.candidacies as unknown[]).length).toBe(1);
+    // `machine admin` alone (decision 66): lists the one pending candidacy, read-only, with the real relay.
+    const listed = await w.run('desktop', a, ['admin']);
+    expect(listed.code, listed.err).toBe(0);
+    expect(listed.out).toMatch(/1 pending candidacy.*waiting for approval/);
+    expect(listed.out).toContain('nas');
+    expect(listed.out.trimEnd().split('\n').at(-1)).toMatch(/machine admin approve \[<id>\]/);
+    expect(((await relayGet(w, '/api/machines/candidacies', w.relay.adminToken)).body.candidacies as unknown[]).length).toBe(1);
     const approved = await w.run('desktop', a, ['admin', 'approve'], { visible: ['y'] });
     expect(approved.code, approved.err).toBe(0);
     const done = await w.run('nas', c, ['join', '--resume'], { visible: ['y'] });
     expect(done.code, done.err).toBe(0);
     expect(done.out).toContain('[ok] enrolled "nas"');
+    // Nothing waits any more: `machine admin` says so and how a machine asks to join.
+    const none = await w.run('desktop', a, ['admin']);
+    expect(none.code, none.err).toBe(0);
+    expect(none.out).toMatch(/no pending candidacy.*machine join <relay>/);
   });
 
   it('a candidacy that the client considers expired (clock 16 minutes ahead) is dropped and a new one is posted', async () => {

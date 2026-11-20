@@ -30,12 +30,10 @@ async function run(args: string[], cliMeta: Partial<CliMetaDeps> = {}): Promise<
 }
 
 describe('machine cli', () => {
-  it('without a subcommand or with an unknown one, it is a usage error that lists the subcommands', async () => {
-    for (const args of [['cli'], ['cli', 'frobnicate']]) {
-      const r = await run(args);
-      expect(r.code, args.join(' ')).toBe(2);
-      expect(r.err).toMatch(/version \| update \| rollback \| self-check \| logs \| post-update \| register/);
-    }
+  it('an unknown subcommand is a usage error that lists the subcommands (without one, `machine cli` shows the version: cliHelp.test.ts)', async () => {
+    const r = await run(['cli', 'frobnicate']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/version \| update \| rollback \| self-check \| logs \| post-update \| register/);
   });
 
   it('refuses an argument a subcommand does not take instead of ignoring it', async () => {

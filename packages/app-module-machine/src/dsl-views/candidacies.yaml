@@ -5,8 +5,9 @@ $sources:
 
 # Read-only slice: no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature happen in
 # the page, never in the backend). The timeline on the left lists the approval procedure; its statuses are static ("todo") until
-# the signing slice drives them from the selected candidacy. The code in the table is recomputed by the module from the key and
-# random it received, never the one the relay sends.
+# the signing slice drives them from the selected candidacy. Decision 55: the candidacy code is not displayed (the human compares
+# the security code after signing). The route still answers `code`, recomputed by the module from the key and random it received,
+# never the one the relay sends; it is compared internally and is a problem when the relay disagrees.
 $type: PageContent
 sections:
   - $type: PageHeader
@@ -47,7 +48,6 @@ sections:
           text: $ctx.row.bindingText
         columns:
           - { key: "name", label: "Name", nowrap: true }
-          - { key: "code", label: "Verification code", nowrap: true }
           - { key: "hostname", label: "Hostname", nowrap: true }
           - { key: "observedIp", label: "Seen from", nowrap: true }
           - { key: "ageText", label: "Age", nowrap: true }

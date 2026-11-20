@@ -184,14 +184,15 @@ function age(nowSeconds: number, createdAt: number): string {
   return seconds < 120 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 }
 
-function formatList(views: CandidacyView[], nowSeconds: number, verbose: boolean): string {
-  const lines = [`${views.length} pending candidacy(ies); approve one with \`machine admin approve <id>\` (a unique prefix of the id is enough):`];
+function formatList(views: CandidacyView[], nowSeconds: number, verbose: boolean, readOnly = false): string {
+  const lines = [readOnly ? `${views.length} pending candidac${views.length === 1 ? 'y' : 'ies'} waiting for approval:` : `${views.length} pending candidacy(ies); approve one with \`machine admin approve <id>\` (a unique prefix of the id is enough):`];
   for (const v of views) {
     lines.push('', `  ${printable(v.id)}  ${printable(v.name)}  host ${printable(v.hostname)}  from ${printable(v.observedIp)}  age ${age(nowSeconds, v.createdAt)}${verbose ? `  candidacy code ${v.code}` : ''}`);
     const binding = bindingWarning(v);
     if (binding !== undefined) lines.push(`    [warn] ${binding}: approving replaces that binding (the old token then no longer works for this machine)`);
     for (const b of v.blockers) lines.push(`    [warn] cannot be approved: ${b}`);
   }
+  if (readOnly) lines.push('', 'To approve one (a unique prefix of the id is enough; with a single one pending the id is optional):', '  machine admin approve [<id>]');
   return `${lines.join('\n')}\n`;
 }
 
@@ -225,6 +226,8 @@ export interface ApproveOptions {
    * without the details (the relay's copy must match every field, or nothing is signed). The passphrase is still asked.
    */
   selfJoin?: { id: string; uuid: string; identityPublicKey: string; random: string; name: string };
+  /** `machine admin` alone (decision 66): only list what is pending, even when exactly one is. Never asks, never approves. */
+  listOnly?: boolean;
   /** Absent: the relay of the saved admin token; a different one is refused. */
   relayUrl?: string;
   days: number;
@@ -289,6 +292,10 @@ export async function runApprove(configDir: string, o: ApproveOptions): Promise<
   // Without an id: none or several are listed; exactly ONE goes straight to its details (no id to copy).
   let wanted = o.id ?? o.selfJoin?.id;
   if (wanted === undefined) {
+    if (o.listOnly === true) {
+      o.say(views.length === 0 ? 'no pending candidacy: nothing waits for approval. A new machine asks to join with `machine join <relay>` (its candidacy appears here at once)\n' : formatList(views, o.now(), o.verbose === true, true));
+      return { kind: 'list', candidacies: views };
+    }
     if (views.length === 0) {
       o.say('no pending candidacy: on the new machine run `machine join <relay>` (its candidacy appears here at once), then run `machine admin approve` again\n');
       return { kind: 'list', candidacies: views };
