@@ -241,7 +241,8 @@ nmcli device status
 ```
 
 - `connected`: NetworkManager manages it. Use recipe 1.
-- `unmanaged` (seen on the box of this project, every device unmanaged): `nmcli` has no connection to modify. Use recipe 2.
+- `unmanaged`, or no `nmcli`: look at `networkctl status <iface>`. A `Link File:` under `/run/systemd/network/10-netplan-...` means netplan generates the link (Ubuntu Server): use recipe 3.
+- Otherwise use recipe 2. Warning: systemd applies the FIRST matching `.link` file in alphabetical order, so a `50-wol.link` is ignored when `10-netplan-...` exists (seen on the box of this project: the setting was lost at the reboot).
 
 Recipe 1, NetworkManager (then reconnect that connection):
 
@@ -259,7 +260,21 @@ MACAddress=<wired mac>
 WakeOnLan=magic
 ```
 
-Then reboot, or run `sudo udevadm trigger`, and re-check `ethtool <iface> | grep -i wake-on`. UNVERIFIED on the box of this project.
+Then reboot, or run `sudo udevadm trigger`, and re-check `ethtool <iface> | grep -i wake-on`. UNVERIFIED: it did not work on the box of this project, where netplan's `10-` link file comes first (use recipe 3 there).
+
+Recipe 3, netplan (verified on the box of this project: `Wake-on: g` after a reboot). In the `ethernets:` block of the interface in `/etc/netplan/*.yaml`, add `wakeonlan: true`, keeping the indentation of the other keys:
+
+```
+    enp0s31f6:
+      match:
+        macaddress: <wired mac>
+      set-name: enp0s31f6
+      wakeonlan: true
+```
+
+Apply it with `sudo netplan try` (it goes back by itself after 120 s unless you press Enter), then reboot and re-check `ethtool <iface> | grep -i wake-on`.
+
+Which address is woken: a unicast packet goes to the IP of the peer. If that IP belongs to the Wi-Fi card (the wired port has no IPv4 address, as on the box of this project), a sleeping machine cannot receive it on the wired card: the broadcast is what reaches it. Test each method alone with `machine peer connect <m> --wake-max-broadcast 0` and `--wake-max-unicast 0`.
 
 If the packet still does not wake the machine, enable "Wake on LAN" in the BIOS/UEFI (the name varies: "Wake on PCI-E", "Power on by PCI-E"). Without a screen you cannot reach it: plug one in for a few minutes, or run `systemctl reboot --firmware-setup`. Try `ethtool` first.
 
@@ -303,7 +318,8 @@ Tuning: a successful wake prints the measured time, for example `answered after 
 ### Trace and limits
 
 - Every packet is recorded in `<configDir>/wake-audit.log` (hash-chained, written before the send; "sent", never "woke"). If the log cannot be written, no packet is sent.
-- Not verified: that a real network card wakes with these defaults; that a router or switch passes the directed broadcast; real resume times.
+- Verified once, on one machine: a Linux box (wired Intel I219-LM, `Wake-on: g` kept across a reboot with netplan `wakeonlan: true`) suspended with `systemctl suspend` woke from `machine ping` and answered after 12.2 s (packets: unicast, broadcast, unicast, answer 2.2 s into the third 5 s window), on the same LAN.
+- Not verified: which of the packets woke it (no acknowledgement; unicast alone and broadcast alone were not tested yet); a Mac, a Windows machine, a Wi-Fi target; that a router or switch passes the directed broadcast; resume times of other hardware.
 - Not across routers or VPNs. The "waker" role (a machine on the target's LAN that sends the packet for you, phase B) is not built.
 - After a suspend the daemon is still running, so a locked screen is fine. A cold boot with disk encryption or without auto-login is not: the daemon does not start until someone logs in.
 
@@ -394,8 +410,8 @@ Specs: [decision log](.claude/specs/2026-11-13_machine-network/_index.md), [thre
 
 ## Not verified
 
-- No real wake on hardware: the defaults, the router and switch behaviour, the resume times.
-- The macOS and Windows Wake-on-LAN settings; the Linux commands were not run on a target for this project.
+- Real wake on hardware: one Linux box only (see "Trace and limits"); the router and switch behaviour and other hardware are not verified.
+- The macOS and Windows Wake-on-LAN settings; the Linux netplan recipe was run on one target, the NetworkManager recipe was not.
 - The BIOS/UEFI names, `systemctl reboot --firmware-setup` and the router DHCP reservation come from general knowledge, not from a run of this project.
 - The update chain (`cli update`, `cli rollback`) has not been run for real against the published registry as of the packaging spec.
 - The startup job against the real `orch` was verified for a throwaway job only (startup.md).

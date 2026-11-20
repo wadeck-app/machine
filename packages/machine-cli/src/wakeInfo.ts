@@ -43,6 +43,7 @@ export function wakeInfoText(data: WakeInfoData): string {
     '  - `ethtool <interface>` shows "Wake-on: g" when magic packets wake the machine ("d" means disabled).',
     '  - `sudo ethtool -s <interface> wol g` enables it until the next reboot.',
     '  - To keep it: `nmcli connection modify <connection> 802-3-ethernet.wake-on-lan magic`, then reconnect that connection.',
+    '  - With netplan (Ubuntu Server; `networkctl status <interface>` shows a "Link File" named 10-netplan-...): add `wakeonlan: true` to the interface in /etc/netplan/*.yaml, `sudo netplan try`, then reboot. A /etc/systemd/network/50-wol.link is ignored there (the 10-netplan link file wins).',
     '',
     'macOS',
     '  - System Settings > Battery (laptop) or Energy (desktop) > "Wake for network access" (UNVERIFIED: the name and the place change between macOS versions).',
