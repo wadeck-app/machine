@@ -172,3 +172,62 @@ describe('shellQuote', () => {
     expect(shellQuote('echo $HOME')).toBe(`'echo $HOME'`);
   });
 });
+
+describe('machine requests: held requests (run --wait)', () => {
+  const held = (offset: number, id: string, command: string, deadlineOffset: number) => ({ ts: at(offset), event: 'held', source: PEER, id, shell: 'sh', command, deadline: Math.floor(NOW.getTime() / 1000) + deadlineOffset, waitSeconds: 600 });
+
+  it('lists the waiting requests first with the time left, the id, and both ways to answer', async () => {
+    seed();
+    const log = new FileAuditLog(join(dir, 'audit.log'));
+    log.write(held(-60, 'abcdef12-3456-4789-8abc-def012345678', 'uptime -p', 7 * 60));
+    const r = await run('requests');
+    expect(r.code, r.err).toBe(0);
+    const out = r.out;
+    expect(out).toMatch(/waiting for your answer on target \(1 request/);
+    expect(out).toContain(`${PEER.slice(0, 8)} -> sh "uptime -p"`);
+    expect(out).toMatch(/7 min left/);
+    expect(out).toContain('id abcdef12');
+    expect(out).toContain('machine admin allow target --shell sh -- "uptime -p"');
+    expect(out).toContain('machine requests --deny abcdef12');
+    // The waiting section comes before the refused ones.
+    expect(out.indexOf('waiting for your answer')).toBeLessThan(out.indexOf('requests waiting for approval on target'));
+  });
+
+  it('does not list a request whose deadline passed', async () => {
+    seed();
+    new FileAuditLog(join(dir, 'audit.log')).write(held(-700, 'abcdef12-3456-4789-8abc-def012345678', 'uptime -p', -100));
+    const r = await run('requests');
+    expect(r.out).not.toContain('uptime -p');
+  });
+
+  it('puts the waiting requests, with their full id, in the json answer', async () => {
+    seed();
+    new FileAuditLog(join(dir, 'audit.log')).write(held(-60, 'abcdef12-3456-4789-8abc-def012345678', 'uptime -p', 420));
+    const r = await run('requests', '--json');
+    const parsed = JSON.parse(r.out) as { summary: { waiting: Array<{ id: string }> } };
+    expect(parsed.summary.waiting.map((w) => w.id)).toEqual(['abcdef12-3456-4789-8abc-def012345678']);
+  });
+
+  it('--deny without a running daemon says nothing is held and how to start it', async () => {
+    seed();
+    const r = await run('requests', '--deny', 'abcdef12');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/daemon is not running/);
+    expect(r.err).toMatch(/machine daemon|machine startup enable/);
+  });
+
+  it('--reason needs --deny, and --deny does not combine with --history', async () => {
+    seed();
+    expect((await run('requests', '--reason', 'no')).err).toMatch(/--reason only applies to .*--deny/);
+    expect((await run('requests', '--reason', 'no')).code).toBe(2);
+    const both = await run('requests', '--deny', 'abcdef12', '--history');
+    expect(both.code).toBe(2);
+    expect(both.err).toMatch(/--deny/);
+  });
+
+  it('--deny and --reason are refused outside machine requests', async () => {
+    seed();
+    expect((await run('status', '--deny', 'abcdef12')).err).toMatch(/--deny only applies to `machine requests`/);
+    expect((await run('status', '--wait', '10m')).err).toMatch(/--wait only applies to `machine run`/);
+  });
+});

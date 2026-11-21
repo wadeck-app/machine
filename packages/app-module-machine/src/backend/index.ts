@@ -53,6 +53,21 @@ const ALLOW_STATUS: Record<string, number> = {
   'relay-error': 502,
 };
 
+/**
+ * The HTTP status of a refusal of the daemon command `deny` (the reason is the `kind`; anything not listed is 502). The body of the answer
+ * carries the daemon's own sentence, which names the fix.
+ */
+const DENY_STATUS: Record<string, number> = {
+  unknown: 404,
+  ambiguous: 400,
+  'too-short': 400,
+  'bad-reason': 400,
+  'no-daemon': 503,
+};
+
+/** The reason of a Deny is read by the agent and kept in the audit log (machine-core MAX_DENY_REASON_LENGTH, printable ASCII). */
+const DENY_REASON_MAX = 200;
+
 /** Storing a policy may include one call to the relay. */
 const ALLOW_TIMEOUT_MS = 20_000;
 
@@ -67,6 +82,39 @@ function allowBodyProblem(body: unknown): string | undefined {
   if (!signed(record['policy'])) return `"policy" must be a signed policy ({ body, signature }); ${expected}`;
   if (record['document'] !== undefined && !signed(record['document'])) return `"document" must be a signed document ({ body, signature }); ${expected}`;
   return undefined;
+}
+
+/** The body of a Deny: `{ id, reason? }`, or why it is not (names the offending field, never its value). */
+type DenyBody = { ok: true; id: string; reason: string | undefined } | { ok: false; problem: string };
+
+function parseDenyBody(body: unknown): DenyBody {
+  const expected = 'expected {"id": "<id of the waiting request>", "reason": "<optional text for the agent>"}';
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, problem: expected };
+  }
+  const record: Record<string, unknown> = Object.fromEntries(Object.entries(body));
+  const extra = Object.keys(record).find((k) => k !== 'id' && k !== 'reason');
+  if (extra !== undefined) {
+    return { ok: false, problem: `the field "${extra}" is not accepted: a Deny signs nothing and asks no passphrase, this route takes only the id and an optional reason (${expected})` };
+  }
+  const id = record['id'];
+  if (typeof id !== 'string' || id.length === 0 || id.length > 64) {
+    return { ok: false, problem: `"id" must be the id of a waiting request, 1 to 64 characters (\`machine requests\` lists them); ${expected}` };
+  }
+  const reason = record['reason'];
+  if (reason === undefined) {
+    return { ok: true, id, reason };
+  }
+  if (typeof reason !== 'string') {
+    return { ok: false, problem: `"reason" must be text; ${expected}` };
+  }
+  if (reason.length > DENY_REASON_MAX) {
+    return { ok: false, problem: `"reason" has ${reason.length} characters: at most ${DENY_REASON_MAX} (the agent reads it); shorten it` };
+  }
+  if (!/^[\x20-\x7e]*$/.test(reason)) {
+    return { ok: false, problem: '"reason" must be printable ASCII (no accent, no line break): the agent reads it and the audit log keeps it; rewrite it' };
+  }
+  return { ok: true, id, reason };
 }
 
 interface Failure {
@@ -226,14 +274,14 @@ export default function register(ctx: ModuleContextLike): void {
   // header; they never see, log or forward a passphrase or a key (the post accepts exactly {policy, document}). The daemon still verifies the
   // admin signature, the target and the base version before it stores or delivers anything (hard rule 4).
   const SENSITIVE = { effect: 'sensitive' } as const;
-  const viaDaemon = async (req: unknown, reply: ReplyLike, command: string, payload: unknown | undefined, timeoutMs: number | undefined, ok: (result: unknown) => unknown = (r) => r): Promise<unknown> => {
+  const viaDaemon = async (req: unknown, reply: ReplyLike, command: string, payload: unknown | undefined, timeoutMs: number | undefined, ok: (result: unknown) => unknown = (r) => r, statuses: Record<string, number> = ALLOW_STATUS): Promise<unknown> => {
     const refusal = checkModuleHeader(req);
     if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
     try {
       const answer = (await callDaemon(configDir(), command, timeoutMs, payload)) as { ok?: unknown; reason?: unknown; message?: unknown };
       if (typeof answer === 'object' && answer !== null && answer.ok === false) {
         const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
-        const status = ALLOW_STATUS[reason] ?? 502;
+        const status = statuses[reason] ?? 502;
         return reply.code(status).send({ status, kind: reason, error: typeof answer.message === 'string' ? answer.message : `the daemon refused the ${command} command` });
       }
       return reply.code(200).send(ok(answer));
@@ -262,6 +310,20 @@ export default function register(ctx: ModuleContextLike): void {
     // Only these two fields go to the daemon, re-built here: nothing else of the request can travel with them.
     return viaDaemon(req, reply, 'submitPolicy', document === undefined ? { policy } : { policy, document }, ALLOW_TIMEOUT_MS);
   }, SENSITIVE);
+
+  // The Deny button (hold-for-approval.md): restricting, so NOT sensitive, no signature, no passphrase. Only {id, reason} reach the daemon, re-built here.
+  ctx.registerRoute('POST', '/deny', (req, reply) => {
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) {
+      return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    }
+    const parsed = parseDenyBody(typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined);
+    if (!parsed.ok) {
+      return reply.code(400).send({ status: 400, kind: 'bad_request', error: parsed.problem });
+    }
+    const { id, reason } = parsed;
+    return viaDaemon(req, reply, 'deny', reason === undefined ? { id } : { id, reason }, undefined, (r) => r, DENY_STATUS);
+  });
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

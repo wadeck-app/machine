@@ -83,6 +83,7 @@ export function requestsAnswer(configDir: string, query: RequestsQuery, now: num
   }
 
   const summary = summarizeRequests(lines, {
+    now,
     isAllowed: (source, shell, command) => isListed(network.policy, source, shell, command, now, network.policyMode),
     nameOf: (uuid) => names.get(uuid),
     ...(query.pendingLimit !== undefined ? { pendingLimit: query.pendingLimit } : {}),

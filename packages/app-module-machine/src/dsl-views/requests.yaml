@@ -1,7 +1,7 @@
 $sources:
   requests:
     url: GET /api/modules/machine/requests
-    poll: 30s
+    poll: 10s
 
 # What the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`, decision 73).
 # Pending = refused because the command is not allowed (a command the policy allows now is not listed). Ages are humanized by the route. No code columns.
@@ -25,6 +25,11 @@ sections:
     items:
       - $type: Markdown
         text: $sources.requests.remoteNote
+  # Held requests (`machine run --wait`): a caller waits for the answer. Allow signs in the browser like the table below, Deny signs nothing and asks no
+  # passphrase. The component draws its own heading and nothing at all when no request is held. The countdown runs in the page between two polls.
+  - $type: machine:HeldRequests
+    rows: $sources.requests.waiting
+    allow: $sources.requests.allow
   - $type: Markdown
     text: "### Waiting for approval"
   - $type: machine:AllowRequestsTable

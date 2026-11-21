@@ -23,7 +23,7 @@ const refusal = (offset: number, command: string): Record<string, Json> => ({ ts
 
 /** What the daemon command `requests` answers (the same reader as the CLI), through JSON like the real HTTP call. */
 function daemonAnswer(audit: string[], over: Record<string, unknown> = {}): unknown {
-  const summary = summarizeRequests(audit, { isAllowed: () => false, nameOf: (u) => (u === PEER ? 'thinkcentre' : undefined) });
+  const summary = summarizeRequests(audit, { now: NOW, isAllowed: () => false, nameOf: (u) => (u === PEER ? 'thinkcentre' : undefined) });
   return JSON.parse(JSON.stringify({ initialized: true, ok: true, self: { uuid: SELF, name: 'target' }, policyMode: 'admin', adminKeyHere: false, logFile: '/x/audit.log', logPresent: true, now: NOW, summary, problems: [], ...over }));
 }
 
@@ -146,5 +146,47 @@ describe('remoteRequestsPage', () => {
     expect(page.pending[0]).toMatchObject({ countText: '1 time', nextCommand: 'machine admin allow laptop --shell sh -- ls', lastSeenText: '10 min ago' });
     expect(page.notes.join(' ')).toMatch(/Showing 1 of 3/);
     expect(page.notes.join(' ')).toMatch(/1 earlier request/);
+  });
+});
+
+describe('requestsPage (held requests, `machine run --wait`)', () => {
+  const held = (offset: number, id: string, command: string, deadlineOffset: number): Record<string, Json> => ({ ts: iso(offset), event: 'held', source: PEER, id, shell: 'sh', command, deadline: NOW + deadlineOffset });
+  const audit = lines([held(-60, 'h1', 'df -h', 540), held(-20, 'h2', 'ls', 100), refusal(-300, 'uptime')]);
+
+  it('lists the held requests soonest deadline first, with the seconds left computed from the daemon clock', () => {
+    const page = requestsPage(daemonAnswer(audit), NOW + 10);
+    expect(page.waiting.map((w) => w.command)).toEqual(['ls', 'df -h']);
+    expect(page.waiting[0]).toMatchObject({ id: 'h2', peer: PEER, peerText: 'thinkcentre', shell: 'sh', secondsLeft: 100, askedText: '30 s ago', nextCommand: 'machine admin allow target --shell sh -- ls' });
+    expect(page.waiting[1]).toMatchObject({ id: 'h1', secondsLeft: 540, nextCommand: 'machine admin allow target --shell sh -- "df -h"' });
+    expect(page.waiting[0]?.nextWhere).toMatch(/admin machine/);
+  });
+
+  it('uses the clock of the daemon, not the one of this process, for the seconds left', () => {
+    const answer = daemonAnswer(audit, { now: NOW + 50 });
+    expect(requestsPage(answer, NOW + 5000).waiting[0]?.secondsLeft).toBe(50);
+  });
+
+  it('counts waiting and pending together for the tab indicator', () => {
+    const page = requestsPage(daemonAnswer(audit), NOW);
+    expect(page.pending).toHaveLength(1);
+    expect(page.count).toBe(3);
+  });
+
+  it('says in mode local that the owner runs `machine policy allow` on the machine', () => {
+    const page = requestsPage(daemonAnswer(audit, { policyMode: 'local' }), NOW);
+    expect(page.waiting[0]?.nextCommand).toBe('machine policy allow --shell sh -- ls');
+    expect(page.waiting[0]?.nextWhere).toMatch(/on target/);
+  });
+
+  it('has an empty list, not a missing one, when nothing is held', () => {
+    const page = requestsPage(daemonAnswer(lines([refusal(-300, 'ls')])), NOW);
+    expect(page.waiting).toEqual([]);
+    expect(page.count).toBe(1);
+  });
+
+  it('an answer without `waiting` (a daemon older than the module) is refused with the fix, not shown as empty', () => {
+    const answer = daemonAnswer(audit) as { summary: Record<string, unknown> };
+    delete answer.summary['waiting'];
+    expect(() => requestsPage(answer, NOW)).toThrow(/machine cli update/);
   });
 });

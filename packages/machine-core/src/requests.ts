@@ -29,6 +29,19 @@ export interface PendingGroup {
   reason: string;
 }
 
+/** A request the target holds right now, waiting for its owner to allow or deny it (`machine run --wait`). Derived from the audit log. */
+export interface WaitingRequest {
+  /** The id of the request, as `machine requests --deny <id>` takes it. */
+  id: string;
+  peer: string;
+  peerName?: string;
+  shell: string;
+  command: string;
+  /** Epoch seconds. */
+  since: number;
+  deadline: number;
+}
+
 export interface HistoryEntry {
   /** Epoch seconds. */
   at: number;
@@ -47,6 +60,9 @@ export interface HistoryEntry {
   detail?: string;
   /** Runs: the template of the typed entry that matched, as signed. */
   template?: string;
+  /** Hold events: how a hold ended (`allowed`, `denied`, `deadline`, ...) and the owner's text of a Deny. */
+  holdOutcome?: string;
+  note?: string;
   /** Runs: `completed`, `failed`, or `accepted` (no completion in the log: a crash or a cut). */
   outcome?: string;
   exitCode?: number | null;
@@ -62,6 +78,8 @@ export type RequestsChain =
 
 export interface RequestsSummary {
   chain: RequestsChain;
+  /** Requests held right now (soonest deadline first): not refused yet, the owner may still allow or deny them. */
+  waiting: WaitingRequest[];
   pending: PendingGroup[];
   /** Distinct pending groups before the cap. */
   pendingTotal: number;
@@ -84,6 +102,8 @@ export interface HistoryFilter {
 }
 
 export interface SummarizeOptions {
+  /** Epoch seconds: a held request whose deadline passed is not waiting any more. */
+  now: number;
   /** Does the policy in force allow this command for this peer now? (false when there is no policy) */
   isAllowed: (peer: string, shell: string, command: string) => boolean;
   nameOf?: (uuid: string) => string | undefined;
@@ -145,6 +165,8 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
     return name === undefined ? {} : { peerName: printable(name, 100) };
   };
 
+  const heldById = new Map<string, WaitingRequest>();
+  const endedHolds = new Set<string>();
   const groups = new Map<string, PendingGroup>();
   const rows: HistoryEntry[] = [];
   const runById = new Map<string, HistoryEntry>();
@@ -164,6 +186,20 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
     const command = str(entry['command']);
     const id = str(entry['id']);
     const reason = str(entry['reason']);
+
+    if (verified && event === 'daemon-started') {
+      // A restart ends every hold (they live in memory): what was held before it is not waiting any more.
+      heldById.clear();
+    }
+    if (verified && event === 'held') {
+      const deadline = entry['deadline'];
+      if (id !== undefined && peer !== undefined && shell !== undefined && command !== undefined && typeof deadline === 'number' && Number.isFinite(deadline)) {
+        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline });
+      } else skipped += 1;
+    }
+    if (verified && event === 'hold-ended' && id !== undefined) {
+      endedHolds.add(id);
+    }
 
     if (event === 'completed' || event === 'failed') {
       const row = id === undefined ? undefined : runById.get(id);
@@ -195,6 +231,16 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
       ...(str(entry['detail']) !== undefined ? { detail: str(entry['detail']) as string } : {}),
       ...(str(entry['template']) !== undefined ? { template: str(entry['template']) as string } : {}),
     };
+    if (event === 'hold-ended') {
+      const outcome = str(entry['outcome']);
+      if (outcome !== undefined) {
+        row.holdOutcome = outcome;
+      }
+      const note = str(entry['note']);
+      if (note !== undefined) {
+        row.note = note;
+      }
+    }
     if (event === 'accepted') {
       row.outcome = 'accepted';
       if (id !== undefined) runById.set(id, row);
@@ -236,8 +282,11 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
   );
   const limit = filter.limit ?? DEFAULT_HISTORY_LIMIT;
 
+  const waiting = [...heldById.values()].filter((w) => !endedHolds.has(w.id) && w.deadline > options.now).sort((a, b) => a.deadline - b.deadline);
+
   return {
     chain,
+    waiting,
     pending: open.slice(0, options.pendingLimit ?? DEFAULT_PENDING_LIMIT),
     pendingTotal: open.length,
     allowedNow,
@@ -281,6 +330,14 @@ export function describeHistory(h: HistoryEntry): string {
     }
     case 'refused':
       return `(${h.reason ?? 'unknown reason'})${h.shell !== undefined ? ` ${h.shell} "${h.command ?? '?'}"` : ''}${h.detail !== undefined ? `: ${h.detail}` : ''}`;
+    case 'session':
+      if (h.event === 'held') {
+        return `held ${h.shell ?? '?'} "${h.command ?? '?'}" waiting for approval`;
+      }
+      if (h.event === 'hold-ended') {
+        return `hold ended: ${h.holdOutcome ?? 'unknown'}${h.note !== undefined ? ` (${h.note})` : ''}${h.command !== undefined ? ` ${h.shell ?? '?'} "${h.command}"` : ''}`;
+      }
+      return `${h.event}${h.reason !== undefined ? ` (${h.reason})` : ''}`;
     default:
       return `${h.event}${h.reason !== undefined ? ` (${h.reason})` : ''}`;
   }

@@ -9,6 +9,7 @@ import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { installRevocation, loadNetwork, recordRevocationSeen, revocationState, type Network } from './network.js';
 import { startInboxLoop, type InboxLoop, type InboxTimer } from './inboxLoop.js';
+import { HoldTable } from '@wadeck-app/machine-core';
 import { startPeerListener, type ServicedPeerListener } from './peerService.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
@@ -80,6 +81,8 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   const log = options.log ?? ((line: string) => process.stderr.write(`[machine] ${line}\n`));
   const now = () => Math.floor(Date.now() / 1000);
 
+  // The requests held for approval (`run --wait`): in memory, shared by the peer service and the `deny` command of the local API.
+  const holds = new HoldTable();
   let listener: ServicedPeerListener | undefined;
   let inbox: InboxLoop | undefined;
   let updateCheck: { stop: () => void } | undefined;
@@ -98,7 +101,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
       },
     },
     configDir,
-    commands: makeCommands(configDir, options.version),
+    commands: makeCommands(configDir, options.version, undefined, holds),
     port: options.port ?? DEFAULT_DAEMON_PORT,
     // A machine daemon runs until it is told to stop: peers must be able to reach it at any time.
     idleTimeout: null,
@@ -145,6 +148,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         },
         // The read-only `requests-list` exchange (decision 74): signed by the admin, answered from this machine's audit.log.
         requests: makeRequestsListDeps(configDir, now, log),
+        holds: { table: holds },
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },

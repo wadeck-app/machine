@@ -89,7 +89,7 @@ Commands:
                                      left on this machine; version, when it was signed here) and a line saying the installed list is asked there with
                                      \`machine policy allow --list\`; for this machine the installed policy and its mode. Read-only, no passphrase
   alias list | set <alias> <ref> | rm <alias>
-  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] -- <command...>
+  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] [--wait <10s..60m>] -- <command...>
                                      run one allowed command on a peer. Without --address the addresses come from
                                      the relay (the signed address record of the peer, verified against its
                                      registration), tried in order with 3 s each; --address overrides it and is the
@@ -98,7 +98,10 @@ Commands:
                                      relay never delivered still arrives); a peer that turns out revoked is refused.
                                      Addresses pinned with \`peer connect\` win over the relay record. A peer configured
                                      for Wake-on-LAN (or --wake) that cannot be reached (unreachable or no answer, never an
-                                     authentication failure) is woken, then retried; --no-wake forbids it
+                                     authentication failure) is woken, then retried; --no-wake forbids it. --wait 10m: a command the
+                                     target does not allow yet is HELD up to that long (the target caps it, default 30 min, and says so):
+                                     its owner sees it as waiting in \`machine requests\` and on the Requests page; an Allow runs it at
+                                     once, a Deny or the deadline refuses it (named cause). A progress line on stderr every 30 s
   ping [<machine>] [--count <n>] [--address <host:port>] [--wake | --no-wake] [--json]
                                      without a machine: relay.json, the relay answers (time, version), the token is accepted and its
                                      access level (machine, machine-admin, full), the local daemon runs, this machine's address record is
@@ -277,6 +280,9 @@ Administration (enrollment through the relay, or by files):
                                      allows each (\`machine admin allow <this machine> ...\`, or \`machine policy allow ...\` in mode local).
                                      Read-only: reads this machine's audit.log (hash chain verified, a broken chain is a warning with its
                                      line), no daemon needed. A command the policy allows now is not listed. At most 100 groups (--limit)
+  requests --deny <id> [--reason <text>]
+                                     refuse a request a peer holds (\`run --wait\`), at once; its caller reads the reason. Run it on the machine that
+                                     holds the request (its daemon must run). No signature, no passphrase: only restricting
   requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
                                      what happened here: runs (exit code, duration), refusals with their reason, session and document
                                      events; chronological, the last 50 by default (--limit up to 1000); --since 2026-11-20 or 3h
@@ -371,6 +377,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--since') out.since = valueOf('--since');
     else if (a === '--event') out.event = valueOf('--event');
     else if (a === '--limit') out.limit = valueOf('--limit');
+    else if (a === '--wait') out.wait = valueOf('--wait');
+    else if (a === '--deny') out.deny = valueOf('--deny');
+    else if (a === '--reason') out.reason = valueOf('--reason');
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
@@ -522,6 +531,18 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const requestsOption = requestsOptions.find(([, v]) => v !== undefined);
   if (requestsOption !== undefined && command !== 'requests') {
     return fail(`${requestsOption[0] as string} only applies to \`machine requests\` (the requests refused by this machine: pending list, or --history)`, EXIT.usage);
+  }
+  if (args.wait !== undefined && command !== 'run') {
+    return fail('--wait only applies to `machine run` (`machine run <machine> --wait 10m -- <command>` keeps the request open on the target while its owner allows or denies it, 10 s to 60 min)', EXIT.usage);
+  }
+  if (args.deny !== undefined && command !== 'requests') {
+    return fail('--deny only applies to `machine requests` (`machine requests --deny <id> [--reason <text>]` refuses a request a peer holds; the id is shown by `machine requests`)', EXIT.usage);
+  }
+  if (args.deny !== undefined && (rest.length > 0 || args.all === true)) {
+    return fail('--deny acts on the machine where you run it (its daemon holds the request): run `machine requests --deny <id>` on the machine that holds it, without a machine name or --all', EXIT.usage);
+  }
+  if (args.reason !== undefined && args.deny === undefined) {
+    return fail('--reason only applies to `machine requests --deny <id>` (the text the agent reads in the refusal)', EXIT.usage);
   }
   if (args.wake && args.noWake) return fail('--wake and --no-wake cannot be combined: --wake forces the wake of a peer that cannot be reached, --no-wake forbids it', EXIT.usage);
   if ((args.wake || args.noWake) && command !== 'run' && command !== 'ping') {

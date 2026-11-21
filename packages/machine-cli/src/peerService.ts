@@ -1,5 +1,9 @@
 import {
+  DEFAULT_TARGET_WAIT_CAP_SECONDS,
+  HoldTable,
   ReplayCache,
+  holdAnswerTimeoutMs,
+  waitedText,
   MAX_REQUESTS_LISTS_PER_MINUTE,
   buildRequestsListAnswer,
   verifyRequestsList,
@@ -36,6 +40,10 @@ export const DEFAULT_MAX_CONCURRENT = 4;
 export const DEFAULT_MAX_REFUSALS_PER_SESSION = 20;
 /** Client-side deadline: the server's command timeout plus a margin for the network and the output. */
 export const DEFAULT_ANSWER_TIMEOUT_MS = DEFAULT_TIMEOUT_MS + 30_000;
+/** How often a held request looks at the policy, the owner's Deny, the peer registration and the deadline. */
+export const DEFAULT_HOLD_POLL_MS = 1000;
+/** The refusals a hold waits out: the command is not on the list yet (an Allow can fix it). Anything else is refused as for a fresh request. */
+const HOLDABLE_REASONS: readonly string[] = ['not-listed', 'no-policy'];
 
 export interface UsageStore {
   count(key: string): number;
@@ -75,6 +83,17 @@ export interface PeerServiceDeps {
   maxFrameBytes?: number;
   /** The read-only `requests-list` exchange (decision 74). Absent: it is an unknown message, as with an older build. */
   requests?: RequestsListDeps;
+  /** Hold of a refused request (`run --wait`, hold-for-approval.md). Absent: a wait is ignored and the refusal is answered at once, as with an older build. */
+  holds?: HoldDeps;
+}
+
+export interface HoldDeps {
+  /** The holds of this daemon; the owner's Deny and the listing read the same table. */
+  table: HoldTable;
+  /** The longest wait this machine grants (default 30 min); a longer wait is capped and the answer says so. */
+  capSeconds?: number;
+  /** Poll interval of a hold (default 1 s): the delay between an Allow and the run is at most this. */
+  pollMs?: number;
 }
 
 export interface RequestsListDeps {
@@ -86,7 +105,31 @@ export interface RequestsListDeps {
 
 export type PeerAnswer =
   | { type: 'result'; id: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean; outputNotUtf8: boolean; decodedFrom?: string; durationMs: number }
-  | { type: 'refused'; id?: string; reason: string; message: string; allowedShells?: string[] };
+  | { type: 'refused'; id?: string; reason: string; message: string; allowedShells?: string[]; held?: HeldInfo };
+
+/** Present on the refusal of a request that was held: the wait applied and the wait asked for (`capped`: this machine shortened it). */
+export interface HeldInfo {
+  waitSeconds: number;
+  requestedSeconds: number;
+  capped: boolean;
+}
+
+/** What the next read of a session gave: a message, or the end of the connection. Never rejects, so it can be carried between a hold and the loop. */
+type Watched = { kind: 'message'; message: unknown } | { kind: 'closed'; error: Error };
+const watchNext = (session: PeerSession): Promise<Watched> =>
+  session.next().then(
+    (message): Watched => ({ kind: 'message', message }),
+    (e: unknown): Watched => ({ kind: 'closed', error: e as Error }),
+  );
+
+/** The read of the session a hold left pending: the serve loop uses it instead of starting a second read. */
+interface Carrier {
+  watch?: Promise<Watched>;
+}
+
+type AllowedDecision = Extract<ReturnType<typeof authorize>, { allowed: true }>;
+type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: string; message: string; logged: Record<string, Json>; allowedShells?: string[] };
+type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
 type ServiceAnswer = PeerAnswer | RequestsListAnswer;
@@ -108,30 +151,33 @@ class PeerService {
     this.startedAt = deps.now();
   }
 
+  /** Written before the first hold of this process: a restart ends every hold (memory only), so `machine requests` ignores what was held before it. */
+  private startMarked = false;
+
   async serve(session: PeerSession): Promise<void> {
     const maxRefusals = this.deps.maxRefusalsPerSession ?? DEFAULT_MAX_REFUSALS_PER_SESSION;
     let refusals = 0;
     const sync: SyncState = { helloSeen: false, listReceived: false };
     this.open.add(session);
     try {
-      await this.serveLoop(session, maxRefusals, sync, refusals);
+      await this.serveLoop(session, maxRefusals, sync, refusals, {});
     } finally {
       this.open.delete(session);
     }
   }
 
-  private async serveLoop(session: PeerSession, maxRefusals: number, sync: SyncState, initialRefusals: number): Promise<void> {
+  private async serveLoop(session: PeerSession, maxRefusals: number, sync: SyncState, initialRefusals: number, carrier: Carrier): Promise<void> {
     let refusals = initialRefusals;
     for (;;) {
-      let message: unknown;
-      try {
-        message = await session.next();
-      } catch (e) {
-        const why = (e as Error).message;
+      const watched = await (carrier.watch ?? watchNext(session));
+      carrier.watch = undefined;
+      if (watched.kind === 'closed') {
+        const why = watched.error.message;
         // A plain disconnect is normal; a broken frame or protocol error is something an admin wants to see.
         if (why !== 'connection closed') this.recordQuiet({ event: 'session-error', source: session.peerId, error: why });
         return;
       }
+      const message = watched.message;
       // Every message re-checks the peer: revoked or removed since the session began means refused, then closed.
       if (!this.deps.directory.lookup(session.peerPublicKey)) {
         this.recordQuiet({ event: 'session-closed', source: session.peerId, reason: 'peer-revoked' });
@@ -180,7 +226,12 @@ class PeerService {
       }
       let answer: ServiceAnswer;
       try {
-        answer = await this.handle(session, message);
+        const handled = await this.handle(session, message, carrier);
+        // A request held and then dropped (the connection ended): nothing to answer.
+        if (handled === undefined) {
+          return;
+        }
+        answer = handled;
       } catch (e) {
         // Never let one request take the daemon down.
         this.problem(`internal error while handling a request from ${session.peerId}: ${(e as Error).message}`);
@@ -373,7 +424,110 @@ class PeerService {
     return buildRequestsListAnswer({ id: body.id, now, ...requests.list(body.limit) }, (this.deps.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES) - 1024);
   }
 
-  private async handle(session: PeerSession, message: unknown): Promise<ServiceAnswer> {
+  /**
+   * Keep a refused request open until its owner decides (hold-for-approval.md). Returns the decision of the SAME `authorize` as a fresh
+   * request once an entry signed under hard rule 4 matches, or the final refusal. The caller sends nothing meanwhile: the pending read of
+   * the session tells a disconnect, and is handed back to the serve loop afterwards.
+   */
+  private async hold(session: PeerSession, carrier: Carrier, request: { id: string; shell: string; command: string }, waitSeconds: number, holds: HoldDeps, check: () => Step, first: Extract<Step, { ok: false }>): Promise<HoldOutcome> {
+    const { deps } = this;
+    const { table } = holds;
+    const { id, shell, command } = request;
+    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS });
+    if (!admitted.ok) {
+      return { kind: 'answer', answer: this.refuse(session, id, admitted.reason, admitted.message, { shell, command }) };
+    }
+    const { hold } = admitted;
+    if (!this.startMarked) {
+      this.startMarked = true;
+      this.recordQuiet({ event: 'daemon-started' });
+    }
+    const info: HeldInfo = { waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped };
+    // No audit, no hold: `machine requests` lists the waiting requests from this entry.
+    try {
+      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped });
+    } catch (e) {
+      table.end(id);
+      this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
+      return { kind: 'answer', answer: this.refuse(session, id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); the request was not held. Fix the disk or permissions of the machine's audit log`) };
+    }
+    const finish = (outcome: string, extra: Record<string, Json> = {}): void => {
+      table.end(id);
+      this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
+    };
+    const refusal = (reason: string, text: string, allowedShells?: string[]): HoldOutcome => ({
+      kind: 'answer',
+      answer: { ...this.refuse(session, id, reason, text, { shell, command }, allowedShells), held: info } as PeerAnswer,
+    });
+
+    let watch: Promise<Watched> = Promise.resolve({ kind: 'closed', error: new Error('unused') });
+    let settled: Watched | undefined;
+    const arm = (): void => {
+      const mine = watchNext(session);
+      watch = mine;
+      settled = undefined;
+      void mine.then((w) => {
+        if (watch === mine) {
+          settled = w;
+        }
+      });
+    };
+    arm();
+    const pollMs = holds.pollMs ?? DEFAULT_HOLD_POLL_MS;
+    try {
+      for (;;) {
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([watch, new Promise<void>((resolve) => (timer = setTimeout(resolve, pollMs)))]);
+        clearTimeout(timer);
+        const seen = settled as Watched | undefined;
+        if (seen?.kind === 'closed') {
+          finish('disconnected');
+          return { kind: 'dropped' };
+        }
+        if (seen?.kind === 'message') {
+          // A caller that holds a request sends nothing else: refuse the stray message, keep the hold.
+          arm();
+          const stray = this.refuse(session, undefined, 'unexpected-message', 'a request waiting for approval accepts no other message on this connection: open another connection for another request');
+          try {
+            session.send(stray);
+          } catch {
+            // The connection is going away: the next read tells.
+          }
+        }
+        if (!deps.directory.lookup(session.peerPublicKey)) {
+          finish('revoked');
+          return refusal('peer-revoked', 'this machine no longer trusts you: your registration was revoked or removed; nothing was run');
+        }
+        const verdict = table.check(id, deps.now());
+        if (verdict.state === 'denied') {
+          finish('denied', verdict.reason !== undefined ? { note: verdict.reason } : {});
+          return refusal('denied', `the owner of ${deps.self.name} denied this request${verdict.reason !== undefined ? `: ${verdict.reason}` : ''}; nothing was run`);
+        }
+        const again = check();
+        if (again.ok) {
+          finish('allowed');
+          return { kind: 'decision', decision: again.decision };
+        }
+        if (!HOLDABLE_REASONS.includes(again.reason)) {
+          // An expired or exhausted entry, an invalid request: refused as for a fresh request.
+          finish('refused', { reason: again.reason });
+          return refusal(again.reason, again.message, again.allowedShells);
+        }
+        if (verdict.state === 'deadline') {
+          finish('deadline');
+          return refusal(again.reason, `${first.message} (${waitedText(hold.waitSeconds, hold.capped, hold.requestedSeconds)})`);
+        }
+      }
+    } finally {
+      // Whatever ended the hold, the read it left pending belongs to the serve loop now.
+      if (table.get(id) !== undefined) {
+        table.end(id);
+      }
+      carrier.watch = watch;
+    }
+  }
+
+  private async handle(session: PeerSession, message: unknown, carrier: Carrier): Promise<ServiceAnswer | undefined> {
     const { deps } = this;
     const now = deps.now();
     // `requests-list` (decision 74): read-only, admin-signed. Without `deps.requests` it is an unknown message, exactly as for an older build.
@@ -401,21 +555,52 @@ class PeerService {
     const fresh = this.replay.accept(body.source, body.nonce, body.expiresAt, now);
     if (!fresh.ok) return this.refuse(session, body.id, fresh.reason, fresh.message);
 
-    const policy = deps.policy();
-    const policyMode = deps.policyMode?.() ?? 'admin';
-    // The shell and the command are recorded (they passed verifyRequest: known shell, 1 to 2048 printable ASCII): `machine requests` lists them.
-    if (!policy) return this.refuse(session, body.id, 'no-policy', noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), { shell: body.shell, command: body.command });
+    // A wait only means something to a target that can hold (an older build ignores it and refuses at once).
+    const rawWait = (message as { waitSeconds?: unknown }).waitSeconds;
+    let waitSeconds: number | undefined;
+    if (rawWait !== undefined) {
+      if (typeof rawWait !== 'number' || !Number.isInteger(rawWait) || rawWait < 1 || rawWait > 1_000_000) {
+        return this.refuse(session, body.id, 'bad-wait', 'waitSeconds must be a whole number of seconds, at least 1: the peer runs an incompatible version');
+      }
+      waitSeconds = rawWait;
+    }
 
     const platform = deps.platform ?? (process.platform === 'win32' ? 'windows' : 'posix');
-    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode, deps.self.name, platform);
-    if (!decision.allowed) {
-      // `decision.detail` (the closest typed entry, the token and the rule that failed) goes to the LOCAL audit log only, never to the caller.
-      const logged: Record<string, Json> = { shell: body.shell, command: body.command };
-      if (decision.detail !== undefined) {
-        logged.detail = decision.detail;
+    // The shell and the command are recorded (they passed verifyRequest: known shell, 1 to 2048 printable ASCII): `machine requests` lists them.
+    // The same check runs again after a hold: an Allow is only a new policy, never a decision of this function.
+    const check = (): Step => {
+      const policy = deps.policy();
+      const policyMode = deps.policyMode?.() ?? 'admin';
+      if (!policy) {
+        return { ok: false, reason: 'no-policy', message: noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), logged: { shell: body.shell, command: body.command } };
       }
-      return this.refuse(session, body.id, decision.reason, decision.message, logged, decision.allowedShells);
+      const result = authorize(policy, body.source, { shell: body.shell, command: body.command }, deps.now(), (key) => deps.usage.count(key), policyMode, deps.self.name, platform);
+      if (result.allowed) {
+        return { ok: true, decision: result };
+      }
+      // `detail` (the closest typed entry, the token and the rule that failed) goes to the LOCAL audit log only, never to the caller.
+      const logged: Record<string, Json> = { shell: body.shell, command: body.command };
+      if (result.detail !== undefined) {
+        logged.detail = result.detail;
+      }
+      return { ok: false, reason: result.reason, message: result.message, logged, ...(result.allowedShells !== undefined ? { allowedShells: result.allowedShells } : {}) };
+    };
+    let step = check();
+    // The same command is allowed under another shell: the caller used the wrong one, and no Allow of this one is expected: not held.
+    if (!step.ok && waitSeconds !== undefined && deps.holds !== undefined && HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
+      const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command }, waitSeconds, deps.holds, check, step);
+      if (outcome.kind === 'dropped') {
+        return undefined;
+      }
+      if (outcome.kind === 'answer') {
+        return outcome.answer;
+      }
+      step = { ok: true, decision: outcome.decision };
     }
+    if (!step.ok) {
+      return this.refuse(session, body.id, step.reason, step.message, step.logged, step.allowedShells);
+    }
+    const decision = step.decision;
     if (this.inFlight >= (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)) {
       return this.refuse(session, body.id, 'busy', 'this machine is already running its maximum number of commands; retry shortly');
     }
@@ -494,15 +679,26 @@ export interface RunOnPeerInput {
   command: string;
   /** Epoch seconds. */
   now: number;
-  /** How long to wait for the answer; defaults to the server's command timeout plus a margin. */
+  /** How long to wait for the answer; defaults to the wait (if any) plus the server's command timeout plus a margin. */
   timeoutMs?: number;
+  /** Ask the target to HOLD the request up to this many seconds when it is not allowed yet (`--wait`). The target may cap it. */
+  waitSeconds?: number;
+  /** While a wait is pending: called every `everyMs` with the seconds left of the wait asked for. */
+  progress?: { everyMs: number; onTick: (secondsLeft: number) => void };
 }
 
 /** Ask a connected peer to run one command and return its answer, which may be a refusal with its cause. */
 export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Promise<PeerAnswer> {
-  const timeoutMs = input.timeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS;
+  const timeoutMs = input.timeoutMs ?? holdAnswerTimeoutMs(input.waitSeconds ?? 0, DEFAULT_TIMEOUT_MS);
   const body = newRequest({ source: input.source, target: input.target, shell: input.shell, command: input.command, now: input.now });
-  session.send({ type: 'run', request: signRequest(body, input.identity.privateKeyPkcs8) });
+  session.send({ type: 'run', request: signRequest(body, input.identity.privateKeyPkcs8), ...(input.waitSeconds !== undefined ? { waitSeconds: input.waitSeconds } : {}) });
+  const startedAt = Date.now();
+  let ticker: NodeJS.Timeout | undefined;
+  if (input.waitSeconds !== undefined && input.progress !== undefined) {
+    const { everyMs, onTick } = input.progress;
+    const waitSeconds = input.waitSeconds;
+    ticker = setInterval(() => onTick(Math.max(0, waitSeconds - (Date.now() - startedAt) / 1000)), everyMs);
+  }
 
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -514,8 +710,17 @@ export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Pr
   let answer: unknown;
   try {
     answer = await Promise.race([session.next(), deadline]);
+  } catch (e) {
+    // The connection of a held request ended: say what that usually means instead of a bare "connection closed".
+    if (input.waitSeconds !== undefined && (e as Error).message === 'connection closed') {
+      throw new Error('the connection ended while the request was waiting for approval (the target daemon may have restarted, or its owner revoked this machine); nothing was run: check `machine status` on the target, then send the request again');
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
+    if (ticker !== undefined) {
+      clearInterval(ticker);
+    }
   }
   if (typeof answer !== 'object' || answer === null) throw new Error('the peer answered with something that is not a machine answer: the peer runs an incompatible version');
   const a = answer as PeerAnswer;

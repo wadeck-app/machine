@@ -1,4 +1,4 @@
-import { allowCommand, describeHistory, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary } from '@wadeck-app/machine-core';
+import { allowCommand, describeHistory, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
 import { ageText } from './candidacies.js';
 
 // The Requests page (decision 73): what the peers asked THIS machine to run and what became of it. The data is the answer of the daemon
@@ -37,6 +37,23 @@ export interface PendingRow {
   nextWhere: string;
 }
 
+/** A request a peer's `run --wait` holds right now: the owner may still allow or deny it. The page counts `secondsLeft` down by itself from the value it got at fetch time. */
+export interface WaitingRow {
+  /** What `machine requests --deny <id>` and the Deny button take. */
+  id: string;
+  peerText: string;
+  peer: string;
+  shell: string;
+  command: string;
+  /** Seconds until the hold ends, by the clock of the daemon that holds it (never negative). */
+  secondsLeft: number;
+  askedText: string;
+  /** What the Allow dialog shows next to the peer (it shows `countText` of a pending row). */
+  countText: string;
+  nextCommand: string;
+  nextWhere: string;
+}
+
 export interface HistoryRow {
   whenText: string;
   peerText: string;
@@ -60,6 +77,7 @@ export interface RequestsPage {
   allow: AllowCapability;
   /** The tab indicator reads this. */
   count: number;
+  waiting: WaitingRow[];
   pending: PendingRow[];
   pendingTotal: number;
   history: HistoryRow[];
@@ -85,7 +103,26 @@ function pendingRow(g: PendingGroup, machine: { name: string; policyMode: 'admin
     firstSeenText: ago(g.firstSeen, now),
     lastSeenText: ago(g.lastSeen, now),
     nextCommand: allowCommand(g, machine),
-    nextWhere: machine.policyMode === 'local' ? `Run it on ${machine.name}: it manages its own allow list and asks its local passphrase.` : 'Run it on the admin machine (the one that holds the admin key): it allows the command for every peer.',
+    nextWhere: nextWhere(machine),
+  };
+}
+
+function nextWhere(machine: { name: string; policyMode: 'admin' | 'local' }): string {
+  return machine.policyMode === 'local' ? `Run it on ${machine.name}: it manages its own allow list and asks its local passphrase.` : 'Run it on the admin machine (the one that holds the admin key): it allows the command for every peer.';
+}
+
+function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'admin' | 'local' }, daemonNow: number, now: number): WaitingRow {
+  return {
+    id: w.id,
+    peerText: w.peerName ?? w.peer.slice(0, 8),
+    peer: w.peer,
+    shell: w.shell,
+    command: w.command,
+    secondsLeft: Math.max(0, w.deadline - daemonNow),
+    askedText: ago(w.since, now),
+    countText: 'waiting now',
+    nextCommand: allowCommand(w, machine),
+    nextWhere: nextWhere(machine),
   };
 }
 
@@ -95,7 +132,7 @@ function historyRow(h: HistoryEntry, now: number): HistoryRow {
 
 function isAnswer(answer: unknown): answer is RequestsAnswerLike {
   const a = typeof answer === 'object' && answer !== null ? (answer as Record<string, unknown>) : undefined;
-  return a !== undefined && a['initialized'] === true && a['ok'] === true && typeof a['summary'] === 'object' && a['summary'] !== null && typeof a['self'] === 'object' && a['self'] !== null;
+  return a !== undefined && a['initialized'] === true && a['ok'] === true && typeof a['summary'] === 'object' && a['summary'] !== null && Array.isArray((a['summary'] as { waiting?: unknown }).waiting) && typeof a['self'] === 'object' && a['self'] !== null;
 }
 
 export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage {
@@ -123,7 +160,8 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
     machine: answer.self,
     policyMode: answer.policyMode,
     allow: { available: allowNote === '', machine: answer.self, note: allowNote },
-    count: summary.pending.length,
+    count: summary.waiting.length + summary.pending.length,
+    waiting: summary.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds)),
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: summary.pendingTotal,
     history: summary.history.map((h) => historyRow(h, nowSeconds)),

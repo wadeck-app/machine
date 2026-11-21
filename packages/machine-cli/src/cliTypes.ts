@@ -31,6 +31,8 @@ export interface CliIo {
   cliMeta?: Partial<CliMetaDeps>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
   allowLoopbackPeers?: boolean;
+  /** Tests only: how often `machine run --wait` prints its progress line (default 30 s). */
+  waitProgressMs?: number;
   /** Tests only: the computer name that default machine names are derived from (default: os.hostname()). */
   hostname?: () => string;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
@@ -124,6 +126,11 @@ export interface Parsed {
   since?: string;
   event?: string;
   limit?: string;
+  /** `machine run --wait <duration>`: hold the request on the target up to this long when it is not allowed yet (hold-for-approval.md). */
+  wait?: string;
+  /** `machine requests --deny <id> [--reason <text>]`: refuse a request that a peer holds. */
+  deny?: string;
+  reason?: string;
   /** `--verbose` (join, setup, admin approve): also shows the candidacy code, which is internal by default (decision 55). */
   verbose: boolean;
   /** `machine cli self-check --quiet`. */

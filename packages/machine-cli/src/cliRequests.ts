@@ -1,7 +1,10 @@
-import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, allowCommand, describeHistory, shellQuote, type HistoryEntry, type HistoryKind, type PolicyMode, type RequestsSummary } from '@wadeck-app/machine-core';
+import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, allowCommand, describeHistory, shellQuote, type HistoryEntry, type HistoryKind, type PolicyMode, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
 import { clockText, relativeText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { requestsAnswer, type RequestsQuery } from './requestsView.js';
+import { makeCommands } from './commands.js';
+import { appVersion } from './version.js';
 
 // `machine requests`: what the peers asked THIS machine to run and what became of it, read from its own audit log (read-only,
 // no daemon, nothing sent). The pending list is the requests refused because the command is not allowed (decision 73).
@@ -35,16 +38,33 @@ export interface PendingText {
   machine: { name: string; policyMode: PolicyMode };
   /** Admin mode only: the admin key is on the machine that prints this (otherwise the command runs on the admin machine). */
   adminKeyHere: boolean;
-  summary: Pick<RequestsSummary, 'pending' | 'pendingTotal' | 'allowedNow'>;
+  summary: Pick<RequestsSummary, 'pending' | 'pendingTotal' | 'allowedNow'> & { waiting?: WaitingRequest[] };
   logPresent: boolean;
   now: number;
   /** `this machine` for the local view; shown in the header. */
   where: string;
 }
 
+const leftText = (seconds: number): string => (seconds >= 60 ? `${Math.ceil(seconds / 60)} min left` : `${Math.max(0, Math.ceil(seconds))} s left`);
+
+/** The requests a peer holds right now: the caller is connected and waits for the answer of the owner. */
+function waitingText(v: PendingText): string[] {
+  const waiting = v.summary.waiting ?? [];
+  if (waiting.length === 0) {
+    return [];
+  }
+  const lines = [`waiting for your answer on ${v.machine.name} (${waiting.length} request${waiting.length === 1 ? '' : 's'}: the caller is connected and waits; allow it to run it at once, deny it to refuse it):`];
+  for (const w of waiting) {
+    lines.push(`  ${who(w)} -> ${w.shell} "${w.command}"  ${leftText(w.deadline - v.now)}, asked ${ago(w.since, v.now)}, id ${w.id.slice(0, 8)}`);
+    lines.push(`      allow: ${allowCommand(w, v.machine)}`);
+    lines.push(`      deny:  machine requests --deny ${w.id.slice(0, 8)} [--reason <text>]`);
+  }
+  return lines;
+}
+
 export function pendingText(v: PendingText): string[] {
   const { pending, pendingTotal, allowedNow } = v.summary;
-  const lines: string[] = [];
+  const lines: string[] = [...waitingText(v)];
   if (pending.length === 0) {
     lines.push(`no request waiting for approval on ${v.machine.name}${v.logPresent ? '' : ' (no audit log yet: no request ever reached it)'}`);
   } else {
@@ -84,6 +104,9 @@ function parseKinds(text: string | undefined): HistoryKind[] | undefined {
 export async function runRequests(ctx: CommandContext): Promise<number> {
   const { args, rest, io, configDir, fail, emit } = ctx;
   const nowSeconds = Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
+  if (args.deny !== undefined) {
+    return await runDeny(ctx, args.deny, args.reason);
+  }
   const usage = 'usage: machine requests [--limit <n>] | machine requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event refused|run|session|document] [--limit <n>] [--json]';
   if (rest.length > 0) return fail(`unexpected argument "${rest[0] as string}" for \`machine requests\`. ${usage}`, EXIT.usage);
   if (args.history !== true) {
@@ -124,6 +147,22 @@ export async function runRequests(ctx: CommandContext): Promise<number> {
   else if (summary.historyTotal > summary.history.length) lines.push(`[info] showing the last ${summary.history.length} of ${summary.historyTotal}: \`--limit <n>\` (up to ${MAX_LIMIT}) or \`--since\` change the window`);
   lines.push(limitation);
   emit(answer, `${lines.join('\n')}\n`);
+  return EXIT.ok;
+}
+
+/** `machine requests --deny <id> [--reason <text>]`: the daemon that holds the request refuses it. Restricting, no signature; the answer names what was denied. */
+async function runDeny(ctx: CommandContext, id: string, reason: string | undefined): Promise<number> {
+  const { args, rest, configDir, fail, emit } = ctx;
+  if (rest.length > 0 || args.history === true || args.limit !== undefined || args.since !== undefined || args.event !== undefined || args.peer !== undefined) {
+    return fail('--deny takes only the id (and --reason): `machine requests --deny <id> [--reason <text>]`; the id is shown by `machine requests`', EXIT.usage);
+  }
+  const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
+  const r = (await client.send('deny', { id, ...(reason !== undefined ? { reason } : {}) })) as Awaited<ReturnType<ReturnType<typeof makeCommands>['deny']>>;
+  if (!r.ok) {
+    return fail(r.message, r.reason === 'bad-reason' || r.reason === 'too-short' || r.reason === 'ambiguous' ? EXIT.usage : EXIT.failure);
+  }
+  emit(r, `[ok] denied ${r.shell} "${r.command}" from ${r.peer.slice(0, 8)}: its caller is answered refused (denied)${reason !== undefined ? ` with your reason` : ''}
+`);
   return EXIT.ok;
 }
 

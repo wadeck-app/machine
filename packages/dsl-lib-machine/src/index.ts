@@ -1,6 +1,6 @@
 import { createRegistry } from '@wadeck-app/dsl-renderer';
 import type { ComponentRegistryEntry } from '@wadeck-app/dsl-renderer';
-import { AllowRequestsTableEntry, FinalCodeDisplayEntry, PassphraseSignerEntry, VerticalTimelineEntry } from './generated/entries.js';
+import { AllowRequestsTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, VerticalTimelineEntry } from './generated/entries.js';
 
 export { AllowRequestsTable } from './components/AllowRequestsTable.js';
 export type { AllowRequestsTableProps, PendingRequestRow } from './components/AllowRequestsTable.js';
@@ -9,6 +9,8 @@ export type { ConfirmSignModalProps } from './components/ConfirmSignModal.js';
 
 export { FinalCodeDisplay } from './components/FinalCodeDisplay.js';
 export type { FinalCodeDisplayProps } from './components/FinalCodeDisplay.js';
+export { HeldRequests } from './components/HeldRequests.js';
+export type { HeldRequestRow, HeldRequestsProps } from './components/HeldRequests.js';
 export { PassphraseSigner } from './components/PassphraseSigner.js';
 export type { PassphraseSignerProps } from './components/PassphraseSigner.js';
 export { VerticalTimeline } from './components/VerticalTimeline.js';
@@ -19,5 +21,5 @@ export type { TimelineStatus, TimelineStep, VerticalTimelineProps } from './comp
  * (`machine:VerticalTimeline`).
  */
 export function createMachineLibEntries(): ComponentRegistryEntry[] {
-  return Object.values(createRegistry([AllowRequestsTableEntry, FinalCodeDisplayEntry, PassphraseSignerEntry, VerticalTimelineEntry]));
+  return Object.values(createRegistry([AllowRequestsTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, VerticalTimelineEntry]));
 }

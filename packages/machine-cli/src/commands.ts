@@ -1,4 +1,4 @@
-import { resolveMachineRef, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
+import { resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
@@ -53,6 +53,7 @@ export interface ListAnswer {
   note?: string;
 }
 
+export type DenyAnswer = { ok: true; id: string; peer: string; shell: string; command: string } | { ok: false; reason: 'unknown' | 'ambiguous' | 'too-short' | 'bad-reason' | 'no-daemon'; message: string };
 export type ResolveAnswer = (Resolution & { name?: string }) | NotInitialized;
 export type AliasAnswer = { ok: true; alias: string; uuid: string; previous?: string } | Exclude<Resolution, { ok: true }> | { ok: false; reason: 'conflict' | 'missing'; message: string } | NotInitialized;
 
@@ -80,7 +81,7 @@ function stringField(payload: unknown, field: string): string {
 const epochSeconds = () => Math.floor(Date.now() / 1000);
 
 /** `version` is read only by `status`: a failure to determine it must not break the other commands. */
-export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds) {
+export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds, holds?: HoldTable) {
   const everyone = (self: MachineIdentity): MachineEntry[] => [{ uuid: self.uuid, name: self.name }, ...loadNetwork(configDir, now()).directory.machines()];
   return {
     status(): StatusAnswer | NotInitialized {
@@ -176,6 +177,27 @@ export function makeCommands(configDir: string, version: string | (() => string)
 
     submitPolicy(payload?: unknown): Promise<SubmitAnswer> {
       return submitPolicy(configDir, payload, now());
+    },
+
+    /**
+     * The Deny of a request that a peer's `run --wait` holds (hold-for-approval.md): restricting, so it needs no signature (hard rule 4, only
+     * restricting actions). Only the daemon holds requests: run in-process (no daemon) it says so instead of pretending.
+     */
+    deny(payload?: unknown): DenyAnswer {
+      const id = stringField(payload, 'id');
+      const rawReason = payloadOf(payload)['reason'];
+      if (rawReason !== undefined && typeof rawReason !== 'string') {
+        throw new Error('"reason" in the request must be text');
+      }
+      if (holds === undefined) {
+        return { ok: false, reason: 'no-daemon', message: 'the machine daemon is not running, so no request is held: start it with `machine startup enable` (at login) or `machine daemon`' };
+      }
+      const denied = holds.deny(id, rawReason);
+      if (!denied.ok) {
+        return denied;
+      }
+      const { hold } = denied;
+      return { ok: true, id: hold.id, peer: hold.peer, shell: hold.shell, command: hold.command };
     },
 
     resolve(payload?: unknown): ResolveAnswer {

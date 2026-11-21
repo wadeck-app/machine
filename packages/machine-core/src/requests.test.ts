@@ -25,7 +25,7 @@ const refused = (at: number, source: string, extra: Record<string, Json> = {}): 
 });
 
 const names: Record<string, string> = { [THINK]: 'thinkcentre', [LAPTOP]: 'laptop' };
-const base = (extra: Partial<SummarizeOptions> = {}): SummarizeOptions => ({ isAllowed: () => false, nameOf: (uuid) => names[uuid], ...extra });
+const base = (extra: Partial<SummarizeOptions> = {}): SummarizeOptions => ({ now: T0 + 1000, isAllowed: () => false, nameOf: (uuid) => names[uuid], ...extra });
 
 describe('summarizeRequests: pending', () => {
   it('groups the refused-not-allowed requests by peer, shell and command with count, first and last seen and the name', () => {
@@ -203,5 +203,54 @@ describe('typed entries in the history (typed-parameters.md): the template that 
   it('an entry without them prints as before', () => {
     const lines = log([refused(0, THINK)]);
     expect(describeHistory(summarizeRequests(lines, base()).history[0] as HistoryEntry)).toBe('(not-listed) sh "ls"');
+  });
+});
+
+describe('summarizeRequests: waiting (held requests, hold-for-approval)', () => {
+  const held = (at: number, id: string, extra: Record<string, Json> = {}): Record<string, Json> => ({ ts: iso(at), event: 'held', source: THINK, id, shell: 'sh', command: 'ls', deadline: T0 + at + 600, waitSeconds: 600, ...extra });
+  const ended = (at: number, id: string, outcome = 'allowed'): Record<string, Json> => ({ ts: iso(at), event: 'hold-ended', source: THINK, id, outcome });
+
+  it('lists a held request that has no end and whose deadline is ahead, with its countdown data and the peer name', () => {
+    const r = summarizeRequests(log([held(0, 'h1')]), base({ now: T0 + 100 }));
+    expect(r.waiting).toEqual([{ id: 'h1', peer: THINK, peerName: 'thinkcentre', shell: 'sh', command: 'ls', since: T0, deadline: T0 + 600 }]);
+  });
+
+  it('does not list a hold that ended (allowed, denied, deadline, disconnected)', () => {
+    const r = summarizeRequests(log([held(0, 'h1'), ended(10, 'h1', 'denied'), held(20, 'h2')]), base({ now: T0 + 100 }));
+    expect(r.waiting.map((w) => w.id)).toEqual(['h2']);
+  });
+
+  it('does not list a hold whose deadline passed even when nobody wrote its end (daemon crash)', () => {
+    const r = summarizeRequests(log([held(0, 'h1')]), base({ now: T0 + 601 }));
+    expect(r.waiting).toEqual([]);
+  });
+
+  it('does not list a hold that predates the last start of the daemon (a restart ends every hold)', () => {
+    const r = summarizeRequests(log([held(0, 'h1'), { ts: iso(50), event: 'daemon-started' }, held(60, 'h2')]), base({ now: T0 + 100 }));
+    expect(r.waiting.map((w) => w.id)).toEqual(['h2']);
+  });
+
+  it('lists the soonest deadline first', () => {
+    const r = summarizeRequests(log([held(0, 'late', { deadline: T0 + 900 }), held(5, 'soon', { deadline: T0 + 300 })]), base({ now: T0 + 10 }));
+    expect(r.waiting.map((w) => w.id)).toEqual(['soon', 'late']);
+  });
+
+  it('never lists a hold read after a break of the chain (unverified)', () => {
+    const lines = log([held(0, 'h1'), held(1, 'h2')]);
+    lines[1] = lines[1]!.replace('h2', 'hX');
+    const r = summarizeRequests(lines, base({ now: T0 + 10 }));
+    expect(r.waiting.map((w) => w.id)).toEqual(['h1']);
+  });
+
+  it('a held request is not a refusal: it makes no pending group until it is refused', () => {
+    const r = summarizeRequests(log([held(0, 'h1')]), base({ now: T0 + 10 }));
+    expect(r.pendingTotal).toBe(0);
+  });
+
+  it('shows the hold events in the history in words', () => {
+    const r = summarizeRequests(log([held(0, 'h1'), ended(10, 'h1', 'denied')]), base({ now: T0 + 100, history: { kinds: ['session'] } }));
+    const text = r.history.map((h) => describeHistory(h));
+    expect(text[0]).toContain('held');
+    expect(text[1]).toContain('denied');
   });
 });

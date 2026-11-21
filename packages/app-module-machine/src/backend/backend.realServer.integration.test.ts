@@ -131,7 +131,7 @@ function requestsAnswer(): unknown {
     lines.push(r.line);
     prev = r.hash;
   });
-  const summary = summarizeRequests(lines, { isAllowed: () => false, nameOf: () => 'beta' });
+  const summary = summarizeRequests(lines, { now, isAllowed: () => false, nameOf: () => 'beta' });
   return { initialized: true, ok: true, self: { uuid: UUID, name: 'alpha' }, policyMode: 'admin', adminKeyHere: false, logFile: 'x', logPresent: true, now, summary, problems: [] };
 }
 

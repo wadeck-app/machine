@@ -90,7 +90,7 @@ function realLog(): string[] {
 }
 
 const localAnswer = (): unknown => {
-  const summary = summarizeRequests(realLog(), { isAllowed: () => false, nameOf: () => 'thinkcentre' });
+  const summary = summarizeRequests(realLog(), { now: NOW, isAllowed: () => false, nameOf: () => 'thinkcentre' });
   return { initialized: true, ok: true, self: { uuid: SELF, name: 'target' }, policyMode: 'admin', adminKeyHere: true, logFile: '/x', logPresent: true, now: NOW, summary, problems: [] };
 };
 

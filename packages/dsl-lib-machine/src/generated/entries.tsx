@@ -107,6 +107,7 @@ import { SearchBar } from '@wadeck-app/dsl-ui/dist/components/table/SearchBar.js
 import { SortableColumn } from '@wadeck-app/dsl-ui/dist/components/table/SortableColumn.js'
 import { AllowRequestsTable } from '../components/AllowRequestsTable.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
+import { HeldRequests } from '../components/HeldRequests.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
 import { VerticalTimeline } from '../components/VerticalTimeline.js'
 import * as nodeSchemas0 from '@wadeck-app/dsl-ui/dist/schemas/generated-node-schemas.js'
@@ -1878,6 +1879,17 @@ export const FinalCodeDisplayEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const HeldRequestsEntry: ComponentRegistryEntry = {
+	name: 'HeldRequests', category: 'composite', tags: ["requests","allow","deny","hold","policy","admin"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'HeldRequests.rows', 'array', false) as import('../components/HeldRequests.js').HeldRequestsProps['rows']
+		const allow = coerceProp(resolveExpressionValue(node['allow'], ctx), 'HeldRequests.allow', 'object', false) as import('../components/HeldRequests.js').HeldRequestsProps['allow']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'HeldRequests.onRefresh', 'function', false) as import('../components/HeldRequests.js').HeldRequestsProps['onRefresh']
+		return <HeldRequests rows={rows} allow={allow} onRefresh={onRefresh} />
+	},
+}
+
 export const PassphraseSignerEntry: ComponentRegistryEntry = {
 	name: 'PassphraseSigner', category: 'composite', tags: ["passphrase","signing","admin"],
 	nodeSchema: null as never,
@@ -2000,6 +2012,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	SortableColumnEntry,
 	AllowRequestsTableEntry,
 	FinalCodeDisplayEntry,
+	HeldRequestsEntry,
 	PassphraseSignerEntry,
 	VerticalTimelineEntry,
 ]
@@ -2142,5 +2155,6 @@ SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["debounceMs"
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
+HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","onRefresh","rows"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

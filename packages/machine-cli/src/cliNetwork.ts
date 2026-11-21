@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { SHELLS, parseAddress, resolveRunShell, type Shell } from '@wadeck-app/machine-core';
+import { PROGRESS_INTERVAL_SECONDS, SHELLS, parseAddress, parseWait, progressText, resolveRunShell, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -503,7 +503,16 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   const fail = ctx.fail;
   const ref = rest[0];
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] -- <command...>', EXIT.peer);
+    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--wait <10s..60m>] -- <command...>', EXIT.peer);
+  }
+  // A wait outside the limits is refused before anything is read or sent.
+  let waitSeconds: number | undefined;
+  if (args.wait !== undefined) {
+    try {
+      waitSeconds = parseWait(args.wait);
+    } catch (e) {
+      return fail((e as Error).message, EXIT.peer);
+    }
   }
   // An unknown --shell is refused before anything is read or sent; the shell itself is chosen below, once the connections.json of the peer is read.
   if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
@@ -553,7 +562,22 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     if (catchUp.installed) io.stderr(`[info] ${peer.name} handed over revocations this machine did not have yet: they are installed
 `);
     // The request is dated now, after the connection exists: a slow connection must not age it.
-    answer = await runOnPeer(session, { identity: self.identity, source: self.uuid, target: peer.peerId, shell: shell as Shell, command, now: epochSeconds() });
+    answer = await runOnPeer(session, {
+      identity: self.identity,
+      source: self.uuid,
+      target: peer.peerId,
+      shell: shell as Shell,
+      command,
+      now: epochSeconds(),
+      ...(waitSeconds !== undefined
+        ? {
+            waitSeconds,
+            // stderr only: --json keeps stdout one document.
+            progress: { everyMs: io.waitProgressMs ?? PROGRESS_INTERVAL_SECONDS * 1000, onTick: (left: number) => io.stderr(`[info] ${progressText(peer.name, left)}
+`) },
+          }
+        : {}),
+    });
   } finally {
     session.close();
   }
@@ -563,12 +587,15 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     const quoted = /[\s"'`]/.test(command) ? `"${command}"` : command;
     // When the target says the same command is allowed under another shell, adding it under this one would widen the list for nothing: its hint is the whole advice.
     const otherShell = answer.allowedShells !== undefined && answer.allowedShells.length > 0;
+    // The owner (or the deadline) already answered a held request: the fix is to ask again, with a longer wait or after the owner is ready.
+    const notHeld = waitSeconds !== undefined && answer.held === undefined && (answer.reason === 'not-listed' || answer.reason === 'no-policy') && !otherShell;
     const how = answer.reason === 'not-listed' && !otherShell ? `. To allow it, on the admin machine run: machine admin allow ${peer.name} --shell ${shell} -- ${quoted} (if ${peer.name} manages its own allow list, run \`machine policy allow --shell ${shell} -- ${quoted}\` on ${peer.name} instead)` : '';
     // Decision 70: a policy signed here a moment ago and not installed yet explains no-policy / not-listed: say so (one line).
     const pending = pendingPolicyLine(configDir, { uuid: peer.peerId, name: peer.name }, { reason: answer.reason, shell, command, selfUuid: self.uuid }, epochSeconds(), (w) => io.stderr(`[warn] ${w}\n`));
     // What the policy signed HERE allows for this machine (local knowledge: the target never sends its list, T-03).
     const listed = answer.reason === 'not-listed' ? refusalListLine(configDir, { uuid: peer.peerId, name: peer.name }, self.uuid, (w) => io.stderr(`[warn] ${w}\n`)) : undefined;
-    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
+    const heldNote = notHeld ? `\n[warn] ${peer.name} did not hold the request although --wait was given: it most likely runs a version without --wait (update it: run machine cli update there); the refusal above is the ordinary one` : '';
+    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);
