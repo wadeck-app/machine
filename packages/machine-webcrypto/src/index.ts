@@ -40,3 +40,4 @@ export {
   type NoticeRecipientsBody,
   type SignedNoticeRecipients,
 } from './noticeRecipients.js';
+export { MAX_LIFETIME_SECONDS, MAX_TIMES, describeLimits, limitsEqual, parseLifetime, type LifetimeInput, type LifetimeLimits } from './lifetime.js';

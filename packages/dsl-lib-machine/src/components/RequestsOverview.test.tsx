@@ -14,6 +14,8 @@ const LAPTOP = '33333333-3333-4333-8333-333333333333';
 const THINK = '11111111-1111-4111-8111-111111111111';
 const admin = generateSigningKeyPair();
 const keyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE));
+const hintedKeyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint: 'the street of my first school' }));
+let keyFileText: string;
 
 const MACHINES = [
   { uuid: SELF, name: 'midgard2', self: true },
@@ -46,12 +48,13 @@ let remoteAnswer: (machine: string) => unknown;
 
 beforeEach(() => {
   calls = [];
+  keyFileText = keyFile;
   elevate = vi.fn(async () => undefined);
   remoteAnswer = (machine) => (machine === THINK ? thinkPage : laptopPage);
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown) => {
     calls.push({ url, body });
     if (url === 'GET /api/modules/machine/admin-key') {
-      return { file: keyFile };
+      return { file: keyFileText };
     }
     if (url === 'POST /api/modules/machine/requests/remote') {
       const answer = remoteAnswer((body as { machine: string }).machine);
@@ -80,6 +83,29 @@ async function load() {
   await userEvent.click(within(dialog).getByRole('button', { name: 'Sign and load' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
 }
+
+describe('the passphrase hint of the load dialog', () => {
+  it('is shown before the passphrase is typed, and absent when the key has none', async () => {
+    keyFileText = hintedKeyFile;
+    const { unmount } = render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
+    expect(await screen.findByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
+    unmount();
+    keyFileText = keyFile;
+    render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
+    await screen.findByLabelText('Admin passphrase');
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+  });
+
+  it('a malformed hint is reported next to the button, no passphrase is asked', async () => {
+    keyFileText = JSON.stringify({ ...JSON.parse(hintedKeyFile), hint: 'x'.repeat(81) });
+    render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/the hint is malformed/);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
 
 describe('this machine only (before anything is loaded)', () => {
   it('shows its own held and refused requests, and the machine filter lists every trusted machine', () => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { PassphraseHint } from './PassphraseHint.js';
 import { INPUT, MODAL_BACKDROP, MODAL_PANEL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
@@ -22,6 +23,10 @@ export interface ConfirmSignModalProps {
   busy?: boolean;
   /** The last failure, shown in the dialog with the way to proceed. */
   error?: string | null;
+  /** Extra controls under the notes (the lifetime choice of the Allow dialog). They are not part of the passphrase form. */
+  children?: React.ReactNode;
+  /** The hint of the admin key (readable without the passphrase), shown above the field. Absent: none is stored. */
+  hint?: string | null;
   /** False: nothing to sign (already allowed, load failure): the dialog only informs, with a Close button. */
   needsPassphrase?: boolean;
   /** Called with `take` when the person confirms; `take()` returns the typed passphrase and empties the field. */
@@ -29,9 +34,9 @@ export interface ConfirmSignModalProps {
   onCancel: () => void;
 }
 
-const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
-export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, needsPassphrase = true, onConfirm, onCancel }: ConfirmSignModalProps) {
+export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, hint = null, needsPassphrase = true, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<HTMLInputElement>(null);
@@ -100,6 +105,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
         {notes.map(n => (
           <p key={n} className={TEXT_MUTED_SM}>{n}</p>
         ))}
+        {children}
         {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}
         <form className="flex flex-col gap-3" onSubmit={submit}>
           {needsPassphrase && (
@@ -107,6 +113,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
               {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
               {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
               <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
+            <PassphraseHint hint={hint} />
             <label className="flex flex-col gap-1 text-sm">
               Admin passphrase
               {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}

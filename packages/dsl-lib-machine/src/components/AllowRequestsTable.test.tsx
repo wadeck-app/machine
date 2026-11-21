@@ -94,11 +94,11 @@ describe('the confirmation', () => {
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
     // The PIN is asked first, before any secret is requested; the module header goes with every call.
     expect(elevate).toHaveBeenCalledTimes(1);
-    expect(calls.map((c) => c.url)).toEqual([`GET /api/modules/machine/allow/${SELF}`]);
+    expect(calls.map((c) => c.url)).toEqual([`GET /api/modules/machine/allow/${SELF}`, 'GET /api/modules/machine/admin-key']);
     expect(calls[0]?.headers).toEqual({ 'x-machine-module': '1' });
   });
 
-  it('Cancel and Escape close it: nothing is signed, the key file is never read', async () => {
+  it('Cancel and Escape close it: nothing is signed (the key file is read once per opening, only for its hint)', async () => {
     render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
     await screen.findByLabelText('Admin passphrase');
@@ -108,7 +108,7 @@ describe('the confirmation', () => {
     await screen.findByLabelText('Admin passphrase');
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(calls.some((c) => c.url.includes('admin-key') || c.url.startsWith('POST'))).toBe(false);
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
   });
 
   it('a PIN that is cancelled is said in the dialog and nothing else is asked', async () => {
@@ -193,13 +193,14 @@ describe('signing in the page', () => {
     expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
   }, 120_000);
 
-  it('an empty passphrase is refused in the dialog, without reading the key file', async () => {
+  it('an empty passphrase is refused in the dialog, without unlocking or posting anything', async () => {
     render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
     await screen.findByLabelText('Admin passphrase');
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Enter the admin passphrase');
-    expect(calls.some((c) => c.url.includes('admin-key'))).toBe(false);
+    expect(calls.filter((c) => c.url.includes('admin-key'))).toHaveLength(1);
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
   });
 
   it('a refusal of the daemon (the policy moved since: stale base) is shown with its own words, the row stays, the dialog stays', async () => {

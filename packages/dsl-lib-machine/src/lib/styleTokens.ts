@@ -42,6 +42,10 @@ export const HELD_COUNTDOWN_URGENT = 'whitespace-nowrap text-sm font-semibold ta
 /** The Deny button of a held request: dsl-ui's danger outline (same pair as its Badge) with a visible keyboard focus ring. */
 export const DENY_BUTTON = 'inline-flex items-center rounded border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-text transition-colors hover:bg-danger-bg focus:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-1';
 
+/** The passphrase hint above the passphrase field: larger than the surrounding text, on its own line (it is what the person needs to read first). */
+export const PASSPHRASE_HINT = 'rounded border border-border bg-surface p-2 text-base text-content';
+export const PASSPHRASE_HINT_LABEL = 'font-semibold text-muted';
+
 /** Text input (same look as dsl-ui's Field* inputs). */
 export const INPUT = 'rounded border border-border bg-surface px-2 py-1 text-sm text-content focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50';
 

@@ -1,6 +1,6 @@
 import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
-import { loadContext, prepareAllow, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
+import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
 
 // The flow of the Allow button without React: context, preview, unlock, signature, post. Real crypto (each unlock derives 600 000 PBKDF2 rounds:
 // a few in this file, not more). The server side is a recording stub, so the tests can read EVERY byte that leaves the page.
@@ -250,4 +250,76 @@ describe('the rule is the one of machine-core', () => {
   });
 });
 
+describe('the lifetime of the entry (limits), as the CLI --times / --for would sign it', () => {
+  const entryOf = (policy: SignedPolicy, command: string) => policy.body.defaults.find((e) => 'command' in e && e.command === command);
+
+  it('prepareAllow with a lifetime equals machine-core nextPolicyBody with the limits the core parser gives', async () => {
+    const current = signedBase(5, [{ shell: SHELL, command: 'ls' }]);
+    for (const [flags, limits] of [[{ times: '1' }, { maxCalls: 1 }], [{ times: '25' }, { maxCalls: 25 }], [{ for: '15m' }, { expiresAt: NOW + 900 }], [{ for: '1d' }, { expiresAt: NOW + 86400 }]] as const) {
+      const prepared = await prepareAllow(context({ current }), { shell: SHELL, command: 'df -h', lifetime: flags }, NOW);
+      const core = coreNext(current.body, { target: SELF, adminKeyId: ADMIN_KEY_ID, now: NOW }, { kind: 'allow', entry: { shell: SHELL, command: 'df -h', limits } });
+      expect(prepared.changed && core.changed ? prepared.body : null).toEqual(core.changed ? core.body : undefined);
+    }
+  });
+
+  it('permanent (no lifetime) writes no limits key at all', async () => {
+    const prepared = await prepareAllow(context(), { shell: SHELL, command: 'df -h' }, NOW);
+    expect(prepared.changed && prepared.body.defaults[0]).toEqual({ shell: SHELL, command: 'df -h' });
+  });
+
+  it('signs and posts the entry with its limits, expiresAt counted from the signing time', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api, context(), { shell: SHELL, command: 'uptime', lifetime: { times: '1' } }, PASSPHRASE, NOW);
+    const once = (api.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy }).policy;
+    expect(entryOf(once, 'uptime')).toEqual({ shell: SHELL, command: 'uptime', limits: { maxCalls: 1 } });
+    const api2 = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api2, context(), { shell: SHELL, command: 'uptime', lifetime: { for: '15m' } }, PASSPHRASE, NOW + 5);
+    const timed = (api2.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy }).policy;
+    expect(entryOf(timed, 'uptime')).toEqual({ shell: SHELL, command: 'uptime', limits: { expiresAt: NOW + 5 + 900 } });
+    // machine-core accepts what the page signed (hard rule 4).
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, timed, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW + 5, targetUuid: SELF }).ok).toBe(true);
+  }, 120_000);
+
+  it('an invalid lifetime is refused with the parser message before the key is read or anything is signed', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await expect(signAndSubmitAllow(api, context(), { shell: SHELL, command: 'uptime', lifetime: { times: '0' } }, PASSPHRASE, NOW)).rejects.toThrow(/--times must be a whole number from 1 to 10000/);
+    await expect(signAndSubmitAllow(api, context(), { shell: SHELL, command: 'uptime', lifetime: { for: '400d' } }, PASSPHRASE, NOW)).rejects.toThrow(/at most 365 days/);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('allowing an entry that exists with the same lifetime is nothing to sign; with another lifetime it renews it', async () => {
+    const current = signedBase(2, [{ shell: SHELL, command: 'uptime', limits: { maxCalls: 1 } }]);
+    const same = await prepareAllow(context({ current }), { shell: SHELL, command: 'uptime', lifetime: { times: '1' } }, NOW);
+    expect(same).toEqual({ changed: false, reason: 'already-allowed' });
+    const renewed = await prepareAllow(context({ current }), { shell: SHELL, command: 'uptime', lifetime: { times: '5' } }, NOW);
+    expect(renewed.changed && renewed.body.defaults).toEqual([{ shell: SHELL, command: 'uptime', limits: { maxCalls: 5 } }]);
+  });
+});
+
 void vi;
+
+describe('readAdminKeyHint (the hint is shown before the passphrase is typed)', () => {
+  const hinted = (hint: string) => JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint }));
+
+  it('reads the hint from the key file, without any passphrase', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: hinted('the street of my first school') } } });
+    expect(await readAdminKeyHint(api)).toBe('the street of my first school');
+    expect(api.sent).toEqual([{ method: 'GET', path: '/admin-key' }]);
+  });
+
+  it('a key file without a hint gives undefined, not an error', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    expect(await readAdminKeyHint(api)).toBeUndefined();
+  });
+
+  it('a malformed hint is refused with the message of the key file reader', async () => {
+    const envelope = { ...JSON.parse(hinted('ok')), hint: 'x'.repeat(81) };
+    const api = stubApi({ get: { '/admin-key': { file: JSON.stringify(envelope) } } });
+    await expect(readAdminKeyHint(api)).rejects.toThrow(/the hint is malformed.*restore the file from another machine/);
+  });
+
+  it('an answer that is not a key file says the page and the module differ, with the fix', async () => {
+    const api = stubApi({ get: { '/admin-key': { nope: 1 } } });
+    await expect(readAdminKeyHint(api)).rejects.toThrow(/unexpected answer.*update the machine module/s);
+  });
+});

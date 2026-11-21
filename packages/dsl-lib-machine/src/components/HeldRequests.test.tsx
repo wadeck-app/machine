@@ -14,6 +14,8 @@ const PEER = '11111111-1111-4111-8111-111111111111';
 const admin = generateSigningKeyPair();
 const ADMIN_KEY_ID = keyId(admin.publicKey);
 const keyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE));
+const hintedKeyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint: 'the street of my first school' }));
+let keyFileText: string;
 
 const ROWS: HeldRequestRow[] = [
   { id: 'aaaa1111', peerText: 'thinkcentre', peer: PEER, shell: 'sh', command: 'ls', secondsLeft: 95, askedText: '5 s ago', countText: 'waiting now', nextCommand: 'machine admin allow desktop --shell sh -- ls', nextWhere: '' },
@@ -30,6 +32,7 @@ let denyAnswer: unknown;
 
 beforeEach(() => {
   calls = [];
+  keyFileText = keyFile;
   denyAnswer = { ok: true, id: 'aaaa1111', peer: PEER, shell: 'sh', command: 'ls' };
   elevate = vi.fn(async () => undefined);
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
@@ -38,7 +41,7 @@ beforeEach(() => {
       return context();
     }
     if (url === 'GET /api/modules/machine/admin-key') {
-      return { file: keyFile };
+      return { file: keyFileText };
     }
     if (url === 'POST /api/modules/machine/allow') {
       return { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
@@ -233,6 +236,81 @@ describe('Allow', () => {
     expect(within(dialog).getByText('df -h')).toBeInTheDocument();
     expect(elevate).toHaveBeenCalledTimes(1);
   });
+
+  it('shows the passphrase hint above the field BEFORE anything is typed, and no element when the key has none', async () => {
+    keyFileText = hintedKeyFile;
+    const { unmount } = render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const hint = await screen.findByTestId('passphrase-hint');
+    expect(hint).toHaveTextContent('Hint: the street of my first school');
+    expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
+    unmount();
+    keyFileText = keyFile;
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await screen.findByLabelText('Admin passphrase');
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+  });
+
+  it('a malformed hint stops the dialog before any passphrase is asked, with the message of the key file reader', async () => {
+    keyFileText = JSON.stringify({ ...JSON.parse(hintedKeyFile), hint: 'x'.repeat(81) });
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/the hint is malformed.*restore the file from another machine/);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+  });
+
+  it('a HELD request defaults to Once: the summary says so before the passphrase and the signed entry has maxCalls 1', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByLabelText('Admin passphrase');
+    expect(within(dialog).getByLabelText('How long is it allowed?')).toHaveValue('once');
+    expect(within(dialog).getByText('Lifetime')).toBeInTheDocument();
+    expect(within(dialog).getByText('allowed once')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/for ONE call/);
+    await userEvent.type(within(dialog).getByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
+    const policy = (post?.body as { policy: SignedPolicy }).policy;
+    expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+  }, 120_000);
+
+  it('a preset duration is worded with its end time before the passphrase and signed as expiresAt', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByLabelText('Admin passphrase');
+    await userEvent.selectOptions(within(dialog).getByLabelText('How long is it allowed?'), '15m');
+    expect(within(dialog).getByText(/^until [0-9]{2}:[0-9]{2} \(in 1[45] min\)$/)).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getByLabelText('How long is it allowed?'), 'permanent');
+    expect(within(dialog).getByText('permanent, until you remove it')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/until you remove it/);
+  });
+
+  it('Custom: an invalid value shows what to write, signs nothing and keeps the typed passphrase; a valid one is signed', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByLabelText('Admin passphrase');
+    await userEvent.selectOptions(within(dialog).getByLabelText('How long is it allowed?'), 'custom');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Limit by'), 'calls');
+    await userEvent.type(within(dialog).getByLabelText(/Number of calls/), '0');
+    expect(await within(dialog).findByText(/whole number from 1 to 10000/)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
+    expect((await within(dialog).findAllByRole('alert')).map((a) => a.textContent).join(' ')).toMatch(/Nothing was signed/);
+    expect(calls.some((c) => c.url === 'POST /api/modules/machine/allow')).toBe(false);
+    expect(within(dialog).getByLabelText('Admin passphrase')).toHaveValue(PASSPHRASE);
+    await userEvent.clear(within(dialog).getByLabelText(/Number of calls/));
+    await userEvent.type(within(dialog).getByLabelText(/Number of calls/), '3');
+    expect(within(dialog).getByText('allowed 3 times')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    const policy = (calls.find((c) => c.url === 'POST /api/modules/machine/allow')?.body as { policy: SignedPolicy }).policy;
+    expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 3 } }]);
+  }, 120_000);
 
   it('signs in the page, posts only the signed policy, the row leaves and the page refreshes', async () => {
     const onRefresh = vi.fn(async () => undefined);

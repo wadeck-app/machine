@@ -165,7 +165,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
         })}
       </ul>
       {selected !== null && (selected.machine !== undefined || allow !== undefined) && api.current !== null && (
-        <AllowDialog key={selected.id} row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }} machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine} api={api.current} onClose={() => setSelected(null)} onDone={(answer) => allowed(selected, answer)} />
+        <AllowDialog key={selected.id} defaultLifetime="once" row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }} machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine} api={api.current} onClose={() => setSelected(null)} onDone={(answer) => allowed(selected, answer)} />
       )}
     </div>
   );

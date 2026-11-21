@@ -2,6 +2,7 @@ import {
   commandTextProblem,
   nextNoticeRecipientsBody,
   nextPolicyBody,
+  parseLifetime,
   sealedNoticeRecipientsDocument,
   sealedPolicyDocument,
   NOTICE_RECIPIENTS_DOMAIN,
@@ -9,8 +10,10 @@ import {
   SHELLS,
   signNoticeRecipients,
   signPolicy,
+  adminKeyHint,
   unlockAdminKey,
   verifyBody,
+  type LifetimeInput,
   type PolicyEdit,
 } from '@wadeck-app/machine-webcrypto';
 import type { PolicyBody, PolicyEntry, SignedNoticeRecipients, SignedPolicy } from '@wadeck-app/machine-core';
@@ -72,6 +75,11 @@ export interface AllowContext {
 export interface AllowChange {
   shell: string;
   command: string;
+  /**
+   * The lifetime as the CLI flags (`--times`, `--for`): parsed by the same pure code at the time of the signature (a duration counts from then). Absent or
+   * empty: a permanent entry, no `limits` key. Invalid: the parser's sentence is thrown before anything is read or signed.
+   */
+  lifetime?: LifetimeInput;
 }
 
 export interface AllowPrepared {
@@ -125,6 +133,18 @@ function asContext(raw: unknown): AllowContext {
   return raw as unknown as AllowContext;
 }
 
+/**
+ * The hint of the admin key, read from the encrypted key file BEFORE the passphrase is typed (it is stored in clear, decision 57). Undefined: no hint is stored.
+ * Throws with the message of the key file reader when the stored hint is malformed. The route is sensitive: call it after the PIN.
+ */
+export async function readAdminKeyHint(api: AllowApi): Promise<string | undefined> {
+  const answer = await api.get('/admin-key');
+  if (!isObject(answer) || typeof answer['file'] !== 'string') {
+    throw unexpected('the admin key file');
+  }
+  return adminKeyHint(answer['file']);
+}
+
 /** The PIN first (so it is asked before the unlock form is shown), then the context of the machine. */
 export async function loadContext(api: AllowApi, machineUuid: string): Promise<AllowContext> {
   await api.elevate();
@@ -146,7 +166,8 @@ export async function prepareAllow(context: AllowContext, change: AllowChange, n
     }
     if (current.body.target !== context.target.uuid) throw new Error(`the policy sent as the current one is written for another machine (${current.body.target}), not for "${context.target.name}": it is not used as a base. Reload the page`);
   }
-  const edit: PolicyEdit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, { kind: 'allow', entry: { shell: change.shell as PolicyEntry['shell'], command: change.command } });
+  const limits = change.lifetime === undefined ? undefined : parseLifetime(change.lifetime, now);
+  const edit: PolicyEdit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, { kind: 'allow', entry: { shell: change.shell as PolicyEntry['shell'], command: change.command, ...(limits === undefined ? {} : { limits }) } });
   if (!edit.changed) return { changed: false, reason: edit.reason };
   return {
     changed: true,

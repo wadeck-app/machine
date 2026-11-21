@@ -172,3 +172,10 @@ Test-plan items not done: 8 (property tests with an independent reference matche
 Not bounded by a check of this change (an attacker-controlled request can still reach them): the audit line carries the command (2048 characters) plus `detail`/`template` (a template is at most 2048 characters, a detail repeats it once); the `not-listed` refusal echoes the command (2048); the per-session refusal cap and the 4 concurrent runs bound the volume, not a single line.
 
 Old builds: a target built before this change refuses a v2 policy with `unsupported version 2 (this build reads version 1)`, without the `machine cli update` hint (an installed build cannot be changed). The admin side prints an `[info]` line naming the update before the question when it signs a v2 policy; a build of this change names the update for a version it does not know.
+
+## Lifetime choice in the Allow dialog (built 2026-11-21)
+
+- The dialog of the Requests page (held requests, other machines, the refused list) offers `Once (1 call)`, `15 minutes`, `1 hour`, `1 day`, `Permanent`, `Custom` (a number of calls 1..10000, or a duration `<digits>s|m|h|d` up to 365 days). Default: Once for a held request, Permanent for the refused list.
+- The choice is a `LifetimeInput` (`--times` / `--for` flags) parsed at signing time by the byte-identical copy of `lifetime.ts` in machine-webcrypto: the signed entry equals what `machine admin allow --times/--for` writes (`allowFlow.test.ts` compares with machine-core). A duration counts from the signature.
+- The summary shown before the passphrase has a `Lifetime` row: `allowed once`, `allowed N times`, `until 22:45 (in 15 min)`, `permanent, until you remove it`. An invalid custom value shows a message and signs nothing; the typed passphrase stays.
+- NOT built: showing the lifetime of existing entries in the page.

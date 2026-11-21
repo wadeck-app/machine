@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ButtonAction, FieldSelect } from '@wadeck-app/dsl-ui';
-import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
+import { readAdminKeyHint, shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { mergeNotices, type NoticeData } from '../lib/noticeRows.js';
 import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../lib/remoteRequestsFlow.js';
 import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
@@ -58,6 +58,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
   const [busy, setBusy] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<{ at: number; outcomes: RemoteOutcome[] } | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
@@ -94,6 +95,8 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
     try {
       // The PIN first, before the passphrase form (same order as the Allow button).
       await elevateForRemote(api.current as AllowApi);
+      // The hint of the key is stored in clear: on screen before the passphrase is typed (a damaged key file stops here, with its fix).
+      setHint((await readAdminKeyHint(api.current as AllowApi)) ?? null);
       setModalError(null);
       setAsking(true);
     } catch (e) {
@@ -193,6 +196,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
           confirmLabel="Sign and load"
           busy={busy}
           error={modalError}
+          hint={hint}
           onConfirm={confirm}
           onCancel={() => setAsking(false)}
         />

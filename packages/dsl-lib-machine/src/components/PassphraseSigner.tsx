@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { signRegistration, unlockAdminKey, type UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
+import { adminKeyHint, signRegistration, unlockAdminKey, type UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { INPUT, TEXT_ERROR } from '../lib/styleTokens.js';
+import { PassphraseHint } from './PassphraseHint.js';
 
 // Where the secrets live (decision D25): the passphrase only in the input element, read at submit and cleared at once; the
 // unlocked key only in a ref, as a NON-EXTRACTABLE CryptoKey. Neither goes through $setVar, $publishOutput, a URL, a prop
@@ -52,6 +53,33 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
   const [unlocked, setUnlocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | undefined>(undefined);
+
+  // The hint is stored in clear in the key file: shown before the passphrase is typed. A file that cannot be read says so now, not at the unlock.
+  useEffect(() => {
+    let cancelled = false;
+    readKeyFile(keyFileUrl).then(
+      (file) => {
+        try {
+          if (!cancelled) {
+            setHint(adminKeyHint(file));
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setError((e as Error).message);
+          }
+        }
+      },
+      (e: unknown) => {
+        if (!cancelled) {
+          setError((e as Error).message);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [keyFileUrl]);
 
   const lock = useCallback(() => {
     if (timer.current !== null) {
@@ -126,6 +154,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
           {/* The browser saves a password under site + username: a fixed username makes this a login of its own, apart from the app-core PIN. */}
           {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
+          <PassphraseHint hint={hint} />
           <label className="flex flex-col gap-1 text-sm">
             Admin passphrase
             {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}

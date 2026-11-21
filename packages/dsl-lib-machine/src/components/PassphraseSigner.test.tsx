@@ -111,12 +111,13 @@ describe('PassphraseSigner', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('ECONNREFUSED');
   });
 
-  it('refuses an empty passphrase before reading the key file', async () => {
+  it('refuses an empty passphrase without unlocking (the file was read once at mount, for the hint)', async () => {
     const fetchMock = stubFetch(new Response(keyFile, { status: 200 }));
     render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Enter the admin passphrase');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('"Lock now" locks: the signing button goes away and the passphrase is asked again', async () => {
@@ -154,4 +155,36 @@ describe('PassphraseSigner', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('registration: name');
     expect(onSigned).not.toHaveBeenCalled();
   }, 120_000);
+});
+
+describe('PassphraseSigner passphrase hint (decision 57)', () => {
+  const hinted = JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint: 'the street of my first school' }));
+
+  it('shows the hint of the key file before anything is typed', async () => {
+    stubFetch(new Response(hinted, { status: 200 }));
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    expect(await screen.findByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
+    expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
+  });
+
+  it('shows nothing when the key has no hint', async () => {
+    const fetchMock = stubFetch(new Response(keyFile, { status: 200 }));
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a malformed hint is refused with the message of the key file reader', async () => {
+    stubFetch(new Response(JSON.stringify({ ...JSON.parse(hinted), hint: 'x'.repeat(81) }), { status: 200 }));
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/the hint is malformed.*restore the file from another machine/);
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+  });
+
+  it('a key file that cannot be read is reported at once with the fix, not at the unlock', async () => {
+    stubFetch(new Response('nope', { status: 500 }));
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Cannot read the admin key file.*500/);
+  });
 });
