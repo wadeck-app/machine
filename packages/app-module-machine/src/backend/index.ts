@@ -163,6 +163,43 @@ function machineRows(answer: ListAnswerLike): Array<{ uuid: string; name: string
   return rows;
 }
 
+interface NoticeHoldersLike {
+  admin?: unknown;
+  listKnown?: unknown;
+  serial?: unknown;
+  recipients?: Array<{ uuid?: unknown; name?: unknown }>;
+  holders?: Array<{ uuid?: unknown; text?: unknown }>;
+  note?: unknown;
+}
+
+/**
+ * Who receives request notices and which machine holds the list (request-notices.md), from the daemon command `noticeHolders` (local files, no
+ * network). Never fails the machines list: when the daemon cannot tell, the page gets a note that names the fix, not empty columns.
+ */
+async function noticeColumns(dir: string): Promise<{ decorate: <R extends { uuid: string }>(row: R) => R; text?: string; note?: string }> {
+  const untouched = <R extends { uuid: string }>(row: R): R => row;
+  let answer: unknown;
+  try {
+    answer = await callDaemon(dir, 'noticeHolders');
+  } catch (err) {
+    const failure = failureOf(err);
+    const older = failure.kind === 'daemon_error' && failure.error.includes('older than this module');
+    return { decorate: untouched, note: older ? 'The daemon is older than this module and cannot tell who receives request notices: update it with `machine cli update` and restart it.' : `Who receives request notices is not shown: ${failure.error}` };
+  }
+  if (isNotInitialized(answer)) {
+    return { decorate: untouched };
+  }
+  const holders = answer as NoticeHoldersLike;
+  const recipients = new Set((holders.recipients ?? []).map((r) => String(r.uuid)));
+  const heldText = new Map((holders.holders ?? []).map((h) => [String(h.uuid), String(h.text)]));
+  const names = (holders.recipients ?? []).map((r) => String(r.name));
+  return {
+    decorate: <R extends { uuid: string }>(row: R): R => ({ ...row, receivesNotices: recipients.has(row.uuid) ? 'yes' : 'no', listHeldText: heldText.get(row.uuid) ?? '' }),
+    ...(holders.listKnown === true ? { text: `Request notices go to ${names.length === 0 ? 'nobody (the list is empty)' : names.join(', ')} (list serial ${String(holders.serial)}).` } : {}),
+    ...(typeof holders.note === 'string' ? { note: holders.note } : {}),
+  };
+}
+
 function candidacyRow(view: CandidacyListView): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
   let bindingText = '';
   if (view.rebind) {
@@ -212,9 +249,12 @@ export default function register(ctx: ModuleContextLike): void {
         return reply.code(failure.status).send(failure);
       }
       const list = answer as ListAnswerLike;
-      const machines = machineRows(list);
+      const notices = await noticeColumns(configDir());
+      const machines = machineRows(list).map((row) => notices.decorate(row));
       return reply.code(200).send({
         machines,
+        ...(notices.text === undefined ? {} : { noticesText: notices.text }),
+        ...(notices.note === undefined ? {} : { noticesNote: notices.note }),
         count: machines.length,
         enrolled: list.enrolled === true,
         ...(typeof list.note === 'string' ? { note: list.note } : {}),

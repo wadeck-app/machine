@@ -149,6 +149,48 @@ describe('GET /machines', () => {
     expect(out.body.presenceNote).toContain('not shown');
   });
 
+  it('adds who receives request notices and which machine holds the list, from the daemon noticeHolders', async () => {
+    const BETA = '11111111-1111-4111-8111-111111111111';
+    await withDaemon({
+      list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [{ uuid: BETA, name: 'beta', aliases: [] }] },
+      noticeHolders: {
+        initialized: true,
+        admin: true,
+        listKnown: true,
+        serial: 42,
+        recipients: [{ uuid: UUID, name: 'alpha (this machine)' }],
+        holders: [{ uuid: BETA, name: 'beta', state: 'sent', text: 'sent 2026-11-21T10:00:00.000Z, not confirmed' }],
+      },
+    });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.status).toBe(200);
+    expect(out.body.machines).toEqual([
+      { uuid: UUID, name: 'alpha', self: true, role: 'this machine', aliasesText: '', receivesNotices: 'yes', listHeldText: '' },
+      { uuid: BETA, name: 'beta', self: false, role: 'peer', aliasesText: '', receivesNotices: 'no', listHeldText: 'sent 2026-11-21T10:00:00.000Z, not confirmed' },
+    ]);
+    expect(out.body.noticesText).toBe('Request notices go to alpha (this machine) (list serial 42).');
+    expect(out.body.noticesNote).toBeUndefined();
+  });
+
+  it('says why when the daemon cannot tell (older daemon, or no list yet), instead of leaving the columns empty', async () => {
+    await withDaemon({ list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [] } });
+    const older = await call(routes(), 'GET /machines');
+    expect(older.status).toBe(200);
+    expect(older.body.noticesNote).toMatch(/older than this module/);
+    expect(older.body.noticesNote).toMatch(/machine cli update/);
+    expect(older.body.machines[0]).not.toHaveProperty('receivesNotices');
+  });
+
+  it('passes the note of a daemon that holds no list yet along', async () => {
+    await withDaemon({
+      list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [] },
+      noticeHolders: { initialized: true, admin: true, listKnown: false, recipients: [], holders: [], note: 'no list of request-notice recipients is signed here yet: run `machine admin notify-to <machine>...`' },
+    });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.body.noticesNote).toMatch(/machine admin notify-to/);
+    expect(out.body.machines[0]).toMatchObject({ receivesNotices: 'no' });
+  });
+
   it('passes the note of an unenrolled daemon along', async () => {
     await withDaemon({ list: { initialized: true, enrolled: false, self: { uuid: UUID, name: 'alpha' }, peers: [], note: 'not enrolled: pin the admin key' } });
     const out = await call(routes(), 'GET /machines');

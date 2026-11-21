@@ -10,6 +10,7 @@ import { putNoticeRecipients, type DistributionReport, type Sender } from './dis
 import { readAdminPin, unlockAdminKey } from './admin.js';
 import { noticeSentFile, readNoticeSent, recordNoticeConfirmed } from './noticeRecipientsSent.js';
 import { readNoticeRecipients } from './noticeRecipientsStore.js';
+import { makeCommands } from './commands.js';
 import { cli, makeAdmin, ok, type TestAdmin } from './testing.js';
 
 // request-notices.md, phase 1: the list of notice recipients rides every distribution, and `machine admin notify-to` chooses it.
@@ -219,5 +220,29 @@ describe('machine admin notify-to', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out).toMatch(/no notice recipients are known/);
     expect(r.out).toMatch(/machine admin distribute/);
+  });
+});
+
+describe('the daemon command noticeHolders (the Machines page)', () => {
+  it('on the admin machine: the recipients and, per trusted machine, what it holds, in words', async () => {
+    await enroll('laptop');
+    const answer = makeCommands(adminDir, 'test').noticeHolders();
+    expect(answer).toMatchObject({ initialized: true, admin: true, listKnown: true, recipients: [{ uuid: uuidOf('desktop'), name: 'desktop (this machine)' }] });
+    const serial = readNoticeRecipients(adminDir, admin.adminPublicKey)?.body.serial;
+    expect(answer).toMatchObject({ serial });
+    const laptop = (answer as { holders: Array<{ uuid: string; state: string; text: string }> }).holders.find((h) => h.uuid === uuidOf('laptop'));
+    expect(laptop).toMatchObject({ state: 'sent' });
+    expect(laptop?.text).toMatch(/not confirmed/);
+  });
+
+  it('says so when no list is known, instead of an empty table', async () => {
+    const answer = makeCommands(adminDir, 'test').noticeHolders();
+    expect(answer).toMatchObject({ initialized: true, admin: true, listKnown: false, recipients: [], holders: [] });
+    expect((answer as { note: string }).note).toMatch(/machine admin notify-to/);
+  });
+
+  it('on a machine that is not the admin: no holders, only what it received', async () => {
+    await ok(dirOf('laptop'), ['admin', 'pin', join(adminDir, 'admin.json')]);
+    expect(makeCommands(dirOf('laptop'), 'test').noticeHolders()).toMatchObject({ initialized: true, admin: false, listKnown: false, holders: [] });
   });
 });

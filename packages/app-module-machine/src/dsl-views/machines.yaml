@@ -20,6 +20,19 @@ sections:
     items:
       - $type: Markdown
         text: $sources.machines.presenceNote
+  # Who receives request notices (decisions 83, 84): the sentence when a list is known, and the fix when the daemon cannot tell.
+  - $type: Card
+    $if: $sources.machines.noticesText
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.noticesText
+  - $type: Card
+    $if: $sources.machines.noticesNote
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.noticesNote
   - $type: DataTable
     rows: $sources.machines.machines
     emptyMessage: No machine
@@ -27,4 +40,6 @@ sections:
       - { key: "name", label: "Name", nowrap: true }
       - { key: "role", label: "Role", nowrap: true }
       - { key: "aliasesText", label: "Aliases" }
+      - { key: "receivesNotices", label: "Receives notices", nowrap: true }
+      - { key: "listHeldText", label: "Notice list held" }
       - { key: "uuid", label: "UUID", nowrap: true }

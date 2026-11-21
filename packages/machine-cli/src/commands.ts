@@ -3,6 +3,7 @@ import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './err
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
+import { noticeHolders, type NoticeHoldersAnswer } from './adminNotifyTo.js';
 import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -151,6 +152,15 @@ export function makeCommands(configDir: string, version: string | (() => string)
         policyMode: network.policyMode,
         ...(network.enrolled ? {} : { note: NOT_ENROLLED_NOTE }),
       };
+    },
+
+    /** The Machines page: who receives request notices and which machine holds the list (request-notices.md). Local files only, read-only. */
+    noticeHolders(): NoticeHoldersAnswer | NotInitialized {
+      const self = selfOf(configDir);
+      if ('initialized' in self) {
+        return self;
+      }
+      return noticeHolders(configDir, now());
     },
 
     /** The Requests page of the module (decision 73): the pending list and the last history entries of this machine's audit log. Read-only. */

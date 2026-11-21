@@ -165,3 +165,56 @@ export async function runNotifyTo(configDir: string, o: NotifyToOptions): Promis
   const names = [...chosen.values()].map((n) => `"${n}"`).join(', ');
   return { out: `${formatted.out}[ok] request notices now go to ${names || 'nobody'} (list serial ${signed.body.serial}); the other machines learn it when they read their inbox\n`, report, formatted, recipients: [...chosen.entries()].map(([uuid, name]) => ({ uuid, name })) };
 }
+
+export interface NoticeHoldersAnswer {
+  initialized: true;
+  /** This machine holds the admin key: it alone signs and sends the list, so it alone has a record of who holds it. */
+  admin: boolean;
+  /** A verified list is stored here. */
+  listKnown: boolean;
+  serial?: number;
+  recipients: Array<{ uuid: string; name: string }>;
+  /** Per trusted machine, admin machine only: the state (see `Holding`) and the sentence of `machine admin notify-to --list`. */
+  holders: Array<{ uuid: string; name: string; state: Holding['state']; text: string }>;
+  /** What to do, or what could not be read (damaged file): always actionable, never silent. */
+  note?: string;
+}
+
+/** The data of the Machines page, from local files only (no network, no passphrase): the counterpart of `machine admin notify-to --list`. */
+export function noticeHolders(configDir: string, now: number): NoticeHoldersAnswer {
+  const admin = existsSync(adminKeyFile(configDir));
+  let signed: ReturnType<typeof readNoticeRecipients>;
+  try {
+    signed = readNoticeRecipients(configDir, readAdminPin(configDir).adminPublicKey);
+  } catch (e) {
+    return { initialized: true, admin, listKnown: false, recipients: [], holders: [], note: (e as Error).message };
+  }
+  if (signed === undefined) {
+    return {
+      initialized: true,
+      admin,
+      listKnown: false,
+      recipients: [],
+      holders: [],
+      note: admin
+        ? 'no list of request-notice recipients is signed here yet: run `machine admin notify-to <machine>...` (or any `machine admin allow`) on this machine'
+        : 'this machine holds no list of request-notice recipients yet: run `machine admin notify-to <machine>...` on the admin machine, after `machine cli update` here if this build is old',
+    };
+  }
+  const recipients = signed.body.recipients.map((uuid) => ({ uuid, name: nameOf(configDir, uuid, now) }));
+  if (!admin) {
+    return { initialized: true, admin, listKnown: true, serial: signed.body.serial, recipients, holders: [] };
+  }
+  let record: NoticeSentRecord = {};
+  let note: string | undefined;
+  try {
+    record = readNoticeSent(configDir);
+  } catch (e) {
+    note = (e as Error).message;
+  }
+  const holders = trustedRegistrations(configDir, now).map((r) => {
+    const holding = holdingOf(signed.body.serial, record[r.body.uuid]);
+    return { uuid: r.body.uuid, name: r.body.name, state: holding.state, text: holdingText(holding) };
+  });
+  return { initialized: true, admin, listKnown: true, serial: signed.body.serial, recipients, holders, ...(note === undefined ? {} : { note }) };
+}
