@@ -211,7 +211,7 @@ describe('the staged launcher form, with a fake installed platform package', () 
     const rel = await cli(configDir, ['startup', 'enable'], undefined, { startup: ctxWith(installed('1.0.0')) });
     expect(rel.code, rel.err).toBe(0);
     expect(rel.out).toMatch(/form: staged launcher/);
-    expect(rel.out).toContain('Node >= 22');
+    expect(rel.out).toContain('Node >= 24');
   });
 
   it('CLI status says which form is registered and whether it is current', async () => {
