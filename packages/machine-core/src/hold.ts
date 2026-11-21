@@ -204,6 +204,22 @@ export function holdAnswerTimeoutMs(waitSeconds: number, runTimeoutMs: number): 
   return waitSeconds * 1000 + runTimeoutMs + HOLD_ANSWER_MARGIN_MS;
 }
 
+/**
+ * The progress lines of a wait: the tick is every 30 s but the text changes once a minute, so a line identical to the previous one is
+ * NOT returned (undefined): the caller prints nothing.
+ */
+export function progressPrinter(machineName: string): (secondsLeft: number) => string | undefined {
+  let last: string | undefined;
+  return secondsLeft => {
+    const line = progressText(machineName, secondsLeft);
+    if (line === last) {
+      return undefined;
+    }
+    last = line;
+    return line;
+  };
+}
+
 /** The progress line the caller prints every 30 s. */
 export function progressText(machineName: string, secondsLeft: number): string {
   const left = secondsLeft >= 60 ? `${Math.ceil(secondsLeft / 60)} min` : `${Math.max(0, Math.ceil(secondsLeft))} s`;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, describeSeconds, parseWait, waitedText } from './hold.js';
+import { DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressPrinter, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, describeSeconds, parseWait, waitedText } from './hold.js';
 
 const PEER_A = '11111111-1111-4111-8111-111111111111';
 const PEER_B = '22222222-2222-4222-8222-222222222222';
@@ -207,6 +207,32 @@ describe('holdAnswerTimeoutMs', () => {
 
   it('without a wait it is the run timeout plus 30 s (unchanged behaviour)', () => {
     expect(holdAnswerTimeoutMs(0, 60_000)).toBe(90_000);
+  });
+});
+
+describe('progressPrinter (user report: "9 min left" printed twice, the tick is every 30 s but the text only changes every minute)', () => {
+  it('never returns the same line twice in a row', () => {
+    const next = progressPrinter('thinkcentre');
+    const seconds = [570, 540, 510, 480, 450, 420];
+    const lines = seconds.map(s => next(s)).filter((l): l is string => l !== undefined);
+    expect(lines).toEqual([
+      'waiting for thinkcentre to allow it (10 min left)',
+      'waiting for thinkcentre to allow it (9 min left)',
+      'waiting for thinkcentre to allow it (8 min left)',
+      'waiting for thinkcentre to allow it (7 min left)',
+    ]);
+  });
+
+  it('keeps counting in seconds below one minute, every tick is a new line', () => {
+    const next = progressPrinter('x');
+    expect([45, 15].map(s => next(s))).toEqual(['waiting for x to allow it (45 s left)', 'waiting for x to allow it (15 s left)']);
+  });
+
+  it('two printers do not share state', () => {
+    const a = progressPrinter('a');
+    const b = progressPrinter('a');
+    expect(a(120)).toBeDefined();
+    expect(b(120)).toBeDefined();
   });
 });
 
