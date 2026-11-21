@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { PROGRESS_INTERVAL_SECONDS, SHELLS, parseAddress, parseWait, progressText, resolveRunShell, type Shell } from '@wadeck-app/machine-core';
+import { DEFAULT_WAIT_NOTICE_DELAY_MS, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressText, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -29,6 +29,7 @@ import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relaySto
 import { exportMachineInfo, importPeer, installPolicy, installRevocation, loadNetwork, recordRevocationSeen, registerMachine, revocationState, type MachineInfo, type PeerBundle } from './network.js';
 import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
 import { runOnPeer } from './peerService.js';
+import { readRunDefaults } from './runDefaultsStore.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
 import { pendingPolicyLine } from './pendingPolicy.js';
@@ -503,17 +504,16 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   const fail = ctx.fail;
   const ref = rest[0];
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--wait <10s..60m>] -- <command...>', EXIT.peer);
+    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] -- <command...>', EXIT.peer);
   }
-  // A wait outside the limits is refused before anything is read or sent.
-  let waitSeconds: number | undefined;
-  if (args.wait !== undefined) {
-    try {
-      waitSeconds = parseWait(args.wait);
-    } catch (e) {
-      return fail((e as Error).message, EXIT.peer);
-    }
+  // What to do when the target does not allow the command yet: flags, then the machine setting, then the built-in default (wait 10m). A bad flag, a contradiction and a damaged setting are refused before anything is read or sent.
+  let wait: RunWait;
+  try {
+    wait = resolveRunWait({ ...(args.onRefusal !== undefined ? { onRefusal: args.onRefusal } : {}), ...(args.wait !== undefined ? { wait: args.wait } : {}), ...(args.noWait ? { noWait: true } : {}) }, readRunDefaults(configDir));
+  } catch (e) {
+    return fail((e as Error).message, EXIT.peer);
   }
+  const waitSeconds = wait.onRefusal === 'wait' ? wait.seconds : undefined;
   // An unknown --shell is refused before anything is read or sent; the shell itself is chosen below, once the connections.json of the peer is read.
   if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
   if (args.address !== undefined && !parseAddress(args.address)) {
@@ -545,6 +545,9 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   for (const failure of connected.failures) io.stderr(`[warn] ${failure}; connected through ${describeAddress(connected.address)}
 `);
   const session = connected.session;
+  // Said once: a wait nobody typed must never be a surprise (stderr only, --json keeps stdout one document). Only when the answer is not
+  // immediate, so that an allowed command keeps a clean stderr (the target sends no "held" frame, and an older caller would not understand one).
+  const notice = defaultWaitNotice(peer.name, wait);
   let answer;
   try {
     // Before any request: exchange the revocation lists (a revocation the relay never delivered still reaches whoever meets a peer that has it).
@@ -572,6 +575,7 @@ async function runRemote(ctx: CommandContext): Promise<number> {
       ...(waitSeconds !== undefined
         ? {
             waitSeconds,
+            ...(notice !== undefined ? { notice: { afterMs: io.waitNoticeMs ?? DEFAULT_WAIT_NOTICE_DELAY_MS, onNotice: () => io.stderr(`[info] ${notice}\n`) } } : {}),
             // stderr only: --json keeps stdout one document.
             progress: { everyMs: io.waitProgressMs ?? PROGRESS_INTERVAL_SECONDS * 1000, onTick: (left: number) => io.stderr(`[info] ${progressText(peer.name, left)}
 `) },
@@ -594,8 +598,11 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     const pending = pendingPolicyLine(configDir, { uuid: peer.peerId, name: peer.name }, { reason: answer.reason, shell, command, selfUuid: self.uuid }, epochSeconds(), (w) => io.stderr(`[warn] ${w}\n`));
     // What the policy signed HERE allows for this machine (local knowledge: the target never sends its list, T-03).
     const listed = answer.reason === 'not-listed' ? refusalListLine(configDir, { uuid: peer.peerId, name: peer.name }, self.uuid, (w) => io.stderr(`[warn] ${w}\n`)) : undefined;
-    const heldNote = notHeld ? `\n[warn] ${peer.name} did not hold the request although --wait was given: it most likely runs a version without --wait (update it: run machine cli update there); the refusal above is the ordinary one` : '';
-    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
+    const notHeldText = notHeld ? notHeldWarning(peer.name, wait) : undefined;
+    const heldNote = notHeldText !== undefined ? `\n[warn] ${notHeldText}` : '';
+    // The hold limits of the target now apply to every default run: say what to do.
+    const limitAdvice = waitSeconds !== undefined ? holdLimitAdvice(answer.reason, peer.name) : undefined;
+    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);

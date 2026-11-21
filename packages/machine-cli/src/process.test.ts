@@ -105,12 +105,12 @@ describe('the bundled CLI as real processes', () => {
     const peerPort = await freePort();
     await startDaemon(b, peerPort);
 
-    const answer = await machine(a, ['run', 'laptop', '--address', `127.0.0.1:${peerPort}`, '--shell', SHELL, '--', 'echo', 'from', 'a', 'real', 'process']);
+    const answer = await machine(a, ['run', 'laptop', '--no-wait', '--address', `127.0.0.1:${peerPort}`, '--shell', SHELL, '--', 'echo', 'from', 'a', 'real', 'process']);
     expect(answer.stderr).toBe('');
     expect(answer.code).toBe(0);
     expect(answer.stdout.trim()).toBe('from a real process');
 
-    const refused = await machine(a, ['run', 'laptop', '--address', `127.0.0.1:${peerPort}`, '--shell', SHELL, '--', 'echo', 'not', 'allowed']);
+    const refused = await machine(a, ['run', 'laptop', '--no-wait', '--address', `127.0.0.1:${peerPort}`, '--shell', SHELL, '--', 'echo', 'not', 'allowed']);
     expect(refused.code).toBe(255);
     expect(refused.stderr).toMatch(/not-listed/);
 

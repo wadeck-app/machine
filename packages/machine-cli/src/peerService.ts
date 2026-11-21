@@ -685,6 +685,8 @@ export interface RunOnPeerInput {
   waitSeconds?: number;
   /** While a wait is pending: called every `everyMs` with the seconds left of the wait asked for. */
   progress?: { everyMs: number; onTick: (secondsLeft: number) => void };
+  /** Called once when no answer came within `afterMs`: the request is held, or the command is slow. A quick answer never calls it. */
+  notice?: { afterMs: number; onNotice: () => void };
 }
 
 /** Ask a connected peer to run one command and return its answer, which may be a refusal with its cause. */
@@ -700,6 +702,7 @@ export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Pr
     ticker = setInterval(() => onTick(Math.max(0, waitSeconds - (Date.now() - startedAt) / 1000)), everyMs);
   }
 
+  const noticeTimer = input.notice === undefined ? undefined : setTimeout(input.notice.onNotice, input.notice.afterMs);
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -718,6 +721,7 @@ export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Pr
     throw e;
   } finally {
     clearTimeout(timer);
+    clearTimeout(noticeTimer);
     if (ticker !== undefined) {
       clearInterval(ticker);
     }

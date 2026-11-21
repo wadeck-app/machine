@@ -124,7 +124,7 @@ describe('the countdown', () => {
 });
 
 describe('Deny', () => {
-  it('opens a small form with an optional reason, Confirm deny and Cancel, and asks neither the PIN nor a passphrase', async () => {
+  it('opens a small form with an optional reason, Confirm deny and Cancel, and asks no passphrase and no PIN yet', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
     await userEvent.click(screen.getByRole('button', { name: 'Deny df -h' }));
     const item = itemOf('df -h');
@@ -134,6 +134,7 @@ describe('Deny', () => {
     expect(within(item).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     expect(within(item).queryByLabelText(/passphrase/i)).toBeNull();
     expect(item.querySelector('input[type="password"]')).toBeNull();
+    // The PIN is asked when the owner confirms, not when the form opens.
     expect(elevate).not.toHaveBeenCalled();
   });
 
@@ -145,7 +146,7 @@ describe('Deny', () => {
     expect(calls).toEqual([]);
   });
 
-  it('posts only {id, reason} with the module header, no PIN, no passphrase; the row leaves and the page refreshes', async () => {
+  it('asks the PIN first (the route is sensitive), then posts only {id, reason} with the module header, no passphrase; the row leaves and the page refreshes', async () => {
     const onRefresh = vi.fn(async () => undefined);
     render(<HeldRequests rows={ROWS} allow={ALLOW} onRefresh={onRefresh} />);
     await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
@@ -153,7 +154,7 @@ describe('Deny', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull());
     expect(calls).toEqual([{ url: 'POST /api/modules/machine/deny', body: { id: 'aaaa1111', reason: 'not now, ask again later' }, headers: { 'x-machine-module': '1' } }]);
-    expect(elevate).not.toHaveBeenCalled();
+    expect(elevate).toHaveBeenCalledTimes(1);
     expect(onRefresh).toHaveBeenCalledWith('requests');
     expect(await screen.findByRole('status')).toHaveTextContent(/denied/i);
     expect(itemOf('df -h')).toBeInTheDocument();
@@ -180,6 +181,33 @@ describe('Deny', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
     expect(calls).toEqual([]);
+  });
+
+  it('a cancelled PIN is reported with the fix, nothing is posted, the form stays', async () => {
+    elevate.mockRejectedValueOnce(new Error('Sensitive action cancelled: PIN not entered'));
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/PIN not entered/);
+    expect(alert).toHaveTextContent(/Deny needs the app-core PIN/);
+    expect(alert).toHaveTextContent(/Confirm deny again/);
+    expect(calls).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Confirm deny' })).toBeEnabled();
+  });
+
+  it.each([
+    ['401 elevation-required', 'elevation-required: the PIN session is missing or expired (401)', /enter the app-core PIN/],
+    ['403 pin-not-set', 'pin-not-set: no PIN has been chosen yet (403)', /app-core-cli pin set/],
+  ])('%s on the post is answered with an actionable sentence', async (_name, raw, fix) => {
+    denyAnswer = new Error(raw);
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(raw);
+    expect(alert).toHaveTextContent(fix);
+    expect(itemOf('ls')).toBeInTheDocument();
   });
 
   it('shows the message of the daemon when the Deny fails, and the row and the form stay for another try', async () => {

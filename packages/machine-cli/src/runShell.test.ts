@@ -41,7 +41,7 @@ const LS = 'echo hi';
 describe('machine run: the shell comes from --shell, else the default of the peer, else the platform', () => {
   it('REAL INCIDENT: the entry exists under another shell: the refusal says which one works, once, and the caller adds what its policy record allows', async () => {
     const address = await setUp([{ shell: ALT, command: LS }, { shell: ALT, command: 'echo other' }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'hi']);
     expect(r.code).toBe(255);
     expect(r.out).toBe('');
     // The hint of the target, word for word, then nothing that repeats it.
@@ -55,7 +55,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
 
   it('the refusal of a command that exists nowhere keeps the old advice, plus the list line', async () => {
     const address = await setUp([{ shell: ALT, command: LS }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'nope']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'nope']);
     expect(r.code).toBe(255);
     expect(r.err).toContain(`To allow it, on the admin machine run: machine admin allow laptop --shell ${SHELL} -- "echo nope"`);
     expect(r.err).not.toContain('is allowed with shell');
@@ -64,7 +64,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
 
   it('--shell wins', async () => {
     const address = await setUp([{ shell: ALT, command: LS }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', ALT, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', ALT, '--', 'echo', 'hi']);
     // powershell writes its own progress XML on stderr: only what machine says matters here.
     expect(r.err).not.toContain('refused');
     expect(r.code).toBe(0);
@@ -74,7 +74,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
   it('the default shell of the peer is used and said (stderr, stdout stays the command output)', async () => {
     const address = await setUp([{ shell: ALT, command: LS }]);
     expect((await cli(a, ['peer', 'connect', 'laptop', '--shell', ALT])).code).toBe(0);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'hi']);
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe('hi');
     expect(r.err).toContain(`[info] shell ${ALT}: the default of laptop (machine peer connect laptop --shell; --shell overrides it)\n`);
@@ -84,7 +84,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
   it('precedence: an explicit --shell beats the default of the peer (and then nothing is said about the default)', async () => {
     const address = await setUp([{ shell: ALT, command: LS }]);
     await cli(a, ['peer', 'connect', 'laptop', '--shell', ALT]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'hi']);
     expect(r.code).toBe(255);
     expect(r.err).not.toContain('the default of laptop');
     expect(r.err).toContain(`is allowed with shell ${ALT}, not with ${SHELL}`);
@@ -93,7 +93,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
   it('a refusal under the default of the peer says that shell came from the default', async () => {
     const address = await setUp([{ shell: SHELL, command: LS }]);
     await cli(a, ['peer', 'connect', 'laptop', '--shell', ALT]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'hi']);
     expect(r.code).toBe(255);
     expect(r.err).toContain(`[info] shell ${ALT}: the default of laptop`);
     expect(r.err).toContain(`is allowed with shell ${SHELL}, not with ${ALT}`);
@@ -103,13 +103,13 @@ describe('machine run: the shell comes from --shell, else the default of the pee
     const address = await setUp([{ shell: SHELL, command: LS }]);
     await cli(a, ['peer', 'connect', 'laptop', '--shell', ALT]);
     await cli(a, ['peer', 'connect', 'laptop', '--no-shell']);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'hi']);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
   });
 
   it('an unknown --shell is refused before anything is sent', async () => {
-    const r = await cli(a, ['run', 'laptop', '--shell', 'zsh', '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--shell', 'zsh', '--', 'echo', 'hi']);
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/unknown shell "zsh": expected one of cmd, ps, bash, sh/);
   });
@@ -119,7 +119,7 @@ describe('machine run: the shell comes from --shell, else the default of the pee
     const file = connectionsFile(a);
     const { writeFileSync } = await import('node:fs');
     writeFileSync(file, JSON.stringify({ v: 1, peers: { [readMachine(b).uuid]: { type: 'direct', shell: 'zsh' } } }));
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--', 'echo', 'hi']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--', 'echo', 'hi']);
     expect(r.code).not.toBe(0);
     expect(r.err).toContain(file);
     expect(r.err).toMatch(/shell: expected one of cmd, ps, bash, sh, got "zsh"/);

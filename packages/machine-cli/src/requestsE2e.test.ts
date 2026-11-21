@@ -30,7 +30,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const refuseOnce = (command: string[]) => cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', ...command]);
+const refuseOnce = (command: string[]) => cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', ...command]);
 const prompt = async () => passphrase;
 
 describe('machine requests <machine> (the admin machine asks a peer)', () => {

@@ -33,6 +33,8 @@ export interface CliIo {
   allowLoopbackPeers?: boolean;
   /** Tests only: how often `machine run --wait` prints its progress line (default 30 s). */
   waitProgressMs?: number;
+  /** Tests only: how long `machine run` waits for an answer before it says that the wait is on by default (2 s). */
+  waitNoticeMs?: number;
   /** Tests only: the computer name that default machine names are derived from (default: os.hostname()). */
   hostname?: () => string;
   /** Clock of the approval age and the candidacy expiry; tests inject a fake one. */
@@ -128,6 +130,10 @@ export interface Parsed {
   limit?: string;
   /** `machine run --wait <duration>`: hold the request on the target up to this long when it is not allowed yet (hold-for-approval.md). */
   wait?: string;
+  /** `machine run --on-refusal wait|fail` and `machine run-defaults --on-refusal wait|fail`: what to do when the target does not allow the command yet (raw text, validated by machine-core). */
+  onRefusal?: string;
+  /** `machine run-defaults --reset`: delete the machine setting. */
+  reset?: true;
   /** `machine requests --deny <id> [--reason <text>]`: refuse a request that a peer holds. */
   deny?: string;
   reason?: string;

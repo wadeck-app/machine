@@ -37,7 +37,7 @@ async function setUp(policyCommands: PolicyDraftEntry[]) {
 describe('two machines through the command line', () => {
   it('runs an allowed command on the peer and returns its output', async () => {
     const { address } = await setUp([{ shell: SHELL, command: 'echo hello from laptop' }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'hello', 'from', 'laptop']);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe('hello from laptop');
@@ -45,7 +45,7 @@ describe('two machines through the command line', () => {
 
   it('refuses a command the policy does not list, exits 255 and says why', async () => {
     const { address } = await setUp([{ shell: SHELL, command: 'echo allowed' }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'something', 'else']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'something', 'else']);
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/refused.*not-listed|not-listed.*refused/s);
     expect(r.out).toBe('');
@@ -56,22 +56,22 @@ describe('two machines through the command line', () => {
   it('propagates the exit code of the remote command', async () => {
     const command = 'exit 7';
     const { address } = await setUp([{ shell: SHELL, command }]);
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'exit', '7']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'exit', '7']);
     expect(r.code).toBe(7);
   });
 
   it('stops at the call limit of an entry', async () => {
     const { address } = await setUp([{ shell: SHELL, command: 'echo once', limits: { maxCalls: 1 } }]);
-    const first = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'once']);
+    const first = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'once']);
     expect(first.code).toBe(0);
-    const second = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'once']);
+    const second = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'once']);
     expect(second.code).toBe(255);
     expect(second.err).toMatch(/exhausted/);
   });
 
   it('writes an audit log on the target that verifies and shows who ran what', async () => {
     const { address } = await setUp([{ shell: SHELL, command: 'echo audited' }]);
-    await ok(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'audited']);
+    await ok(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'audited']);
     const lines = readFileSync(join(b, 'audit.log'), 'utf8').trim().split('\n');
     expect(lines.map((l) => (JSON.parse(l) as { entry: { event: string } }).entry.event)).toEqual(['accepted', 'completed']);
     expect(lines[0]).toContain(readMachine(a).uuid);
@@ -79,7 +79,7 @@ describe('two machines through the command line', () => {
 
   it('cannot run on a machine it has no address for, and says how to give one', async () => {
     await setUp([{ shell: SHELL, command: 'echo hello' }]);
-    const r = await cli(a, ['run', 'laptop', '--shell', SHELL, '--', 'echo', 'hello']);
+    const r = await cli(a, ['run', 'laptop', '--no-wait', '--shell', SHELL, '--', 'echo', 'hello']);
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/--address/);
   });

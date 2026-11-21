@@ -62,7 +62,7 @@ async function daemon(dir: string): Promise<string> {
   return `127.0.0.1:${running.peerPort}`;
 }
 
-const runHello = (from: string, to: string, address: string) => cli(from, ['run', to, '--address', address, '--shell', SHELL, '--', 'echo', 'hello']);
+const runHello = (from: string, to: string, address: string) => cli(from, ['run', to, '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'hello']);
 const revocationsOf = (dir: string): Array<{ uuid: string; serial: number }> => {
   const file = join(dir, 'revocations.json');
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as { entries: Array<{ uuid: string; serial: number }> }).entries : [];

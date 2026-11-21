@@ -97,8 +97,8 @@ describe('machine run --wait', () => {
     expect((JSON.parse(none.out) as { summary: { waiting: unknown[] } }).summary.waiting).toEqual([]);
   });
 
-  it('without --wait the refusal is immediate, as before', async () => {
-    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'later'], undefined, { allowLoopbackPeers: true });
+  it('with --no-wait the refusal is immediate, as before the wait became the default', async () => {
+    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--no-wait', '--', 'echo', 'later'], undefined, { allowLoopbackPeers: true });
     expect(r.code).toBe(255);
     expect(r.err).toContain('refused by laptop: not-listed');
   });

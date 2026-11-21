@@ -173,6 +173,8 @@ Status: `Planned` = design decided, not implemented; `Open` = design pending; `A
 
 No `Open` threat ships with it (hard rule 10).
 
+**Deny button (hold-for-approval.md).** A Deny restricts (answers a waiting caller `refused: denied`), so it needs no signature (hard rule 4). The web route `POST /deny` is nevertheless `sensitive` (app-core PIN, same as the Allow routes): a local process that merely reaches the app-core port cannot deny the owner's held requests (denial of service on a caller, with a reason text the agent reads). `machine requests --deny` is unprotected on purpose: it needs the local daemon token, i.e. the local user at the terminal. The reason is printable ASCII, 200 characters, and is shown to the caller and kept in the audit log.
+
 **Allow button: passphrase in the shared origin (decision 76, T-13, T-14, T-39).** The Requests page now asks the admin passphrase and signs in the browser, so T-13 and T-14 are live for this action (accepted AR-2, unchanged).
 
 | Question | Answer |

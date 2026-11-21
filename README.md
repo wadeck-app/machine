@@ -201,12 +201,17 @@ machine run laptop --shell sh -- uptime
 machine peer connect laptop --shell sh          # once: the default shell of laptop on this machine
 machine allowed laptop                          # what is allowed there (policy signed here)
 machine run laptop --address 192.168.1.50:47921 -- uptime   # skip the relay record
+machine run laptop --no-wait -- uptime          # refused at once if not allowed (the old behaviour)
+machine run laptop --wait 30m -- uptime         # wait up to 30 min for the owner of laptop
+machine run-defaults --on-refusal fail          # make --no-wait the default of this machine
 machine ping                                    # this machine -> relay, one line per step
 machine ping laptop                             # real authenticated channel to a peer; runs nothing
 machine ping laptop --count 3
 machine list                                    # this machine and its peers, online state per the relay
 machine status                                  # identity, enrollment, policy, revocations
 ```
+
+**`machine run` waits by default.** A command the target does not allow yet is held up to 10 minutes: the owner of the target allows or denies it (`machine requests`, Requests page), an Allow runs it at once. stderr says so once when the target has not answered after 2 s (`waiting up to 10m for laptop to allow it (default; --no-wait to fail at once)`), `--json` stdout stays one document. **A script that relied on an immediate refusal now waits up to 10 minutes: add `--no-wait`**, or run `machine run-defaults --on-refusal fail` once on the machine that runs the script. Precedence, highest first: the flags (`--no-wait`, `--on-refusal wait|fail`, `--wait <10s..60m>`), the machine setting (`machine run-defaults`, file `run-defaults.json`), the built-in default (wait 10m). `--no-wait` with `--wait` is refused. The target holds at most 2 requests per peer and 4 per machine (`hold-limit-peer`, `hold-limit-machine`): wait for its owner to answer them, or use `--no-wait`. See [hold-for-approval.md](.claude/specs/2026-11-13_machine-network/hold-for-approval.md).
 
 The shell is part of the exact entry. `run` uses `--shell`, else the default set with `machine peer connect <machine> --shell` (said on stderr), else the platform of the caller (cmd on Windows, sh elsewhere). A Windows caller reaching a Linux target therefore needs `--shell sh` or the default. When a command is refused as `not-listed` but exists under another shell, the refusal names that shell (only the command you sent, never the list); the caller also prints what the policy signed here allows (10 entries at most).
 

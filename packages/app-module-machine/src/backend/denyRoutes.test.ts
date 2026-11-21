@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import register from './index.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
-// The Deny button of the Requests page: restricting, so no signature and no passphrase. The route forwards only {id, reason} to the daemon command `deny`.
+// The Deny button of the Requests page: no signature and no passphrase, but sensitive (the app-core PIN): a process that merely reaches the port must not answer the owner's held requests. The route forwards only {id, reason} to the daemon command `deny`.
 
 const DAEMON_TOKEN = 'daemon-health-token-value';
 const HEADER = { 'x-machine-module': '1' };
@@ -79,10 +79,10 @@ async function withDaemon(answers: Record<string, unknown>): Promise<Array<{ com
 const DENIED = { ok: true, id: 'abc12345', peer: '11111111-1111-4111-8111-111111111111', shell: 'sh', command: 'ls' };
 
 describe('POST /deny', () => {
-  it('is registered, and is NOT sensitive: a Deny only restricts, it signs nothing and asks no passphrase', () => {
+  it('is registered and declared effect sensitive (the app-core PIN), like the Allow routes: it signs nothing and asks no passphrase', () => {
     const route = routes().get('POST /deny');
     expect(route).toBeDefined();
-    expect(route?.options).toBeUndefined();
+    expect(route?.options).toEqual({ effect: 'sensitive' });
   });
 
   it('without the module header is refused 403 and the daemon is never asked', async () => {

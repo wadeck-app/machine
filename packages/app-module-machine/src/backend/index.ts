@@ -311,7 +311,7 @@ export default function register(ctx: ModuleContextLike): void {
     return viaDaemon(req, reply, 'submitPolicy', document === undefined ? { policy } : { policy, document }, ALLOW_TIMEOUT_MS);
   }, SENSITIVE);
 
-  // The Deny button (hold-for-approval.md): restricting, so NOT sensitive, no signature, no passphrase. Only {id, reason} reach the daemon, re-built here.
+  // The Deny button (hold-for-approval.md): restricting, so no signature and no passphrase, but sensitive (the app-core PIN) like the Allow routes: it answers a waiting caller. Only {id, reason} reach the daemon, re-built here.
   ctx.registerRoute('POST', '/deny', (req, reply) => {
     const refusal = checkModuleHeader(req);
     if (refusal !== undefined) {
@@ -323,7 +323,7 @@ export default function register(ctx: ModuleContextLike): void {
     }
     const { id, reason } = parsed;
     return viaDaemon(req, reply, 'deny', reason === undefined ? { id } : { id, reason }, undefined, (r) => r, DENY_STATUS);
-  });
+  }, SENSITIVE);
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

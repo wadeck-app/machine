@@ -9,6 +9,8 @@ import { daemonStateText, runStartupCommand } from './cliStartup.js';
 import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWake, runWakeInfo } from './cliWake.js';
+import { runDefaultsDocument, runDefaultsStatusLine, runDefaultsView, runRunDefaults } from './cliRunDefaults.js';
+import { RunDefaultsError } from './runDefaultsStore.js';
 import { runRequests } from './cliRequests.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
@@ -89,7 +91,7 @@ Commands:
                                      left on this machine; version, when it was signed here) and a line saying the installed list is asked there with
                                      \`machine policy allow --list\`; for this machine the installed policy and its mode. Read-only, no passphrase
   alias list | set <alias> <ref> | rm <alias>
-  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] [--wait <10s..60m>] -- <command...>
+  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] -- <command...>
                                      run one allowed command on a peer. Without --address the addresses come from
                                      the relay (the signed address record of the peer, verified against its
                                      registration), tried in order with 3 s each; --address overrides it and is the
@@ -98,10 +100,19 @@ Commands:
                                      relay never delivered still arrives); a peer that turns out revoked is refused.
                                      Addresses pinned with \`peer connect\` win over the relay record. A peer configured
                                      for Wake-on-LAN (or --wake) that cannot be reached (unreachable or no answer, never an
-                                     authentication failure) is woken, then retried; --no-wake forbids it. --wait 10m: a command the
-                                     target does not allow yet is HELD up to that long (the target caps it, default 30 min, and says so):
-                                     its owner sees it as waiting in \`machine requests\` and on the Requests page; an Allow runs it at
-                                     once, a Deny or the deadline refuses it (named cause). A progress line on stderr every 30 s
+                                     authentication failure) is woken, then retried; --no-wake forbids it.
+                                     WAITING IS THE DEFAULT: a command the target does not allow yet is HELD up to 10 min (the target caps
+                                     it, default 30 min, and says so): its owner sees it as waiting in \`machine requests\` and on the
+                                     Requests page; an Allow runs it at once, a Deny or the deadline refuses it (named cause). A progress
+                                     line on stderr says so once after 2 s without an answer, then every 30 s. --no-wait (= --on-refusal fail) refuses at
+                                     once, as before; --wait <10s..60m> sets the duration (implies --on-refusal wait); a contradiction
+                                     (--no-wait with --wait) is refused. Precedence: these flags, the machine setting
+                                     (\`machine run-defaults\`), the built-in default (wait 10m). Scripts that relied on an immediate
+                                     refusal must pass --no-wait
+  run-defaults [--on-refusal wait|fail] [--wait <10s..60m>] [--reset] [--json]
+                                     shows what \`machine run\` does when the target does not allow the command yet, with where each
+                                     value comes from (flag, setting, built-in), and changes the machine setting
+                                     (<config dir>/run-defaults.json; a damaged file is an error, never a fallback). --reset deletes it
   ping [<machine>] [--count <n>] [--address <host:port>] [--wake | --no-wake] [--json]
                                      without a machine: relay.json, the relay answers (time, version), the token is accepted and its
                                      access level (machine, machine-admin, full), the local daemon runs, this machine's address record is
@@ -378,6 +389,8 @@ function parse(argv: string[]): Parsed {
     else if (a === '--event') out.event = valueOf('--event');
     else if (a === '--limit') out.limit = valueOf('--limit');
     else if (a === '--wait') out.wait = valueOf('--wait');
+    else if (a === '--on-refusal') out.onRefusal = valueOf('--on-refusal');
+    else if (a === '--reset') out.reset = true;
     else if (a === '--deny') out.deny = valueOf('--deny');
     else if (a === '--reason') out.reason = valueOf('--reason');
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
@@ -499,7 +512,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -532,8 +545,20 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (requestsOption !== undefined && command !== 'requests') {
     return fail(`${requestsOption[0] as string} only applies to \`machine requests\` (the requests refused by this machine: pending list, or --history)`, EXIT.usage);
   }
-  if (args.wait !== undefined && command !== 'run') {
-    return fail('--wait only applies to `machine run` (`machine run <machine> --wait 10m -- <command>` keeps the request open on the target while its owner allows or denies it, 10 s to 60 min)', EXIT.usage);
+  if (args.wait !== undefined && command !== 'run' && command !== 'run-defaults') {
+    return fail('--wait only applies to `machine run` (`machine run <machine> --wait 10m -- <command>` keeps the request open on the target while its owner allows or denies it, 10 s to 60 min) and to `machine run-defaults --wait 10m` (the duration used when nothing is typed)', EXIT.usage);
+  }
+  if (args.onRefusal !== undefined && command !== 'run' && command !== 'run-defaults') {
+    return fail('--on-refusal only applies to `machine run` and `machine run-defaults` (wait | fail: what to do when the target does not allow the command yet)', EXIT.usage);
+  }
+  if (args.reset === true && command !== 'run-defaults') {
+    return fail('--reset only applies to `machine run-defaults` (it deletes the machine setting of `machine run`)', EXIT.usage);
+  }
+  // --no-wait belongs to join (its own wait for the admin) and to run (do not wait for the target's owner); setup and admin approve refuse it themselves.
+  if (args.noWait && !(command === 'join' || command === 'setup' || command === 'run' || (command === 'admin' && rest[0] === 'approve'))) {
+    return fail(command === 'run-defaults'
+      ? '--no-wait is a flag of one `machine run`; to make every run fail at once use `machine run-defaults --on-refusal fail`'
+      : '--no-wait only applies to `machine run` (fail at once instead of waiting for the owner of the target), `machine join` and `machine admin approve`', EXIT.usage);
   }
   if (args.deny !== undefined && command !== 'requests') {
     return fail('--deny only applies to `machine requests` (`machine requests --deny <id> [--reason <text>]` refuses a request a peer holds; the id is shown by `machine requests`)', EXIT.usage);
@@ -660,6 +685,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'cli') return await runCliMeta(ctx);
     if (command === 'wake') return await runWake(ctx);
     if (command === 'wake-info') return runWakeInfo(ctx);
+    if (command === 'run-defaults') {
+      return runRunDefaults(ctx);
+    }
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
     if (command === 'requests' && rest.length === 0 && args.all !== true) return await runRequests(ctx);
 
@@ -692,6 +720,18 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         if (notInitialized(r)) return fail(r.message);
         // Read only and local (daemon.port.json and a live pid): `status` never starts the daemon and asks no network.
         const daemon = readDaemonState(configDir, io.startup?.isAlive);
+        // The setting of `machine run` (what to do when a target does not allow a command yet). A damaged file is a warning here (status stays readable), an error for `run` itself.
+        const runLines = ((): { text: string[]; document: Record<string, unknown> } => {
+          try {
+            const view = runDefaultsView(configDir);
+            return { text: [runDefaultsStatusLine(view.wait)], document: runDefaultsDocument(configDir, view.setting, view.wait) };
+          } catch (e) {
+            if (!(e instanceof RunDefaultsError)) {
+              throw e;
+            }
+            return { text: [`[warn] ${e.message}`], document: { error: e.message } };
+          }
+        })();
         const lines = [
           `${r.name} (${r.uuid})`,
           `version: ${r.version}`,
@@ -705,8 +745,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           ...revokedBlock(r.revoked ?? [], Math.floor((io.now?.() ?? new Date()).getTime() / 1000)),
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
+          ...runLines.text,
         ];
-        emit({ ...r, daemon }, `${lines.join('\n')}\n`);
+        emit({ ...r, daemon, runDefaults: runLines.document }, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {

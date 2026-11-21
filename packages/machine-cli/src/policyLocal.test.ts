@@ -363,20 +363,20 @@ describe('two daemons: a local-mode target', () => {
     const daemon = await startMachineDaemon(b, { port: 0, version: 'e2e', peerPort: 0, peerHost: '127.0.0.1', log: () => undefined });
     stoppers.push(daemon.stop);
     const address = `127.0.0.1:${daemon.peerPort}`;
-    const run = (word: string) => cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', word]);
+    const run = (word: string) => cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', word]);
 
     // Mode admin: the entry signed by the admin runs (a single word "echo admin entry" needs the exact string).
-    const first = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo admin entry']);
+    const first = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo admin entry']);
     expect(first.code, first.err).toBe(0);
 
     // Mode local: the list starts EMPTY, then the machine allows its own command.
     expect((await enable()).code).toBe(0);
-    const refused = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo admin entry']);
+    const refused = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo admin entry']);
     expect(refused.code).toBe(255);
     expect(refused.err).toMatch(/no-policy|not-listed|no policy/);
     expect((await allow(['--shell', SHELL, '--', 'echo local entry'])).code).toBe(0);
     // No wait: the daemon reloads its network as soon as a policy file changes (not after its 5 s cache delay).
-    const okRun = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo local entry']);
+    const okRun = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo local entry']);
     expect(okRun.code, okRun.err).toBe(0);
     expect(okRun.out).toContain('local entry');
     const notListed = await run('other');
@@ -391,23 +391,23 @@ describe('two daemons: a local-mode target', () => {
     const refusedInstall = await cli(b, ['policy', 'install', adminDoc]);
     expect(refusedInstall.code).not.toBe(0);
     expect(refusedInstall.err).toContain('machine policy delegate');
-    expect((await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo admin new'])).code).toBe(255);
-    expect((await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo local entry'])).code).toBe(0);
+    expect((await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo admin new'])).code).toBe(255);
+    expect((await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo local entry'])).code).toBe(0);
 
     // After delegate the local list stops applying (EMPTY), the admin document is accepted, and the old local document stays refused.
     const staleLocal = join(root, 'stale-local.json');
     writeFileSync(staleLocal, readFileSync(join(b, 'policy-local.json'), 'utf8'));
     const delegate = await cli(b, ['policy', 'delegate'], typed([LOCAL_PASS]), { ask: yes });
     expect(delegate.code, delegate.err).toBe(0);
-    const emptied = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo local entry']);
+    const emptied = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo local entry']);
     expect(emptied.code).toBe(255);
     expect(emptied.err).toMatch(/no-policy|no policy/);
     expect((await cli(b, ['policy', 'install', adminDoc])).code).toBe(0);
-    const adminRun = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo admin new']);
+    const adminRun = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo admin new']);
     expect(adminRun.code, adminRun.err).toBe(0);
     const stale = await cli(b, ['policy', 'install', staleLocal]);
     expect(stale.code).not.toBe(0);
     expect(stale.err).toMatch(/policy refused/);
-    expect((await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo local entry'])).code).toBe(255);
+    expect((await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo local entry'])).code).toBe(255);
   }, 30_000);
 });

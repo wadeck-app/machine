@@ -76,7 +76,7 @@ describe('machine ping <machine> over a real channel', () => {
     const daemon = await startDaemon(b, [], false);
     const address = `127.0.0.1:${daemon.peerPort}`;
     expect((await ping(['laptop', '--address', address])).code).toBe(0);
-    const run = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'hi']);
+    const run = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'hi']);
     expect(run.code).toBe(255);
     // B holds a policy with no entry: the ping passed without any, the command is refused.
     expect(run.err).toMatch(/refused by laptop: not-listed/);

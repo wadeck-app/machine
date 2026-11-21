@@ -240,3 +240,21 @@ export {
 } from './wake.js';
 export { runWakeSequence, type SentStep, type WakeEvent, type WakeOutcome, type WakeSequenceDeps, type WakeSequenceOptions } from './wakeSequence.js';
 export { CONNECTION_TYPES, parseConnections, resolveRunShell, type RunShellSource, serializeConnections, type Connections, type ConnectionType, type PeerConnection, type WakeConfig } from './connections.js';
+export {
+  DEFAULT_ON_REFUSAL,
+  DEFAULT_WAIT_NOTICE_DELAY_MS,
+  DEFAULT_WAIT_SECONDS,
+  ON_REFUSAL_VALUES,
+  defaultWaitNotice,
+  describeRunWait,
+  holdLimitAdvice,
+  notHeldWarning,
+  parseRunDefaults,
+  resolveRunWait,
+  serializeRunDefaults,
+  type OnRefusal,
+  type RunDefaults,
+  type RunWait,
+  type RunWaitFlags,
+  type RunWaitSource,
+} from './runDefaults.js';

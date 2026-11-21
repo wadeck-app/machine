@@ -34,7 +34,7 @@ describe('machine run refused with no-policy', () => {
   it('the target says what happened and what to do; the caller adds the policy signed here', async () => {
     const daemon = await startMachineDaemon(b, { port: 0, version: 'e2e', peerPort: 0, peerHost: '127.0.0.1', advertise: [], inbox: { timer: idleTimer }, log: () => undefined });
     stoppers.push(daemon.stop);
-    const run = await cli(a, ['run', 'laptop', '--address', `127.0.0.1:${daemon.peerPort}`, '--shell', SHELL, '--', 'echo', 'hi'], undefined, { allowLoopbackPeers: true });
+    const run = await cli(a, ['run', 'laptop', '--no-wait', '--address', `127.0.0.1:${daemon.peerPort}`, '--shell', SHELL, '--', 'echo', 'hi'], undefined, { allowLoopbackPeers: true });
     expect(run.code).toBe(255);
     expect(run.err).toContain('refused by laptop: no-policy: no policy is installed on this machine yet. If the admin just ran `machine admin allow laptop`');
     expect(run.err).toContain('retry shortly');

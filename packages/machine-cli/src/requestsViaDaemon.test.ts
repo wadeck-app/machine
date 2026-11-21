@@ -30,7 +30,7 @@ beforeEach(async () => {
   stoppers.push(daemon.stop);
   address = `127.0.0.1:${daemon.peerPort}`;
   await cli(a, ['peer', 'connect', 'laptop', '--address', address]);
-  await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--', 'echo', 'something']);
+  await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', 'echo', 'something']);
 });
 afterEach(async () => {
   while (stoppers.length > 0) await stoppers.pop()?.();

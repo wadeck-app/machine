@@ -47,7 +47,7 @@ function leftText(seconds: number): string {
 /**
  * The held requests of the Requests page: a caller ran `machine run <peer> --wait ... -- <command>` and waits for the owner to answer. Each shows the
  * exact command in large type, a live countdown (counted down here from the seconds left of the fetch), and two buttons. Allow is the same flow as the
- * table below (confirmation, admin passphrase, signature in the page); Deny is a restricting action: an optional reason, no signature, no passphrase.
+ * table below (confirmation, admin passphrase, signature in the page); Deny is a restricting action: an optional reason, no signature, no passphrase (the app-core PIN only).
  *
  * @registryCategory composite
  * @registryTags requests allow deny hold policy admin
