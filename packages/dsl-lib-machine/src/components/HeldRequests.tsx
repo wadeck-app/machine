@@ -96,7 +96,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   };
 
   const allowed = (row: HeldRequestRow, answer: AllowResult) => {
-    const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon installs it within about a minute`;
+    const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon fetches it at its next inbox poll (about 5 s while it holds a request, up to a minute otherwise)`;
     setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. The caller gets the result as soon as the daemon re-checks the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}`);
     leave(row);
   };
