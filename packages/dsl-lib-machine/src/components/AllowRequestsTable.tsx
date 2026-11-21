@@ -14,6 +14,12 @@ export interface PendingRequestRow {
   /** The `machine admin allow ...` command that does the same from a terminal. */
   nextCommand: string;
   nextWhere: string;
+  /** Whether Allow is offered for this row. Default: `allow.available`. */
+  canAllow?: boolean;
+  /** Present: this row is a NOTICE another machine reported (not verified live); the text says by whom and when. */
+  note?: string;
+  /** The notice carries only the first part of the command. */
+  commandTruncated?: boolean;
 }
 
 export interface AllowRequestsTableProps {
@@ -48,6 +54,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
 
   const visible = rows.filter(r => !allowed.has(rowKey(r)));
   const canAllow = allow?.available === true;
+  const rowCanAllow = (r: PendingRequestRow): boolean => r.canAllow ?? canAllow;
 
   const done = (row: PendingRequestRow, answer: AllowResult) => {
     setAllowed(prev => new Set(prev).add(rowKey(row)));
@@ -84,15 +91,24 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
             </thead>
             <tbody>
               {visible.map(r => (
-                <tr key={rowKey(r)} className={TABLE_BODY_ROW}>
+                <tr key={rowKey(r)} className={TABLE_BODY_ROW} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
                   <td className="whitespace-nowrap px-2 py-1">{r.peerText}</td>
                   <td className="whitespace-nowrap px-2 py-1">{r.shell}</td>
-                  <td className="break-all px-2 py-1 font-mono">{r.command}</td>
+                  <td className="break-all px-2 py-1">
+                    {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
+                    <span className="font-mono">{r.command}</span>
+                    {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED_SM}`}>Truncated: only the first part of the command was reported.</div>}
+                    {r.note !== undefined && (
+                      <div data-testid="notice-note" className="text-xs text-muted">
+                        {r.note}
+                      </div>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap px-2 py-1">{r.countText}</td>
                   <td className="whitespace-nowrap px-2 py-1">{r.firstSeenText}</td>
                   <td className="whitespace-nowrap px-2 py-1">{r.lastSeenText}</td>
                   <td className="px-2 py-1">
-                    {canAllow ? (
+                    {rowCanAllow(r) ? (
                       // violations-suppress: react/no-raw-button ButtonAction has no aria-label and dsl-ui's Button is not exported: the name "Allow <command>" tells the rows apart for a screen reader (looks like dsl-ui's primary Button, same tokens as its Badge)
                       <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
                         Allow

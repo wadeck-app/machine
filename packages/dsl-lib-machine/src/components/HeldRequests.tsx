@@ -27,6 +27,10 @@ export interface HeldRequestRow {
   denyText?: string;
   /** Epoch milliseconds at which `secondsLeft` was read: the countdown runs from it. Default: when the list arrived. */
   fetchedAtMs?: number;
+  /** Present: this row is a NOTICE another machine reported (not verified live); the text says by whom and when. Shown muted, the row has no "asked" text. */
+  note?: string;
+  /** The notice carries only the first part of the command. */
+  commandTruncated?: boolean;
 }
 
 export interface HeldRequestsProps {
@@ -118,7 +122,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
           const left = Math.max(0, r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt));
           const rowCanAllow = r.canAllow ?? canAllow;
           return (
-            <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM}>
+            <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className={`text-sm ${TEXT_MUTED_SM}`}>
                   From <span className="font-medium text-content">{r.peerText}</span>
@@ -128,11 +132,19 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                       on <span className="font-medium text-content">{r.machine.name}</span>
                     </>
                   )}{' '}
-                  in <span className="font-mono text-content">{r.shell}</span>, asked {r.askedText}
+                  in <span className="font-mono text-content">{r.shell}</span>
+                  {r.note === undefined && <>, asked {r.askedText}</>}
                 </span>
                 <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
               </div>
+              {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
               <div className={HELD_COMMAND}>{r.command}</div>
+              {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED}`}>Truncated: only the first part of the command was reported.</div>}
+              {r.note !== undefined && (
+                <div data-testid="notice-note" className={`text-xs ${TEXT_MUTED}`}>
+                  {r.note}
+                </div>
+              )}
               {left > 0 && denying !== r.id && (
                 <div className="flex flex-wrap items-center gap-2">
                   {rowCanAllow ? (

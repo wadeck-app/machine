@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { authorize, isUuid, resolveMachineRef, summarizeRequests, type HistoryKind, type PolicyBody, type PolicyMode, type RequestsSummary } from '@wadeck-app/machine-core';
+import { authorize, isUuid, resolveMachineRef, summarizeRequests, visibleNotices, type HistoryKind, type PolicyBody, type PolicyMode, type RequestsSummary, type StoredNotice } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin } from './admin.js';
 import type { RequestsListDeps } from './peerService.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
+import { readNotices } from './noticesStore.js';
 import { readAliases } from './state.js';
 
 // `machine requests` and the Requests page of the module: the audit log of THIS machine, read and summarized (the reader is
@@ -36,6 +37,10 @@ export interface RequestsView {
   /** Epoch seconds of the answer, so that a reader humanizes ages against the same clock. */
   now: number;
   summary: RequestsSummary;
+  /** Requests held or refused on OTHER machines, as they reported them (request-notices.md): visible ones, newest first. Not verified live. */
+  notices: StoredNotice[];
+  /** Set when notices.json cannot be read (then `notices` is empty): the message names the file and the fix. */
+  noticesError?: string;
   /** What was left out of the network and why (as `machine status`): a missing policy or name here explains a surprise. */
   problems: string[];
 }
@@ -94,6 +99,14 @@ export function requestsAnswer(configDir: string, query: RequestsQuery, now: num
       ...(query.limit !== undefined ? { limit: query.limit } : {}),
     },
   });
+  let notices: StoredNotice[] = [];
+  let noticesError: string | undefined;
+  try {
+    notices = visibleNotices(readNotices(configDir), now);
+  } catch (e) {
+    // A damaged file never breaks the listing of this machine: reported with its fix, the rest is shown.
+    noticesError = (e as Error).message;
+  }
   return {
     initialized: true,
     ok: true,
@@ -104,6 +117,8 @@ export function requestsAnswer(configDir: string, query: RequestsQuery, now: num
     logPresent,
     now,
     summary,
+    notices,
+    ...(noticesError !== undefined ? { noticesError } : {}),
     problems: network.problems,
   };
 }

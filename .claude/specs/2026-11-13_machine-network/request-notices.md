@@ -28,7 +28,7 @@ Wire (after the normal handshake, so the sender is the authenticated, pinned, pa
 
 | Frame | Fields |
 |---|---|
-| `request-notice` | `id` (request id), `shell`, `command` (at most 2048), `commandTruncated`, `state` (`held`, `refused`), `deadline` (epoch s or null), `ts` |
+| `request-notice` | `id` (request id), `peer` (uuid of the caller as the target knows it), `peerName`, `shell`, `command` (at most 2048), `commandTruncated`, `state` (`held`, `refused`), `deadline` (epoch s or null), `ts` |
 | `request-notice-end` | `id`, `outcome` (`allowed`, `denied`, `deadline`, `disconnected`, `refused`, `revoked`), `ts` |
 | answer | `{ type:"notice-ack", id }`, or a normal `refused` (older build: `unknown-message`) |
 
@@ -54,3 +54,19 @@ Notice spam by a compromised peer; notice spoofing (revoked or unknown peer, ano
 **NOT built in phase 1:** the Allow button of the page (browser signing) does not send the list. The page distributes only its policy envelope; the list reaches the target through any CLI distribution (`approve`, `admin allow`, `distribute`, `notify-to`). Mirroring it needs the backend route (`policyWeb.ts`, contract "exactly { policy, document? }") and the allow flow of the page to carry a second document: the webcrypto builder already accepts the kind.
 Rollout note: an older target deletes a `notice-recipients` document as `malformed` (unknown kind) and counts it in `documents-unverified`: harmless, update first.
 
+**Phase 2, Requests page (built, 2026-11-21; module side only, needs the daemon `notices` field):** backend `requests.ts` turns `notices` / `noticesError` of the daemon `requests` answer into `NoticeRow[]` (countdown = deadline - ts - time since receipt, no cross-clock) and warns when the daemon is older; pure merge `dsl-lib-machine/src/lib/noticeRows.ts` (live machine wins, self dropped, filter, dedupe by machine+id); rendered by `RequestsOverview`, `HeldRequests`, `AllowRequestsTable` (test ids `notice-row`, `notice-note`).
+Refresh: the page's existing 10 s poll of `requests`. Allow reuses the remote-row path for the notice `machine`; no Deny button (hint to run `--deny <id>` ON the target).
+A truncated command gets no Allow button (it would sign a different command); the row says to use Load the other machines.
+
+**Phase 2, machine-cli (built, 2026-11-21):** receiver in `peerService.ts` (`deps.notices`; absent = `unknown-message`), sender `requestNotifier.ts` (`deps.notifier`, hooks in `hold()`/`handle()`), wiring `noticeWiring.ts` + `daemonEntry.ts`, display `requestsLayout.ts` (machine-core) / `requestsView.ts` / `cliRequests.ts`. Tests: `requestNotifier`, `peerServiceNotice`, `requestsView`, `cliRequests`, `requestsViaDaemon`, `noticesE2e` (two daemons), machine-core `requestsLayout`.
+Daemon `requests` answer carries `notices: StoredNotice[]` (visible, newest first) and, when `notices.json` is damaged, `notices: []` plus `noticesError`; `machine requests --json` has the same fields, text mode prints a `[warn]` with the fix.
+Deviations:
+- The notifier is always wired (no relay/addresses gate): an unreachable recipient is a named `notice-undelivered`, no recipient list is one `notice-no-recipient`.
+- Connect: 3 s per address (transport), plus a 10 s safety net around address lookup; answer 3 s; at most 3 attempts 30 s apart (a refused-without-hold notice retries too); an abandoned start (hold ended) is silent, its end notice still gets 3 attempts.
+- Attempts to one recipient are serialized: after the first `unknown-message`, the others queued for the hour are dropped without a frame. At most 16 pending per recipient, oldest dropped with a `notice-undelivered` (`too-many-pending`). A recipient that is not a trusted peer: one `notice-undelivered` per recipient per process.
+- Rate limit: dropped frames get `refused rate-limited` without a `refused` audit line each; `request-notice-rate-limited` is written at the first drop, and once more with the total when the sender is heard again (two lines per limited minute at most).
+- Store failure: one `request-notice-store-failed` and one problem line until a store succeeds again; the sender gets `notice-store-unavailable`.
+- Not held and not noticed: wrong-shell refusals (an Allow of that shell is not expected), hold admission refusals.
+- Display: notice rows form a block `reported by the other machines` inside WAITING NOW / REFUSED (own table with MACHINE and REPORTED columns), the note is two lines (`reported by <machines> at the time shown, not verified live:` / `use Load the other machines on the page, or `machine requests <machine>`, to confirm`). Left = deadline - this clock. Exact allow lines are `machine admin allow <machine> ...` (policy mode of the other machine is unknown, admin assumed); none for a truncated command. Remote views (`<machine>`, `--all`) show no notices.
+
+**Verified on the real page (2026-11-21, isolated app-core, fake relay, two daemons):** a held request on the target appears on the admin Requests page within the 10 s poll without any PIN or passphrase, labelled with the reporting machine and the not-verified note; the hostile command renders as one text node; Deny and the deadline remove the row; with the admin daemon down the target writes exactly ONE `notice-undelivered` (3 attempts) and the hold is unaffected, no storm after the restart. Not verified: the Allow confirmation modal (the app-core PIN gate came first), the old-admin back-off on a real older build (unit tests only), the relay address lookup (addresses were pinned), `test:relay` against the real relay (the notice travels the peer channel, not the relay).

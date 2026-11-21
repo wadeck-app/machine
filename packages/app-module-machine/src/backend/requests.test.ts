@@ -133,6 +133,57 @@ describe('requestsPage (the Requests page, local machine)', () => {
   });
 });
 
+describe('requestsPage: request notices (request-notices.md, phase 2)', () => {
+  const REPORTER = '33333333-3333-4333-8333-333333333333';
+  const REQ = 'aaaa1111-0000-4000-8000-000000000000';
+  const stored = (over: Record<string, unknown> = {}) => ({ machine: REPORTER, machineName: 'laptop', receivedAt: NOW - 20, id: REQ, peer: PEER, peerName: 'thinkcentre', shell: 'sh', command: 'ls -l', commandTruncated: false, state: 'held', deadline: NOW + 580, ts: NOW - 30, ...over });
+
+  it('turns a held notice into a row of the machine that REPORTED it, counting down from the hold length minus the time since it arrived (no clock of the target needed)', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [stored()] }), NOW);
+    expect(page.noticesError).toBe('');
+    expect(page.notices).toEqual([
+      { id: REQ, machine: REPORTER, machineName: 'laptop', peerText: 'thinkcentre', peer: PEER, shell: 'sh', command: 'ls -l', commandTruncated: false, state: 'held', secondsLeft: 590, receivedAt: NOW - 20 },
+    ]);
+  });
+
+  it('a refused notice has no countdown', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [stored({ state: 'refused', deadline: null })] }), NOW);
+    expect(page.notices[0]).toMatchObject({ state: 'refused', secondsLeft: null });
+  });
+
+  it('the countdown never goes below zero', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [stored({ deadline: NOW - 100, ts: NOW - 130, receivedAt: NOW - 120 })] }), NOW);
+    expect(page.notices[0]?.secondsLeft).toBe(0);
+  });
+
+  it('notices do not count in the tab indicator (they are not verified here)', () => {
+    expect(requestsPage(daemonAnswer([], { notices: [stored()] }), NOW).count).toBe(0);
+  });
+
+  it('a damaged store is reported with the daemon message, never silently', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [], noticesError: 'notices.json is damaged: delete it' }), NOW);
+    expect(page.notices).toEqual([]);
+    expect(page.noticesError).toBe('notices.json is damaged: delete it');
+  });
+
+  it('an older daemon that does not report notices is named, with the fix', () => {
+    const page = requestsPage(daemonAnswer([]), NOW);
+    expect(page.notices).toEqual([]);
+    expect(page.noticesError).toMatch(/does not report request notices.*machine cli update/);
+  });
+
+  it('a notices field that is not a list is reported', () => {
+    const page = requestsPage(daemonAnswer([], { notices: 'x' }), NOW);
+    expect(page.noticesError).toMatch(/unexpected.*machine cli update/);
+  });
+
+  it('a notice that is not shaped like a stored notice is reported and skipped, the others stay', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [{ nope: 1 }, stored()] }), NOW);
+    expect(page.notices).toHaveLength(1);
+    expect(page.noticesError).toMatch(/1 request notice.*not shown/);
+  });
+});
+
 describe('remoteRequestsPage', () => {
   it('humanizes the peer answer like the local pending list, with the command to run for that peer', () => {
     const page = remoteRequestsPage(

@@ -131,3 +131,35 @@ describe('isListed', () => {
     expect(isListed(policy({ defaults: [{ ...entry, limits: { expiresAt: NOW - 1 } }] }), PEER, 'sh', 'ls', NOW, 'admin')).toBe(true);
   });
 });
+
+describe('requestsAnswer: notices of other machines (request-notices.md)', () => {
+  const SENDER = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
+  const stored = (n: number, over: Record<string, unknown> = {}) => ({
+    machine: SENDER, machineName: 'thinkcentre', receivedAt: NOW - n, id: `3f1c2d3e-4a5b-4c6d-8e7f-${String(n).padStart(12, '0')}`, peer: PEER, peerName: 'agent-box', shell: 'sh', command: `echo ${n}`, commandTruncated: false, state: 'held', deadline: NOW + 600, ts: NOW - n, ...over,
+  });
+
+  it('carries the visible notices, newest first, and drops a held notice whose deadline passed', () => {
+    initMachine(dir, 'target');
+    writeFileSync(join(dir, 'notices.json'), JSON.stringify({ v: 1, notices: [stored(30), stored(10), stored(20, { deadline: NOW - 1 }), stored(40, { state: 'refused', deadline: null })] }));
+    const v = view();
+    expect(v.notices.map((n) => n.command)).toEqual(['echo 10', 'echo 30', 'echo 40']);
+    expect(v.noticesError).toBeUndefined();
+  });
+
+  it('no file: an empty list and no error', () => {
+    initMachine(dir, 'target');
+    expect(view().notices).toEqual([]);
+    expect(view().noticesError).toBeUndefined();
+  });
+
+  it('a damaged file gives an empty list and the message naming the file and the fix; the rest of the answer is intact', () => {
+    initMachine(dir, 'target');
+    writeLog([refusal(-100, 'ls')]);
+    writeFileSync(join(dir, 'notices.json'), '{ not json');
+    const v = view();
+    expect(v.notices).toEqual([]);
+    expect(v.noticesError).toContain('notices.json');
+    expect(v.noticesError).toContain('Delete it');
+    expect(v.summary.pending.map((g) => g.command)).toEqual(['ls']);
+  });
+});

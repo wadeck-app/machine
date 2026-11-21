@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { layoutHistory, layoutRequests, REQUESTS_WIDTH, type RequestsLayoutInput } from './requestsLayout.js';
 import type { HistoryEntry, PendingGroup, WaitingRequest } from './requests.js';
+import type { StoredNotice } from './requestNotice.js';
 
 const NOW = 1_800_000_000;
 const PEER = '11111111-1111-4111-8111-111111111111';
@@ -192,5 +193,56 @@ describe('layoutHistory', () => {
     const lines = layoutHistory({ ...base, history: [entry({ command: 'y'.repeat(400) })], historyTotal: 1, logPresent: true });
     expect(widest(lines)).toBeLessThanOrEqual(REQUESTS_WIDTH);
     expect(ascii(lines)).toBe(true);
+  });
+});
+
+describe('layoutRequests: notices of other machines (request-notices.md)', () => {
+  const OTHER = '22222222-2222-4222-8222-222222222222';
+  const notice = (n: number, command: string, over: Partial<StoredNotice> = {}): StoredNotice => ({
+    machine: OTHER, machineName: 'laptop', receivedAt: NOW - 120, id: `abcdef1${n}-3456-4789-8abc-def012345678`, peer: PEER, peerName: 'midgard2', shell: 'sh', command, commandTruncated: false, state: 'held', deadline: NOW + 300, ts: NOW - 120, ...over,
+  });
+
+  it('lists a held notice in WAITING NOW labelled with its machine, with the exact allow command for THAT machine and the not-verified note', () => {
+    const lines = layoutRequests(input({ notices: [notice(1, 'uptime')] }));
+    const text = lines.join('\n');
+    expect(lines[0]).toBe('thinkcentre (admin mode): nothing waiting, no refused request, 1 reported by other machines');
+    expect(text).toMatch(/^WAITING NOW/m);
+    expect(text).toMatch(/MACHINE +ID +FROM +SHELL +LEFT +REPORTED +COMMAND/);
+    expect(text).toMatch(/laptop +abcdef11 +midgard2 +sh +5 min +2 min ago +uptime/);
+    expect(text).toContain('allow: machine admin allow laptop --shell sh -- uptime');
+    expect(text).toContain('reported by laptop');
+    expect(text).toContain('not verified live');
+    expect(text).toContain('Load the other machines');
+    expect(text).toContain('`machine requests <machine>`');
+    expect(widest(lines)).toBeLessThanOrEqual(REQUESTS_WIDTH);
+    expect(ascii(lines)).toBe(true);
+  });
+
+  it('lists a refused notice in REFUSED, next to the local rows without mixing them', () => {
+    const lines = layoutRequests(input({ pending: [group('ls')], pendingTotal: 1, notices: [notice(1, 'df -h', { state: 'refused', deadline: null })] }));
+    const text = lines.join('\n');
+    expect(text.match(/^REFUSED/gm)).toHaveLength(1);
+    expect(text).toContain('allow: machine admin allow thinkcentre --shell sh -- ls');
+    expect(text).toContain('allow: machine admin allow laptop --shell sh -- "df -h"');
+  });
+
+  it('shows the command as escaped printable ASCII and never offers an exact allow for a truncated command', () => {
+    const lines = layoutRequests(input({ notices: [notice(1, 'echo \u001b[31mred', { commandTruncated: true })] }));
+    const text = lines.join('\n');
+    expect(ascii(lines)).toBe(true);
+    expect(text).not.toContain('allow: machine admin allow laptop --shell sh -- ');
+    expect(text).toContain('cut');
+  });
+
+  it('several notices: the template for the machine, exact commands with --full', () => {
+    const two = [notice(1, 'uptime'), notice(2, 'df -h', { machineName: 'desktop' })];
+    expect(layoutRequests(input({ notices: two })).join('\n')).toContain('(exact: --full or --json)');
+    const full = layoutRequests(input({ notices: two, full: true })).join('\n');
+    expect(full).toContain('allow: machine admin allow laptop --shell sh -- uptime');
+    expect(full).toContain('allow: machine admin allow desktop --shell sh -- "df -h"');
+  });
+
+  it('no notice, no change: the layout is the one of before', () => {
+    expect(layoutRequests(input({ notices: [] }))).toEqual(layoutRequests(input()));
   });
 });

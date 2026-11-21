@@ -14,7 +14,8 @@ $sources:
 # machine in policy mode admin: it does what `machine admin allow` does for the machine the row belongs to, with the admin passphrase and the unlocked key
 # ONLY in the browser (machine:RequestsOverview, confirmation modal, signature in the page, only the signed documents posted). Elsewhere (no admin key
 # here, mode local) the row shows the CLI command instead and the capability note says why. Deny is a button for this machine's own rows; for a request
-# held on another machine the row says where to run it (a remote Deny is not built). History stays read-only and local (the CLI shows it).
+# held on another machine the row says where to run it (a remote Deny is not built). Notices (request-notices.md, phase 2): held or refused requests that
+# OTHER machines reported are listed in the same sections without a passphrase, labelled with the machine that reported them; the 10s poll above refreshes them. History stays read-only and local (the CLI shows it).
 $type: PageContent
 sections:
   - $type: PageHeader
@@ -38,6 +39,8 @@ sections:
     pending: $sources.requests.pending
     allow: $sources.requests.allow
     remote: $sources.requests.remote
+    notices: $sources.requests.notices
+    noticesError: $sources.requests.noticesError
     emptyMessage: $sources.requests.emptyMessage
   - $type: Markdown
     text: "### History of this machine"

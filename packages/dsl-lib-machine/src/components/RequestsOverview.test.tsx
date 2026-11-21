@@ -2,6 +2,7 @@ import { encryptAdminKey, generateSigningKeyPair, verifyRequestsList } from '@wa
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NoticeData } from '../lib/noticeRows.js';
 import { RequestsOverview, type RequestsOverviewProps } from './RequestsOverview.js';
 
 // The Requests page for ALL trusted machines: this machine's own requests come from the page, the others are loaded by the admin machine with a request
@@ -169,5 +170,94 @@ describe('loading the other machines', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/PIN not entered/);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('request notices (reported by other machines, no passphrase)', () => {
+  const NOTICE_ID = 'cccc3333-0000-4000-8000-000000000000';
+  const RECEIVED = Math.floor(new Date(2026, 10, 21, 14, 2, 30).getTime() / 1000);
+  const notice = (over: Partial<NoticeData> = {}): NoticeData => ({ id: NOTICE_ID, machine: LAPTOP, machineName: 'laptop', peerText: 'thinkcentre', peer: THINK, shell: 'sh', command: 'uptime', commandTruncated: false, state: 'held', secondsLeft: 300, receivedAt: RECEIVED, ...over });
+  const NOTE = 'reported by laptop at 14:02; not verified live: use Load the other machines to confirm';
+
+  it('shows a held notice next to the own rows, labelled with the machine that reported it, with the muted note, Allow and no Deny', () => {
+    render(<RequestsOverview {...props({ notices: [notice()] })} />);
+    const item = screen.getByRole('listitem', { name: 'Held request uptime' });
+    expect(item).toHaveAttribute('data-testid', 'notice-row');
+    expect(within(item).getByText('laptop')).toBeInTheDocument();
+    expect(within(item).getByTestId('notice-note')).toHaveTextContent(NOTE);
+    expect(within(item).getByRole('button', { name: 'Allow uptime' })).toBeInTheDocument();
+    expect(within(item).queryByRole('button', { name: /^Deny/ })).toBeNull();
+    expect(within(item).getByText(/machine requests --deny cccc3333.*ON laptop/)).toBeInTheDocument();
+    expect(within(item).getByText(/5 min 0 s left|4 min 5\d s left/)).toBeInTheDocument();
+    // The own row is untouched.
+    expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
+  });
+
+  it('Allow of a notice row goes through the existing allow flow for the machine of the row', async () => {
+    render(<RequestsOverview {...props({ notices: [notice()] })} />);
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Held request uptime' })).getByRole('button', { name: 'Allow uptime' }));
+    await waitFor(() => expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${LAPTOP}`)).toBe(true));
+  });
+
+  it('shows the command as plain text: markup in it is never interpreted', () => {
+    const nasty = '<b id="x">bold</b><img src=x onerror=alert(1)>';
+    const { container } = render(<RequestsOverview {...props({ held: [], notices: [notice({ command: nasty })] })} />);
+    expect(container.querySelector('b#x')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain(nasty);
+  });
+
+  it('a truncated command is flagged and has no Allow button', () => {
+    render(<RequestsOverview {...props({ notices: [notice({ commandTruncated: true })] })} />);
+    const item = screen.getByRole('listitem', { name: 'Held request uptime' });
+    expect(within(item).queryByRole('button', { name: 'Allow uptime' })).toBeNull();
+    expect(within(item).getByText(/command is truncated/i)).toBeInTheDocument();
+  });
+
+  it('a refused notice is a row of the machine, in its own section, with the note and Allow', () => {
+    render(<RequestsOverview {...props({ notices: [notice({ state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
+    expect(screen.getByRole('heading', { name: 'Waiting for approval on laptop' })).toBeInTheDocument();
+    const row = screen.getByTestId('notice-row');
+    expect(row).toHaveTextContent('whoami');
+    expect(within(row).getByTestId('notice-note')).toHaveTextContent(NOTE);
+    expect(within(row).getByRole('button', { name: 'Allow whoami' })).toBeInTheDocument();
+  });
+
+  it('a damaged store is a visible warning with the message', () => {
+    render(<RequestsOverview {...props({ noticesError: 'notices.json is damaged: delete it' })} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/notices.*notices.json is damaged: delete it/i);
+  });
+
+  it('no notice and no error: nothing is added', () => {
+    render(<RequestsOverview {...props({ notices: [], noticesError: '' })} />);
+    expect(screen.queryByTestId('notice-row')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('after loading, the live rows of a machine replace its notices (same request id once, a request that is gone disappears), the others stay', async () => {
+    const live = { ...thinkPage, waiting: [{ ...thinkPage.waiting[0], id: NOTICE_ID, command: 'hostname' }] };
+    remoteAnswer = (machine) => (machine === THINK ? live : laptopPage);
+    const list = [notice({ machine: THINK, machineName: 'thinkcentre', command: 'hostname' }), notice({ id: 'dddd4444-0000-4000-8000-000000000000', command: 'gone' })];
+    render(<RequestsOverview {...props({ notices: list })} />);
+    expect(screen.getAllByTestId('notice-row')).toHaveLength(2);
+    await load();
+    expect(screen.queryByTestId('notice-row')).toBeNull();
+    expect(screen.getAllByRole('listitem', { name: 'Held request hostname' })).toHaveLength(1);
+    expect(screen.queryByRole('listitem', { name: 'Held request gone' })).toBeNull();
+  }, 120_000);
+
+  it('a machine that could not answer keeps its notices on screen', async () => {
+    remoteAnswer = (machine) => (machine === LAPTOP ? new Error('cannot reach laptop') : thinkPage);
+    render(<RequestsOverview {...props({ notices: [notice()] })} />);
+    await load();
+    expect(screen.getByRole('listitem', { name: 'Held request uptime' })).toHaveAttribute('data-testid', 'notice-row');
+  }, 120_000);
+
+  it('the machine filter applies to notices', async () => {
+    render(<RequestsOverview {...props({ notices: [notice()] })} />);
+    await userEvent.selectOptions(screen.getByLabelText('Machine'), THINK);
+    expect(screen.queryByRole('listitem', { name: 'Held request uptime' })).toBeNull();
+    await userEvent.selectOptions(screen.getByLabelText('Machine'), LAPTOP);
+    expect(screen.getByRole('listitem', { name: 'Held request uptime' })).toBeInTheDocument();
   });
 });

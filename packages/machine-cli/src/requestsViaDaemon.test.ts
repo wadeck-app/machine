@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { newRequestsList, signRequestsList } from '@wadeck-app/machine-core';
@@ -90,5 +90,22 @@ describe('requests (daemon command for the module backend)', () => {
       expect(answer.summary.pending.map((g) => g.command)).toEqual(['echo something']);
       expect(answer.summary.history.length).toBeGreaterThan(0);
     }
+  });
+
+  it('carries the notices of other machines (visible, newest first) and, for a damaged file, an empty list plus noticesError', async () => {
+    const stored = (n: number) => ({ machine: '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d', machineName: 'desktop', receivedAt: 1_800_000_000 - n, id: `3f1c2d3e-4a5b-4c6d-8e7f-${String(n).padStart(12, '0')}`, peer: '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f', peerName: 'agent-box', shell: 'sh', command: `echo ${n}`, commandTruncated: false, state: 'refused', deadline: null, ts: 1_800_000_000 - n });
+    writeFileSync(join(b, 'notices.json'), JSON.stringify({ v: 1, notices: [stored(2), stored(1)] }));
+    const answer = makeCommands(b, 'e2e').requests();
+    if (!answer.initialized || !answer.ok) {
+      throw new Error('unexpected answer');
+    }
+    expect(answer.notices.map((n) => n.command)).toEqual(['echo 1', 'echo 2']);
+    writeFileSync(join(b, 'notices.json'), 'garbage');
+    const damaged = makeCommands(b, 'e2e').requests();
+    if (!damaged.initialized || !damaged.ok) {
+      throw new Error('unexpected answer');
+    }
+    expect(damaged.notices).toEqual([]);
+    expect(damaged.noticesError).toContain('notices.json');
   });
 });

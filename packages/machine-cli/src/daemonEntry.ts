@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { FileAuditLog, FileUsageStore } from './stores.js';
 import { policyFingerprint } from './policyMode.js';
 import { makeRequestsListDeps } from './requestsView.js';
+import { createRequestNotifier, type RequestNotifier } from './requestNotifier.js';
+import { makeNoticeConnect, makeNoticeRecipients, makeNoticeStoreDeps } from './noticeWiring.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
 export const DEFAULT_DAEMON_PORT = 47920;
@@ -48,6 +50,8 @@ export interface DaemonStart {
   interfaces?: InterfaceProvider;
   /** Tests only: the timer and the client of the inbox loop, which runs only when this machine joined a relay (relay.json). */
   inbox?: { timer?: InboxTimer; client?: RelayClient; heartbeatMs?: number };
+  /** Tests only: let the notice sender reach a recipient on loopback (a record of the relay may not point there). */
+  notices?: { allowLocal?: boolean };
   /** Tests only: the update manager, the bundle path and the periodic timer of the update check. */
   updates?: DaemonUpdates;
   /** Tests only: replaces the registration of the module with app-core (the default one writes into the real app-core folder). */
@@ -86,6 +90,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   let listener: ServicedPeerListener | undefined;
   let inbox: InboxLoop | undefined;
   let updateCheck: { stop: () => void } | undefined;
+  let notifier: RequestNotifier | undefined;
   let markStopped: () => void = () => undefined;
   const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
   const stopped = new Promise<void>((resolve) => (markStopped = resolve));
@@ -93,6 +98,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     hooks: {
       onShutdown: () => {
         updateCheck?.stop();
+        notifier?.close();
         inbox?.stop();
         listener?.close();
         removeDaemonPortFile(configDir, process.pid);
@@ -127,6 +133,17 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     // Load once now so that a corrupt file stops the start instead of the first connection.
     network();
 
+    // Request notices (request-notices.md): told to the recipients of the signed list, best effort, over the same connection path as `machine run`.
+    notifier = createRequestNotifier({
+      self: { uuid: self.uuid, name: self.name },
+      recipients: makeNoticeRecipients(configDir),
+      peerOf: (uuid) => network().directory.find(uuid),
+      connect: makeNoticeConnect(configDir, self, now, options.notices?.allowLocal === true),
+      audit: (entry) => audit.write({ ts: new Date(now() * 1000).toISOString(), ...entry }),
+      problem: log,
+      now,
+    });
+
     listener = await startPeerListener(
       {
         self,
@@ -149,6 +166,8 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         // The read-only `requests-list` exchange (decision 74): signed by the admin, answered from this machine's audit.log.
         requests: makeRequestsListDeps(configDir, now, log),
         holds: { table: holds },
+        notices: makeNoticeStoreDeps(configDir),
+        notifier,
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },

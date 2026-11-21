@@ -1,3 +1,4 @@
+import type { StoredNotice } from './requestNotice.js';
 import { allowCommand, describeHistory, type HistoryEntry, type PendingGroup, type WaitingRequest } from './requests.js';
 import type { PolicyMode } from './policy.js';
 
@@ -34,6 +35,8 @@ export interface RequestsLayoutInput {
   targetPlatform?: 'windows' | 'posix';
   /** The last note, kept only when there is room under the cap (what this listing does not cover). */
   extraNote?: string;
+  /** Notices other machines sent (already filtered by visibleNotices): requests held or refused THERE, reported, not verified live. */
+  notices?: StoredNotice[];
 }
 
 const ascii = (text: string): string => text.replace(/[^\x20-\x7e]/g, '?');
@@ -91,6 +94,46 @@ function wrap(text: string, width: number): string[] {
   return chunks;
 }
 
+/** The rows of one section that come from notices of other machines: a table labelled with the machine, its exact allow lines, the not-verified note. */
+function noticeBlock(kind: 'held' | 'refused', rows: StoredNotice[], input: RequestsLayoutInput): string[] {
+  const { now, full } = input;
+  const columns: Column[] =
+    kind === 'held'
+      ? [
+          { title: 'Machine', cells: rows.map((n) => n.machineName), max: 14 },
+          { title: 'Id', cells: rows.map((n) => n.id.slice(0, 8)), max: 8 },
+          { title: 'From', cells: rows.map((n) => n.peerName), max: 14 },
+          { title: 'Shell', cells: rows.map((n) => n.shell), max: 6 },
+          { title: 'Left', cells: rows.map((n) => leftText((n.deadline ?? now) - now)), max: 8 },
+          { title: 'Reported', cells: rows.map((n) => input.age(n.receivedAt, now)), max: 12 },
+          { title: 'Command', cells: rows.map((n) => n.command + (n.commandTruncated ? ' [...]' : '')) },
+        ]
+      : [
+          { title: 'Machine', cells: rows.map((n) => n.machineName), max: 14 },
+          { title: 'From', cells: rows.map((n) => n.peerName), max: 14 },
+          { title: 'Shell', cells: rows.map((n) => n.shell), max: 6 },
+          { title: 'Reported', cells: rows.map((n) => input.age(n.receivedAt, now)), max: 12 },
+          { title: 'Command', cells: rows.map((n) => n.command + (n.commandTruncated ? ' [...]' : '')) },
+        ];
+  const lines = ['  reported by the other machines:', ...table(columns, full)];
+  // The exact command of a row is for the machine of the row. A command cut at 2048 characters is never offered: allowing the cut text would allow another command.
+  const exact = (n: StoredNotice): string => `allow: ${allowCommand(n, { name: n.machineName, policyMode: 'admin' })}`;
+  const exactRows = rows.filter((n) => !n.commandTruncated);
+  if (full) {
+    lines.push(...exactRows.map((n) => `  ${exact(n)}`));
+  } else if (rows.length === 1 && exactRows.length === 1 && `  ${exact(rows[0] as StoredNotice)}`.length <= REQUESTS_WIDTH) {
+    lines.push(`  ${exact(rows[0] as StoredNotice)}`);
+  } else {
+    lines.push(fit('  allow: machine admin allow <machine> --shell <shell> -- <command>  (exact: --full or --json)'));
+  }
+  if (rows.length > exactRows.length) {
+    lines.push(fit('  a command cut at 2048 characters has no allow line here: allow it from the page, or read it in full with `machine requests <machine>`'));
+  }
+  const names = [...new Set(rows.map((n) => n.machineName))].join(', ');
+  lines.push(fit(`  reported by ${names} at the time shown, not verified live:`), fit('  use Load the other machines on the page, or `machine requests <machine>`, to confirm'));
+  return lines;
+}
+
 const who = (g: { peer: string; peerName?: string }): string => ascii(g.peerName ?? g.peer.slice(0, 8));
 
 function allowTemplate(machine: { name: string; policyMode: PolicyMode }): string {
@@ -129,6 +172,9 @@ function notes(input: RequestsLayoutInput): string[] {
   if (shell !== undefined) {
     out.push(shell);
   }
+  if (input.waiting.length === 0 && (input.notices ?? []).some((n) => n.state === 'held')) {
+    out.push('deny: machine requests --deny <id> [--reason <text>], run ON the machine named in MACHINE (the one that holds it)');
+  }
   if (input.waiting.length > 0) {
     out.push(
       input.remote
@@ -159,55 +205,70 @@ export function layoutRequests(raw: RequestsLayoutInput): string[] {
     ...raw,
     machine: { ...raw.machine, name: ascii(raw.machine.name) },
     waiting: raw.waiting.map((w) => ({ ...w, shell: ascii(w.shell), command: ascii(w.command), ...(w.peerName !== undefined ? { peerName: ascii(w.peerName) } : {}) })),
+    notices: (raw.notices ?? []).map((n) => ({ ...n, machineName: ascii(n.machineName), peerName: ascii(n.peerName), shell: ascii(n.shell) as StoredNotice['shell'], command: ascii(n.command) })),
     pending: raw.pending.map((g) => ({ ...g, shell: ascii(g.shell), command: ascii(g.command), ...(g.peerName !== undefined ? { peerName: ascii(g.peerName) } : {}) })),
   };
   const { machine, now, waiting, pending, pendingTotal } = input;
+  const notices = input.notices ?? [];
+  const heldNotices = notices.filter((n) => n.state === 'held');
+  const refusedNotices = notices.filter((n) => n.state === 'refused');
   const name = ascii(machine.name);
   const counts = [
     waiting.length > 0 ? `${waiting.length} waiting now` : 'nothing waiting',
     pendingTotal > 0 ? `${pendingTotal} refused (not allowed)` : 'no refused request',
+    ...(notices.length > 0 ? [`${notices.length} reported by other machines`] : []),
   ];
   const lines: string[] = [fit(`${name} (${machine.policyMode} mode): ${counts.join(', ')}`)];
 
-  if (waiting.length > 0) {
+  if (waiting.length > 0 || heldNotices.length > 0) {
     lines.push('', `${'Waiting now'.toUpperCase()}  (the caller is connected and waits: answer before the time left runs out)`);
-    lines.push(
-      ...table(
-        [
-          { title: 'Id', cells: waiting.map((w) => w.id.slice(0, 8)), max: 8 },
-          { title: 'From', cells: waiting.map(who), max: 14 },
-          { title: 'Shell', cells: waiting.map((w) => ascii(w.shell)), max: 6 },
-          { title: 'Left', cells: waiting.map((w) => leftText(w.deadline - now)), max: 8 },
-          { title: 'Asked', cells: waiting.map((w) => input.age(w.since, now)), max: 12 },
-          { title: 'Command', cells: waiting.map((w) => ascii(w.command)) },
-        ],
-        input.full,
-      ),
-    );
-    lines.push(...allowLines(waiting, input));
-  }
-
-  if (pending.length > 0) {
-    lines.push('', `${'Refused'.toUpperCase()}  (not allowed, newest first)`);
-    lines.push(
-      ...table(
-        [
-          { title: 'From', cells: pending.map(who), max: 14 },
-          { title: 'Shell', cells: pending.map((g) => ascii(g.shell)), max: 6 },
-          { title: 'Times', cells: pending.map((g) => String(g.count)), max: 6 },
-          { title: 'Last', cells: pending.map((g) => input.age(g.lastSeen, now)), max: 12 },
-          { title: 'Command', cells: pending.map((g) => ascii(g.command)) },
-        ],
-        input.full,
-      ),
-    );
-    lines.push(...allowLines(pending, input));
-    if (pendingTotal > pending.length) {
-      lines.push(`  [info] showing ${pending.length} of ${pendingTotal} (the newest): --limit <n> shows more`);
+    if (waiting.length > 0) {
+      lines.push(
+        ...table(
+          [
+            { title: 'Id', cells: waiting.map((w) => w.id.slice(0, 8)), max: 8 },
+            { title: 'From', cells: waiting.map(who), max: 14 },
+            { title: 'Shell', cells: waiting.map((w) => ascii(w.shell)), max: 6 },
+            { title: 'Left', cells: waiting.map((w) => leftText(w.deadline - now)), max: 8 },
+            { title: 'Asked', cells: waiting.map((w) => input.age(w.since, now)), max: 12 },
+            { title: 'Command', cells: waiting.map((w) => ascii(w.command)) },
+          ],
+          input.full,
+        ),
+      );
+      lines.push(...allowLines(waiting, input));
+    }
+    if (heldNotices.length > 0) {
+      lines.push(...noticeBlock('held', heldNotices, input));
     }
   }
 
-  if (waiting.length === 0 && pending.length === 0 && !input.logPresent) {
+  if (pending.length > 0 || refusedNotices.length > 0) {
+    lines.push('', `${'Refused'.toUpperCase()}  (not allowed, newest first)`);
+    if (pending.length > 0) {
+      lines.push(
+        ...table(
+          [
+            { title: 'From', cells: pending.map(who), max: 14 },
+            { title: 'Shell', cells: pending.map((g) => ascii(g.shell)), max: 6 },
+            { title: 'Times', cells: pending.map((g) => String(g.count)), max: 6 },
+            { title: 'Last', cells: pending.map((g) => input.age(g.lastSeen, now)), max: 12 },
+            { title: 'Command', cells: pending.map((g) => ascii(g.command)) },
+          ],
+          input.full,
+        ),
+      );
+      lines.push(...allowLines(pending, input));
+      if (pendingTotal > pending.length) {
+        lines.push(`  [info] showing ${pending.length} of ${pendingTotal} (the newest): --limit <n> shows more`);
+      }
+    }
+    if (refusedNotices.length > 0) {
+      lines.push(...noticeBlock('refused', refusedNotices, input));
+    }
+  }
+
+  if (waiting.length === 0 && pending.length === 0 && notices.length === 0 && !input.logPresent) {
     lines.push('', '  no audit log yet: no request ever reached it');
   }
   if (input.allowedNow > 0) {

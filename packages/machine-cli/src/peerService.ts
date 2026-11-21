@@ -5,6 +5,11 @@ import {
   holdAnswerTimeoutMs,
   waitedText,
   MAX_REQUESTS_LISTS_PER_MINUTE,
+  MAX_NOTICES_PER_MINUTE,
+  parseRequestNotice,
+  parseRequestNoticeEnd,
+  type NoticeOutcome,
+  type StoredNotice,
   buildRequestsListAnswer,
   verifyRequestsList,
   parseRevocationHello,
@@ -29,6 +34,7 @@ import type { MachineIdentity } from './identity.js';
 import { MAX_CATCHUPS_PER_MINUTE, RATE_LIMITED_MESSAGE, UNAVAILABLE_FRAME_MESSAGE, listsOfFrame, type RevocationSyncDeps } from './revocationSync.js';
 import { MAX_FUTURE_SECONDS } from './network.js';
 import { noPolicyMessage } from './noPolicy.js';
+import type { RequestNotifier } from './requestNotifier.js';
 
 // The peer service: what a machine does with an authenticated peer connection. Every request goes through the same
 // gates, in this order: signature and addressing, start time, authenticated source, replay, policy, concurrency, audit,
@@ -85,6 +91,16 @@ export interface PeerServiceDeps {
   requests?: RequestsListDeps;
   /** Hold of a refused request (`run --wait`, hold-for-approval.md). Absent: a wait is ignored and the refusal is answered at once, as with an older build. */
   holds?: HoldDeps;
+  /** Request notices received from other machines (request-notices.md). Absent: `request-notice` is an unknown message, as with an older build. */
+  notices?: NoticeStoreDeps;
+  /** Tells the notice recipients about held and refused requests (best effort, never awaited). Absent: nobody is told. */
+  notifier?: RequestNotifier;
+}
+
+/** Where received notices are kept: the peer service decides WHO sent them and WHEN; a failure here is reported, never thrown at the sender. */
+export interface NoticeStoreDeps {
+  record: (notice: StoredNotice, now: number) => void;
+  end: (machine: string, id: string, now: number) => void;
 }
 
 export interface HoldDeps {
@@ -132,7 +148,7 @@ type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: strin
 type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
-type ServiceAnswer = PeerAnswer | RequestsListAnswer;
+type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string };
 
 
 interface SyncState {
@@ -451,9 +467,12 @@ class PeerService {
       this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
       return { kind: 'answer', answer: this.refuse(session, id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); the request was not held. Fix the disk or permissions of the machine's audit log`) };
     }
+    // Best effort and never awaited: the recipients are told once the request is safely held.
+    this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline }));
     const finish = (outcome: string, extra: Record<string, Json> = {}): void => {
       table.end(id);
       this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
+      this.notify((n) => n.ended(id, outcome as NoticeOutcome));
     };
     const refusal = (reason: string, text: string, allowedShells?: string[]): HoldOutcome => ({
       kind: 'answer',
@@ -532,9 +551,106 @@ class PeerService {
     }
   }
 
+  /** The name of the machine authenticated on this session, as the directory of this machine knows it. */
+  private nameOf(session: PeerSession): string {
+    return this.deps.directory.lookup(session.peerPublicKey)?.name ?? session.peerId.slice(0, 8);
+  }
+
+  /** A call into the notifier: whatever it does, the request goes on. */
+  private notify(action: (notifier: RequestNotifier) => void): void {
+    const { notifier } = this.deps;
+    if (notifier === undefined) {
+      return;
+    }
+    try {
+      action(notifier);
+    } catch (e) {
+      this.problem(`cannot send a request notice (${(e as Error).message}); the request itself is not affected`);
+    }
+  }
+
+  /** Notice frames per sender in the last minute, and the frames dropped since the limit was hit. */
+  private readonly noticeTimes = new Map<string, number[]>();
+  private readonly noticeDrops = new Map<string, number>();
+  private noticeStoreFailed = false;
+
+  private noticeRateLimited(peerId: string): boolean {
+    const now = this.deps.now();
+    const recent = (this.noticeTimes.get(peerId) ?? []).filter((t) => now - t < 60);
+    if (recent.length >= MAX_NOTICES_PER_MINUTE) {
+      this.noticeTimes.set(peerId, recent);
+      const dropped = (this.noticeDrops.get(peerId) ?? 0) + 1;
+      this.noticeDrops.set(peerId, dropped);
+      if (dropped === 1) {
+        this.recordQuiet({ event: 'request-notice-rate-limited', source: peerId, limit: MAX_NOTICES_PER_MINUTE, dropped });
+      }
+      return true;
+    }
+    const dropped = this.noticeDrops.get(peerId);
+    if (dropped !== undefined) {
+      this.noticeDrops.delete(peerId);
+      // The count of the minute that ended, reported once (the first drop already wrote its own line).
+      if (dropped > 1) {
+        this.recordQuiet({ event: 'request-notice-rate-limited', source: peerId, limit: MAX_NOTICES_PER_MINUTE, dropped });
+      }
+    }
+    recent.push(now);
+    this.noticeTimes.set(peerId, recent);
+    return false;
+  }
+
+  /** `request-notice` and `request-notice-end`: information from a trusted peer, stored for `machine requests`. Never changes a policy, never runs anything. */
+  private noticeFrame(session: PeerSession, message: unknown, notices: NoticeStoreDeps): ServiceAnswer {
+    const now = this.deps.now();
+    const isEnd = (message as { type?: unknown }).type === 'request-notice-end';
+    const end = isEnd ? parseRequestNoticeEnd(message) : undefined;
+    const start = isEnd ? undefined : parseRequestNotice(message);
+    const problem = end?.ok === false ? end.message : start?.ok === false ? start.message : undefined;
+    if (problem !== undefined) {
+      return this.refuse(session, undefined, 'bad-notice', `${problem}: the peer runs an incompatible version`);
+    }
+    const id = end?.ok === true ? end.end.id : (start as { ok: true; notice: { id: string } }).notice.id;
+    if (this.noticeRateLimited(session.peerId)) {
+      // No `refused` audit line per dropped frame: the minute has its own line (noticeRateLimited).
+      return { type: 'refused', id, reason: 'rate-limited', message: `too many request notices from this machine (limit ${MAX_NOTICES_PER_MINUTE} per minute): the notice was dropped` };
+    }
+    const sender = this.deps.directory.lookup(session.peerPublicKey);
+    if (sender === undefined) {
+      return this.refuse(session, undefined, 'peer-revoked', 'this machine no longer trusts you: your registration was revoked or removed');
+    }
+    try {
+      if (end?.ok === true) {
+        notices.end(session.peerId, id, now);
+      } else {
+        const { type: _type, ...notice } = (start as { ok: true; notice: { type: string } & Omit<StoredNotice, 'machine' | 'machineName' | 'receivedAt'> }).notice;
+        // The label is the machine authenticated on this connection, never a name inside the frame.
+        notices.record({ ...notice, machine: session.peerId, machineName: sender.name, receivedAt: now }, now);
+      }
+    } catch (e) {
+      if (!this.noticeStoreFailed) {
+        this.noticeStoreFailed = true;
+        this.problem(`cannot store the request notices of other machines (${(e as Error).message})`);
+        this.recordQuiet({ event: 'request-notice-store-failed', source: session.peerId, error: (e as Error).message.slice(0, 300) });
+      }
+      return { type: 'refused', id, reason: 'notice-store-unavailable', message: 'this machine cannot store request notices (its notices file is damaged): its owner deletes <configDir>/notices.json; nothing else is affected' };
+    }
+    this.noticeStoreFailed = false;
+    if (end?.ok === true) {
+      this.recordQuiet({ event: 'request-notice-end', source: session.peerId, id, outcome: end.end.outcome });
+    } else {
+      this.recordQuiet({ event: 'request-notice', source: session.peerId, id, state: (start as { ok: true; notice: { state: string } }).notice.state });
+    }
+    return { type: 'notice-ack', id };
+  }
+
   private async handle(session: PeerSession, message: unknown, carrier: Carrier): Promise<ServiceAnswer | undefined> {
     const { deps } = this;
     const now = deps.now();
+    // Request notices: without `deps.notices` they are unknown messages, exactly as for an older build.
+    const kind = typeof message === 'object' && message !== null ? (message as { type?: unknown }).type : undefined;
+    if (deps.notices && (kind === 'request-notice' || kind === 'request-notice-end')) {
+      return this.noticeFrame(session, message, deps.notices);
+    }
     // `requests-list` (decision 74): read-only, admin-signed. Without `deps.requests` it is an unknown message, exactly as for an older build.
     if (deps.requests && typeof message === 'object' && message !== null && (message as { type?: unknown }).type === 'requests-list') {
       return this.requestsList(session, message, deps.requests);
@@ -603,6 +719,10 @@ class PeerService {
       step = { ok: true, decision: outcome.decision };
     }
     if (!step.ok) {
+      // A refusal an Allow could still fix, answered without a hold: the owner may want to know (the cases a hold would have kept).
+      if (HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
+        this.notify((n) => n.refused({ id: body.id, peer: session.peerId, peerName: this.nameOf(session), shell: body.shell, command: body.command }));
+      }
       return this.refuse(session, body.id, step.reason, step.message, step.logged, step.allowedShells);
     }
     const decision = step.decision;

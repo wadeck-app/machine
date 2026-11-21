@@ -1924,9 +1924,11 @@ export const RequestsOverviewEntry: ComponentRegistryEntry = {
 		const pending = coerceProp(resolveExpressionValue(node['pending'], ctx), 'RequestsOverview.pending', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['pending']
 		const allow = coerceProp(resolveExpressionValue(node['allow'], ctx), 'RequestsOverview.allow', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['allow']
 		const remote = coerceProp(resolveExpressionValue(node['remote'], ctx), 'RequestsOverview.remote', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['remote']
+		const notices = coerceProp(resolveExpressionValue(node['notices'], ctx), 'RequestsOverview.notices', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['notices']
+		const noticesError = coerceProp(resolveExpressionValue(node['noticesError'], ctx), 'RequestsOverview.noticesError', 'string', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['noticesError']
 		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'RequestsOverview.emptyMessage', 'string', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['emptyMessage']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'RequestsOverview.onRefresh', 'function', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['onRefresh']
-		return <RequestsOverview self={self} machines={machines} held={held} pending={pending} allow={allow} remote={remote} emptyMessage={emptyMessage} onRefresh={onRefresh} />
+		return <RequestsOverview self={self} machines={machines} held={held} pending={pending} allow={allow} remote={remote} notices={notices} noticesError={noticesError} emptyMessage={emptyMessage} onRefresh={onRefresh} />
 	},
 }
 
@@ -2187,5 +2189,5 @@ AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["al
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","onRefresh","rows"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
-RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","held","machines","onRefresh","pending","remote","self"] : [];
+RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","held","machines","notices","noticesError","onRefresh","pending","remote","self"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

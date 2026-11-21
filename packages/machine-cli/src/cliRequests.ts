@@ -1,5 +1,5 @@
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
-import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, layoutHistory, layoutRequests, shellQuote, type HistoryKind, type PolicyMode, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, layoutHistory, layoutRequests, shellQuote, type HistoryKind, type PolicyMode, type RequestsSummary, type StoredNotice, type WaitingRequest } from '@wadeck-app/machine-core';
 import { clockText, relativeText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { requestsAnswer, type RequestsQuery } from './requestsView.js';
@@ -45,6 +45,8 @@ export interface PendingText {
   full?: boolean;
   /** What this listing does not cover (the local view: this machine only). */
   extraNote?: string;
+  /** The local view: requests other machines reported (request-notices.md). */
+  notices?: StoredNotice[];
 }
 
 /** The listing of one machine (machine-core layoutRequests): header, WAITING NOW, REFUSED, Notes. The same for `machine requests`, `<machine>` and `--all`. */
@@ -62,6 +64,7 @@ export function pendingText(v: PendingText): string[] {
     logPresent: v.logPresent,
     full: v.full === true,
     ...(v.extraNote !== undefined ? { extraNote: v.extraNote } : {}),
+    ...(v.notices !== undefined ? { notices: v.notices } : {}),
     age: relativeText,
     // Known for this machine only: a peer does not tell, the note then covers both.
     ...(local ? { targetPlatform: process.platform === 'win32' ? ('windows' as const) : ('posix' as const) } : {}),
@@ -116,12 +119,15 @@ export async function runRequests(ctx: CommandContext): Promise<number> {
   }
   if (summary.skipped > 0) io.stderr(`[warn] ${summary.skipped} verified entr${summary.skipped === 1 ? 'y has' : 'ies have'} no usable time or event name and ${summary.skipped === 1 ? 'is' : 'are'} not shown\n`);
   for (const p of answer.problems) io.stderr(`[warn] ${p}\n`);
+  if (answer.noticesError !== undefined) {
+    io.stderr(`[warn] ${answer.noticesError}\n`);
+  }
 
   const limitation = answer.adminKeyHere
     ? 'this machine only: `machine requests <machine>` or `--all` asks the peers (admin passphrase)'
     : 'this machine only: the admin machine lists the others with `machine requests <machine>`';
   if (args.history !== true) {
-    emit(answer, `${pendingText({ machine: { name: answer.self.name, policyMode: answer.policyMode }, adminKeyHere: answer.adminKeyHere, summary, logPresent: answer.logPresent, now: nowSeconds, where: 'this machine', full: args.full === true, extraNote: limitation }).join('\n')}\n`);
+    emit(answer, `${pendingText({ machine: { name: answer.self.name, policyMode: answer.policyMode }, adminKeyHere: answer.adminKeyHere, summary, logPresent: answer.logPresent, now: nowSeconds, where: 'this machine', full: args.full === true, extraNote: limitation, notices: answer.notices }).join('\n')}\n`);
     return EXIT.ok;
   }
   emit(answer, `${layoutHistory({ machineName: answer.self.name, now: nowSeconds, history: summary.history, historyTotal: summary.historyTotal, logPresent: answer.logPresent, full: args.full === true, when: ago, limitation }).join('\n')}\n`);

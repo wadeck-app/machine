@@ -582,7 +582,8 @@ describe('relay with ownership bound at approval', () => {
       await bothEnrolled();
       const why = await diagnose();
       expect(relay.inbox(readMachine(a).uuid), why).toEqual([]);
-      expect(relay.inbox(readMachine(b).uuid), why).toEqual([]);
+      // The list of notice recipients rides every approval (request-notices.md): it is the only document the new machine gets.
+      expect(relay.inbox(readMachine(b).uuid).map((d) => (d.document as { body: { kind: string } }).body.kind), why).toEqual(['notice-recipients']);
     });
 
     it('a third machine: the others get one peer document each about each other, none is sent to the admin machine about itself, none to a machine about itself', async () => {
@@ -597,7 +598,7 @@ describe('relay with ownership bound at approval', () => {
       expect(approved.out).toContain('2 document(s) stored by the relay for 1 machine(s)');
       const [ua, ub, uc] = [readMachine(a).uuid, readMachine(b).uuid, readMachine(c).uuid];
       const dirOfUuid = new Map([[ua, a], [ub, b], [uc, c]]);
-      const about = (uuid: string) => relay.inbox(uuid).map((d) => (openDocumentFor(dirOfUuid.get(uuid) as string, d.document) as { registration: { body: { uuid: string } } }).registration.body.uuid);
+      const about = (uuid: string) => relay.inbox(uuid).filter((d) => (d.document as { body: { kind: string } }).body.kind === 'peer').map((d) => (openDocumentFor(dirOfUuid.get(uuid) as string, d.document) as { registration: { body: { uuid: string } } }).registration.body.uuid);
       expect(relay.inbox(ua)).toEqual([]);
       expect(about(ub)).toEqual([uc]);
       expect(about(uc)).toEqual([ub]);

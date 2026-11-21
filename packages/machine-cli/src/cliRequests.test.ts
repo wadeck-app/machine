@@ -272,3 +272,38 @@ describe('machine requests: held requests (run --wait)', () => {
     expect((await run('status', '--wait', '10m')).err).toMatch(/--wait only applies to `machine run`/);
   });
 });
+
+describe('machine requests: notices of other machines', () => {
+  const SENDER = '0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d';
+  const stored = (n: number, over: Record<string, unknown> = {}) => ({
+    machine: SENDER, machineName: 'thinkcentre', receivedAt: Math.floor(NOW.getTime() / 1000) - 60 * n, id: `3f1c2d3e-4a5b-4c6d-8e7f-${String(n).padStart(12, '0')}`, peer: PEER, peerName: 'agent-box', shell: 'sh', command: `echo ${n}`, commandTruncated: false, state: 'held', deadline: Math.floor(NOW.getTime() / 1000) + 600, ts: Math.floor(NOW.getTime() / 1000) - 60 * n, ...over,
+  });
+
+  it('lists them labelled with the machine, with the allow command of THAT machine and the not-verified note', async () => {
+    seed();
+    writeFileSync(join(dir, 'notices.json'), JSON.stringify({ v: 1, notices: [stored(1)] }));
+    const r = await run('requests');
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('1 reported by other machines');
+    expect(r.out).toMatch(/thinkcentre +3f1c2d3e +agent-box +sh +10 min/);
+    expect(r.out).toContain('allow: machine admin allow thinkcentre --shell sh -- "echo 1"');
+    expect(r.out).toContain('not verified live');
+  });
+
+  it('--json carries the visible notices and keeps the rest', async () => {
+    seed();
+    writeFileSync(join(dir, 'notices.json'), JSON.stringify({ v: 1, notices: [stored(1), stored(2, { deadline: 1 })] }));
+    const doc = JSON.parse((await run('requests', '--json')).out) as { notices: Array<{ command: string; machineName: string }>; summary: { pending: unknown[] } };
+    expect(doc.notices.map((n) => [n.machineName, n.command])).toEqual([['thinkcentre', 'echo 1']]);
+    expect(doc.summary.pending.length).toBeGreaterThan(0);
+  });
+
+  it('a damaged notices.json is a [warn] naming the file and the fix, and the rest is still shown', async () => {
+    seed();
+    writeFileSync(join(dir, 'notices.json'), 'garbage');
+    const r = await run('requests');
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/\[warn\].*notices\.json.*Delete it/);
+    expect(r.out).toContain('refused (not allowed)');
+  });
+});

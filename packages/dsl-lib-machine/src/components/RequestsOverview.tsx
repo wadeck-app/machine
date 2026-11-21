@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ButtonAction, FieldSelect } from '@wadeck-app/dsl-ui';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
+import { mergeNotices, type NoticeData } from '../lib/noticeRows.js';
 import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../lib/remoteRequestsFlow.js';
 import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
@@ -22,6 +23,10 @@ export interface RequestsOverviewProps {
   allow?: Capability;
   /** Whether this machine may ask the others (`$sources.requests.remote`): the admin machine only. */
   remote?: { available: boolean; note: string };
+  /** What OTHER machines reported (`$sources.requests.notices`): held and refused requests, not verified live. Shown without a passphrase; Load the other machines replaces them with the live rows. */
+  notices?: NoticeData[];
+  /** Why the notices may be incomplete (`$sources.requests.noticesError`); shown as a warning when not empty. */
+  noticesError?: string;
   emptyMessage?: string;
   /**
    * Re-runs the page's sources, so the lists are the daemon's own after an allow or a deny. Defaults to the page's $refresh.
@@ -33,6 +38,7 @@ export interface RequestsOverviewProps {
 const ALL = 'all';
 const NO_HELD: HeldRequestRow[] = [];
 const NO_PENDING: PendingRequestRow[] = [];
+const NO_NOTICES: NoticeData[] = [];
 const NO_MACHINES: Array<{ uuid: string; name: string; self?: boolean }> = [];
 
 const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
@@ -46,7 +52,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  * @registryCategory composite
  * @registryTags requests allow hold policy admin machines
  */
-export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
+export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
   const [filter, setFilter] = useState(ALL);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -73,7 +79,13 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       return o.page.waiting.map((w) => ({ ...w, machine: o.page.machine, canAllow: o.page.allow.available, denyText: `Deny: run \`machine requests --deny ${w.id.slice(0, 8)}\` ON ${o.page.machine.name}`, fetchedAtMs: loaded.at }));
     });
   }, [loaded, filter]);
-  const rows = useMemo(() => [...ownRows, ...remoteRows].sort((a, b) => a.secondsLeft - b.secondsLeft), [ownRows, remoteRows]);
+  // The notices of a machine the page has loaded live are replaced by its live rows; a machine that did not answer keeps its notices.
+  const loadedMachines = useMemo(() => new Set((loaded?.outcomes ?? []).flatMap((o) => (o.ok ? [o.peer.uuid] : []))), [loaded]);
+  // The countdown of a notice runs from the moment the page got it.
+  const noticesFetchedAt = useMemo(() => Date.now(), [notices]);
+  const noticeRows = useMemo(() => mergeNotices({ notices, selfUuid: self?.uuid, loadedMachines, filter, allowAvailable: allow?.available === true }), [notices, self?.uuid, loadedMachines, filter, allow?.available]);
+  const noticeHeld = useMemo<HeldRequestRow[]>(() => noticeRows.held.map((r) => ({ ...r, fetchedAtMs: noticesFetchedAt })), [noticeRows, noticesFetchedAt]);
+  const rows = useMemo(() => [...ownRows, ...remoteRows, ...noticeHeld].sort((a, b) => a.secondsLeft - b.secondsLeft), [ownRows, remoteRows, noticeHeld]);
 
   const options = [{ value: ALL, label: 'All machines' }, ...(self !== undefined ? [{ value: self.uuid, label: `${self.name} (this machine)` }] : []), ...peers.map((p) => ({ value: p.uuid, label: p.name }))];
 
@@ -134,6 +146,11 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
           Other machines loaded at {clock(loaded.at)} ({loaded.outcomes.length - failures.length} of {loaded.outcomes.length} answered). They are not refreshed by themselves: reload to see newer requests.
         </div>
       )}
+      {noticesError !== '' && (
+        <div role="alert" className={NOTICE_WARNING}>
+          Request notices from the other machines may be missing: {noticesError}
+        </div>
+      )}
       {failures.map((f) => (
         <div key={f.peer.uuid} role="alert" className={NOTICE_WARNING}>
           {f.peer.name}: {f.message}
@@ -157,6 +174,13 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
           {page.notes.map((n) => (
             <div key={n} className={TEXT_MUTED_SM}>{n}</div>
           ))}
+        </div>
+      ))}
+
+      {noticeRows.refused.map((section) => (
+        <div key={section.machine.uuid} className="flex flex-col gap-2">
+          <h3 className="text-base font-semibold text-content">Waiting for approval on {section.machine.name}</h3>
+          <AllowRequestsTable rows={section.rows} allow={{ available: allow?.available === true, machine: section.machine, note: '' }} emptyMessage={`No refused request on ${section.machine.name}`} {...(onRefresh !== undefined ? { onRefresh } : {})} />
         </div>
       ))}
 

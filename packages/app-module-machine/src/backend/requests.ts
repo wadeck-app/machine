@@ -23,6 +23,31 @@ interface RequestsAnswerLike {
   now: number;
   summary: RequestsSummary;
   problems: string[];
+  /** Request notices reported by other machines (request-notices.md, phase 2); absent in an older daemon. */
+  notices?: unknown;
+  noticesError?: unknown;
+}
+
+/**
+ * A held or refused request that ANOTHER machine reported (a notice). Information, not verified live: the row is labelled with the machine that
+ * REPORTED it (`machineName`, authenticated by the daemon), never with a name inside the notice. `command` is untrusted text: the page shows it as text only.
+ */
+export interface NoticeRow {
+  /** The request id (what `machine requests --deny <id>` takes ON the machine). */
+  id: string;
+  /** The machine that reported it, and so the machine Allow signs for. */
+  machine: string;
+  machineName: string;
+  peerText: string;
+  peer: string;
+  shell: string;
+  command: string;
+  commandTruncated: boolean;
+  state: 'held' | 'refused';
+  /** Held: seconds left at the time of this answer; null for a refused one. */
+  secondsLeft: number | null;
+  /** Epoch seconds, this machine's clock. */
+  receivedAt: number;
 }
 
 export interface PendingRow {
@@ -88,6 +113,10 @@ export interface RequestsPage {
   waiting: WaitingRow[];
   pending: PendingRow[];
   pendingTotal: number;
+  /** Held and refused requests other machines reported, newest first. */
+  notices: NoticeRow[];
+  /** Why the notices may be incomplete (damaged store, older daemon, unexpected entries); empty when all is well. */
+  noticesError: string;
   history: HistoryRow[];
   historyTotal: number;
   logPresent: boolean;
@@ -144,6 +173,55 @@ function isAnswer(answer: unknown): answer is RequestsAnswerLike {
   return a !== undefined && a['initialized'] === true && a['ok'] === true && typeof a['summary'] === 'object' && a['summary'] !== null && Array.isArray((a['summary'] as { waiting?: unknown }).waiting) && typeof a['self'] === 'object' && a['self'] !== null;
 }
 
+type LooseNotice = { [K in keyof NoticeRow | 'peerName' | 'deadline' | 'ts']?: unknown };
+const isLooseNotice = (v: unknown): v is LooseNotice => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function noticeRow(n: unknown, now: number): NoticeRow | undefined {
+  if (!isLooseNotice(n)) {
+    return undefined;
+  }
+  const { machine, machineName, receivedAt, id, peer, peerName, shell, command, commandTruncated, state, deadline, ts } = n;
+  if (typeof machine !== 'string' || typeof machineName !== 'string' || typeof id !== 'string' || typeof peer !== 'string' || typeof shell !== 'string' || typeof command !== 'string' || typeof commandTruncated !== 'boolean') {
+    return undefined;
+  }
+  if (typeof receivedAt !== 'number' || typeof ts !== 'number' || (state !== 'held' && state !== 'refused')) {
+    return undefined;
+  }
+  if (state === 'held' && typeof deadline !== 'number') {
+    return undefined;
+  }
+  // The hold length is deadline - ts (both the target's clock); the time since it arrived is on this clock: no clock of the target is compared with this one.
+  const secondsLeft = state === 'held' ? Math.max(0, (deadline as number) - ts - Math.max(0, now - receivedAt)) : null;
+  return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt };
+}
+
+function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRow[]; noticesError: string } {
+  if (answer.notices === undefined) {
+    return { notices: [], noticesError: 'the daemon does not report request notices: it is an older version, update it with `machine cli update` and restart it' };
+  }
+  if (!Array.isArray(answer.notices)) {
+    return { notices: [], noticesError: 'the daemon sent request notices in an unexpected shape: it is probably another version, update it with `machine cli update` and restart it' };
+  }
+  const rows: NoticeRow[] = [];
+  let skipped = 0;
+  for (const n of answer.notices) {
+    const row = noticeRow(n, now);
+    if (row === undefined) {
+      skipped += 1;
+    } else {
+      rows.push(row);
+    }
+  }
+  const messages: string[] = [];
+  if (typeof answer.noticesError === 'string' && answer.noticesError !== '') {
+    messages.push(answer.noticesError);
+  }
+  if (skipped > 0) {
+    messages.push(`${skipped} request notice${skipped === 1 ? ' is' : 's are'} not shown: not shaped like a notice, the daemon and the module are probably not the same version (\`machine cli update\`).`);
+  }
+  return { notices: rows, noticesError: messages.join(' ') };
+}
+
 export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage {
   if (typeof answer === 'object' && answer !== null && (answer as { initialized?: unknown }).initialized === false) {
     throw new RequestsAnswerError(String((answer as { message?: unknown }).message ?? 'this machine is not initialized: run `machine setup <relay>`'));
@@ -177,6 +255,7 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
     waiting: summary.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds)),
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: summary.pendingTotal,
+    ...noticesOf(answer, nowSeconds),
     history: summary.history.map((h) => historyRow(h, nowSeconds)),
     historyTotal: summary.historyTotal,
     logPresent: answer.logPresent,
