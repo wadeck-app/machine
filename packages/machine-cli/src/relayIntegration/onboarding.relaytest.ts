@@ -205,7 +205,8 @@ describe('onboarding with the real relay', () => {
   });
 
   it('a command that is not allowed is refused by the target, with the reason', async () => {
-    const r = await w.run('desktop', a, ['run', 'laptop', '--shell', SHELL, '--', 'echo not-allowed'], { allowLoopbackPeers: true });
+    // `machine run` waits for the owner by default since 5860fa4: --no-wait asks for the immediate refusal this test is about.
+    const r = await w.run('desktop', a, ['run', 'laptop', '--no-wait', '--shell', SHELL, '--', 'echo not-allowed'], { allowLoopbackPeers: true });
     expect(r.code).toBe(255);
     expect(r.err).toMatch(/refused by laptop/);
     expect(r.out).toBe('');
