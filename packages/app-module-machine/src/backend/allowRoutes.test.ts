@@ -159,6 +159,28 @@ describe('POST /allow (the signed policy)', () => {
     expect(seen).toEqual([{ command: 'submitPolicy', body: { policy: SIGNED_POLICY, document: SIGNED_DOCUMENT } }]);
   });
 
+  it('forwards the signed list of notice recipients too, re-built with exactly its two fields', async () => {
+    const seen = await withDaemon({ submitPolicy: { ok: true } });
+    const list = { signed: { body: { v: 1, serial: 5 }, signature: 'sig' }, document: SIGNED_DOCUMENT };
+    const out = await call(routes(), 'POST /allow', { headers: HEADER, body: { policy: SIGNED_POLICY, document: SIGNED_DOCUMENT, noticeRecipients: list } });
+    expect(out.status).toBe(200);
+    expect(seen).toEqual([{ command: 'submitPolicy', body: { policy: SIGNED_POLICY, document: SIGNED_DOCUMENT, noticeRecipients: list } }]);
+  });
+
+  it.each([
+    ['text', 'x'],
+    ['no document', { signed: { body: {}, signature: 's' } }],
+    ['no signature', { signed: { body: {} }, document: { body: {}, signature: 's' } }],
+    ['an extra field', { signed: { body: {}, signature: 's' }, document: { body: {}, signature: 's' }, passphrase: 'TOP-SECRET-VALUE' }],
+  ])('refuses a malformed noticeRecipients (%s): 400, the daemon is never asked, the value is never echoed', async (_name, noticeRecipients) => {
+    const seen = await withDaemon({ submitPolicy: { ok: true } });
+    const out = await call(routes(), 'POST /allow', { headers: HEADER, body: { policy: SIGNED_POLICY, document: SIGNED_DOCUMENT, noticeRecipients } });
+    expect(out.status).toBe(400);
+    expect(out.body.error).toMatch(/noticeRecipients/);
+    expect(JSON.stringify(out.body)).not.toContain('TOP-SECRET-VALUE');
+    expect(seen).toEqual([]);
+  });
+
   it('refuses any other field, so a passphrase or a key can never be forwarded by mistake (400, the daemon is never asked, the value is never echoed)', async () => {
     const seen = await withDaemon({ submitPolicy: { ok: true } });
     const out = await call(routes(), 'POST /allow', { headers: HEADER, body: { policy: SIGNED_POLICY, passphrase: 'TOP-SECRET-VALUE' } });
@@ -182,6 +204,9 @@ describe('POST /allow (the signed policy)', () => {
     ['mode-local', 409],
     ['unknown-machine', 404],
     ['bad-document', 400],
+    ['bad-notice-recipients', 400],
+    ['stale-notice-recipients', 409],
+    ['notice-recipients-invalid', 409],
     ['refused', 409],
     ['relay-error', 502],
   ])('a refusal %s is HTTP %i, with the daemon message', async (reason, status) => {

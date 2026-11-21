@@ -2,15 +2,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   assertPolicyBody,
   canonicalize,
+  canonicalSignedNoticeRecipients,
+  compareNoticeRecipients,
   DOCUMENT_RETENTION_SECONDS,
   documentId,
   POLICY_DOMAIN,
   resolveMachineRef,
   verifyDocument,
   verifyDocumentEnvelope,
+  verifyNoticeRecipients,
   type Json,
   type PolicyMode,
   type SignedDocument,
+  type SignedNoticeRecipients,
   type SignedPolicy,
 } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin } from './admin.js';
@@ -19,6 +23,8 @@ import { adminRelayError } from './adminRelay.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminRelayAccess } from './distribute.js';
 import { exportMachineInfo, installPolicy, loadNetwork } from './network.js';
+import { recordNoticeSent } from './noticeRecipientsSent.js';
+import { installNoticeRecipients, readNoticeRecipients } from './noticeRecipientsStore.js';
 import { readPolicyMode, policyFiles } from './policyMode.js';
 import { RelayError, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
@@ -83,6 +89,11 @@ export interface AllowContextOk {
   current: SignedPolicy | null;
   source: 'installed on this machine' | 'the last one signed here';
   delivery: 'install' | 'inbox';
+  /**
+   * Another machine only (request-notices.md): the list of machines that receive request notices, stored on this admin machine (null: none yet) and this machine's
+   * uuid. The page seals the stored list for the target, or signs `[selfUuid]` when there is none, in the same unlock as the policy.
+   */
+  noticeRecipients?: { selfUuid: string; current: SignedNoticeRecipients | null };
 }
 
 /** A machine the admin can address: the identity key is the one of its registration, the key an inbox document for it is sealed to (decision 78). */
@@ -177,6 +188,14 @@ export function allowContext(configDir: string, payload: unknown, now: number): 
   }
   const base = baseOf(configDir, target, toSelf, pin.adminPublicKey);
   if (!base.ok) return base;
+  let noticeRecipients: AllowContextOk['noticeRecipients'];
+  if (!toSelf) {
+    try {
+      noticeRecipients = { selfUuid: exportMachineInfo(configDir).uuid, current: readNoticeRecipients(configDir, pin.adminPublicKey) ?? null };
+    } catch (e) {
+      return fail('notice-recipients-invalid', `${(e as Error).message}. Nothing was signed`);
+    }
+  }
   return {
     ok: true,
     target,
@@ -187,27 +206,36 @@ export function allowContext(configDir: string, payload: unknown, now: number): 
     current: base.current ?? null,
     source: base.source,
     delivery: toSelf ? 'install' : 'inbox',
+    ...(noticeRecipients === undefined ? {} : { noticeRecipients }),
   };
 }
 
 export type SubmitAnswer =
-  | { ok: true; target: { uuid: string; name: string }; version: number; delivery: 'installed' | 'inbox'; /** The same policy was already installed here, or the relay already held the document. */ alreadyThere?: true }
+  | { ok: true; target: { uuid: string; name: string }; version: number; delivery: 'installed' | 'inbox'; /** The same policy was already installed here, or the relay already held the document. */ alreadyThere?: true; /** The list of notice recipients, sent with the policy to another machine. `failed`: the policy went through, the list did not (`noticeRecipientsMessage` says how to send it). */ noticeRecipients?: 'sent' | 'already-there' | 'failed'; noticeRecipientsMessage?: string }
   | (Failure & { recorded?: true });
 
-const BAD_PAYLOAD = 'expected {"policy": <signed policy>, "document": <signed inbox document, for another machine>}: the page signs both in the browser';
+const BAD_PAYLOAD = 'expected {"policy": <signed policy>, "document": <signed inbox document, for another machine>, "noticeRecipients": {"signed": <signed list>, "document": <signed inbox document>}}: the page signs them in the browser';
 
 /**
  * The signed policy (and, for another machine, the signed inbox document) the page produced. Verified against the pinned admin key and the
  * current version, then stored and delivered like `machine admin allow`. `client` is for tests.
  */
 export async function submitPolicy(configDir: string, payload: unknown, now: number, options: { client?: RelayClient } = {}): Promise<SubmitAnswer> {
-  const p = typeof payload === 'object' && payload !== null ? (payload as { policy?: unknown; document?: unknown }) : {};
+  const p = typeof payload === 'object' && payload !== null ? (payload as { policy?: unknown; document?: unknown; noticeRecipients?: unknown }) : {};
   const policy = p.policy as SignedPolicy | undefined;
   if (typeof policy !== 'object' || policy === null || typeof policy.body !== 'object' || policy.body === null || typeof policy.signature !== 'string') return fail('bad-payload', BAD_PAYLOAD);
   try {
     assertPolicyBody(policy.body);
   } catch (e) {
     return fail('bad-payload', `the policy is not valid: ${(e as Error).message}`);
+  }
+  let listPayload: { signed: unknown; document: unknown } | undefined;
+  if (p.noticeRecipients !== undefined) {
+    const raw: Record<string, unknown> | undefined = typeof p.noticeRecipients === 'object' && p.noticeRecipients !== null && !Array.isArray(p.noticeRecipients) ? Object.fromEntries(Object.entries(p.noticeRecipients)) : undefined;
+    if (raw === undefined || Object.keys(raw).some((k) => k !== 'signed' && k !== 'document') || raw['signed'] === undefined || raw['document'] === undefined) {
+      return fail('bad-payload', `"noticeRecipients" must be exactly {"signed": <signed list>, "document": <signed inbox document>}, nothing else: ${BAD_PAYLOAD}`);
+    }
+    listPayload = { signed: raw['signed'], document: raw['document'] };
   }
   if (!existsSync(adminKeyFile(configDir))) return notAdminHere(configDir);
   const pin = readAdminPin(configDir);
@@ -241,6 +269,17 @@ export async function submitPolicy(configDir: string, payload: unknown, now: num
     if (typeof refusal !== 'string') document = refusal;
     else return fail('bad-document', refusal);
   }
+  let list: CheckedList | undefined;
+  if (listPayload !== undefined) {
+    if (toSelf) {
+      return fail('bad-payload', 'a list of notice recipients was sent with a policy for THIS machine: it is sent to another machine only. Nothing was stored or sent');
+    }
+    const checked = checkNoticeRecipients(configDir, listPayload, pin.adminPublicKey, target.uuid, now);
+    if ('ok' in checked) {
+      return checked;
+    }
+    list = checked;
+  }
 
   if (toSelf) {
     try {
@@ -256,7 +295,8 @@ export async function submitPolicy(configDir: string, payload: unknown, now: num
   recordSignedPolicy(configDir, policy);
   try {
     await (access as NonNullable<typeof access>).client.putInboxDocument(target.uuid, document as SignedDocument);
-    return { ok: true, target, version: policy.body.version, delivery: 'inbox' };
+    const answer = { ok: true as const, target, version: policy.body.version, delivery: 'inbox' as const };
+    return list === undefined ? answer : { ...answer, ...(await deliverList(configDir, (access as NonNullable<typeof access>).client, target, list, pin.adminPublicKey, now)) };
   } catch (raw) {
     if (raw instanceof RelayError && raw.code === 'id_conflict') return { ok: true, target, version: policy.body.version, delivery: 'inbox', alreadyThere: true };
     const message = (adminRelayError(raw) as Error).message;
@@ -281,4 +321,87 @@ function checkDocument(raw: unknown, policy: SignedPolicy, adminPublicKey: strin
   }
   if (checked.body.expiresAt - checked.body.issuedAt > DOCUMENT_RETENTION_SECONDS) return 'the inbox document lives longer than the relay keeps it. Nothing was stored or sent';
   return raw as SignedDocument;
+}
+
+interface CheckedList {
+  signed: SignedNoticeRecipients;
+  document: SignedDocument;
+}
+
+/**
+ * The list of notice recipients the page signed (request-notices.md): the same checks as an inbox of the target would make on the envelope, plus the replace-newer
+ * rule against the list stored here. Everything is refused BEFORE the policy is recorded, so a bad list never leaves a half-done Allow.
+ */
+function checkNoticeRecipients(configDir: string, raw: { signed: unknown; document: unknown }, adminPublicKey: string, targetUuid: string, now: number): CheckedList | Failure {
+  const refuse = (why: string): Failure => fail('bad-notice-recipients', `the list of notice recipients is refused (${why}). Nothing was stored or sent`);
+  let signed: SignedNoticeRecipients;
+  try {
+    signed = canonicalSignedNoticeRecipients(raw.signed);
+  } catch (e) {
+    return refuse((e as Error).message);
+  }
+  const verified = verifyNoticeRecipients(signed, { adminPublicKey });
+  if (!verified.ok) {
+    return refuse(`${verified.reason}: ${verified.message}`);
+  }
+  const envelope = verifyDocumentEnvelope(raw.document, { adminPublicKey, selfUuid: targetUuid, now });
+  if (!envelope.ok) {
+    return refuse(`the inbox document: ${envelope.reason}: ${envelope.message}`);
+  }
+  const expectedId = documentId(`v2:notice-recipients:${targetUuid}:${signed.body.serial}:${signed.signature}`);
+  if (envelope.kind !== 'notice-recipients' || envelope.body.id !== expectedId) {
+    return refuse('the inbox document does not carry that list (its kind or id is not the one of this list): the page and this machine disagree');
+  }
+  if (envelope.body.expiresAt - envelope.body.issuedAt > DOCUMENT_RETENTION_SECONDS) {
+    return refuse('the inbox document lives longer than the relay keeps it');
+  }
+  let stored: SignedNoticeRecipients | undefined;
+  try {
+    stored = readNoticeRecipients(configDir, adminPublicKey);
+  } catch (e) {
+    return fail('notice-recipients-invalid', `${(e as Error).message}. Nothing was stored or sent`);
+  }
+  const order = compareNoticeRecipients(stored, signed);
+  if (order === 'older' || (order === 'same' && stored !== undefined && stored.signature !== signed.signature)) {
+    return fail('stale-notice-recipients', `this machine already holds a list of notice recipients (serial ${stored?.body.serial}) that this one (serial ${signed.body.serial}) does not replace: reload the page and allow it again. Nothing was stored or sent`);
+  }
+  return { signed, document: raw.document as SignedDocument };
+}
+
+/**
+ * After the policy went through: keep the list as the list of this admin machine (replace-newer), send it, record what was sent. A failure here never undoes
+ * the policy: it is said, with the command that sends the list again.
+ */
+async function deliverList(configDir: string, client: RelayClient, target: { uuid: string; name: string }, list: CheckedList, adminPublicKey: string, now: number): Promise<{ noticeRecipients: 'sent' | 'already-there' | 'failed'; noticeRecipientsMessage?: string }> {
+  const again = 'machine admin notify-to <machines that receive the notices>';
+  const failed = (message: string): { noticeRecipients: 'failed'; noticeRecipientsMessage: string } => ({
+    noticeRecipients: 'failed',
+    noticeRecipientsMessage: `${message}. The policy stands. Run \`${again}\` to send the list; it is safe to run again`,
+  });
+  try {
+    installNoticeRecipients(configDir, list.signed, adminPublicKey);
+  } catch (e) {
+    return failed(`the list could not be kept on this machine (${(e as Error).message})`);
+  }
+  let outcome: 'sent' | 'already-there' = 'sent';
+  let problem: string | undefined;
+  try {
+    await client.putInboxDocument(target.uuid, list.document);
+  } catch (raw) {
+    if (raw instanceof RelayError && raw.code === 'id_conflict') {
+      outcome = 'already-there';
+    } else {
+      problem = `the relay did not store the list for "${target.name}": ${(adminRelayError(raw) as Error).message}`;
+    }
+  }
+  let recordProblem: string | undefined;
+  try {
+    recordNoticeSent(configDir, target.uuid, { serial: list.signed.body.serial, at: now, stored: problem === undefined });
+  } catch (e) {
+    recordProblem = (e as Error).message;
+  }
+  if (problem !== undefined) {
+    return failed(problem);
+  }
+  return { noticeRecipients: outcome, ...(recordProblem === undefined ? {} : { noticeRecipientsMessage: `the record of what was sent could not be written: ${recordProblem}` }) };
 }

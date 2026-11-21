@@ -41,6 +41,9 @@ const REMOTE_STATUS: Record<string, number> = {
 const ALLOW_STATUS: Record<string, number> = {
   'bad-payload': 400,
   'bad-document': 400,
+  'bad-notice-recipients': 400,
+  'stale-notice-recipients': 409,
+  'notice-recipients-invalid': 409,
   'unknown-machine': 404,
   'bad-signature': 403,
   'stale-base': 409,
@@ -77,11 +80,19 @@ function allowBodyProblem(body: unknown): string | undefined {
   const expected = 'expected {"policy": <signed policy>, "document": <signed inbox document, for another machine>}: the page signs them in the browser';
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return expected;
   const record = body as Record<string, unknown>;
-  const extra = Object.keys(record).find((k) => k !== 'policy' && k !== 'document');
-  if (extra !== undefined) return `the field "${extra}" is not accepted: this route takes only the signed policy and its document, never a passphrase or a key (${expected})`;
+  const extra = Object.keys(record).find((k) => k !== 'policy' && k !== 'document' && k !== 'noticeRecipients');
+  if (extra !== undefined) return `the field "${extra}" is not accepted: this route takes only the signed policy, its document and the signed list of notice recipients, never a passphrase or a key (${expected})`;
   const signed = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { body?: unknown }).body === 'object' && (v as { body?: unknown }).body !== null && typeof (v as { signature?: unknown }).signature === 'string';
   if (!signed(record['policy'])) return `"policy" must be a signed policy ({ body, signature }); ${expected}`;
   if (record['document'] !== undefined && !signed(record['document'])) return `"document" must be a signed document ({ body, signature }); ${expected}`;
+  const list = record['noticeRecipients'];
+  if (list !== undefined) {
+    const shape: Record<string, unknown> | undefined = typeof list === 'object' && list !== null && !Array.isArray(list) ? Object.fromEntries(Object.entries(list)) : undefined;
+    const listExtra = shape === undefined ? undefined : Object.keys(shape).find((k) => k !== 'signed' && k !== 'document');
+    if (shape === undefined || listExtra !== undefined || !signed(shape['signed']) || !signed(shape['document'])) {
+      return `"noticeRecipients" must be exactly {"signed": <signed list>, "document": <signed inbox document>}${listExtra === undefined ? '' : ` (the field "${listExtra}" is not accepted)`}; ${expected}`;
+    }
+  }
   return undefined;
 }
 
@@ -347,9 +358,10 @@ export default function register(ctx: ModuleContextLike): void {
     const body = typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined;
     const problem = allowBodyProblem(body);
     if (problem !== undefined) return reply.code(400).send({ status: 400, kind: 'bad_request', error: problem });
-    const { policy, document } = body as { policy: unknown; document?: unknown };
-    // Only these two fields go to the daemon, re-built here: nothing else of the request can travel with them.
-    return viaDaemon(req, reply, 'submitPolicy', document === undefined ? { policy } : { policy, document }, ALLOW_TIMEOUT_MS);
+    const { policy, document, noticeRecipients } = body as { policy: unknown; document?: unknown; noticeRecipients?: { signed: unknown; document: unknown } };
+    // Only these fields go to the daemon, re-built here: nothing else of the request can travel with them.
+    const forwarded = { policy, ...(document === undefined ? {} : { document }), ...(noticeRecipients === undefined ? {} : { noticeRecipients: { signed: noticeRecipients.signed, document: noticeRecipients.document } }) };
+    return viaDaemon(req, reply, 'submitPolicy', forwarded, ALLOW_TIMEOUT_MS);
   }, SENSITIVE);
 
   // The Deny button (hold-for-approval.md): restricting, so no signature and no passphrase, but sensitive (the app-core PIN) like the Allow routes: it answers a waiting caller. Only {id, reason} reach the daemon, re-built here.

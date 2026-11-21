@@ -1,5 +1,19 @@
-import { commandTextProblem, nextPolicyBody, sealedPolicyDocument, POLICY_DOMAIN, SHELLS, signPolicy, unlockAdminKey, verifyBody, type PolicyEdit } from '@wadeck-app/machine-webcrypto';
-import type { PolicyBody, PolicyEntry, SignedPolicy } from '@wadeck-app/machine-core';
+import {
+  commandTextProblem,
+  nextNoticeRecipientsBody,
+  nextPolicyBody,
+  sealedNoticeRecipientsDocument,
+  sealedPolicyDocument,
+  NOTICE_RECIPIENTS_DOMAIN,
+  POLICY_DOMAIN,
+  SHELLS,
+  signNoticeRecipients,
+  signPolicy,
+  unlockAdminKey,
+  verifyBody,
+  type PolicyEdit,
+} from '@wadeck-app/machine-webcrypto';
+import type { PolicyBody, PolicyEntry, SignedNoticeRecipients, SignedPolicy } from '@wadeck-app/machine-core';
 import { appFetcher, elevate } from './shellApi.js';
 
 // The Allow button of the Requests page, without React (decision 76): what `machine admin allow <machine> --shell <s> -- <command>` does, with the admin
@@ -48,6 +62,11 @@ export interface AllowContext {
   current: SignedPolicy | null;
   source: string;
   delivery: 'install' | 'inbox';
+  /**
+   * Another machine only (request-notices.md): the list of machines that receive request notices, as stored on the admin machine (null: none), and this machine's uuid.
+   * Absent: an older module backend, the page then cannot send the list.
+   */
+  noticeRecipients?: { selfUuid: string; current: SignedNoticeRecipients | null };
 }
 
 export interface AllowChange {
@@ -76,6 +95,19 @@ export interface AllowResult {
   version: number;
   delivery: 'installed' | 'inbox';
   alreadyThere?: true;
+  /** The list of notice recipients sent with the policy to another machine: `sent`, `already-there`, `failed` (the daemon, with its message) or `skipped` (the backend is older: nothing was sent). */
+  noticeRecipients?: 'sent' | 'already-there' | 'failed' | 'skipped';
+  noticeRecipientsMessage?: string;
+}
+
+const SKIPPED_MESSAGE = 'the list of machines that receive request notices was NOT sent with this policy: the module backend is older than this page. Update the machine module (`app-core-cli update`), or run `machine admin notify-to <machines>` on the admin machine';
+
+/** One sentence for the confirmation line of the page: empty when the list rode along without a problem to tell. */
+export function noticeRecipientsText(result: AllowResult): string {
+  if (result.noticeRecipients === 'failed' || result.noticeRecipients === 'skipped') {
+    return ` [warn] ${result.noticeRecipientsMessage ?? SKIPPED_MESSAGE}`;
+  }
+  return result.noticeRecipientsMessage === undefined ? '' : ` [warn] ${result.noticeRecipientsMessage}`;
 }
 
 const unexpected = (what: string): Error =>
@@ -143,22 +175,36 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
       `the module backend did not send the identity key of "${context.target.name}", so the policy cannot be sealed to it (a policy is never sent to the relay in clear). Nothing was signed. Update the machine module (\`app-core-cli update\`) and reload the page`,
     );
   }
+  // A stored list the pinned admin key did not sign is not sealed for anybody: the page never vouches for what a backend handed over.
+  const stored = context.noticeRecipients?.current ?? null;
+  if (stored !== null && !(await verifyBody(NOTICE_RECIPIENTS_DOMAIN, stored as never, context.adminPublicKey))) {
+    throw new Error('the list of notice recipients sent by the module backend is not signed by the admin key pinned on this machine, so the page does not send it. Nothing was signed. Delete notice-recipients.json on the admin machine and run `machine admin notify-to <machines>` there');
+  }
   const answer = await api.get('/admin-key');
   if (!isObject(answer) || typeof answer['file'] !== 'string') throw unexpected('the admin key file');
 
   const key = await unlockAdminKey(answer['file'], passphrase, { extractable: false });
-  let body: { policy: SignedPolicy; document?: unknown };
+  let body: { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
   try {
     if (key.keyId !== context.adminKeyId || key.publicKey !== context.adminPublicKey) {
       throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
     }
     const policy = await signPolicy(prepared.body, key.privateKey);
     body = context.delivery === 'inbox' ? { policy, document: await sealedPolicyDocument(policy, now, key.privateKey, targetKey as string) } : { policy };
+    // The list of notice recipients rides the same unlock, like every distribution of the CLI: the stored list as it is, or a new one for this machine.
+    if (context.delivery === 'inbox' && context.noticeRecipients !== undefined) {
+      const signed = stored ?? ((await signNoticeRecipients(nextNoticeRecipientsBody({ adminKeyId: context.adminKeyId, now, current: null, recipients: [context.noticeRecipients.selfUuid] }), key.privateKey)) as unknown as SignedNoticeRecipients);
+      body.noticeRecipients = { signed, document: await sealedNoticeRecipientsDocument(signed as never, context.target.uuid, now, key.privateKey, targetKey as string) };
+    }
   } finally {
     // Locked before anything goes to the network: a failure of the post never leaves an unlocked key behind.
     key.lock();
   }
   const result = await api.post('/allow', body);
   if (!isObject(result) || result['ok'] === false) throw unexpected('the signed policy');
-  return result as unknown as AllowResult;
+  const allowResult = result as unknown as AllowResult;
+  if (context.delivery === 'inbox' && context.noticeRecipients === undefined) {
+    return { ...allowResult, noticeRecipients: 'skipped', noticeRecipientsMessage: SKIPPED_MESSAGE };
+  }
+  return allowResult;
 }

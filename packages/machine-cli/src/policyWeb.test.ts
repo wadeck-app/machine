@@ -1,13 +1,16 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildDocument, DOCUMENT_DOMAIN, documentId, generateSigningKeyPair, keyId, nextPolicyBody, signDocument, signPolicy, verifyInboxDocument, type PolicyBody, type SignedPolicy, type SignedDocument } from '@wadeck-app/machine-core';
+import { buildDocument, DOCUMENT_DOMAIN, documentId, generateSigningKeyPair, keyId, nextPolicyBody, signDocument, signNoticeRecipients, signPolicy, verifyInboxDocument, type PolicyBody, type SignedPolicy, type SignedDocument } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { unlockAdminKey } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { adminKeyText, allowContext, submitPolicy } from './policyWeb.js';
 import { readPolicyRecord } from './adminAllow.js';
+import { adminRelayAccess } from './distribute.js';
+import { readNoticeSent } from './noticeRecipientsSent.js';
+import { noticeRecipientsFile, readNoticeRecipients } from './noticeRecipientsStore.js';
 import { cli, fakeTiming, ok } from './testing.js';
 import { createRelayClient, RelayError, type RelayClient } from './relayClient.js';
 
@@ -344,5 +347,121 @@ describe('submitPolicy: the signed document the browser produced', () => {
     expect(answer).toMatchObject({ ok: false, reason: 'bad-payload' });
     expect(JSON.stringify(answer)).not.toContain('S3CRET');
     expect(await submitPolicy(a, undefined, now())).toMatchObject({ ok: false, reason: 'bad-payload' });
+  });
+});
+
+describe('the Allow button also sends the list of notice recipients (request-notices.md)', () => {
+  const adminPublicKey = () => JSON.parse(readFileSync(join(a, 'admin.json'), 'utf8')).adminPublicKey as string;
+  const listsOf = (dir: string) =>
+    relay
+      .inbox(readMachine(dir).uuid)
+      .map((d) => verifyInboxDocument(d.document, { adminPublicKey: adminPublicKey(), selfUuid: readMachine(dir).uuid, now: now(), identityPrivateKeyPkcs8: readMachine(dir).identity.privateKeyPkcs8 }))
+      .flatMap((v) => (v.ok && v.kind === 'notice-recipients' ? [v.noticeRecipients] : []));
+
+  /** What the page sends for the list: the stored one when the context carries it, else a new one for [this machine]; sealed to the target. */
+  async function browserSignsList(machine: string, over: { signer?: Uint8Array; recipients?: string[]; serial?: number; id?: string } = {}) {
+    const context = allowContext(a, { machine }, now());
+    if (!context.ok || context.noticeRecipients === undefined) {
+      throw new Error(`context without a list: ${JSON.stringify(context)}`);
+    }
+    const pair = await unlockAdminKey(a, async () => passphrase);
+    const signer = over.signer ?? pair.privateKeyPkcs8;
+    const stored = context.noticeRecipients.current;
+    const signed =
+      stored !== null && over.recipients === undefined && over.serial === undefined && over.signer === undefined
+        ? stored
+        : signNoticeRecipients({ v: 1, adminKeyId: context.adminKeyId, serial: over.serial ?? Math.max(now(), (stored?.body.serial ?? 0) + 1), issuedAt: now(), recipients: over.recipients ?? [context.noticeRecipients.selfUuid] }, signer);
+    const to = context.target.uuid;
+    const document = buildDocument(
+      { kind: 'notice-recipients', to, id: over.id ?? documentId(`v2:notice-recipients:${to}:${signed.body.serial}:${signed.signature}`), issuedAt: now(), expiresAt: now() + 30 * 86400, payload: signed as never, recipientIdentityPublicKey: context.target.identityPublicKey },
+      pair.privateKeyPkcs8,
+    );
+    return { signed, document };
+  }
+
+  it('the context of a peer carries the stored list (or null) and this machine; the context of this machine carries none', async () => {
+    await twoMachines();
+    const peer = allowContext(a, { machine: 'laptop' }, now());
+    expect(peer).toMatchObject({ ok: true, noticeRecipients: { selfUuid: readMachine(a).uuid } });
+    expect((peer as { noticeRecipients: { current: { body: { recipients: string[] } } } }).noticeRecipients.current.body.recipients).toEqual([readMachine(a).uuid]);
+    expect(allowContext(a, { machine: readMachine(a).uuid }, now())).not.toHaveProperty('noticeRecipients');
+    rmSync(noticeRecipientsFile(a));
+    expect(allowContext(a, { machine: 'laptop' }, now())).toMatchObject({ ok: true, noticeRecipients: { current: null } });
+  });
+
+  it('a damaged stored list is reported before any passphrase, with the fix', async () => {
+    await twoMachines();
+    writeFileSync(noticeRecipientsFile(a), '{not json');
+    const context = allowContext(a, { machine: 'laptop' }, now());
+    expect(context).toMatchObject({ ok: false, reason: 'notice-recipients-invalid' });
+    expect((context as { message: string }).message).toMatch(/notice-recipients\.json.*Delete it/);
+  });
+
+  it('with the stored list: the policy and the list are both in the inbox of the target, and the sent record says so', async () => {
+    await twoMachines();
+    const signed = await browserSigns('laptop', 'echo hello');
+    const list = await browserSignsList('laptop');
+    const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: list }, now());
+    // The approval already put this very list (same id) in the inbox of the laptop, which has not read it: the relay says so.
+    expect(answer).toMatchObject({ ok: true, delivery: 'inbox', noticeRecipients: 'already-there' });
+    expect(listsOf(b).some((l) => l.signature === list.signed.signature)).toBe(true);
+    expect(readNoticeSent(a)[readMachine(b).uuid]?.sent).toMatchObject({ serial: list.signed.body.serial, stored: true });
+  });
+
+  it('without any stored list: the page signed one for this machine, the daemon stores it as the list of this admin machine and sends it', async () => {
+    await twoMachines();
+    rmSync(noticeRecipientsFile(a));
+    const signed = await browserSigns('laptop', 'echo hello');
+    // A serial apart from the one the approval signed in the same second (same content, same id: the relay would answer already-there).
+    const list = await browserSignsList('laptop', { serial: now() + 7, recipients: [readMachine(a).uuid] });
+    expect(list.signed.body.recipients).toEqual([readMachine(a).uuid]);
+    const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: list }, now());
+    expect(answer).toMatchObject({ ok: true, noticeRecipients: 'sent' });
+    expect(readNoticeRecipients(a, adminPublicKey())?.signature).toBe(list.signed.signature);
+    expect(listsOf(b).some((l) => l.signature === list.signed.signature)).toBe(true);
+  });
+
+  it('refuses a list not signed by the pinned admin key, before anything is stored or sent (the policy neither)', async () => {
+    await twoMachines();
+    const signed = await browserSigns('laptop', 'echo hello');
+    const list = await browserSignsList('laptop', { signer: generateSigningKeyPair().privateKeyPkcs8 });
+    const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: list }, now());
+    expect(answer).toMatchObject({ ok: false, reason: 'bad-notice-recipients' });
+    expect((answer as { message: string }).message).toMatch(/Nothing was stored or sent/);
+    expect(policyDocs(readMachine(b).uuid)).toHaveLength(0);
+    expect(readPolicyRecord(a, readMachine(b).uuid, adminPublicKey())).toBeUndefined();
+  });
+
+  it('refuses a document that does not carry that list, an older list than the stored one, and unknown fields', async () => {
+    await twoMachines();
+    const signed = await browserSigns('laptop', 'echo hello');
+    const wrongId = await browserSignsList('laptop', { id: documentId('something else') });
+    expect(await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: wrongId }, now())).toMatchObject({ ok: false, reason: 'bad-notice-recipients' });
+    const older = await browserSignsList('laptop', { serial: 5, recipients: [readMachine(a).uuid] });
+    expect(await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: older }, now())).toMatchObject({ ok: false, reason: 'stale-notice-recipients' });
+    const list = await browserSignsList('laptop');
+    expect(await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: { ...list, passphrase: 'x' } }, now())).toMatchObject({ ok: false, reason: 'bad-payload' });
+    expect(policyDocs(readMachine(b).uuid)).toHaveLength(0);
+  });
+
+  it('a relay that refuses only the list: the policy went through, the answer says the list did not, with the command', async () => {
+    await twoMachines();
+    const signed = await browserSigns('laptop', 'echo hello');
+    const list = await browserSignsList('laptop');
+    const real = (adminRelayAccess(a) as NonNullable<ReturnType<typeof adminRelayAccess>>).client;
+    const client = {
+      ...real,
+      putInboxDocument: async (to: string, document: SignedDocument) => {
+        if (document.body.kind === 'notice-recipients') {
+          throw new RelayError({ status: 503, code: 'unavailable', message: 'the relay is down' });
+        }
+        return real.putInboxDocument(to, document);
+      },
+    } as unknown as RelayClient;
+    const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: list }, now(), { client });
+    expect(answer, JSON.stringify(answer)).toMatchObject({ ok: true, noticeRecipients: 'failed' });
+    expect((answer as { noticeRecipientsMessage: string }).noticeRecipientsMessage).toMatch(/machine admin notify-to/);
+    expect(policyDocs(readMachine(b).uuid)).toHaveLength(1);
+    expect(readNoticeSent(a)[readMachine(b).uuid]?.sent).toMatchObject({ stored: false });
   });
 });

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
+import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
 import { DenyForm } from './DenyForm.js';
@@ -99,7 +99,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
 
   const allowed = (row: HeldRequestRow, answer: AllowResult) => {
     const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon installs it within about a minute`;
-    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. The caller gets the result as soon as the daemon re-checks the request. \`machine allowed ${answer.target.name}\` lists it.`);
+    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. The caller gets the result as soon as the daemon re-checks the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}`);
     leave(row);
   };
 

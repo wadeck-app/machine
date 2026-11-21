@@ -30,3 +30,13 @@ export { DEFAULT_APPLY_WINDOW_SECONDS, entryFromText, nextPolicyBody, type EditC
 export { candidacyCode, finalCode, formatFinalCode, formatVerificationCode } from './sas.js';
 export { ed25519PublicToX25519, sealTo } from './seal.js';
 export { PAIR_SECRET_V2_DOMAIN, derivePairSecretFromSignature, type PairMember } from './pairSecret.js';
+export {
+  MAX_NOTICE_RECIPIENTS,
+  NOTICE_RECIPIENTS_DOMAIN,
+  assertNoticeRecipientsBody,
+  nextNoticeRecipientsBody,
+  sealedNoticeRecipientsDocument,
+  signNoticeRecipients,
+  type NoticeRecipientsBody,
+  type SignedNoticeRecipients,
+} from './noticeRecipients.js';

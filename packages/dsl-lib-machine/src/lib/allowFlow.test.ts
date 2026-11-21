@@ -1,4 +1,4 @@
-import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signPolicy as coreSignPolicy, verifyInboxDocument, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
+import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
 import { loadContext, prepareAllow, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
 
@@ -140,6 +140,59 @@ describe('signAndSubmitAllow', () => {
     if (verified.ok && verified.kind === 'policy') expect(verified.policy).toEqual(body.policy);
     expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
   }, 120_000);
+
+  describe('the list of notice recipients rides the Allow of another machine (request-notices.md)', () => {
+    const targetKeys = generateSigningKeyPair();
+    const inboxContext = (noticeRecipients?: AllowContext['noticeRecipients']) =>
+      context({ target: { uuid: PEER, name: 'laptop', identityPublicKey: targetKeys.publicKey }, toSelf: false, delivery: 'inbox', source: 'the last one signed here', ...(noticeRecipients === undefined ? {} : { noticeRecipients }) });
+    const answerOk = { ok: true, target: { uuid: PEER, name: 'laptop' }, version: 1, delivery: 'inbox' };
+    const storedList = (recipients: string[] = [SELF], key = admin): SignedNoticeRecipients => coreSignList({ v: 1, adminKeyId: ADMIN_KEY_ID, serial: NOW - 500, issuedAt: NOW - 500, recipients }, key.privateKeyPkcs8);
+    const posted = (api: ReturnType<typeof stubApi>) => api.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy; document: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
+
+    it('reuses the list stored on the admin machine as it is, sealed to the target, in the same unlock', async () => {
+      const api = stubApi({ get: { '/admin-key': { file: keyFile } }, post: { ...answerOk, noticeRecipients: 'sent' } });
+      const stored = storedList();
+      const result = await signAndSubmitAllow(api, inboxContext({ selfUuid: SELF, current: stored }), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW);
+      const body = posted(api);
+      expect(Object.keys(body).sort()).toEqual(['document', 'noticeRecipients', 'policy']);
+      expect(Object.keys(body.noticeRecipients ?? {}).sort()).toEqual(['document', 'signed']);
+      expect(body.noticeRecipients?.signed).toEqual(stored);
+      const opened = verifyInboxDocument(body.noticeRecipients?.document, { adminPublicKey: admin.publicKey, selfUuid: PEER, now: NOW, identityPrivateKeyPkcs8: targetKeys.privateKeyPkcs8 });
+      expect(opened).toMatchObject({ ok: true, kind: 'notice-recipients' });
+      expect(result.noticeRecipients).toBe('sent');
+      expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
+    }, 120_000);
+
+    it('signs a new list for this machine when none is stored (serial from the clock), and the core verifier accepts it', async () => {
+      const api = stubApi({ get: { '/admin-key': { file: keyFile } }, post: { ...answerOk, noticeRecipients: 'sent' } });
+      await signAndSubmitAllow(api, inboxContext({ selfUuid: SELF, current: null }), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW);
+      const list = posted(api).noticeRecipients?.signed as SignedNoticeRecipients;
+      expect(list.body).toMatchObject({ v: 1, adminKeyId: ADMIN_KEY_ID, serial: NOW, recipients: [SELF] });
+      expect(coreVerifyList(list, { adminPublicKey: admin.publicKey })).toMatchObject({ ok: true });
+    }, 120_000);
+
+    it('REFUSES a stored list the pinned admin key did not sign, before the passphrase is used (a hostile backend cannot make the page vouch for it)', async () => {
+      const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+      const forged = storedList([PEER], generateSigningKeyPair());
+      await expect(signAndSubmitAllow(api, inboxContext({ selfUuid: SELF, current: forged }), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW)).rejects.toThrow(/list of notice recipients.*not signed by the admin key pinned/s);
+      expect(api.sent).toEqual([]);
+    });
+
+    it('an older module backend (no list in the context): the Allow goes through unchanged and the result says the list was not sent, with the fix', async () => {
+      const api = stubApi({ get: { '/admin-key': { file: keyFile } }, post: answerOk });
+      const result = await signAndSubmitAllow(api, inboxContext(), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW);
+      expect(Object.keys(posted(api)).sort()).toEqual(['document', 'policy']);
+      expect(result.noticeRecipients).toBe('skipped');
+      expect(result.noticeRecipientsMessage).toMatch(/machine admin notify-to/);
+      expect(result.noticeRecipientsMessage).toMatch(/app-core-cli update/);
+    }, 120_000);
+
+    it('a list the daemon could not send is carried to the user with its own words', async () => {
+      const api = stubApi({ get: { '/admin-key': { file: keyFile } }, post: { ...answerOk, noticeRecipients: 'failed', noticeRecipientsMessage: 'the relay did not store the list: run machine admin notify-to' } });
+      const result = await signAndSubmitAllow(api, inboxContext({ selfUuid: SELF, current: storedList() }), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW);
+      expect(result).toMatchObject({ noticeRecipients: 'failed', noticeRecipientsMessage: 'the relay did not store the list: run machine admin notify-to' });
+    }, 120_000);
+  });
 
   it('another machine, but the backend sent no identity key for it: nothing is signed or posted, and the message says to update the module', async () => {
     const api = stubApi({ get: { '/admin-key': { file: keyFile } } });

@@ -87,6 +87,9 @@ export function AllowDialog({ row, machine, api, onClose, onDone }: AllowDialogP
     `Policy version ${prepared.fromVersion} -> ${prepared.toVersion}, edited from the one ${context.source}. After this change every trusted peer may run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`,
     ...(prepared.peersWithOwnList.length > 0 ? [`Not affected (they have their own list): ${prepared.peersWithOwnList.join(', ')}.`] : []),
     context.delivery === 'install' ? `It is signed here, in this page, and installed on ${machine.name} (this machine).` : `It is signed here, in this page, and stored in the relay inbox of ${machine.name}.`,
+    ...(context.delivery === 'inbox' && context.noticeRecipients !== undefined
+      ? [`The list of machines that receive request notices (information only, no right) is signed with it and sent to ${machine.name}${context.noticeRecipients.current === null ? ': none exists yet, a new one naming this machine is signed' : ' (the one already signed on this machine)'}.`]
+      : []),
   ];
   return (
     <ConfirmSignModal

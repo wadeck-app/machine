@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
+import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
 
@@ -60,7 +60,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
     setAllowed(prev => new Set(prev).add(rowKey(row)));
     setSelected(null);
     const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon installs it within about a minute`;
-    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. \`machine allowed ${answer.target.name}\` lists it.`);
+    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}`);
     // The page's own data catches up (the allowed command leaves the pending list); a failure is reported by the page's notifier.
     void onRefresh?.('requests');
   };
