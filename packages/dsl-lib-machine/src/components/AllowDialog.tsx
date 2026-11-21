@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FieldSelect, FieldText } from '@wadeck-app/dsl-ui';
-import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
+import { deliveryNotice, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
+import type { ProgressEvent, ProgressRecord } from '../lib/allowProgress.js';
 import { LIFETIME_PRESETS, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { AllowProgress } from './AllowProgress.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import type { PendingRequestRow } from './AllowRequestsTable.js';
 
@@ -11,7 +13,11 @@ type Phase =
   | { kind: 'ready'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined }
   | { kind: 'info'; message: string }
   | { kind: 'failed'; message: string }
-  | { kind: 'signing'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined };
+  | { kind: 'signing'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined }
+  | { kind: 'done'; result: AllowResult };
+
+/** What the dialog tells the owner of the progress (decision 86). */
+export type AllowDialogEvent = ProgressEvent | { type: 'start' } | { type: 'abort' };
 
 export interface AllowDialogProps {
   row: PendingRequestRow;
@@ -21,6 +27,14 @@ export interface AllowDialogProps {
   defaultLifetime?: Extract<LifetimeKind, 'once' | 'permanent'>;
   onClose: () => void;
   onDone: (result: AllowResult) => void;
+  /**
+   * The progress after "Allow and sign" (decision 86). When given, the steps are shown in this dialog from the click and the dialog stays open after the
+   * result (with Close); the owner keeps showing the progress on the card when the dialog is closed.
+   */
+  onEvent?: (event: AllowDialogEvent) => void;
+  progress?: ProgressRecord | undefined;
+  /** Epoch milliseconds, ticking in the owner of the progress. */
+  now?: number;
 }
 
 const OPTIONS = LIFETIME_PRESETS.map((p) => ({ value: p.kind, label: p.label }));
@@ -35,7 +49,7 @@ function warningText(machineName: string, peerText: string, words: string): stri
 }
 
 /** The confirmation of ONE row: loads the context (after the PIN), shows the exact change and its lifetime, asks the passphrase, signs in the page and posts. */
-export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone }: AllowDialogProps) {
+export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone, onEvent, progress, now = Date.now() }: AllowDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
   const [choice, setChoice] = useState<LifetimeChoice>({ kind: defaultLifetime, customKind: 'duration', customText: '' });
@@ -91,15 +105,22 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
     let passphrase = take();
     setError(null);
     setPhase({ kind: 'signing', context, prepared, hint });
-    signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: resolution.flags }, passphrase, Math.floor(Date.now() / 1000)).then(
+    onEvent?.({ type: 'start' });
+    signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: resolution.flags }, passphrase, Math.floor(Date.now() / 1000), () => onEvent?.({ type: 'signed' })).then(
       result => {
         passphrase = '';
+        // The owner learns the result even when the dialog was closed meanwhile: the progress goes on in its card.
+        onEvent?.({ type: 'result', result });
         if (mounted.current) {
+          if (onEvent !== undefined) {
+            setPhase({ kind: 'done', result });
+          }
           onDone(result);
         }
       },
       (e: unknown) => {
         passphrase = '';
+        onEvent?.({ type: 'abort' });
         if (!mounted.current) {
           return;
         }
@@ -111,6 +132,27 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
 
   if (phase.kind === 'loading') {
     return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
+  }
+  if (phase.kind === 'done') {
+    const path = deliveryNotice(phase.result);
+    return (
+      <ConfirmSignModal
+        title={`Allowed on ${machine.name}`}
+        details={[
+          { label: 'Machine', value: machine.name },
+          { label: 'Shell', value: row.shell },
+          { label: 'Command', value: row.command },
+        ]}
+        warning=""
+        needsPassphrase={false}
+        confirmLabel=""
+        notes={[`Policy version ${phase.result.version}. ${path.text}.`, 'You can close this window: the progress stays on the request.']}
+        onConfirm={() => undefined}
+        onCancel={onClose}
+      >
+        {progress !== undefined && <AllowProgress record={progress} now={now} />}
+      </ConfirmSignModal>
+    );
   }
   if (phase.kind === 'info' || phase.kind === 'failed') {
     return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" error={phase.kind === 'failed' ? phase.message : null} notes={phase.kind === 'info' ? [phase.message] : []} onConfirm={() => undefined} onCancel={onClose} />;
@@ -160,6 +202,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
           </div>
         )}
         {problem !== null && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
+        {progress !== undefined && phase.kind === 'signing' && <AllowProgress record={progress} now={now} />}
         {choice.kind === 'once' && <div className={TEXT_MUTED_SM}>The command runs once, then the next identical request is refused (or held) again.</div>}
       </div>
     </ConfirmSignModal>

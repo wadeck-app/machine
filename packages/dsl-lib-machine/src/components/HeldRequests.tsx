@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
+import { AllowProgress } from './AllowProgress.js';
 import { DenyForm } from './DenyForm.js';
+import { useAllowProgress } from './useAllowProgress.js';
 
 export interface HeldRequestRow {
   /** What the Deny button posts: the id of the held request. */
@@ -37,6 +39,11 @@ export interface HeldRequestsProps {
   /** Whether Allow is offered here and for which machine (`$sources.requests.allow`): the admin machine, in policy mode admin. */
   allow?: { available: boolean; machine: { uuid: string; name: string }; note: string };
   /**
+   * Whether each other machine is reachable directly now, by uuid (fields `reachableState` and `reachable` of `$sources.machines.machines`): a badge on the cards
+   * of the requests it holds. Allow reaches a machine at once when it is, else through the relay inbox (decision 86). This machine shows no badge.
+   */
+  reachability?: Record<string, { state: string; text: string }>;
+  /**
    * Re-runs the page's sources, so the list is the daemon's own after an allow or a deny. Defaults to the page's `$refresh`.
    * @ctxDefault $refresh
    */
@@ -62,13 +69,14 @@ function leftText(seconds: number): string {
  * @registryCategory composite
  * @registryTags requests allow deny hold policy admin
  */
-export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsProps) {
+export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }: HeldRequestsProps) {
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
+  const progress = useAllowProgress<HeldRequestRow>(api.current);
 
   // The seconds left of every row are those of the moment the rows arrived: a new list (a refresh) starts the count again.
   const fetchedAt = useMemo(() => Date.now(), [rows]);
@@ -83,7 +91,9 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
     return () => clearInterval(timer);
   }, [ticking, rows]);
 
-  const visible = rows.filter((r) => !answered.has(r.id));
+  // A request that was allowed stays as a card while its progress is shown, even after the page's list no longer has it.
+  const orphans = Object.values(progress.entries).filter((e) => !rows.some((r) => r.id === e.row.id)).map((e) => e.row);
+  const visible = [...rows.filter((r) => !answered.has(r.id)), ...orphans];
   const canAllow = allow?.available === true;
   const elapsedSince = (from: number): number => Math.max(0, Math.floor((now - from) / 1000));
 
@@ -98,8 +108,10 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   const allowed = (row: HeldRequestRow, answer: AllowResult) => {
     // Which path the policy took, in the words of the CLI (success colour: installed directly or here; warning colour: the relay inbox, with the cause).
     const path = deliveryNotice(answer);
-    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. The caller gets the result as soon as ${answer.target.name} re-checks the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
-    leave(row);
+    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. The progress is shown on the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
+    setDenying(null);
+    // The page's own data catches up; the card stays (with its progress) until the person dismisses it after the end.
+    void onRefresh?.('requests');
   };
 
   const denied = (row: HeldRequestRow) => {
@@ -120,6 +132,8 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
         {visible.map((r) => {
           const left = Math.max(0, r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt));
           const rowCanAllow = r.canAllow ?? canAllow;
+          const progressOf = progress.entries[r.id]?.record;
+          const reach = r.machine !== undefined ? reachability?.[r.machine.uuid] : undefined;
           return (
             <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -134,7 +148,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                   in <span className="font-mono text-content">{r.shell}</span>
                   {r.note === undefined && <>, asked {r.askedText}</>}
                 </span>
-                <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
+                {progressOf === undefined && <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>}
               </div>
               {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
               <div className={HELD_COMMAND}>{r.command}</div>
@@ -144,7 +158,27 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                   {r.note}
                 </div>
               )}
-              {left > 0 && denying !== r.id && (
+              {reach !== undefined && progressOf === undefined && (
+                <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>
+                  Reachability: {reach.text}
+                </span>
+              )}
+              {progressOf !== undefined && (
+                <>
+                  <AllowProgress record={progressOf} now={progress.now} />
+                  {progressOf.finishedAt !== undefined && (
+                    // violations-suppress: react/no-raw-button same plain button as Allow and Deny of this card
+                    <button type="button" aria-label={`Dismiss ${r.command}`} onClick={() => {
+                        progress.dismiss(r.id);
+                        // The request left the daemon's list when it ended; the rows of the page may not have caught up yet.
+                        setAnswered((prev) => new Set(prev).add(r.id));
+                      }} className={DENY_BUTTON}>
+                      Dismiss
+                    </button>
+                  )}
+                </>
+              )}
+              {progressOf === undefined && left > 0 && denying !== r.id && (
                 <div className="flex flex-wrap items-center gap-2">
                   {rowCanAllow ? (
                     // violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Allow <command>" tells the rows apart for a screen reader (same button as the table below)
@@ -160,13 +194,24 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                   </button>
                 </div>
               )}
-              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
+              {progressOf === undefined && left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
             </li>
           );
         })}
       </ul>
       {selected !== null && (selected.machine !== undefined || allow !== undefined) && api.current !== null && (
-        <AllowDialog key={selected.id} defaultLifetime="once" row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }} machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine} api={api.current} onClose={() => setSelected(null)} onDone={(answer) => allowed(selected, answer)} />
+        <AllowDialog
+          key={selected.id}
+          defaultLifetime="once"
+          row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }}
+          machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine}
+          api={api.current}
+          progress={progress.entries[selected.id]?.record}
+          now={progress.now}
+          onEvent={(event) => progress.handle(selected, selected.machine ?? (allow as NonNullable<typeof allow>).machine, selected.machine?.uuid ?? 'self', event)}
+          onClose={() => setSelected(null)}
+          onDone={(answer) => allowed(selected, answer)}
+        />
       )}
     </div>
   );

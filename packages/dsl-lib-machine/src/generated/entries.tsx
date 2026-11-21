@@ -1896,8 +1896,9 @@ export const HeldRequestsEntry: ComponentRegistryEntry = {
 	render: ({ node, ctx }: RegistryRenderProps) => {
 		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'HeldRequests.rows', 'array', false) as import('../components/HeldRequests.js').HeldRequestsProps['rows']
 		const allow = coerceProp(resolveExpressionValue(node['allow'], ctx), 'HeldRequests.allow', 'object', false) as import('../components/HeldRequests.js').HeldRequestsProps['allow']
+		const reachability = coerceProp(resolveExpressionValue(node['reachability'], ctx), 'HeldRequests.reachability', 'object', false) as import('../components/HeldRequests.js').HeldRequestsProps['reachability']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'HeldRequests.onRefresh', 'function', false) as import('../components/HeldRequests.js').HeldRequestsProps['onRefresh']
-		return <HeldRequests rows={rows} allow={allow} onRefresh={onRefresh} />
+		return <HeldRequests rows={rows} allow={allow} reachability={reachability} onRefresh={onRefresh} />
 	},
 }
 
@@ -2187,7 +2188,7 @@ SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["curren
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
-HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","onRefresh","rows"] : [];
+HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","onRefresh","reachability","rows"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
 RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","held","machines","notices","noticesError","onRefresh","pending","remote","self"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

@@ -1,3 +1,4 @@
+import React from 'react';
 import { generateSigningKeyPair, encryptAdminKey, keyId, type SignedPolicy } from '@wadeck-app/machine-core';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -29,10 +30,12 @@ interface Call { url: string; body: unknown; headers: Record<string, string> | u
 let calls: Call[];
 let elevate: ReturnType<typeof vi.fn>;
 let denyAnswer: unknown;
+let holdAnswer: unknown;
 
 beforeEach(() => {
   calls = [];
   keyFileText = keyFile;
+  holdAnswer = { state: 'held' };
   denyAnswer = { ok: true, id: 'aaaa1111', peer: PEER, shell: 'sh', command: 'ls' };
   elevate = vi.fn(async () => undefined);
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
@@ -45,6 +48,9 @@ beforeEach(() => {
     }
     if (url === 'POST /api/modules/machine/allow') {
       return { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
+    }
+    if (url.startsWith('GET /api/modules/machine/hold-progress/')) {
+      return holdAnswer;
     }
     if (url === 'POST /api/modules/machine/deny') {
       if (denyAnswer instanceof Error) {
@@ -63,6 +69,11 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
+// After a successful Allow the dialog stays open with the progress (decision 86): wait for it, then close it.
+const closeDone = async () => {
+  await userEvent.click(await screen.findByRole('button', { name: 'Close' }, { timeout: 20_000 }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+};
 const itemOf = (command: string) => screen.getByRole('listitem', { name: `Held request ${command}` });
 
 describe('the list', () => {
@@ -271,7 +282,7 @@ describe('Allow', () => {
     expect(dialog).toHaveTextContent(/for ONE call/);
     await userEvent.type(within(dialog).getByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    await closeDone();
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
     const policy = (post?.body as { policy: SignedPolicy }).policy;
     expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
@@ -307,7 +318,7 @@ describe('Allow', () => {
     await userEvent.type(within(dialog).getByLabelText(/Number of calls/), '3');
     expect(within(dialog).getByText('allowed 3 times')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    await closeDone();
     const policy = (calls.find((c) => c.url === 'POST /api/modules/machine/allow')?.body as { policy: SignedPolicy }).policy;
     expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 3 } }]);
   }, 120_000);
@@ -318,11 +329,13 @@ describe('Allow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    await closeDone();
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
     expect(Object.keys(post?.body as object)).toEqual(['policy']);
     expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
-    expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull();
+    // The card stays, with its progress, until the end of the hold is known (decision 86).
+    expect(within(itemOf('ls')).getByRole('progressbar')).toBeInTheDocument();
+    expect(within(itemOf('ls')).queryByRole('button', { name: 'Allow ls' })).toBeNull();
     expect(onRefresh).toHaveBeenCalledWith('requests');
     expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1. Installed on desktop/i);
   }, 120_000);
@@ -406,5 +419,82 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
     const start = Date.now();
     render(<HeldRequests rows={[{ ...remote, fetchedAtMs: start - 20_000 }]} allow={ALLOW} />);
     expect(within(itemOf('hostname')).getByText('4 min 40 s left')).toBeInTheDocument();
+  });
+});
+
+describe('the progress after Allow (decision 86)', () => {
+  async function allowLs(rows: HeldRequestRow[] = ROWS, extra: Partial<React.ComponentProps<typeof HeldRequests>> = {}) {
+    render(<HeldRequests rows={rows} allow={ALLOW} {...extra} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+  }
+
+  it('the dialog stays open after the result with the steps, the path wording and a Close button; the held command is not claimed released yet', async () => {
+    await allowLs();
+    const dialog = await screen.findByRole('dialog', undefined, { timeout: 20_000 });
+    await within(dialog).findByRole('button', { name: 'Close' }, { timeout: 20_000 });
+    expect(dialog).toHaveTextContent('Allowed on desktop');
+    expect(within(dialog).getByRole('progressbar')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/Signed/);
+    expect(dialog).toHaveTextContent(/Installed on desktop/);
+    expect(dialog).toHaveTextContent(/progress stays on the request/);
+    expect(dialog).not.toHaveTextContent('The held command was released');
+  }, 120_000);
+
+  it('the card keeps the progress when the dialog is closed, polls the daemon, and shows the release only when the end is reported', async () => {
+    await allowLs();
+    await closeDone();
+    const card = itemOf('ls');
+    expect(within(card).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow', '100');
+    expect(within(card).queryByText('The held command was released')).toBeNull();
+    // The daemon is asked for this machine ("self") and this request.
+    await waitFor(() => expect(calls.some((c) => c.url === 'GET /api/modules/machine/hold-progress/self/aaaa1111')).toBe(true));
+    holdAnswer = { state: 'ended', outcome: 'allowed' };
+    expect(await within(card).findByText('The held command was released', undefined, { timeout: 8000 })).toBeInTheDocument();
+    expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    await userEvent.click(within(card).getByRole('button', { name: /Dismiss/ }));
+    expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull();
+  }, 120_000);
+
+  it('an end that is not allowed is a failure with its cause, never a success', async () => {
+    holdAnswer = { state: 'ended', outcome: 'deadline' };
+    await allowLs();
+    await closeDone();
+    const card = itemOf('ls');
+    await waitFor(() => expect(card).toHaveTextContent(/wait ended|deadline/), { timeout: 8000 });
+    expect(within(card).queryByText('The held command was released')).toBeNull();
+    expect(within(card).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow', '100');
+  }, 120_000);
+
+  it('the card stays from its snapshot when the request leaves the list (the page refreshed)', async () => {
+    const view = render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await closeDone();
+    view.rerender(<HeldRequests rows={[ROWS[1] as HeldRequestRow]} allow={ALLOW} />);
+    expect(within(itemOf('ls')).getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem', { name: /^Held request/ })).toHaveLength(2);
+  }, 120_000);
+});
+
+describe('the reachability badge of a request held on another machine', () => {
+  const LAPTOP = '33333333-3333-4333-8333-333333333333';
+  const remote: HeldRequestRow = { id: 'cccc3333-0000-4000-8000-000000000000', peerText: 'midgard2', peer: SELF, shell: 'cmd', command: 'hostname', secondsLeft: 300, askedText: 'reported', countText: 'waiting now', nextCommand: 'machine admin allow laptop -- hostname', nextWhere: '', machine: { uuid: LAPTOP, name: 'laptop' } };
+
+  it.each([
+    ['direct', 'direct now (12 ms, checked 8 s ago)', /direct now/],
+    ['not-direct', 'not reachable directly (last seen 2 h ago; relay inbox only)', /relay inbox only/],
+    ['unknown', 'unknown', /^Reachability: unknown$/],
+  ])('shows the state %s in words', (state, text, expected) => {
+    render(<HeldRequests rows={[remote]} allow={ALLOW} reachability={{ [LAPTOP]: { state, text } }} />);
+    expect(within(itemOf('hostname')).getByTestId('reachable-badge')).toHaveTextContent(expected);
+  });
+
+  it('shows nothing for a request held on this machine, or when the state is not given', () => {
+    render(<HeldRequests rows={[ROWS[0] as HeldRequestRow, remote]} allow={ALLOW} reachability={{ [SELF]: { state: 'self', text: 'this machine' } }} />);
+    expect(within(itemOf('ls')).queryByTestId('reachable-badge')).toBeNull();
+    expect(within(itemOf('hostname')).queryByTestId('reachable-badge')).toBeNull();
   });
 });

@@ -60,3 +60,12 @@ export const COMMAND_TEXT = 'break-all font-mono text-sm text-content';
 export const PAGE_BUTTON = 'inline-flex items-center rounded border border-border bg-surface px-3 py-1 text-xs font-medium text-content transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 disabled:opacity-40';
 
 // @formatter:on
+
+/** Progress after an Allow (decision 86): the track and the fill of the bar, and one text colour per state of a step. Theme tokens only. */
+export const PROGRESS_TRACK = 'h-2 w-full overflow-hidden rounded bg-border';
+export const PROGRESS_FILL = 'h-2 rounded bg-primary transition-all';
+export const PROGRESS_FILL_FAILED = 'h-2 rounded bg-danger transition-all';
+export const STEP_DONE = 'text-success-text';
+export const STEP_ACTIVE = 'font-medium text-content';
+export const STEP_PENDING = 'text-muted';
+export const STEP_FAILED = 'text-danger-text';

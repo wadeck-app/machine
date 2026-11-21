@@ -14,7 +14,7 @@ export interface RequestsOverviewProps {
   /** This machine (`$sources.requests.machine`). */
   self?: { uuid: string; name: string };
   /** The trusted machines (`$sources.machines.machines`): this one and its peers. */
-  machines?: Array<{ uuid: string; name: string; self?: boolean }>;
+  machines?: Array<{ uuid: string; name: string; self?: boolean; reachable?: string; reachableState?: string }>;
   /** The requests held right now on THIS machine (`$sources.requests.waiting`), soonest deadline first. */
   held?: HeldRequestRow[];
   /** The requests refused on THIS machine because the command is not allowed (`$sources.requests.pending`). */
@@ -39,7 +39,7 @@ const ALL = 'all';
 const NO_HELD: HeldRequestRow[] = [];
 const NO_PENDING: PendingRequestRow[] = [];
 const NO_NOTICES: NoticeData[] = [];
-const NO_MACHINES: Array<{ uuid: string; name: string; self?: boolean }> = [];
+const NO_MACHINES: Array<{ uuid: string; name: string; self?: boolean; reachable?: string; reachableState?: string }> = [];
 
 const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
 
@@ -129,6 +129,11 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
   const failures = loaded?.outcomes.filter((o): o is Extract<RemoteOutcome, { ok: false }> => !o.ok) ?? [];
   const pages = (loaded?.outcomes ?? []).flatMap((o) => (o.ok && (filter === ALL || filter === o.peer.uuid) ? [o.page] : []));
+  // The state of the direct channel of every other machine, from the Machines source (self has none: its requests carry no badge).
+  const reachability = useMemo(
+    () => Object.fromEntries(machines.filter((m) => m.self !== true && m.reachableState !== undefined && m.reachable !== undefined).map((m) => [m.uuid, { state: m.reachableState as string, text: m.reachable as string }])),
+    [machines],
+  );
   const counts = `${rows.length} held request${rows.length === 1 ? '' : 's'}`;
 
   return (
@@ -160,7 +165,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
         </div>
       ))}
 
-      <HeldRequests rows={rows} allow={allow} {...(onRefresh !== undefined ? { onRefresh } : {})} />
+      <HeldRequests rows={rows} allow={allow} reachability={reachability} {...(onRefresh !== undefined ? { onRefresh } : {})} />
       {rows.length === 0 && <div className={TEXT_MUTED_SM}>No held request{filter === ALL ? '' : ' for this machine'} ({counts}).</div>}
 
       {showSelf && (
