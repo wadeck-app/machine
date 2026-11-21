@@ -229,8 +229,8 @@ describe('remoteRequestsPage', () => {
     expect(page.waiting[0]).toMatchObject({ id: 'aaaa1111-0000-4000-8000-000000000000', peerText: 'thinkcentre', shell: 'cmd', command: 'hostname', secondsLeft: 540, askedText: '60 s ago', nextCommand: 'machine admin allow laptop --shell cmd -- hostname' });
     expect(page.allow).toEqual({ available: true, machine: { uuid: SELF, name: 'laptop' }, note: '' });
     expect(page.count).toBe(1);
-    // The Deny of a request held elsewhere is not built: the page says where to run it, it never shows a button that does nothing.
-    expect(page.denyNote).toMatch(/machine requests --deny <id>.*ON laptop/);
+    // The Deny of a request held elsewhere goes through the daemon (decision 85): the note names the CLI form.
+    expect(page.denyNote).toMatch(/machine requests laptop --deny <id>/);
   });
 
   it('a peer in mode local cannot be allowed from the admin machine: the capability says why and the command is the local one', () => {

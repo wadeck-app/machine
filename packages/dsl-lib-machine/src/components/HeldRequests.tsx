@@ -23,8 +23,6 @@ export interface HeldRequestRow {
   machine?: { uuid: string; name: string };
   /** Whether Allow is offered for the machine of this row. Default: `allow.available`. */
   canAllow?: boolean;
-  /** Present: no Deny button for this row (denying from another machine is not available), this text says where to deny it. */
-  denyText?: string;
   /** Epoch milliseconds at which `secondsLeft` was read: the countdown runs from it. Default: when the list arrived. */
   fetchedAtMs?: number;
   /** Present: this row is a NOTICE another machine reported (not verified live); the text says by whom and when. Shown muted, the row has no "asked" text. */
@@ -104,7 +102,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   };
 
   const denied = (row: HeldRequestRow) => {
-    setResult(`Denied ${row.shell} ${JSON.stringify(row.command)} from ${row.peerText}: the caller was answered "refused: denied". Nothing was signed.`);
+    setResult(`Denied ${row.shell} ${JSON.stringify(row.command)} from ${row.peerText}${row.machine !== undefined ? ` on ${row.machine.name} (${row.machine.name} was told over the authenticated channel)` : ''}: the caller was answered "refused: denied". Nothing was signed.`);
     leave(row);
   };
 
@@ -155,17 +153,13 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                   ) : (
                     <span className="break-all font-mono text-xs">{r.nextCommand}</span>
                   )}
-                  {r.denyText !== undefined ? (
-                    <span className={`text-xs ${TEXT_MUTED}`}>{r.denyText}</span>
-                  ) : (
-                    // violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Deny <command>" tells the rows apart for a screen reader (looks like dsl-ui's danger outline button)
-                    <button type="button" aria-label={`Deny ${r.command}`} onClick={() => setDenying(r.id)} className={DENY_BUTTON}>
-                      Deny
-                    </button>
-                  )}
+                  {/* violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Deny <command>" tells the rows apart for a screen reader (looks like dsl-ui's danger outline button) */}
+                  <button type="button" aria-label={`Deny ${r.command}`} onClick={() => setDenying(r.id)} className={DENY_BUTTON}>
+                    Deny
+                  </button>
                 </div>
               )}
-              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
+              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
             </li>
           );
         })}

@@ -154,3 +154,51 @@ describe('POST /deny', () => {
     expect(out.body.error).toMatch(/machine cli update/);
   });
 });
+
+describe('POST /deny with a machine (a request held on another machine, decision 85)', () => {
+  const REMOTE = { ok: true, id: '3f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f', peer: { uuid: '22222222-2222-4222-8222-222222222222', name: 'thinkcentre' } };
+
+  it('forwards only {peer, id, reason} to the daemon command denyRemote and returns its answer', async () => {
+    const seen = await withDaemon({ denyRemote: REMOTE });
+    const out = await call('POST /deny', { headers: HEADER, body: { machine: 'thinkcentre', id: 'abc12345', reason: 'not now' } });
+    expect(out).toEqual({ status: 200, body: REMOTE });
+    expect(seen).toEqual([{ command: 'denyRemote', body: { peer: 'thinkcentre', id: 'abc12345', reason: 'not now' } }]);
+  });
+
+  it('forwards no reason key when none was given', async () => {
+    const seen = await withDaemon({ denyRemote: REMOTE });
+    await call('POST /deny', { headers: HEADER, body: { machine: 'thinkcentre', id: 'abc12345' } });
+    expect(seen).toEqual([{ command: 'denyRemote', body: { peer: 'thinkcentre', id: 'abc12345' } }]);
+  });
+
+  it.each([
+    ['an empty machine', { machine: '', id: 'abc12345' }],
+    ['a machine that is not text', { machine: 7, id: 'abc12345' }],
+    ['a too long machine', { machine: 'm'.repeat(65), id: 'abc12345' }],
+  ])('400 for %s, and the daemon is never asked', async (_name, body) => {
+    const seen = await withDaemon({ denyRemote: REMOTE });
+    const out = await call('POST /deny', { headers: HEADER, body });
+    expect(out.status).toBe(400);
+    expect(out.body.error).toMatch(/"machine"/);
+    expect(seen).toEqual([]);
+  });
+
+  it.each([
+    ['not-a-recipient', 403],
+    ['recipients-unreadable', 409],
+    ['not-held', 404],
+    ['ambiguous', 400],
+    ['bad-reason', 400],
+    ['bad-deny', 400],
+    ['unknown-peer', 404],
+    ['peer-too-old', 502],
+    ['unreachable', 502],
+    ['no-answer', 504],
+    ['audit-unavailable', 503],
+  ])('maps the remote reason %s to %i, keeps the kind and the message of the target', async (reason, status) => {
+    await withDaemon({ denyRemote: { ok: false, reason, message: `why ${reason}` } });
+    const out = await call('POST /deny', { headers: HEADER, body: { machine: 'thinkcentre', id: 'abc12345' } });
+    expect(out.status).toBe(status);
+    expect(out.body).toMatchObject({ status, kind: reason, error: `why ${reason}` });
+  });
+});

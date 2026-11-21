@@ -327,3 +327,4 @@ export {
   type RequestNoticeEnd,
   type StoredNotice,
 } from './requestNotice.js';
+export { MAX_DENY_FRAME_BYTES, buildRequestDeny, parseRequestDeny, type ParsedRequestDeny, type RequestDeny } from './requestDeny.js';

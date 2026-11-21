@@ -299,9 +299,11 @@ Administration (enrollment through the relay, or by files):
                                      allows each (\`machine admin allow <this machine> ...\`, or \`machine policy allow ...\` in mode local).
                                      Read-only: reads this machine's audit.log (hash chain verified, a broken chain is a warning with its
                                      line), no daemon needed. A command the policy allows now is not listed. At most 100 groups (--limit)
-  requests --deny <id> [--reason <text>]
-                                     refuse a request a peer holds (\`run --wait\`), at once; its caller reads the reason. Run it on the machine that
-                                     holds the request (its daemon must run). No signature, no passphrase: only restricting
+  requests [<machine>] --deny <id> [--reason <text>]
+                                     refuse a request a peer holds (\`run --wait\`), at once; its caller reads the reason. Without a machine: run it
+                                     on the machine that holds the request (its daemon must run). With <machine>: from a machine named in the
+                                     notice recipients of <machine> (\`machine admin notify-to\`), over the authenticated channel. No signature,
+                                     no passphrase: only restricting
   requests [--full]                  the same, with the whole command (wrapped under its column) and the exact allow command of every row
                                      instead of the template; also for <machine>, --all and --history. --json is always complete
   requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
@@ -590,8 +592,11 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (args.deny !== undefined && command !== 'requests') {
     return fail('--deny only applies to `machine requests` (`machine requests --deny <id> [--reason <text>]` refuses a request a peer holds; the id is shown by `machine requests`)', EXIT.usage);
   }
-  if (args.deny !== undefined && (rest.length > 0 || args.all === true)) {
-    return fail('--deny acts on the machine where you run it (its daemon holds the request): run `machine requests --deny <id>` on the machine that holds it, without a machine name or --all', EXIT.usage);
+  if (args.deny !== undefined && args.all === true) {
+    return fail('--deny names ONE request: `machine requests --deny <id>` on the machine that holds it, or `machine requests <machine> --deny <id>` from a machine that receives its request notices; it cannot be combined with --all', EXIT.usage);
+  }
+  if (args.deny !== undefined && rest.length > 1) {
+    return fail('--deny takes one machine at most: `machine requests <machine> --deny <id> [--reason <text>]` (the machine that holds the request)', EXIT.usage);
   }
   if (args.reason !== undefined && args.deny === undefined) {
     return fail('--reason only applies to `machine requests --deny <id>` (the text the agent reads in the refusal)', EXIT.usage);
@@ -717,7 +722,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     }
     if (command === 'log') return runActivityLog(ctx); // run-log
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
-    if (command === 'requests' && rest.length === 0 && args.all !== true) return await runRequests(ctx);
+    if (command === 'requests' && (rest.length === 0 || args.deny !== undefined) && args.all !== true) return await runRequests(ctx);
 
     // Bare groups (decision 66): `machine peer` shows what `machine list` shows, `machine alias` what `machine alias list` shows.
     const bareView = command === 'peer' && rest.length === 0;

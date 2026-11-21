@@ -78,7 +78,6 @@ export function mergeNotices(input: { notices: NoticeData[]; selfUuid: string | 
         nextWhere: '',
         machine,
         canAllow,
-        denyText: `Deny: run \`machine requests --deny ${n.id.slice(0, 8)}\` ON ${n.machineName}`,
         note,
         commandTruncated: n.commandTruncated,
       });

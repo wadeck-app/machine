@@ -168,6 +168,8 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         holds: { table: holds },
         notices: makeNoticeStoreDeps(configDir),
         notifier,
+        // A machine of the notice-recipients list may refuse a held request (decision 85).
+        remoteDeny: { recipients: makeNoticeRecipients(configDir) },
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },

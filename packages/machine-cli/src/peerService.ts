@@ -6,6 +6,7 @@ import {
   waitedText,
   MAX_REQUESTS_LISTS_PER_MINUTE,
   MAX_NOTICES_PER_MINUTE,
+  parseRequestDeny,
   parseRequestNotice,
   parseRequestNoticeEnd,
   type NoticeOutcome,
@@ -95,6 +96,13 @@ export interface PeerServiceDeps {
   notices?: NoticeStoreDeps;
   /** Tells the notice recipients about held and refused requests (best effort, never awaited). Absent: nobody is told. */
   notifier?: RequestNotifier;
+  /** The `request-deny` frame (decision 85): a machine of the notice-recipients list refuses a held request. Absent: it is an unknown message, as with an older build. */
+  remoteDeny?: RemoteDenyDeps;
+}
+
+export interface RemoteDenyDeps {
+  /** The uuids of the signed notice-recipients list; undefined when this machine holds none. May throw (damaged file): the deny is refused with that message. */
+  recipients: () => string[] | undefined;
 }
 
 /** Where received notices are kept: the peer service decides WHO sent them and WHEN; a failure here is reported, never thrown at the sender. */
@@ -148,7 +156,7 @@ type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: strin
 type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
-type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string };
+type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string };
 
 
 interface SyncState {
@@ -643,6 +651,55 @@ class PeerService {
     return { type: 'notice-ack', id };
   }
 
+  /**
+   * `request-deny` (decision 85): refuses a held request for a machine of the notice-recipients list. The sender is the machine authenticated on
+   * this connection, never a name in the frame. Restricting only (hard rule 4): no signature; who denied is audited BEFORE the hold is refused.
+   */
+  private denyFrame(session: PeerSession, message: unknown, remote: RemoteDenyDeps, holds: HoldDeps | undefined): ServiceAnswer {
+    const parsed = parseRequestDeny(message);
+    if (!parsed.ok) {
+      return this.refuse(session, undefined, 'bad-deny', `${parsed.message}: the peer runs an incompatible version`);
+    }
+    const { id, reason } = parsed.deny;
+    const name = this.deps.self.name;
+    const manual = `run \`machine requests --deny <id>\` ON ${name}`;
+    let recipients: string[] | undefined;
+    try {
+      recipients = remote.recipients();
+    } catch (e) {
+      this.problem(`cannot read the notice recipients (${(e as Error).message}): remote denials are refused until it is fixed`);
+      return this.refuse(session, undefined, 'recipients-unreadable', `${name} cannot read its notice-recipients list (${(e as Error).message}), so it cannot tell whether you may deny: fix that file on ${name} (see the message), or ${manual}`);
+    }
+    if (recipients === undefined) {
+      return this.refuse(session, undefined, 'not-a-recipient', `${name} holds no notice-recipients list, so no machine may deny its requests remotely: run \`machine admin distribute ${name}\` on the admin machine (then deny again), or ${manual}`);
+    }
+    if (!recipients.includes(session.peerId)) {
+      return this.refuse(session, undefined, 'not-a-recipient', `${name} does not list you as a recipient of its request notices, so you may not deny its requests: add this machine with \`machine admin notify-to <machines>\` on the admin machine, or ${manual}`);
+    }
+    if (holds === undefined) {
+      return this.refuse(session, undefined, 'not-held', `${name} does not hold requests (its daemon runs without hold support): nothing to deny`);
+    }
+    const matches = holds.table.list().filter((h) => h.id.startsWith(id));
+    if (matches.length === 0) {
+      return this.refuse(session, undefined, 'not-held', `no request is waiting on ${name} under the id "${id}": it may have been answered, expired or dropped already; \`machine requests ${name}\` lists what waits now`);
+    }
+    if (matches.length > 1) {
+      return this.refuse(session, undefined, 'ambiguous', `"${id}" matches ${matches.length} waiting requests on ${name}: give more characters of the id`);
+    }
+    const hold = matches[0] as { id: string; shell: string; command: string };
+    try {
+      this.recordStrict({ event: 'request-denied-remotely', source: session.peerId, by: session.peerId, byName: this.nameOf(session), id: hold.id, shell: hold.shell, command: hold.command, ...(reason !== undefined ? { note: reason } : {}) });
+    } catch (e) {
+      this.problem(`cannot write the audit log (${(e as Error).message}): remote denials are refused until it works again`);
+      return this.refuse(session, undefined, 'audit-unavailable', `${name} cannot write its audit log, so it does not record who denies: nothing was denied. Fix the disk or permissions of its audit log`);
+    }
+    const denied = holds.table.deny(hold.id, reason);
+    if (!denied.ok) {
+      return this.refuse(session, undefined, denied.reason === 'unknown' ? 'not-held' : denied.reason, denied.message);
+    }
+    return { type: 'deny-ack', id: hold.id };
+  }
+
   private async handle(session: PeerSession, message: unknown, carrier: Carrier): Promise<ServiceAnswer | undefined> {
     const { deps } = this;
     const now = deps.now();
@@ -650,6 +707,9 @@ class PeerService {
     const kind = typeof message === 'object' && message !== null ? (message as { type?: unknown }).type : undefined;
     if (deps.notices && (kind === 'request-notice' || kind === 'request-notice-end')) {
       return this.noticeFrame(session, message, deps.notices);
+    }
+    if (deps.remoteDeny && kind === 'request-deny') {
+      return this.denyFrame(session, message, deps.remoteDeny, deps.holds);
     }
     // `requests-list` (decision 74): read-only, admin-signed. Without `deps.requests` it is an unknown message, exactly as for an older build.
     if (deps.requests && typeof message === 'object' && message !== null && (message as { type?: unknown }).type === 'requests-list') {

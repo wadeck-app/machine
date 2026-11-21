@@ -43,7 +43,8 @@ describe('mergeNotices', () => {
       canAllow: true,
       note: 'reported by laptop at 14:02; not verified live: use Load the other machines to confirm',
     });
-    expect(held[0]?.denyText).toBe('Deny: run `machine requests --deny aaaa1111` ON laptop');
+    // The Deny button is offered like for any row; the machine to tell is the one that holds it (decision 85).
+    expect(held[0]).not.toHaveProperty('denyText');
   });
 
   it('a refused notice becomes a row in a section of the machine that reported it', () => {

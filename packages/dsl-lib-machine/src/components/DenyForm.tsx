@@ -37,13 +37,15 @@ export function denyFailureMessage(err: unknown): string {
 export interface DenyFormProps {
   /** The id of the held request. */
   id: string;
+  /** The machine that holds it when it is not this one (uuid): the daemon of this machine tells it over the authenticated channel (decision 85). */
+  machine?: string;
   api: AllowApi;
   onCancel: () => void;
   onDenied: () => void;
 }
 
 /** The inline Deny form of a held request: an optional reason for the caller. A restricting action: no signature and no passphrase, but the route is sensitive, so the app-core PIN is asked first (as for Allow). */
-export function DenyForm({ id, api, onCancel, onDenied }: DenyFormProps) {
+export function DenyForm({ id, machine, api, onCancel, onDenied }: DenyFormProps) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function DenyForm({ id, api, onCancel, onDenied }: DenyFormProps) {
     setError(null);
     const trimmed = reason.trim();
     // The PIN first, like the Allow dialog (loadContext): a cancelled dialog stops here and nothing is posted.
-    api.elevate().then(() => api.post('/deny', trimmed === '' ? { id } : { id, reason: trimmed })).then(
+    api.elevate().then(() => api.post('/deny', { id, ...(machine !== undefined ? { machine } : {}), ...(trimmed === '' ? {} : { reason: trimmed }) })).then(
       () => onDenied(),
       (err: unknown) => {
         setBusy(false);

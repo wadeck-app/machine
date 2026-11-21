@@ -265,16 +265,47 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
     nextWhere: '',
     machine: { uuid: LAPTOP, name: 'laptop' },
     canAllow: true,
-    denyText: 'Deny: run `machine requests --deny cccc3333` ON laptop',
   };
 
-  it('names the machine that holds it, offers Allow, and shows where to deny instead of a Deny button that would do nothing', () => {
+  it('names the machine that holds it and offers Allow and Deny (no "run it ON the machine" workaround text)', () => {
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
     const item = itemOf('hostname');
     expect(within(item).getByText('laptop')).toBeInTheDocument();
     expect(within(item).getByRole('button', { name: 'Allow hostname' })).toBeInTheDocument();
-    expect(within(item).queryByRole('button', { name: /^Deny/ })).toBeNull();
-    expect(within(item).getByText(/machine requests --deny cccc3333/)).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny hostname' })).toBeInTheDocument();
+    expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
+  });
+
+  it('Deny of a request held elsewhere posts the id, the machine and the reason after the PIN, and says which machine was told (decision 85)', async () => {
+    denyAnswer = { ok: true, id: remote.id, peer: { uuid: LAPTOP, name: 'laptop' } };
+    render(<HeldRequests rows={[remote]} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.type(screen.getByLabelText(/reason/i), 'not now');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Held request hostname' })).toBeNull());
+    expect(calls).toEqual([{ url: 'POST /api/modules/machine/deny', body: { id: remote.id, machine: LAPTOP, reason: 'not now' }, headers: { 'x-machine-module': '1' } }]);
+    expect(elevate).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('status')).toHaveTextContent(/laptop/);
+  });
+
+  it('when the target refuses because this machine is not a notice recipient, the form shows its cause and the fix, and the row stays', async () => {
+    denyAnswer = new Error('laptop does not list you as a recipient of its request notices: add this machine with `machine admin notify-to <machines>` on the admin machine, or run `machine requests --deny <id>` ON laptop');
+    render(<HeldRequests rows={[remote]} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/does not list you/);
+    expect(alert).toHaveTextContent(/machine admin notify-to/);
+    expect(alert).toHaveTextContent(/machine requests --deny <id>.*ON laptop/);
+    expect(itemOf('hostname')).toBeInTheDocument();
+  });
+
+  it('an older target (peer-too-old) is told to update: the message of the backend is shown as it is', async () => {
+    denyAnswer = new Error('laptop is too old to accept a remote deny: run `machine cli update` on laptop');
+    render(<HeldRequests rows={[remote]} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/machine cli update/);
   });
 
   it('Allow asks the policy of THAT machine (its uuid), not of this one', async () => {

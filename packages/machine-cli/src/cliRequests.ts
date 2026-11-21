@@ -2,6 +2,7 @@ import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, layoutHistory, layoutRequests, shellQuote, type HistoryKind, type PolicyMode, type RequestsSummary, type StoredNotice, type WaitingRequest } from '@wadeck-app/machine-core';
 import { clockText, relativeText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
+import { denyRemoteCommand } from './denyRemote.js';
 import { requestsAnswer, type RequestsQuery } from './requestsView.js';
 import { makeCommands } from './commands.js';
 import { appVersion } from './version.js';
@@ -136,9 +137,20 @@ export async function runRequests(ctx: CommandContext): Promise<number> {
 
 /** `machine requests --deny <id> [--reason <text>]`: the daemon that holds the request refuses it. Restricting, no signature; the answer names what was denied. */
 async function runDeny(ctx: CommandContext, id: string, reason: string | undefined): Promise<number> {
-  const { args, rest, configDir, fail, emit } = ctx;
-  if (rest.length > 0 || args.history === true || args.limit !== undefined || args.since !== undefined || args.event !== undefined || args.peer !== undefined) {
-    return fail('--deny takes only the id (and --reason): `machine requests --deny <id> [--reason <text>]`; the id is shown by `machine requests`', EXIT.usage);
+  const { args, rest, io, configDir, fail, emit } = ctx;
+  if (rest.length > 1 || args.history === true || args.limit !== undefined || args.since !== undefined || args.event !== undefined || args.peer !== undefined) {
+    return fail('--deny takes only the id (and --reason): `machine requests [<machine>] --deny <id> [--reason <text>]`; the id is shown by `machine requests` (on the machine that holds it) or `machine requests <machine>`', EXIT.usage);
+  }
+  if (rest.length === 1) {
+    // A request held on ANOTHER machine (decision 85): sent over the authenticated channel, accepted only from a machine of its notice-recipients list. No passphrase.
+    const machine = rest[0] as string;
+    const nowSeconds = Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
+    const sent = await denyRemoteCommand(configDir, { peer: machine, id, ...(reason !== undefined ? { reason } : {}) }, nowSeconds, { allowLocal: io.allowLoopbackPeers === true, ...(args.address !== undefined ? { address: args.address } : {}) });
+    if (!sent.ok) {
+      return fail(sent.message, sent.reason === 'bad-deny' || sent.reason === 'ambiguous' || sent.reason === 'bad-reason' || sent.reason === 'unknown-peer' ? EXIT.usage : EXIT.failure);
+    }
+    emit(sent, `[ok] denied the request ${sent.id.slice(0, 8)} held on ${sent.peer?.name ?? machine}: its caller is answered refused (denied)${reason !== undefined ? ' with your reason' : ''}\n`);
+    return EXIT.ok;
   }
   const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
   const r = (await client.send('deny', { id, ...(reason !== undefined ? { reason } : {}) })) as Awaited<ReturnType<ReturnType<typeof makeCommands>['deny']>>;

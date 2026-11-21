@@ -304,7 +304,7 @@ export function remoteRequestsPage(answer: RequestsListAnswer, nowSeconds: numbe
     allow: { available: allowNote === '', machine: answer.machine, note: allowNote },
     count: answer.waiting.length + answer.pending.length,
     waiting: answer.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds, -skew)),
-    denyNote: `To deny a held request run \`machine requests --deny <id>\` ON ${machine.name} (the machine that holds it): denying from another machine is not available yet.`,
+    denyNote: `To deny a held request of ${machine.name} from this machine use the Deny button, or run \`machine requests ${machine.name} --deny <id>\` (this machine must be one of its notice recipients: \`machine admin notify-to\`).`,
     pending: answer.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: answer.pendingTotal,
     chainOk: answer.chain.ok,

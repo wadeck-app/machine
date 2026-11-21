@@ -112,7 +112,7 @@ describe('layoutRequests: notes footer', () => {
 
   it('the deny command is a note (run on the machine that holds the request), with the id column to read', () => {
     const notes = layoutRequests(input({ waiting: [held(1, 'hostname')], remote: true })).join('\n');
-    expect(notes).toMatch(/deny: machine requests --deny <id> \[--reason <text>\], run ON thinkcentre/);
+    expect(notes).toMatch(/deny: machine requests thinkcentre --deny <id> \[--reason <text>\]/);
   });
 
   it('a remote listing says how an allow reaches the target and runs the held command', () => {

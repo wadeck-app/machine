@@ -145,9 +145,9 @@ describe('machine requests <machine> (the admin machine asks a peer)', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out.split('\n')[0]).toBe('laptop (admin mode): 1 waiting now, no refused request');
     expect(r.out).toMatch(new RegExp(`[0-9a-f]{8} +desktop +\\w+ +\\d+ s +\(now|\d+ s ago) +echo held-here$`, 'm'));
-    // Allow is the admin command of THIS machine; the Deny is run on the target (the remote Deny is not built).
+    // Allow is the admin command of THIS machine; the Deny is run on the target (or `machine requests laptop --deny <id>` from here).
     expect(r.out).toContain(`  allow: machine admin allow laptop --shell ${SHELL} -- "echo held-here"`);
-    expect(r.out).toMatch(/deny: machine requests --deny <id> .*run ON laptop/);
+    expect(r.out).toMatch(/deny: machine requests laptop --deny <id> /);
     expect(r.out).toMatch(/installs it within about a minute/);
     expect(Math.max(...r.out.split('\n').map((l) => l.length))).toBeLessThanOrEqual(100);
     // The held request is listed once: it is not a refused group yet.

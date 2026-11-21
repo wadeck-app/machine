@@ -67,10 +67,25 @@ const DENY_STATUS: Record<string, number> = {
   'too-short': 400,
   'bad-reason': 400,
   'no-daemon': 503,
+  // A request held on ANOTHER machine (decision 85): the answer of that machine, or why it could not be asked.
+  'not-a-recipient': 403,
+  'recipients-unreadable': 409,
+  'not-held': 404,
+  'bad-deny': 400,
+  'unknown-peer': 404,
+  'peer-too-old': 502,
+  unreachable: 502,
+  'no-answer': 504,
+  'audit-unavailable': 503,
+  'unexpected-answer': 502,
+  'bad-payload': 400,
 };
 
 /** The reason of a Deny is read by the agent and kept in the audit log (machine-core MAX_DENY_REASON_LENGTH, printable ASCII). */
 const DENY_REASON_MAX = 200;
+
+/** Connecting to the target (3 s per address, plus the address lookup) and its answer (10 s). */
+const REMOTE_DENY_TIMEOUT_MS = 30_000;
 
 /** Storing a policy may include one call to the relay. */
 const ALLOW_TIMEOUT_MS = 20_000;
@@ -97,25 +112,29 @@ function allowBodyProblem(body: unknown): string | undefined {
 }
 
 /** The body of a Deny: `{ id, reason? }`, or why it is not (names the offending field, never its value). */
-type DenyBody = { ok: true; id: string; reason: string | undefined } | { ok: false; problem: string };
+type DenyBody = { ok: true; id: string; reason: string | undefined; machine: string | undefined } | { ok: false; problem: string };
 
 function parseDenyBody(body: unknown): DenyBody {
-  const expected = 'expected {"id": "<id of the waiting request>", "reason": "<optional text for the agent>"}';
+  const expected = 'expected {"id": "<id of the waiting request>", "reason": "<optional text for the agent>", "machine": "<the machine that holds it, when it is not this one>"}';
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return { ok: false, problem: expected };
   }
   const record: Record<string, unknown> = Object.fromEntries(Object.entries(body));
-  const extra = Object.keys(record).find((k) => k !== 'id' && k !== 'reason');
+  const extra = Object.keys(record).find((k) => k !== 'id' && k !== 'reason' && k !== 'machine');
   if (extra !== undefined) {
-    return { ok: false, problem: `the field "${extra}" is not accepted: a Deny signs nothing and asks no passphrase, this route takes only the id and an optional reason (${expected})` };
+    return { ok: false, problem: `the field "${extra}" is not accepted: a Deny signs nothing and asks no passphrase, this route takes only the id, an optional reason and the machine that holds the request (${expected})` };
   }
   const id = record['id'];
   if (typeof id !== 'string' || id.length === 0 || id.length > 64) {
     return { ok: false, problem: `"id" must be the id of a waiting request, 1 to 64 characters (\`machine requests\` lists them); ${expected}` };
   }
+  const machine = record['machine'];
+  if (machine !== undefined && (typeof machine !== 'string' || machine.length === 0 || machine.length > 64)) {
+    return { ok: false, problem: `"machine" must be the name, alias or uuid of the machine that holds the request, 1 to 64 characters (the Requests page names it); ${expected}` };
+  }
   const reason = record['reason'];
   if (reason === undefined) {
-    return { ok: true, id, reason };
+    return { ok: true, id, reason, machine };
   }
   if (typeof reason !== 'string') {
     return { ok: false, problem: `"reason" must be text; ${expected}` };
@@ -126,7 +145,7 @@ function parseDenyBody(body: unknown): DenyBody {
   if (!/^[\x20-\x7e]*$/.test(reason)) {
     return { ok: false, problem: '"reason" must be printable ASCII (no accent, no line break): the agent reads it and the audit log keeps it; rewrite it' };
   }
-  return { ok: true, id, reason };
+  return { ok: true, id, reason, machine };
 }
 
 interface Failure {
@@ -374,8 +393,13 @@ export default function register(ctx: ModuleContextLike): void {
     if (!parsed.ok) {
       return reply.code(400).send({ status: 400, kind: 'bad_request', error: parsed.problem });
     }
-    const { id, reason } = parsed;
-    return viaDaemon(req, reply, 'deny', reason === undefined ? { id } : { id, reason }, undefined, (r) => r, DENY_STATUS);
+    const { id, reason, machine } = parsed;
+    const rest = reason === undefined ? { id } : { id, reason };
+    // Held on another machine: this daemon opens the authenticated channel to it (decision 85); the target decides whether this machine may deny.
+    if (machine !== undefined) {
+      return viaDaemon(req, reply, 'denyRemote', { peer: machine, ...rest }, REMOTE_DENY_TIMEOUT_MS, (r) => r, DENY_STATUS);
+    }
+    return viaDaemon(req, reply, 'deny', rest, undefined, (r) => r, DENY_STATUS);
   }, SENSITIVE);
 
   // run-log: the Activity page (the commands this machine sent and received), a plain read route in its own file

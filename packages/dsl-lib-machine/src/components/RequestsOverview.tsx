@@ -47,7 +47,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  * The held and refused requests of ALL the trusted machines, with a machine filter. This machine's own come from the page; the others are loaded on
  * demand by the admin machine: the page signs a read-only requests-list per peer IN THE BROWSER with the admin key (passphrase asked each time, never
  * stored), the daemon forwards it, the peer answers (same authorization as the CLI `machine requests <machine>`). Allow signs the policy of the machine the row
- * belongs to. Deny of a request held elsewhere is not available: the row says where to run it.
+ * belongs to. Deny of a request held elsewhere is sent by the daemon of this machine to the machine that holds it (it must name this machine among its notice recipients).
  *
  * @registryCategory composite
  * @registryTags requests allow hold policy admin machines
@@ -76,7 +76,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       if (!o.ok || (filter !== ALL && filter !== o.peer.uuid)) {
         return [];
       }
-      return o.page.waiting.map((w) => ({ ...w, machine: o.page.machine, canAllow: o.page.allow.available, denyText: `Deny: run \`machine requests --deny ${w.id.slice(0, 8)}\` ON ${o.page.machine.name}`, fetchedAtMs: loaded.at }));
+      return o.page.waiting.map((w) => ({ ...w, machine: o.page.machine, canAllow: o.page.allow.available, fetchedAtMs: loaded.at }));
     });
   }, [loaded, filter]);
   // The notices of a machine the page has loaded live are replaced by its live rows; a machine that did not answer keeps its notices.

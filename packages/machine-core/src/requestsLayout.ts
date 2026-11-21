@@ -173,12 +173,12 @@ function notes(input: RequestsLayoutInput): string[] {
     out.push(shell);
   }
   if (input.waiting.length === 0 && (input.notices ?? []).some((n) => n.state === 'held')) {
-    out.push('deny: machine requests --deny <id> [--reason <text>], run ON the machine named in MACHINE (the one that holds it)');
+    out.push('deny: machine requests <MACHINE> --deny <id> [--reason <text>] (MACHINE column; no passphrase)');
   }
   if (input.waiting.length > 0) {
     out.push(
       input.remote
-        ? `deny: machine requests --deny <id> [--reason <text>], run ON ${machine.name} (the machine that holds it)`
+        ? `deny: machine requests ${machine.name} --deny <id> [--reason <text>] (no passphrase)`
         : 'deny: machine requests --deny <id> [--reason <text>] (no passphrase)',
     );
   }

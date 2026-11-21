@@ -116,14 +116,14 @@ describe('loading the other machines', () => {
     expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
   }, 120_000);
 
-  it('shows the held requests of the other machines next to this machine\'s own, with the machine named, Allow for that machine and no Deny button', async () => {
+  it('shows the held requests of the other machines next to this machine\'s own, with the machine named, Allow for that machine and Deny (sent to that machine)', async () => {
     render(<RequestsOverview {...props()} />);
     await load();
     const item = screen.getByRole('listitem', { name: 'Held request hostname' });
     expect(within(item).getByText('thinkcentre')).toBeInTheDocument();
     expect(within(item).getByRole('button', { name: 'Allow hostname' })).toBeInTheDocument();
-    expect(within(item).queryByRole('button', { name: /^Deny/ })).toBeNull();
-    expect(within(item).getByText(/machine requests --deny bbbb2222.*ON thinkcentre/)).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny hostname' })).toBeInTheDocument();
+    expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
     // This machine's own row keeps its Deny button.
     expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Waiting for approval on thinkcentre' })).toBeInTheDocument();
@@ -179,15 +179,15 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   const notice = (over: Partial<NoticeData> = {}): NoticeData => ({ id: NOTICE_ID, machine: LAPTOP, machineName: 'laptop', peerText: 'thinkcentre', peer: THINK, shell: 'sh', command: 'uptime', commandTruncated: false, state: 'held', secondsLeft: 300, receivedAt: RECEIVED, ...over });
   const NOTE = 'reported by laptop at 14:02; not verified live: use Load the other machines to confirm';
 
-  it('shows a held notice next to the own rows, labelled with the machine that reported it, with the muted note, Allow and no Deny', () => {
+  it('shows a held notice next to the own rows, labelled with the machine that reported it, with the muted note, Allow and Deny', () => {
     render(<RequestsOverview {...props({ notices: [notice()] })} />);
     const item = screen.getByRole('listitem', { name: 'Held request uptime' });
     expect(item).toHaveAttribute('data-testid', 'notice-row');
     expect(within(item).getByText('laptop')).toBeInTheDocument();
     expect(within(item).getByTestId('notice-note')).toHaveTextContent(NOTE);
     expect(within(item).getByRole('button', { name: 'Allow uptime' })).toBeInTheDocument();
-    expect(within(item).queryByRole('button', { name: /^Deny/ })).toBeNull();
-    expect(within(item).getByText(/machine requests --deny cccc3333.*ON laptop/)).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny uptime' })).toBeInTheDocument();
+    expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
     expect(within(item).getByText(/5 min 0 s left|4 min 5\d s left/)).toBeInTheDocument();
     // The own row is untouched.
     expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
