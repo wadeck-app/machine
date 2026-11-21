@@ -47,15 +47,22 @@ async function unlock(passphrase = PASSPHRASE) {
 describe('PassphraseSigner', () => {
   // User report 2026-11-21: the browser autofilled this field like the app-core PIN field (two anonymous password inputs with autocomplete="off",
   // which Chrome ignores for passwords). The field must be distinguishable and say "not a saved login".
-  it('the passphrase field cannot be taken for a saved login: own name and id, new-password, password-manager opt-outs', () => {
-    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
-    const field = screen.getByLabelText('Admin passphrase');
+  // User rule (same day): the browser must still HELP (save and fill), but under its own login, never mixed with the PIN: the browser keys a
+  // saved password by site + username, so the form carries a fixed username (read-only, visually hidden) and a current-password field.
+  it('the passphrase is a saved login of its own for the browser: fixed username field, own name and id, current-password, no opt-out', () => {
+    const { container } = render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    const field = screen.getByLabelText('Admin passphrase') as HTMLInputElement;
     expect(field).toHaveAttribute('name', 'machine-admin-passphrase');
     expect(field).toHaveAttribute('id', 'machine-admin-passphrase');
-    expect(field).toHaveAttribute('autocomplete', 'new-password');
-    expect(field).toHaveAttribute('data-1p-ignore');
-    expect(field).toHaveAttribute('data-lpignore', 'true');
-    expect(field).toHaveAttribute('data-bwignore', 'true');
+    expect(field).toHaveAttribute('autocomplete', 'current-password');
+    expect(field.hasAttribute('data-1p-ignore')).toBe(false);
+    expect(field.hasAttribute('data-lpignore')).toBe(false);
+    const user = container.querySelector('input[autocomplete="username"]') as HTMLInputElement;
+    expect(user).not.toBeNull();
+    expect(user.value).toBe('machine-admin');
+    expect(user.readOnly).toBe(true);
+    expect(user.form).toBe(field.form);
+    expect(user.name).toBe('machine-admin-username');
   });
 
   it('starts locked: asks for the passphrase and offers no signing', () => {

@@ -123,10 +123,13 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
             void unlock();
           }}
         >
+          {/* The browser saves a password under site + username: a fixed username makes this a login of its own, apart from the app-core PIN. */}
+          {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
+          <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
           <label className="flex flex-col gap-1 text-sm">
             Admin passphrase
             {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}
-            <input ref={passphraseInput} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase" autoComplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore="true" className={INPUT} />
+            <input ref={passphraseInput} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase" autoComplete="current-password" className={INPUT} />
           </label>
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />

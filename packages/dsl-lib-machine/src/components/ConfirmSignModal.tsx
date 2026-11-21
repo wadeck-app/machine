@@ -103,11 +103,16 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
         {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}
         <form className="flex flex-col gap-3" onSubmit={submit}>
           {needsPassphrase && (
+            <>
+              {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
+              {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
+              <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
             <label className="flex flex-col gap-1 text-sm">
               Admin passphrase
               {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
-              <input ref={passphrase} type="password" name="machine-admin-passphrase-confirm" id="machine-admin-passphrase-confirm" autoComplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore="true" disabled={busy} className={INPUT} />
+              <input ref={passphrase} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase-confirm" autoComplete="current-password" disabled={busy} className={INPUT} />
             </label>
+            </>
           )}
           {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
           <div data-footer="" className="flex justify-end gap-2">
