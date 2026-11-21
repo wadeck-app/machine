@@ -16,7 +16,8 @@ const COPIES = VALIDATOR_SOURCES.map((file) => join(here, '..', '..', 'machine-w
 const DANGEROUS = ';&$`"\'\\*?~!#%^<>{}[]';
 
 function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((line) => line.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  // A Windows checkout has CRLF line ends: `.` does not match `\r`, so the line comments would survive the strip without this split.
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((line) => line.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
 }
 
 export function blacklistFindings(source: string): string[] {
@@ -61,5 +62,7 @@ describe('the validator holds no blacklist of characters', () => {
     expect(blacklistFindings('const SHELL_META = "<>;&";')).not.toEqual([]);
     // Comments and ordinary text are not findings.
     expect(blacklistFindings("// never a forbidden list: [^x] ;&$\nconst ok = 'abc';")).toEqual([]);
+    // Same source with Windows line ends (CI on windows-latest checks files out with CRLF).
+    expect(blacklistFindings("// never a forbidden list: [^x] ;&$\r\nconst ok = 'abc';\r\n")).toEqual([]);
   });
 });
