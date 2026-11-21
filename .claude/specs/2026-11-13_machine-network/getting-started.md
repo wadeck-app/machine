@@ -14,7 +14,7 @@ The user-facing guide (install, quick start, allow, run, Wake-on-LAN, troublesho
 | Start the daemon now and at each login (each machine) | `machine startup enable` (`--no-start` registers only; `machine status` shows `daemon: running` or `NOT running` with the fix) | none; never automatic unless `--auto-startup` |
 | Stop starting at login | `machine startup disable` | none; also ends the running daemon of the job |
 | Test the connection | `machine ping` (path to the relay), `machine ping <machine>` (channel to a peer) | none; runs nothing, needs no allowlist entry |
-| Reach a machine that sleeps (same LAN) | `machine peer connect <machine> --address <ip>:<port> --wake-mac <mac>` once, then `machine run` / `machine ping` as usual; `machine peer wake <machine>` to wake now | type the MAC of the target (never learned from the relay) |
+| Reach a machine that sleeps (same LAN) | `machine peer connect <machine> --address <ip>:<port> --wake-mac <mac>` once, then `machine run` / `machine ping` as usual; `machine wake <machine>` to wake now | type the MAC of the target (never learned from the relay) |
 
 The relay is named once (`<relay>` is a host or URL), then stored. A machine that holds the admin key and runs `machine join <relay>` approves itself (needs `machine admin login` first, or use `setup`). The token of `setup` is the machine token AND the admin token of the first machine (one file content in `relay.json` and `relay-admin.json`); `machine admin login` on another machine adds `<name> admin`. A relay without the `machine-admin` scope fails loudly: update it; `machine admin login --full-access` (a full-access token that can also manage tokens) is the explicit opt-in.
 
@@ -131,7 +131,7 @@ machine peer connect <machine> --address 192.168.1.40:47921 --wake-mac aa:bb:cc:
     when it cannot be reached (type ping-if-not-reachable-magic-packet; --type direct keeps it manual, then --wake wakes on demand)
 machine peer connect <machine> --show        the effective values, "(default)" marks what nobody set
 machine peer connect <machine> --remove      forget the settings of that peer
-machine peer wake <machine>                  wake now, wait for the answer, print the measured time (ignores the 60 s cooldown)
+machine wake <machine>                       wake now, wait for the answer, print the measured time (ignores the 60 s cooldown)
 machine wake-info <machine>                  checklist to prepare THE TARGET: its BIOS/driver/system settings, daemon at login, how to find its MAC,
                                              and the command above filled with what this machine knows (reads local files, sends nothing)
 machine run <machine> --wake|--no-wake ...   force or forbid the wake for this command (same on machine ping <machine>)
@@ -149,7 +149,7 @@ machine run <machine> --wake|--no-wake ...   force or forbid the wake for this c
 
 - Order: unicast to the pinned (or last known) IPv4 address, probe, directed broadcast, probe, alternating; success stops at once. A flag changes that value and keeps the others.
 - Tuning: a wake prints `answered after 14.2 s, woken by unicast (probe window 3, 4.2 s into its 5 s)`; after more than 80% of a window it prints the command that raises `probeSeconds`. "By unicast" names the last packet before the answer: Wake-on-LAN gives no acknowledgement.
-- Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A refused connection is not woken either: the machine answered, so it is awake and no daemon listens; the output says to start the daemon there (`machine startup enable`). A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits); `machine peer wake` is explicit and ignores that cooldown (the packet limits still apply).
+- Only an unreachable or silent peer is woken, never an authentication, registration or revocation failure. A refused connection is not woken either: the machine answered, so it is awake and no daemon listens; the output says to start the daemon there (`machine startup enable`). A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits); `machine wake` is explicit and ignores that cooldown (the packet limits still apply).
 - The target must SLEEP, not be shut down: its daemon starts at login, so a machine woken from power-off without auto-login does not listen. BIOS/UEFI and driver Wake-on-LAN settings are on the target (on Linux `ethtool <interface>` shows `Wake-on: g`); Wi-Fi targets are unreliable. `machine wake-info <machine>` prints this checklist for the target (macOS and Windows lines are marked UNVERIFIED).
 - Trace: `<configDir>/wake-audit.log` (who woke what, how many packets, hash-chained); the settings are in `connections.json` (no secret).
 

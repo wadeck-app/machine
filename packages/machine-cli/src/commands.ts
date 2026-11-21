@@ -4,6 +4,7 @@ import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
 import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
+import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
@@ -158,6 +159,23 @@ export function makeCommands(configDir: string, version: string | (() => string)
     /** The Requests page, remote section (decision 74): forwards a request signed in the browser with the admin key to a peer. Read-only; signs nothing. */
     remoteRequests(payload?: unknown): Promise<RemoteRequestsAnswer> {
       return remoteRequestsCommand(configDir, payload, now());
+    },
+
+    /**
+     * The Allow button of the Requests page (decision 76). The page unlocks the admin key and signs IN THE BROWSER; the daemon only serves the
+     * ENCRYPTED key file, answers what the page needs before it asks the passphrase, and verifies and delivers the signed result. It never
+     * receives a passphrase or an unlocked key and signs nothing.
+     */
+    adminKeyFile(): ReturnType<typeof adminKeyText> {
+      return adminKeyText(configDir);
+    },
+
+    allowContext(payload?: unknown): ReturnType<typeof allowContext> {
+      return allowContext(configDir, payload, now());
+    },
+
+    submitPolicy(payload?: unknown): Promise<SubmitAnswer> {
+      return submitPolicy(configDir, payload, now());
     },
 
     resolve(payload?: unknown): ResolveAnswer {

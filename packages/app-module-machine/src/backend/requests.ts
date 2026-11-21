@@ -45,9 +45,19 @@ export interface HistoryRow {
   unverified: boolean;
 }
 
+/** Whether the Allow button of the rows is offered on this machine (decision 76), and why not. The button signs IN THE BROWSER; see AllowRequestsTable. */
+export interface AllowCapability {
+  available: boolean;
+  /** The target of the policy: this machine. */
+  machine: { uuid: string; name: string };
+  /** Why it is not offered, and what to do instead; empty when it is. */
+  note: string;
+}
+
 export interface RequestsPage {
   machine: { uuid: string; name: string };
   policyMode: 'admin' | 'local';
+  allow: AllowCapability;
   /** The tab indicator reads this. */
   count: number;
   pending: PendingRow[];
@@ -103,9 +113,16 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
   if (summary.historyTotal > summary.history.length) notes.push(`Showing the last ${summary.history.length} of ${summary.historyTotal} entries.`);
   if (summary.allowedNow > 0) notes.push(`${summary.allowedNow} earlier request${summary.allowedNow === 1 ? ' is' : 's are'} allowed now and not listed.`);
   if (summary.skipped > 0) notes.push(`${summary.skipped} verified entr${summary.skipped === 1 ? 'y has' : 'ies have'} no usable time or event name and ${summary.skipped === 1 ? 'is' : 'are'} not shown.`);
+  let allowNote = '';
+  if (answer.policyMode === 'local') {
+    allowNote = `${answer.self.name} manages its own allow list (policy mode local): an admin signature would be refused. Run the command shown in each row on ${answer.self.name} (\`machine policy allow\`, it asks the local passphrase).`;
+  } else if (!answer.adminKeyHere) {
+    allowNote = 'Only the admin machine can allow a command: it holds the admin key. Run the command shown in each row there (`machine admin allow`).';
+  }
   return {
     machine: answer.self,
     policyMode: answer.policyMode,
+    allow: { available: allowNote === '', machine: answer.self, note: allowNote },
     count: summary.pending.length,
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: summary.pendingTotal,

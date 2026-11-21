@@ -136,13 +136,6 @@ const GROUPS: GroupHelp[] = [
         examples: ['machine peer connect laptop --shell sh', 'machine peer connect laptop --address 192.168.1.20:47921 --wake-mac aa:bb:cc:dd:ee:ff', 'machine peer connect laptop --show'],
       },
       {
-        name: 'wake',
-        usage: 'wake <machine>',
-        text: 'wake the peer now (Wake-on-LAN, same LAN) and wait for it to answer',
-        options: ['<machine>   a peer with a MAC set by `machine peer connect`'],
-        examples: ['machine peer wake laptop'],
-      },
-      {
         name: 'forget-record',
         usage: 'forget-record <peer>',
         text: 'forget the highest address record seen for ONE peer (only after it was reinstalled)',
@@ -150,7 +143,7 @@ const GROUPS: GroupHelp[] = [
         examples: ['machine peer forget-record laptop'],
       },
     ],
-    examples: ['machine peer', 'machine peer connect laptop --address 192.168.1.20:47921', 'machine peer wake laptop'],
+    examples: ['machine peer', 'machine peer connect laptop --address 192.168.1.20:47921'],
   },
   {
     name: 'startup',
@@ -229,7 +222,9 @@ const find = (name: string | undefined): GroupHelp | undefined => GROUPS.find((g
 export function unknownSubcommandMessage(group: string, sub: string | undefined): string {
   const g = find(group);
   if (g === undefined) throw new Error(`no help for the command group "${group}"`);
-  const what = sub === undefined ? `${group} needs a subcommand` : `unknown ${group} subcommand "${sub}"`;
+  // `machine peer wake` was renamed `machine wake`: a user of the old form is told, not left with a bare "unknown".
+  const renamed = group === 'peer' && sub === 'wake' ? ' (`machine peer wake` was renamed: use `machine wake <machine>`)' : '';
+  const what = sub === undefined ? `${group} needs a subcommand` : `unknown ${group} subcommand "${sub}"${renamed}`;
   return `${what}: machine ${group} ${g.subs.map((s) => s.name).join(' | ')}; see \`machine ${group} --help\``;
 }
 

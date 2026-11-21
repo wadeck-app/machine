@@ -7,8 +7,8 @@ import { checkModuleHeader } from './guard.js';
 import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './requests.js';
 import type { RequestsListAnswer } from '@wadeck-app/machine-core';
 
-// Backend of the machine module. Slice 1: read-only routes only. No route here signs, spends the relay token or changes
-// anything (decision D25: signing happens in the browser). Local-API limit, stated honestly: app-core checks only Host and
+// Backend of the machine module. Read routes, plus the routes of the Allow button (decision 76: `sensitive`, they carry only the ENCRYPTED admin key
+// and signed documents). No route here signs: signing happens in the browser (decision D25). Local-API limit, stated honestly: app-core checks only Host and
 // Origin, so ANY local process can call these routes as the user; they hand out what that process could read from the files
 // of the same user anyway. `guard.ts` (x-machine-module) is for the routes of the later slices that sign or spend the token.
 
@@ -35,6 +35,39 @@ const REMOTE_STATUS: Record<string, number> = {
   'no-admin': 403,
   'rate-limited': 429,
 };
+
+/** The HTTP status of a refusal of the daemon commands of the Allow flow (the reason is the `kind`; anything not listed is 502). */
+const ALLOW_STATUS: Record<string, number> = {
+  'bad-payload': 400,
+  'bad-document': 400,
+  'unknown-machine': 404,
+  'bad-signature': 403,
+  'stale-base': 409,
+  'mode-local': 409,
+  'no-admin-key': 409,
+  'no-admin-token': 409,
+  'policy-record-invalid': 409,
+  'policy-mode-invalid': 409,
+  'key-file-invalid': 409,
+  refused: 409,
+  'relay-error': 502,
+};
+
+/** Storing a policy may include one call to the relay. */
+const ALLOW_TIMEOUT_MS = 20_000;
+
+/** Why a body is not `{ policy, document? }` (names the offending field, never its value); undefined when it is. */
+function allowBodyProblem(body: unknown): string | undefined {
+  const expected = 'expected {"policy": <signed policy>, "document": <signed inbox document, for another machine>}: the page signs them in the browser';
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return expected;
+  const record = body as Record<string, unknown>;
+  const extra = Object.keys(record).find((k) => k !== 'policy' && k !== 'document');
+  if (extra !== undefined) return `the field "${extra}" is not accepted: this route takes only the signed policy and its document, never a passphrase or a key (${expected})`;
+  const signed = (v: unknown): boolean => typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { body?: unknown }).body === 'object' && (v as { body?: unknown }).body !== null && typeof (v as { signature?: unknown }).signature === 'string';
+  if (!signed(record['policy'])) return `"policy" must be a signed policy ({ body, signature }); ${expected}`;
+  if (record['document'] !== undefined && !signed(record['document'])) return `"document" must be a signed document ({ body, signature }); ${expected}`;
+  return undefined;
+}
 
 interface Failure {
   status: number;
@@ -186,6 +219,49 @@ export default function register(ctx: ModuleContextLike): void {
     },
     { effect: 'sensitive' },
   );
+
+  // The Allow button of the Requests page (decision 76, app-module-parity.md P2.0 and P2.2). The admin passphrase and the unlocked key exist ONLY in
+  // the browser: the page reads the ENCRYPTED key file here, unlocks it, signs the next policy and posts back only signed documents. These three
+  // routes are `sensitive` (the app-core PIN, so a process that merely reaches the port cannot even fetch the key file) and need the module
+  // header; they never see, log or forward a passphrase or a key (the post accepts exactly {policy, document}). The daemon still verifies the
+  // admin signature, the target and the base version before it stores or delivers anything (hard rule 4).
+  const SENSITIVE = { effect: 'sensitive' } as const;
+  const viaDaemon = async (req: unknown, reply: ReplyLike, command: string, payload: unknown | undefined, timeoutMs: number | undefined, ok: (result: unknown) => unknown = (r) => r): Promise<unknown> => {
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    try {
+      const answer = (await callDaemon(configDir(), command, timeoutMs, payload)) as { ok?: unknown; reason?: unknown; message?: unknown };
+      if (typeof answer === 'object' && answer !== null && answer.ok === false) {
+        const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
+        const status = ALLOW_STATUS[reason] ?? 502;
+        return reply.code(status).send({ status, kind: reason, error: typeof answer.message === 'string' ? answer.message : `the daemon refused the ${command} command` });
+      }
+      return reply.code(200).send(ok(answer));
+    } catch (err) {
+      const failure = failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  };
+
+  ctx.registerRoute('GET', '/admin-key', (req, reply) => viaDaemon(req, reply, 'adminKeyFile', undefined, undefined, (answer) => ({ file: (answer as { file: string }).file })), SENSITIVE);
+
+  ctx.registerRoute('GET', '/allow/:machine', (req, reply) => {
+    const machine = typeof req === 'object' && req !== null ? (req as { params?: { machine?: unknown } }).params?.machine : undefined;
+    if (typeof machine !== 'string' || machine.length === 0) return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'expected the machine (name, alias or uuid) in the path: /allow/<machine>' });
+    return viaDaemon(req, reply, 'allowContext', { machine }, undefined);
+  }, SENSITIVE);
+
+  ctx.registerRoute('POST', '/allow', (req, reply) => {
+    // The header first (a stray request learns nothing about the body rules), then the shape; viaDaemon checks the header again, which is cheap.
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    const body = typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined;
+    const problem = allowBodyProblem(body);
+    if (problem !== undefined) return reply.code(400).send({ status: 400, kind: 'bad_request', error: problem });
+    const { policy, document } = body as { policy: unknown; document?: unknown };
+    // Only these two fields go to the daemon, re-built here: nothing else of the request can travel with them.
+    return viaDaemon(req, reply, 'submitPolicy', document === undefined ? { policy } : { policy, document }, ALLOW_TIMEOUT_MS);
+  }, SENSITIVE);
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

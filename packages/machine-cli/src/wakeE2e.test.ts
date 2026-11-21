@@ -221,8 +221,8 @@ describe('machine run with a sleeping peer', () => {
   });
 });
 
-describe('machine ping --wake and machine peer wake', () => {
-  it('peer wake ignores the cooldown that a run just started; run and ping still respect it', async () => {
+describe('machine ping --wake and machine wake', () => {
+  it('wake ignores the cooldown that a run just started; run and ping still respect it', async () => {
     const port = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01', '--wake-wait', '10', '--wake-probe', '2']);
     expect((await run(wakeWorld())).code).toBe(255);
@@ -230,9 +230,12 @@ describe('machine ping --wake and machine peer wake', () => {
     expect((await run(viaRun)).code).toBe(255);
     expect(viaRun.sent).toEqual([]);
     const explicit = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
-    const r = await cli(a, ['peer', 'wake', 'laptop'], undefined, explicit.io);
+    const r = await cli(a, ['wake', 'laptop'], undefined, explicit.io);
     expect(r.code).toBe(0);
     expect(explicit.sent).toEqual(['unicast']);
+    // The audit entries of the explicit wake say who asked: `wake` (entries written before the rename keep their `peer wake`, the chain does not read the value).
+    expect(auditEntries().filter((e) => e.requestedBy === 'wake').length).toBeGreaterThan(0);
+    expect(auditEntries().some((e) => e.requestedBy === 'peer wake')).toBe(false);
     expect(r.err).not.toMatch(/cooldown/);
   });
 
@@ -257,25 +260,25 @@ describe('machine ping --wake and machine peer wake', () => {
     expect(world.sent).toEqual([]);
   });
 
-  it('peer wake sends now, waits, prints the measured time, and an awake peer gets no packet', async () => {
+  it('wake sends now, waits, prints the measured time, and an awake peer gets no packet', async () => {
     const port = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01']);
     const world = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
-    const r = await cli(a, ['peer', 'wake', 'laptop'], undefined, world.io);
+    const r = await cli(a, ['wake', 'laptop'], undefined, world.io);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by unicast \(probe window 1, [\d.]+ s into its 5 s\)/);
     expect(world.sent).toEqual(['unicast']);
     const awake = wakeWorld({ asleep: false });
-    const again = await cli(a, ['peer', 'wake', 'laptop'], undefined, awake.io);
+    const again = await cli(a, ['wake', 'laptop'], undefined, awake.io);
     expect(again.code).toBe(0);
     expect(again.out).toMatch(/\[ok\] "laptop" already answers on 127\.0\.0\.1:\d+: no packet was sent/);
     expect(awake.sent).toEqual([]);
   });
 
-  it('peer wake of a peer that never answers: exit 1 with the cause and the fixes', async () => {
+  it('wake of a peer that never answers: exit 1 with the cause and the fixes', async () => {
     const port = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01', '--wake-wait', '10', '--wake-probe', '2']);
-    const r = await cli(a, ['peer', 'wake', 'laptop'], undefined, wakeWorld().io);
+    const r = await cli(a, ['wake', 'laptop'], undefined, wakeWorld().io);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/\[fail\] no answer from "laptop" after 10 s and 5 packets/);
   });

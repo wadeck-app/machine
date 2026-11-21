@@ -80,8 +80,8 @@ async function withRelay(candidacies: unknown[]): Promise<string> {
 }
 
 describe('route registration', () => {
-  it('registers the five read-only GET routes and the one sensitive POST (the remote requests list, decision 74)', () => {
-    expect([...routes().keys()].sort()).toEqual(['GET /candidacies', 'GET /health', 'GET /machines', 'GET /requests', 'GET /status', 'POST /requests/remote']);
+  it('registers the five read-only GET routes and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76)', () => {
+    expect([...routes().keys()].sort()).toEqual(['GET /admin-key', 'GET /allow/:machine', 'GET /candidacies', 'GET /health', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /requests/remote']);
   });
 });
 

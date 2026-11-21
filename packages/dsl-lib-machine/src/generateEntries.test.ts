@@ -7,10 +7,11 @@ import { LIB_ENTRIES } from './paths.js';
 describe('generated entries', () => {
   const generated = generateEntries();
 
-  it('registers the three machine components', () => {
-    for (const name of ['VerticalTimeline', 'PassphraseSigner', 'FinalCodeDisplay']) {
+  it('registers the machine components (and not the internal modal, which must never be wired from a view)', () => {
+    for (const name of ['VerticalTimeline', 'PassphraseSigner', 'FinalCodeDisplay', 'AllowRequestsTable']) {
       expect(generated, `${name} is missing: run "npm run entries --workspace=packages/dsl-lib-machine"`).toContain(`${name}Entry`);
     }
+    expect(generated).not.toContain('ConfirmSignModalEntry');
   });
 
   it('src/generated/entries.tsx is not stale', () => {

@@ -105,6 +105,7 @@ import { FilterChips } from '@wadeck-app/dsl-ui/dist/components/table/FilterChip
 import { Pagination } from '@wadeck-app/dsl-ui/dist/components/table/Pagination.js'
 import { SearchBar } from '@wadeck-app/dsl-ui/dist/components/table/SearchBar.js'
 import { SortableColumn } from '@wadeck-app/dsl-ui/dist/components/table/SortableColumn.js'
+import { AllowRequestsTable } from '../components/AllowRequestsTable.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
 import { VerticalTimeline } from '../components/VerticalTimeline.js'
@@ -1853,6 +1854,18 @@ export const SortableColumnEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const AllowRequestsTableEntry: ComponentRegistryEntry = {
+	name: 'AllowRequestsTable', category: 'composite', tags: ["requests","allow","policy","admin"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'AllowRequestsTable.rows', 'array', false) as import('../components/AllowRequestsTable.js').AllowRequestsTableProps['rows']
+		const allow = coerceProp(resolveExpressionValue(node['allow'], ctx), 'AllowRequestsTable.allow', 'object', false) as import('../components/AllowRequestsTable.js').AllowRequestsTableProps['allow']
+		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'AllowRequestsTable.emptyMessage', 'string', false) as import('../components/AllowRequestsTable.js').AllowRequestsTableProps['emptyMessage']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'AllowRequestsTable.onRefresh', 'function', false) as import('../components/AllowRequestsTable.js').AllowRequestsTableProps['onRefresh']
+		return <AllowRequestsTable rows={rows} allow={allow} emptyMessage={emptyMessage} onRefresh={onRefresh} />
+	},
+}
+
 export const FinalCodeDisplayEntry: ComponentRegistryEntry = {
 	name: 'FinalCodeDisplay', category: 'atomic', tags: ["verification","code","enrollment"],
 	nodeSchema: null as never,
@@ -1985,6 +1998,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	PaginationEntry,
 	SearchBarEntry,
 	SortableColumnEntry,
+	AllowRequestsTableEntry,
 	FinalCodeDisplayEntry,
 	PassphraseSignerEntry,
 	VerticalTimelineEntry,
@@ -2126,6 +2140,7 @@ FilterChipsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","mo
 PaginationEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["onPageChange","page","size","total","urlParam"] : [];
 SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["debounceMs","focusExpand","onChange","placeholder","resetUrlParams","size","urlParam","value"] : [];
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
+AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

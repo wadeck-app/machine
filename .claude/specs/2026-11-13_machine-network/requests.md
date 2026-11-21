@@ -70,6 +70,10 @@ Only the admin (holder of the admin key) can ask, so the exposure is limited to 
 
 The page lists the local machine (pending and history). For the remote section the backend route exists (`POST /api/modules/machine/requests/remote`, `sensitive`: the app-core PIN; header `x-machine-module`; body `{ machine, request }` where `request` is the document signed in the browser): the daemon forwards it as is and returns the peer rows. **Not built: the page component that unlocks the admin key and signs a `requests-list` document** (`PassphraseSigner` signs registrations only, and the key file route it reads is not built). Until then the page says so and points to `machine requests <machine>`. The daemon never holds the admin key; the module backend never sees it.
 
+### Allow button (decision 76)
+
+Each pending row of the page has an Allow button on the admin machine in policy mode admin: it is `machine admin allow <this machine> --shell <s> -- <command>` with the signature made in the browser. Design, routes and limits: `app-module-parity.md` P2.2 and threat-model.md "Allow button". Elsewhere the row shows the CLI command and a note.
+
 ## Not verified
 
 - Chain behaviour on a log written by an older build (entries without `shell` and `command` on `no-policy` are simply not pending).

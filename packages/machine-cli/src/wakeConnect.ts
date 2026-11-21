@@ -24,7 +24,7 @@ import { readWakeState, recordWake } from './wakeState.js';
 import { writeWakeAudit } from './wakeAudit.js';
 import type { WakeSender } from './wakeSender.js';
 
-// The connection of `machine run`, `machine ping` and `machine peer wake` to a peer that may be asleep (decision 62): try, and when every failure
+// The connection of `machine run`, `machine ping` and `machine wake` to a peer that may be asleep (decision 62): try, and when every failure
 // says "unreachable" or "timeout" (a TYPE, see ConnectFailureKind), send magic packets (unicast then broadcast, a probe window after each) and keep
 // trying. Everything that touches the world (clock, sockets, interfaces, connection, files of the config dir) is in `WakeEnv`.
 
@@ -76,8 +76,8 @@ export interface WakeEnv {
   self: { uuid: string; name: string };
   peer: PeerToReach;
   /** Which command asked for the wake (audit). */
-  requestedBy: 'run' | 'ping' | 'peer wake';
-  /** An explicit `machine peer wake`: the 60 s cooldown (made for the automatic wakes of `run` and `ping`) does not apply. The packet limits do. */
+  requestedBy: 'run' | 'ping' | 'wake';
+  /** An explicit `machine wake`: the 60 s cooldown (made for the automatic wakes of `run` and `ping`) does not apply. The packet limits do. */
   bypassCooldown?: boolean;
   epochSeconds: () => number;
   nowMs: () => number;

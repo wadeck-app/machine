@@ -8,7 +8,7 @@ import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { daemonStateText, runStartupCommand } from './cliStartup.js';
 import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
-import { runWakeInfo } from './cliWake.js';
+import { runWake, runWakeInfo } from './cliWake.js';
 import { runRequests } from './cliRequests.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
@@ -54,7 +54,7 @@ Getting started (one command per machine; the name of a machine is the computer 
     machine peer connect <machine> --address <ip>:<port> --wake-mac <aa:bb:cc:dd:ee:ff>
                                      once: pins the address and the MAC you type (never learned from the relay); then
                                      \`machine run\` and \`machine ping\` wake the machine when it cannot be reached
-    machine peer wake <machine>      wake it now and wait for it to answer: prints each step and the measured time
+    machine wake <machine>           wake it now and wait for it to answer: prints each step and the measured time
     machine wake-info <machine>      checklist to prepare THE TARGET (BIOS/driver, per-system settings, daemon at login, its MAC)
     A refused connection (the machine answers, no daemon listens) is never woken: start the daemon there.
     The target must SLEEP (suspend), not be shut down: its daemon starts at login, so a machine woken from power-off
@@ -245,7 +245,8 @@ Administration (enrollment through the relay, or by files):
                                      of this machine (cmd on Windows, sh elsewhere)
   peer connect <machine> --show      the effective values, (default) marks what nobody set
   peer connect <machine> --remove    forget the settings of that peer
-  peer wake <machine>                send the wake now (the same steps), wait for the peer to answer, print the measured time
+  wake <machine> [--address <host:port>] [--json]
+                                     send the wake now (the same steps), wait for the peer to answer, print the measured time
                                      and a hint when the answer came late in a probe window. Exit 0 answers, 1 not. The 60 s cooldown
                                      between wakes applies to \`run --wake\` and \`ping --wake\`; this explicit command ignores it (the
                                      packet limits still apply)
@@ -466,7 +467,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, 'wake-info': 1, allowed: 1, requests: 1 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1 };
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -489,7 +490,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (args.wake && args.noWake) return fail('--wake and --no-wake cannot be combined: --wake forces the wake of a peer that cannot be reached, --no-wake forbids it', EXIT.usage);
   if ((args.wake || args.noWake) && command !== 'run' && command !== 'ping') {
-    return fail(`${args.wake ? '--wake' : '--no-wake'} only applies to \`machine run\` and \`machine ping\` (it wakes the peer when it cannot be reached; \`machine peer wake <machine>\` wakes it now)`, EXIT.usage);
+    return fail(`${args.wake ? '--wake' : '--no-wake'} only applies to \`machine run\` and \`machine ping\` (it wakes the peer when it cannot be reached; \`machine wake <machine>\` wakes it now)`, EXIT.usage);
   }
   if (!peerConnect) {
     const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--no-shell', args.noShell || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle]];
@@ -597,6 +598,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
 
     if (command === 'startup') return await runStartupCommand(ctx);
     if (command === 'cli') return await runCliMeta(ctx);
+    if (command === 'wake') return await runWake(ctx);
     if (command === 'wake-info') return runWakeInfo(ctx);
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
     if (command === 'requests' && rest.length === 0 && args.all !== true) return await runRequests(ctx);

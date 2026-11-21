@@ -140,7 +140,7 @@ machine requests laptop               admin machine: the pending list of a peer 
 machine requests --all                every peer, one passphrase; unreachable peers are reported
 ```
 
-`machine requests` reads the hash-chained audit log of this machine (no daemon needed). A command the policy allows now is not listed. A broken log is a warning with its line, and what follows is marked `[UNVERIFIED]`. The remote list needs the admin key here and peers that run this version; it shows the pending requests only (the history is read on each machine). The Requests page of the app-core module shows the same for this machine.
+`machine requests` reads the hash-chained audit log of this machine (no daemon needed). A command the policy allows now is not listed. A broken log is a warning with its line, and what follows is marked `[UNVERIFIED]`. The remote list needs the admin key here and peers that run this version; it shows the pending requests only (the history is read on each machine). The Requests page of the app-core module shows the same for this machine. On the admin machine (policy mode admin) each pending row has an Allow button: a confirmation names the machine, shell and exact command, asks the admin passphrase, and signs the new policy IN THE BROWSER (the daemon and the module backend never receive the passphrase or the unlocked key; the page asks the app-core PIN first). It is `machine admin allow` with a browser signature; `machine allowed <machine>` then lists the command. Elsewhere (no admin key, mode local) the row shows the CLI command.
 
 ### Who manages the allow list of a machine
 
@@ -197,7 +197,7 @@ Not verified on real hardware yet (see the end of this file). Tune it per peer.
 
 ### How it works
 
-The sender (the machine where you run `machine run` or `machine peer wake`) sends magic packets over UDP port 9, alternating:
+The sender (the machine where you run `machine run` or `machine wake`) sends magic packets over UDP port 9, alternating:
 
 1. a unicast packet to the known IPv4 address of the target (pinned by you, else the relay record), then a probe window;
 2. a directed broadcast of the subnet shared with the target, then a probe window;
@@ -288,7 +288,7 @@ macOS and Windows settings (UNVERIFIED, also printed by `machine wake-info`):
 ```
 machine peer connect laptop --address 192.168.1.50:47921 --wake-mac aa:bb:cc:dd:ee:ff
 machine wake-info laptop        # checklist for the target, filled with what this machine knows (sends nothing)
-machine peer wake laptop        # wake now, wait for the answer, print the measured time
+machine wake laptop             # wake now, wait for the answer, print the measured time
 machine peer connect laptop --show      # effective values, "(default)" marks what nobody set
 machine peer connect laptop --remove    # forget the settings of that peer
 ```
@@ -297,7 +297,7 @@ machine peer connect laptop --remove    # forget the settings of that peer
 - After `peer connect` with a MAC, `machine run` and `machine ping` wake the peer when it cannot be reached. `--type direct` keeps it manual (then `--wake` wakes on demand).
 - `machine run laptop --wake -- ...` forces the wake for one command, `--no-wake` forbids it. Same on `machine ping laptop`.
 - Only an unreachable or silent peer is woken. A refused connection is never woken (the machine answered, so it is awake and no daemon listens: start it there with `machine startup enable`), nor is an authentication, registration or revocation failure.
-- A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits). `machine peer wake` ignores that cooldown.
+- A second wake of the same peer within 60 s by `run --wake` or `ping --wake` sends no packet (it still waits). `machine wake` ignores that cooldown.
 
 ### Timing options (per peer, on `peer connect`)
 

@@ -89,6 +89,28 @@ describe('requestsPage (the Requests page, local machine)', () => {
     expect(requestsPage(daemonAnswer(audit, { adminKeyHere: false }), NOW).remoteNote).toMatch(/admin machine/);
   });
 
+  describe('the Allow button (decision 76)', () => {
+    it('is offered on the admin machine in mode admin: the rows carry what the confirmation names (machine, shell, exact command)', () => {
+      const page = requestsPage(daemonAnswer(audit, { adminKeyHere: true }), NOW);
+      expect(page.allow).toEqual({ available: true, machine: { uuid: SELF, name: 'target' }, note: '' });
+      expect(page.pending.map((p) => [p.shell, p.command])).toEqual([['sh', 'df -h'], ['sh', 'ls']]);
+    });
+
+    it('is not offered without the admin key here, and says where to do it', () => {
+      const page = requestsPage(daemonAnswer(audit, { adminKeyHere: false }), NOW);
+      expect(page.allow.available).toBe(false);
+      expect(page.allow.note).toMatch(/only the admin machine can allow/i);
+      expect(page.allow.note).toMatch(/machine admin allow/);
+    });
+
+    it('is not offered in mode local: that machine signs its own list, the note names `machine policy allow`', () => {
+      const page = requestsPage(daemonAnswer(audit, { adminKeyHere: true, policyMode: 'local' }), NOW);
+      expect(page.allow.available).toBe(false);
+      expect(page.allow.note).toMatch(/manages its own allow list/);
+      expect(page.allow.note).toMatch(/machine policy allow/);
+    });
+  });
+
   it('shows no verification code and nothing from the keys', () => {
     expect(JSON.stringify(requestsPage(daemonAnswer(audit), NOW))).not.toMatch(/verification|code"/i);
   });

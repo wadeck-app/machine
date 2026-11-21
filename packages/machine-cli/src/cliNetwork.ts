@@ -19,7 +19,7 @@ import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistributio
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { runRemoteRequests } from './cliRequestsRemote.js';
-import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, runPeerWake, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
+import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
 import { connectWithWake } from './wakeConnect.js';
 import { writeFileAtomic } from './fsutil.js';
 import { NotInitializedError } from './errors.js';
@@ -442,7 +442,6 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       return EXIT.ok;
     }
     if (sub === 'connect') return await runPeerConnect(ctx);
-    if (sub === 'wake') return await runPeerWake(ctx);
     if (sub === 'forget-record') {
       if (first === undefined || second !== undefined) return fail('usage: machine peer forget-record <peer>', EXIT.usage);
       try {

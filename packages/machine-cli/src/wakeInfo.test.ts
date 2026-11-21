@@ -68,7 +68,7 @@ describe('wakeInfoText', () => {
     const configured = wakeInfoText({ ...base, pinned: ['192.168.1.40:47921'], mac: 'aa:bb:cc:dd:ee:01' });
     expect(configured).toContain('machine peer connect laptop --show');
     expect(configured).not.toContain('--wake-mac <aa:bb:cc:dd:ee:ff>');
-    expect(configured).toContain('machine peer wake laptop');
+    expect(configured).toContain('machine wake laptop');
   });
 
   it('says what the command does not know: nothing was checked on the target', () => {

@@ -35,7 +35,7 @@ export const WAKE_COOLDOWN_SECONDS = 60;
 /**
  * Every timing of a wake is configurable PER PEER (resume times differ a lot between machines). Defaults and hard bounds: a typo cannot create a
  * storm (at most 8 packets per method) or a wait of hours. UNVERIFIED on real hardware: the defaults are a starting point to tune with
- * `machine peer wake`, which prints the measured time.
+ * `machine wake`, which prints the measured time.
  */
 export const WAKE_TUNING_FIELDS = ['probeSeconds', 'waitSeconds', 'maxUnicast', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds'] as const;
 export type WakeTuningField = (typeof WAKE_TUNING_FIELDS)[number];

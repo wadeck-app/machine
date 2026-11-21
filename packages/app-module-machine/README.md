@@ -11,6 +11,9 @@ app-core module `machine` (title "Machine"): admin pages of the machine network.
 | `GET /api/modules/machine/candidacies` | relay, admin token | candidacies with the recomputed code, `count` for the tab indicator |
 | `GET /api/modules/machine/requests` | local daemon `requests` (the audit log, same reader as `machine requests`) | Requests page: pending rows (ages, next command), history rows, chain state, `count` for the tab indicator (decision 73) |
 | `POST /api/modules/machine/requests/remote` | local daemon `remoteRequests` | sensitive (app-core PIN) and `x-machine-module`; body `{ machine, request }`, `request` = the `requests-list` document SIGNED IN THE BROWSER with the admin key; answers the peer rows. No page component signs it yet (decision 74) |
+| `GET /api/modules/machine/admin-key` | daemon `adminKeyFile` | sensitive + `x-machine-module`; `{ file }`: the ENCRYPTED admin key file as on disk (refused when it is not an encrypted envelope). The page unlocks it in the browser (decision 76) |
+| `GET /api/modules/machine/allow/:machine` | daemon `allowContext` | sensitive + header; target, pinned admin key, the signed policy to edit from, delivery (`install` here, `inbox` for a peer); refuses before any passphrase (no admin key, mode local, no admin token) |
+| `POST /api/modules/machine/allow` | daemon `submitPolicy` | sensitive + header; body exactly `{ policy, document? }` (signed in the browser; any other field is a 400); the daemon verifies the signature, target and base version, then installs it here or puts the document in the peer's relay inbox |
 | `GET /api/modules/machine/health` | config folder, relay (`/api/whoami`), daemon | update test of app-core-cli (decision 65): `{ ok, checks[] }` |
 
 - Config dir: `MACHINE_CONFIG_DIR`, else `~/.config/machine` (same as machine-cli).
@@ -40,4 +43,4 @@ The integration test packages the module and starts `app-core-cli dev` on a free
 
 ## Not in this slice
 
-Approve and reject buttons (the components `machine:PassphraseSigner` and `machine:FinalCodeDisplay` exist in `packages/dsl-lib-machine` but are not on a page; the Candidacies timeline statuses are static), the admin key file route, the post-decision and distribution routes, Policy, Audit and Unlock pages, publication (see the work breakdown in admin-ui.md).
+Only the Allow button of the Requests page signs (decision 76; "remove an entry" is supported by the route and the signing code but has no page yet: no Policy page). Not built: Reject, Revoke, Approve candidacy, Distribute, "remember the passphrase". Approve and reject buttons (the components `machine:PassphraseSigner` and `machine:FinalCodeDisplay` exist in `packages/dsl-lib-machine` but are not on a page; the Candidacies timeline statuses are static), the post-decision and distribution routes, Policy, Audit and Unlock pages, publication (see the work breakdown in admin-ui.md).

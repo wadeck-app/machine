@@ -70,13 +70,13 @@ export function wakeInfoText(data: WakeInfoData): string {
     add(
       `Then, on this machine (the one that will send the wake)`,
       `  machine peer connect ${name} --address ${address} --wake-mac ${macArgument}`,
-      `  machine peer wake ${name}        (after putting the target to sleep: prints each step and the measured time)`,
+      `  machine wake ${name}      (after putting the target to sleep: prints each step and the measured time)`,
     );
   } else {
     add(
       'Then, on this machine (the one that will send the wake)',
       `  machine peer connect ${name} --show      (the MAC ${mac} is configured; this prints every setting)`,
-      `  machine peer wake ${name}        (after putting the target to sleep: prints each step and the measured time)`,
+      `  machine wake ${name}      (after putting the target to sleep: prints each step and the measured time)`,
     );
   }
   add('');

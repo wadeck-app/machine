@@ -10,7 +10,7 @@ import type { CliMetaDeps } from './cliMeta.js';
 
 const GROUPS: Record<string, string[]> = {
   admin: ['init', 'login', 'approve', 'revoke', 'allow', 'distribute', 'forget-relay-record', 'pin', 'register', 'sign-policy'],
-  peer: ['info', 'import', 'connect', 'wake', 'forget-record'],
+  peer: ['info', 'import', 'connect', 'forget-record'],
   startup: ['status', 'enable', 'disable'],
   cli: ['version', 'update', 'rollback', 'self-check', 'logs', 'post-update', 'register'],
   alias: ['list', 'set', 'rm'],

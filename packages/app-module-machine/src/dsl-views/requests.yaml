@@ -3,15 +3,17 @@ $sources:
     url: GET /api/modules/machine/requests
     poll: 30s
 
-# Read-only (decision 73): what the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`).
-# Pending = refused because the command is not allowed (a command the policy allows now is not listed). The page runs nothing and signs
-# nothing: the exact command that allows a request is shown, to run on the admin machine. Ages are humanized by the route. No code columns.
+# What the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`, decision 73).
+# Pending = refused because the command is not allowed (a command the policy allows now is not listed). Ages are humanized by the route. No code columns.
+# Each pending row has an Allow button (decision 76) on the admin machine in policy mode admin: it does what `machine admin allow` does, with the admin
+# passphrase and the unlocked key ONLY in the browser (machine:AllowRequestsTable, confirmation modal, signature in the page, only the signed documents
+# posted). Elsewhere (no admin key here, mode local) the row shows the CLI command instead and `allow.note` says why. History stays read-only.
 # The requests of OTHER machines are listed by `machine requests <machine>` on the admin machine; the page cannot ask a peer yet (see remoteNote).
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Requests
-    subtitle: Commands that peers asked this machine to run. Read-only.
+    subtitle: Commands that peers asked this machine to run. On the admin machine, Allow signs the new policy here, in your browser, with the admin passphrase.
   - $type: Card
     $if: $sources.requests.chainText
     padding: sm
@@ -25,20 +27,10 @@ sections:
         text: $sources.requests.remoteNote
   - $type: Markdown
     text: "### Waiting for approval"
-  - $type: DataTable
+  - $type: machine:AllowRequestsTable
     rows: $sources.requests.pending
+    allow: $sources.requests.allow
     emptyMessage: $sources.requests.emptyMessage
-    expansion:
-      $type: Markdown
-      text: $ctx.row.nextWhere
-    columns:
-      - { key: "peerText", label: "From", nowrap: true }
-      - { key: "shell", label: "Shell", nowrap: true }
-      - { key: "command", label: "Command" }
-      - { key: "countText", label: "Times", nowrap: true }
-      - { key: "firstSeenText", label: "First", nowrap: true }
-      - { key: "lastSeenText", label: "Last", nowrap: true }
-      - { key: "nextCommand", label: "To allow it" }
   - $type: Markdown
     text: "### History"
   - $type: DataTable

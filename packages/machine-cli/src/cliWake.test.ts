@@ -8,7 +8,7 @@ import { cli, provision } from './testing.js';
 import type { WakeSender } from './wakeSender.js';
 import { wakeAuditFile } from './wakeAudit.js';
 
-// `machine peer connect` and `machine peer wake` (decision 62): settings, flags over file, validation, the failing cases. A = "desktop" (admin, caller), B = "laptop" (the peer).
+// `machine peer connect` and `machine wake` (decisions 62 and 75): settings, flags over file, validation, the failing cases. A = "desktop" (admin, caller), B = "laptop" (the peer).
 
 let root: string;
 let a: string;
@@ -313,7 +313,25 @@ describe('flags are accepted only where they mean something', () => {
   });
 });
 
-describe('machine peer wake <machine>', () => {
+describe('machine peer wake (removed): fails loudly with the new command', () => {
+  it('names `machine wake <machine>`, exit 2, sends nothing', async () => {
+    const r = await cli(a, ['peer', 'wake', 'laptop']);
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('');
+    expect(r.err).toBe('[fail] unknown peer subcommand "wake" (`machine peer wake` was renamed: use `machine wake <machine>`): machine peer info | import | connect | forget-record; see `machine peer --help`\n');
+    expect(existsSync(wakeAuditFile(a))).toBe(false);
+  });
+
+  it('`machine peer wake --help` gives the same hint, `machine peer --help` no longer lists it', async () => {
+    const h = await cli(a, ['peer', 'wake', '--help']);
+    expect(h.code).toBe(2);
+    expect(h.err).toMatch(/use `machine wake <machine>`/);
+    const g = await cli(a, ['peer', '--help']);
+    expect(g.out).not.toMatch(/peer wake/);
+  });
+});
+
+describe('machine wake <machine>', () => {
   const fakeSender = (sent: string[]): WakeSender => ({
     send: async (method, _packet, routes) => {
       sent.push(method);
@@ -321,7 +339,7 @@ describe('machine peer wake <machine>', () => {
     },
   });
   const noSleep = { sleep: async () => undefined, nowMs: (() => { let t = 0; return () => (t += 1000); })() };
-  const wakeCli = (args: string[], wake: object) => cli(a, ['peer', 'wake', ...args], undefined, { wake } as never);
+  const wakeCli = (args: string[], wake: object) => cli(a, ['wake', ...args], undefined, { wake } as never);
 
   it('with no MAC configured: exit 1 with the command that sets it', async () => {
     const r = await wakeCli(['laptop'], {});

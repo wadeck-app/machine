@@ -35,7 +35,7 @@ import { WakeAuditError } from './wakeAudit.js';
 import { connectWithWake, settingsFromConfig, WakeError, wakeEnabled, type WakeEnv, type WakeSettings } from './wakeConnect.js';
 import { createWakeSender } from './wakeSender.js';
 
-// `machine peer connect` (how this machine reaches a peer), `machine peer wake`, and the wake plumbing of `machine run` and `machine ping`
+// `machine peer connect` (how this machine reaches a peer), `machine wake`, and the wake plumbing of `machine run` and `machine ping`
 // (decision 62). The pure parts are in machine-core (wake.ts, wakeSequence.ts, connections.ts) and wakeConnect.ts.
 
 /** The IPv4 interfaces of this machine. */
@@ -74,7 +74,7 @@ export interface WakeSinks {
   warn: (line: string) => void;
 }
 
-/** Wake lines on stderr (stdout belongs to the command output): `[info]`, `[ok]`, `[warn]`. `okOnStdout`: `[ok]` lines go to stdout (ping, peer wake). */
+/** Wake lines on stderr (stdout belongs to the command output): `[info]`, `[ok]`, `[warn]`. `okOnStdout`: `[ok]` lines go to stdout (ping, wake). */
 export function stderrSinks(ctx: CommandContext, okOnStdout = false): WakeSinks {
   const { io, args } = ctx;
   return {
@@ -102,8 +102,8 @@ export function makeWakeEnv(ctx: CommandContext, trusted: TrustedPeer, options: 
     self: { uuid: self.uuid, name: self.name },
     peer,
     requestedBy: options.requestedBy,
-    // An explicit `machine peer wake` is the user asking now: the cooldown of the automatic wakes does not apply (the packet limits still do).
-    bypassCooldown: options.requestedBy === 'peer wake',
+    // An explicit `machine wake` is the user asking now: the cooldown of the automatic wakes does not apply (the packet limits still do).
+    bypassCooldown: options.requestedBy === 'wake',
     epochSeconds: () => epochSecondsOf(ctx),
     nowMs: io.wake?.nowMs ?? (() => performance.now()),
     sleep: io.wake?.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
@@ -341,13 +341,13 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// machine peer wake
+// machine wake
 
 /** Sends the wake now and waits for the peer to answer: 0 it answers, 1 it does not (or cannot be woken from here). */
-export async function runPeerWake(ctx: CommandContext): Promise<number> {
-  const { args, rest, fail, emit } = ctx;
-  const ref = rest[1];
-  if (ref === undefined || rest.length > 2) return fail('usage: machine peer wake <machine> [--address <host:port>] [--json]', EXIT.usage);
+export async function runWake(ctx: CommandContext): Promise<number> {
+  const { rest, fail, emit } = ctx;
+  const ref = rest[0];
+  if (ref === undefined || rest.length > 1) return fail('usage: machine wake <machine> [--address <host:port>] [--json]', EXIT.usage);
   const trusted = resolveTrustedPeer(ctx, ref, { reference: EXIT.reference, failure: EXIT.failure });
   if ('exit' in trusted) return trusted.exit;
   const { peer } = trusted;
@@ -362,7 +362,7 @@ export async function runPeerWake(ctx: CommandContext): Promise<number> {
   const sinks = stderrSinks(ctx, true);
   try {
     const target = await targetFor(ctx, peer, connection, sinks.warn);
-    const env = makeWakeEnv(ctx, trusted, { requestedBy: 'peer wake', sinks, pinned: pinnedOf(connection) });
+    const env = makeWakeEnv(ctx, trusted, { requestedBy: 'wake', sinks, pinned: pinnedOf(connection) });
     const result = await connectWithWake(env, target, settings.settings);
     result.connected.session.close();
     if (result.wake === undefined) sinks.ok(`"${peer.name}" already answers on ${describeAddress(result.connected.address)}: no packet was sent`);

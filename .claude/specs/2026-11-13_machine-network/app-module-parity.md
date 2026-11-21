@@ -45,7 +45,7 @@ Module today: Full / Partial / None. "Browser" = feasible at all; "B" means via 
 | 24 | `admin login` | device login to get the relay admin token (writes `relay-admin.json`) | None | B (relay console confirmation is out of band) | yes | P3.2 | M |
 | 25 | `admin pin` / `register` / `sign-policy`, `peer info` / `import`, `policy install` | file mode (no relay) | None | Not meaningful (files on disk, no relay) | - | CLI only | - |
 | 26 | `peer connect` (set / `--show` / `--remove`) | pinned addresses, Wake-on-LAN settings (`connections.json`) | None | B | yes (pinned address redirects commands) | P1.6 (show), P2.5 (set) | M; no daemon command exists |
-| 27 | `peer wake` | send magic packets, wait for the peer | None | B (UDP from the backend process, same host as the CLI) | yes | P2.5 | M; dep `wakeSender` export |
+| 27 | `wake` | send magic packets, wait for the peer | None | B (UDP from the backend process, same host as the CLI) | yes | P2.5 | M; dep `wakeSender` export |
 | 28 | `peer forget-record` | reset the highest address record of a peer | None | B | yes (anti-rollback state) | P2.8 | S |
 | 29 | `startup status` | orch job state | None | B (spawns/reads orch: not verified how) | no | P1.7 | M |
 | 30 | `startup enable` / `disable` | create/remove the login job; disable ends the daemon | None | B | yes (disable kills the backend's daemon) | P2.6 | M |
@@ -110,7 +110,8 @@ Each package: tests through the real app-core harness (`backend.realServer.integ
 |---|---|---|---|
 | P2.0 Foundation | key-file GET route, module-scope unlock store (remember, idle, lock button), confirmation modal component, `elevate()` wiring, backend signature verification, relay document put | L | no PIN -> 403 `pin-not-set`; no token -> 401; valid signature passes, forged or stale base version refused; passphrase and key absent from every request body and log (grep test); lock button and idle expiry wipe the key (jsdom fake timers) |
 | P2.1 Approve / reject | wire PassphraseSigner, final code display, timeline statuses, distribution | L | cross-check: document signed by the page verifies in machine-core and is accepted by a real daemon test peer; reject needs no passphrase; agent-browser full flow on `/candidacies` |
-| P2.2 Allow / remove entry | add/remove with base version, "allow" shortcut from Requests rows | L | version compare-and-set conflict surfaced; `commandTextProblem` errors shown |
+| P2.2 Allow / remove entry | add/remove with base version, "allow" shortcut from Requests rows | L | version compare-and-set conflict surfaced; `commandTextProblem` errors shown. **Status 2026-11-21 (decision 76): Allow built** on the Requests rows, verified in a real browser on an isolated app-core. Remove: signing code, daemon and route support it, no UI (no Policy page, P1.3). Mode local: not built, the row points to `machine policy allow`. Not built: Reject, Revoke, Approve candidacy, Distribute |
+| P2.0 (part built) | Foundation | | Built for Allow only: key file route (sensitive, encrypted file only), `sensitive` routes with the module header, `ConfirmSignModal`, daemon commands `adminKeyFile`, `allowContext`, `submitPolicy`, `nextPolicyBody` copy in machine-webcrypto. NOT built: remembered unlock store, lock button, idle timeout (the passphrase is used for one signature and the key is locked right after) |
 | P2.3 Revoke | sign, distribute | M | revoked machine disappears; distribution failure shown with retry |
 | P2.4 Distribute | retry | M | idempotent resend |
 | P2.5 Wake now + peer connect | set/remove pinned addresses and MAC, wake with steps | M | `connections.json` equals the CLI result byte for byte |
