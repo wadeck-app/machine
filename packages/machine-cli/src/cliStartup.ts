@@ -37,7 +37,7 @@ function daemonOutcomeText(d: DaemonOutcome, id: string, start: boolean): string
 
 function enableText(r: EnableResult, start: boolean): string {
   const daemon = daemonOutcomeText(r.daemon, r.id, start);
-  const form = r.form !== 'development' ? `${FORM_TEXT[r.form]} (the job needs Node >= 22 on its PATH: the launcher starts node)` : FORM_TEXT.development;
+  const form = r.form !== 'development' ? `${FORM_TEXT[r.form]} (the job needs Node >= 24 on its PATH: the launcher starts node)` : FORM_TEXT.development;
   const removed = r.pruned && r.pruned.removed.length > 0 ? `removed older staged launchers: ${r.pruned.removed.join(', ')}\n` : '';
   const skipped = r.pruned && r.pruned.skipped.length > 0 ? `older staged launchers still in use, kept until the next run: ${r.pruned.skipped.join(', ')}\n` : '';
   const note = r.formNote === undefined ? '' : `${r.formNote}\n`;
