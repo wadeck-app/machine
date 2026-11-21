@@ -5,6 +5,7 @@ import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError
 import { runHealth } from './health.js';
 import { checkModuleHeader } from './guard.js';
 import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './requests.js';
+import { registerActivityRoute } from './activityRoute.js'; // run-log
 import type { RequestsListAnswer } from '@wadeck-app/machine-core';
 
 // Backend of the machine module. Read routes, plus the routes of the Allow button (decision 76: `sensitive`, they carry only the ENCRYPTED admin key
@@ -324,6 +325,9 @@ export default function register(ctx: ModuleContextLike): void {
     const { id, reason } = parsed;
     return viaDaemon(req, reply, 'deny', reason === undefined ? { id } : { id, reason }, undefined, (r) => r, DENY_STATUS);
   }, SENSITIVE);
+
+  // run-log: the Activity page (the commands this machine sent and received), a plain read route in its own file
+  registerActivityRoute(ctx, configDir); // run-log
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

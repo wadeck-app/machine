@@ -1,0 +1,10 @@
+# The commands THIS machine sent (`machine run`, its outgoing run log under <config dir>/run-log/) and received (its audit log), newest first
+# (run-log.md). Read-only: machine:ActivityLog reads GET /api/modules/machine/activity itself, because the filters, the period and the pages
+# change the query. A command is shown as typed: it never carries a secret (same rule as the allow list), and its output is never stored.
+$type: PageContent
+sections:
+  - $type: PageHeader
+    title: Activity
+    subtitle: Commands this machine sent with `machine run` and commands it received, newest first. The same list as `machine log`.
+  - $type: machine:ActivityLog
+    pageSize: 25

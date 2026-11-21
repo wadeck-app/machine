@@ -29,6 +29,8 @@ import { candidacyFile, readRelayAdminConfig, readRelayConfig } from './relaySto
 import { exportMachineInfo, importPeer, installPolicy, installRevocation, loadNetwork, recordRevocationSeen, registerMachine, revocationState, type MachineInfo, type PeerBundle } from './network.js';
 import { DEFAULT_PROMPT_TIMEOUT_SECONDS, MAX_PROMPT_TIMEOUT_SECONDS, promptHidden, promptLine, PromptTimeoutError, withPromptTimeout, type PromptLimits } from './prompt.js';
 import { runOnPeer } from './peerService.js';
+// run-log: every machine run is recorded in the outgoing run log (run-log.md)
+import { recordRun, type RunRecorder } from './runLogRecord.js';
 import { readRunDefaults } from './runDefaultsStore.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
@@ -490,7 +492,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
   if (command === 'run') {
     // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.
     try {
-      return await runRemote(ctx);
+      return await recordRun({ configDir: ctx.configDir, stderr: ctx.io.stderr }, (recorder) => runRemote(ctx, recorder)); // run-log
     } catch (e) {
       return fail((e as Error).message, EXIT.peer);
     }
@@ -499,7 +501,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
   return undefined;
 }
 
-async function runRemote(ctx: CommandContext): Promise<number> {
+async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<number> { // run-log
   const { args, rest, io, configDir } = ctx;
   const fail = ctx.fail;
   const ref = rest[0];
@@ -538,6 +540,8 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   if (chosen.source === 'peer-default') io.stderr(`[info] shell ${shell}: the default of ${peer.name} (machine peer connect ${peer.name} --shell; --shell overrides it)\n`);
   const wakeSettings = wakeSettingsFor(ctx, peer, read.connection);
   if (!wakeSettings.ok) return fail(wakeSettings.message, EXIT.peer);
+  // run-log: from here the run is recorded, whatever its end
+  recorder.target({ self: { name: self.name, uuid: self.uuid }, peer: { name: peer.name, uuid: peer.peerId }, shell, command, wait });
   // The same resolution and connection as `machine ping` (peerConnect.ts): the address override, the pinned addresses, or the verified record of the relay.
   const sinks = stderrSinks(ctx);
   const target = await targetFor(ctx, peer, read.connection, sinks.warn);
@@ -565,6 +569,7 @@ async function runRemote(ctx: CommandContext): Promise<number> {
     if (catchUp.installed) io.stderr(`[info] ${peer.name} handed over revocations this machine did not have yet: they are installed
 `);
     // The request is dated now, after the connection exists: a slow connection must not age it.
+    recorder.sending(); // run-log
     answer = await runOnPeer(session, {
       identity: self.identity,
       source: self.uuid,
@@ -585,6 +590,7 @@ async function runRemote(ctx: CommandContext): Promise<number> {
   } finally {
     session.close();
   }
+  recorder.answered(answer); // run-log
   if (answer.type === 'refused') {
     // The fix is the command to run on the admin machine, with this exact command (an exact match is the only rule).
     // A peer that manages its own list (policy mode local) cannot be changed from here: its refusal message names the owner (the caller does not know the mode).

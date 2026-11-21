@@ -34,6 +34,16 @@
     {
       "kind": "page",
       "slot": "nav",
+      "label": "Activity",
+      "path": "/activity",
+      "view": {
+        "type": "path",
+        "value": "./src/dsl-views/activity.yaml"
+      }
+    },
+    {
+      "kind": "page",
+      "slot": "nav",
       "label": "Candidacies",
       "path": "/candidacies",
       "count": { "route": "/candidacies", "field": "count" },

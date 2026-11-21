@@ -6,6 +6,7 @@ import { readAliases, removeAlias, setAlias } from './state.js';
 import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
+import { activityFromPayload, type ActivityAnswer } from './activityView.js'; // run-log
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
 // when no daemon is running and the tests need no network. No answer ever carries a secret.
@@ -156,6 +157,11 @@ export function makeCommands(configDir: string, version: string | (() => string)
     requests(): RequestsAnswer {
       return requestsAnswer(configDir, {}, now());
     },
+
+    /** The Activity page (run-log.md): the commands this machine sent and received, filtered and paginated. Read-only. */ // run-log
+    activity(payload?: unknown): ActivityAnswer { // run-log
+      return activityFromPayload(configDir, payload, now()); // run-log
+    }, // run-log
 
     /** The Requests page, remote section (decision 74): forwards a request signed in the browser with the admin key to a peer. Read-only; signs nothing. */
     remoteRequests(payload?: unknown): Promise<RemoteRequestsAnswer> {

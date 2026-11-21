@@ -12,6 +12,7 @@ import { runWake, runWakeInfo } from './cliWake.js';
 import { runDefaultsDocument, runDefaultsStatusLine, runDefaultsView, runRunDefaults } from './cliRunDefaults.js';
 import { RunDefaultsError } from './runDefaultsStore.js';
 import { runRequests } from './cliRequests.js';
+import { logOnlyFlagProblem, runActivityLog } from './cliActivity.js'; // run-log
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { DEFAULT_PEER_HOST, startMachineDaemon } from './daemonEntry.js';
@@ -294,9 +295,9 @@ Administration (enrollment through the relay, or by files):
   requests --deny <id> [--reason <text>]
                                      refuse a request a peer holds (\`run --wait\`), at once; its caller reads the reason. Run it on the machine that
                                      holds the request (its daemon must run). No signature, no passphrase: only restricting
-  requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
   requests [--full]                  the same, with the whole command (wrapped under its column) and the exact allow command of every row
                                      instead of the template; also for <machine>, --all and --history. --json is always complete
+  requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
                                      what happened here: runs (exit code, duration), refusals with their reason, session and document
                                      events; chronological, the last 50 by default (--limit up to 1000); --since 2026-11-20 or 3h
   requests <machine> [--limit <n>]   ADMIN machine only: ask that peer for its pending list over the authenticated channel (one read-only
@@ -304,6 +305,11 @@ Administration (enrollment through the relay, or by files):
                                      peer audits it and allows 6 per minute). A peer that is too old says so: \`machine cli update\` there
   requests --all [--limit <n>]       the same for every trusted peer, one passphrase; a peer that cannot be reached is reported, the others
                                      are still shown (exit 1). Pending list only: the history of a machine is read on that machine
+  log [--sent | --received] [--machine <name>] [--since <30m|2h|3d|date>] [--outcome <ran|refused|denied|deadline|timeout|connection-lost|error|unfinished>] [--text <word>] [--limit <n>] [--offset <n>] [--json]
+                                     everything this machine SENT with \`machine run\` (to whom, the command as typed, when, how it ended) and
+                                     RECEIVED (its audit log), as one list, newest first, 50 per page (--limit up to 500, --offset for the
+                                     next page). Read-only, no daemon needed. The sent runs are kept in <config dir>/run-log/ (5 MiB per
+                                     file, the newest 5 files); the output of a command and its environment are never stored
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy for this machine: signed by the admin (mode admin, the default) or by the local policy key (mode local)
@@ -390,12 +396,6 @@ function parse(argv: string[]): Parsed {
     else if (a === '--since') out.since = valueOf('--since');
     else if (a === '--event') out.event = valueOf('--event');
     else if (a === '--limit') out.limit = valueOf('--limit');
-    else if (a === '--wait') out.wait = valueOf('--wait');
-    else if (a === '--on-refusal') out.onRefusal = valueOf('--on-refusal');
-    else if (a === '--reset') out.reset = true;
-    else if (a === '--deny') out.deny = valueOf('--deny');
-    else if (a === '--reason') out.reason = valueOf('--reason');
-    else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--sent') out.sent = true; // run-log
     else if (a === '--received') out.received = true; // run-log
     else if (a === '--machine') out.machine = valueOf('--machine'); // run-log
@@ -403,6 +403,12 @@ function parse(argv: string[]): Parsed {
     else if (a === '--text') out.text = valueOf('--text'); // run-log
     else if (a === '--offset') out.offset = valueOf('--offset'); // run-log
     else if (a === '--full') out.full = true;
+    else if (a === '--wait') out.wait = valueOf('--wait');
+    else if (a === '--on-refusal') out.onRefusal = valueOf('--on-refusal');
+    else if (a === '--reset') out.reset = true;
+    else if (a === '--deny') out.deny = valueOf('--deny');
+    else if (a === '--reason') out.reason = valueOf('--reason');
+    else if (a === '--timeout') out.timeout = valueOf('--timeout');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
       // The security code has five groups of five digits: typed without quotes the shell splits it, the groups are one value again.
@@ -521,7 +527,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0 };
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0, log: 0 }; // run-log
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -551,8 +557,13 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   const requestsOptions: Array<[string, unknown]> = [['--history', args.history], ['--all', args.all], ['--since', args.since], ['--event', args.event], ['--limit', args.limit], ['--full', args.full]];
   const requestsOption = requestsOptions.find(([, v]) => v !== undefined);
-  if (requestsOption !== undefined && command !== 'requests') {
+  if (requestsOption !== undefined && command !== 'requests' && command !== 'log') { // run-log: --since and --limit are shared with `machine log`
     return fail(`${requestsOption[0] as string} only applies to \`machine requests\` (the requests refused by this machine: pending list, or --history)`, EXIT.usage);
+  }
+  // run-log: the filters of `machine log` belong to it alone, and it takes none of the `requests` ones
+  const logFlagProblem = logOnlyFlagProblem(command, args);
+  if (logFlagProblem !== undefined) {
+    return fail(logFlagProblem, EXIT.usage);
   }
   if (args.wait !== undefined && command !== 'run' && command !== 'run-defaults') {
     return fail('--wait only applies to `machine run` (`machine run <machine> --wait 10m -- <command>` keeps the request open on the target while its owner allows or denies it, 10 s to 60 min) and to `machine run-defaults --wait 10m` (the duration used when nothing is typed)', EXIT.usage);
@@ -697,6 +708,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'run-defaults') {
       return runRunDefaults(ctx);
     }
+    if (command === 'log') return runActivityLog(ctx); // run-log
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
     if (command === 'requests' && rest.length === 0 && args.all !== true) return await runRequests(ctx);
 

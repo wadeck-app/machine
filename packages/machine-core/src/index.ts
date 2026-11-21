@@ -260,3 +260,35 @@ export {
   type RunWaitFlags,
   type RunWaitSource,
 } from './runDefaults.js';
+// run-log: the outgoing run log and the Activity timeline (run-log.md)
+export {
+  RUN_LOG_MAX_COMMAND,
+  RUN_LOG_MAX_LINE,
+  RUN_LOG_OUTCOMES,
+  buildRunLogLine,
+  outcomeOfAnswer,
+  outcomeOfFailure,
+  parseRunLogLines,
+  waitModeOf,
+  type RunLogEntry,
+  type RunLogInput,
+  type RunLogMachine,
+  type RunLogOutcome,
+  type RunLogOutcomeKind,
+  type RunLogWaitMode,
+} from './runLog.js';
+export {
+  ACTIVITY_DEFAULT_LIMIT,
+  ACTIVITY_DIRECTIONS,
+  ACTIVITY_MAX_LIMIT,
+  ACTIVITY_OUTCOMES,
+  buildActivity,
+  parseActivityQuery,
+  type ActivityDirection,
+  type ActivityEvent,
+  type ActivityFilter,
+  type ActivityInput,
+  type ActivityMachine,
+  type ActivityQueryText,
+  type ActivityPage,
+} from './activity.js';

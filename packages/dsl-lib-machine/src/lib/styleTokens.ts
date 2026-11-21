@@ -45,4 +45,14 @@ export const DENY_BUTTON = 'inline-flex items-center rounded border border-dange
 /** Text input (same look as dsl-ui's Field* inputs). */
 export const INPUT = 'rounded border border-border bg-surface px-2 py-1 text-sm text-content focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50';
 
+/** Activity page (run-log): the outcome of a command, one pair of tokens per tone (same pairs as dsl-ui's Badge). */
+export const OUTCOME_SUCCESS = 'inline-block whitespace-nowrap rounded border border-success bg-success-bg px-2 py-0.5 text-xs text-success-text';
+export const OUTCOME_WARNING = 'inline-block whitespace-nowrap rounded border border-warning bg-warning-bg px-2 py-0.5 text-xs text-warning-text';
+export const OUTCOME_DANGER = 'inline-block whitespace-nowrap rounded border border-danger bg-danger-bg px-2 py-0.5 text-xs text-danger-text';
+export const OUTCOME_NEUTRAL = 'inline-block whitespace-nowrap rounded border border-border px-2 py-0.5 text-xs text-muted';
+
+/** Activity page: the command column and the pager buttons. */
+export const COMMAND_TEXT = 'break-all font-mono text-sm text-content';
+export const PAGE_BUTTON = 'inline-flex items-center rounded border border-border bg-surface px-3 py-1 text-xs font-medium text-content transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 disabled:opacity-40';
+
 // @formatter:on
