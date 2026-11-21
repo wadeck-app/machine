@@ -65,7 +65,7 @@ describe('shim', () => {
   it('node cannot start: cause and fix', () => {
     const { d, err } = deps({ spawnSync: () => ({ status: null, error: new Error('ENOENT') }) });
     expect(shim.run(d)).toBe(1);
-    expect(err.join('')).toMatch(/ENOENT.*Node\.js 22/);
+    expect(err.join('')).toMatch(/ENOENT.*Node\.js 24/);
   });
 
   it('killed by a signal: exit 1 naming the signal', () => {

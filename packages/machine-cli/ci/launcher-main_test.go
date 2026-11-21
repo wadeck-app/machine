@@ -71,7 +71,7 @@ func TestCheckNodeMissingNamesCauseRequirementAndFix(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when node is not in PATH")
 	}
-	for _, want := range []string{"machine", "`node` was not found in PATH", "executable file not found", "Node.js 22 or newer", "https://nodejs.org", "PATH of the process that starts machine"} {
+	for _, want := range []string{"machine", "`node` was not found in PATH", "executable file not found", "Node.js 24 or newer", "https://nodejs.org", "PATH of the process that starts machine"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message %q does not contain %q", err.Error(), want)
 		}

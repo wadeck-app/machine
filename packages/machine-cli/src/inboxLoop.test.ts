@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildDocument, documentId, newCandidacyRandom, sealTo, type Json, type SignedDocument, generateSigningKeyPair } from '@wadeck-app/machine-core';
+import { DOCUMENT_DOMAIN, buildDocument, documentId, documentSealContext, newCandidacyRandom, openSealed, sealTo, signDocument, signPolicy, type DocumentInput, type Json, type SignedDocument, generateSigningKeyPair } from '@wadeck-app/machine-core';
 import { unlockAdminKey } from './admin.js';
 import { startMachineDaemon } from './daemonEntry.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
@@ -37,6 +37,15 @@ const auditLines = (name: string) => (existsSync(join(dirOf(name), 'audit.log'))
 const auditEvents = (name: string) => auditLines(name).map((l) => JSON.parse(l) as { entry?: Record<string, unknown> } & Record<string, unknown>);
 // The audit line format wraps the entry; the fields of interest are found wherever they are.
 const auditText = (name: string) => auditLines(name).join('\n');
+
+const identityOf = (name: string) => exportMachineInfo(dirOf(name)).identityPublicKey;
+/** The clear payload of a sealed document: what the admin put in it (admin side tests only: it needs the identity key of the addressee). */
+const payloadOf = (document: SignedDocument, name: string): Json => {
+  const { kind, to, id, payload } = document.body;
+  return JSON.parse(Buffer.from(openSealed(readMachine(dirOf(name)).identity.privateKeyPkcs8, payload.sealed, documentSealContext(kind, to, id))).toString('utf8')) as Json;
+};
+/** A document sealed to `name`, signed by `signer` (the admin key, or a stranger's for a forgery). */
+const sealedFor = (name: string, input: Omit<DocumentInput, 'recipientIdentityPublicKey'>, signer: Uint8Array): SignedDocument => buildDocument({ ...input, recipientIdentityPublicKey: identityOf(name) }, signer);
 
 /** A timer that never waits: the test sees the delays that were asked for and fires by hand. */
 function fakeTimer(): InboxTimer & { delays: number[]; pending: () => number; fire: () => void } {
@@ -197,7 +206,7 @@ describe('the inbox loop: documents from the admin', () => {
     await enroll('server');
     const stranger = generateSigningKeyPair();
     const stolen = relay.inbox(uuidOf('laptop'))[0]?.document as SignedDocument;
-    const forged = buildDocument({ kind: 'peer', to: uuidOf('laptop'), id: documentId('forged'), issuedAt: stolen.body.issuedAt, expiresAt: stolen.body.expiresAt, payload: stolen.body.payload }, stranger.privateKeyPkcs8);
+    const forged = sealedFor('laptop', { kind: 'peer', to: uuidOf('laptop'), id: documentId('forged'), issuedAt: stolen.body.issuedAt, expiresAt: stolen.body.expiresAt, payload: payloadOf(stolen, 'laptop') }, stranger.privateKeyPkcs8);
     relay.setOwner(uuidOf('laptop'), relay.token);
     // The real one is removed so that only the forgery is left.
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).deleteInboxDocument(uuidOf('laptop'), stolen.body.id);
@@ -221,7 +230,7 @@ describe('the inbox loop: documents from the admin', () => {
     const real = relay.inbox(uuidOf('laptop'))[0]?.document as SignedDocument;
     const machine = createRelayClient({ baseUrl: relay.url, token: relay.token });
     await machine.deleteInboxDocument(uuidOf('laptop'), real.body.id);
-    const forged = buildDocument({ kind: 'peer', to: uuidOf('laptop'), id: real.body.id, issuedAt: real.body.issuedAt, expiresAt: real.body.expiresAt, payload: real.body.payload }, generateSigningKeyPair().privateKeyPkcs8);
+    const forged = sealedFor('laptop', { kind: 'peer', to: uuidOf('laptop'), id: real.body.id, issuedAt: real.body.issuedAt, expiresAt: real.body.expiresAt, payload: payloadOf(real, 'laptop') }, generateSigningKeyPair().privateKeyPkcs8);
     await adminClient().putInboxDocument(uuidOf('laptop'), forged);
     const { loop } = loopFor('laptop');
     await loop.ready;
@@ -231,6 +240,88 @@ describe('the inbox loop: documents from the admin', () => {
     await adminClient().putInboxDocument(uuidOf('laptop'), real);
     await loop.runOnce();
     expect(machineNames('laptop')).toEqual(['server']);
+  });
+
+  describe('plaintext and unreadable documents (decision 78)', () => {
+    /** The client refuses to send a clear document (relayClient.test.ts): an admin machine of an older build is simulated with a raw request. */
+    async function putRaw(uuid: string, document: SignedDocument): Promise<void> {
+      const response = await fetch(`${relay.url}/api/machines/${uuid}/inbox/${document.body.id}`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${relay.adminToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify(document),
+      });
+      if (response.status !== 204) {
+        throw new Error(`the raw PUT of the old-build document failed with ${response.status}`);
+      }
+    }
+
+    /** What an admin machine of an older build puts in the inbox: envelope version 1, the policy in clear, signed by the real admin key. */
+    async function plaintextPolicyDocument(id: string): Promise<SignedDocument> {
+      const key = await unlockAdminKey(adminDir, pass);
+      const policy = signPolicy(
+        { v: 1, target: uuidOf('laptop'), version: 1, baseVersion: 0, adminKeyId: admin.adminKeyId, issuedAt: nowSeconds(), notBefore: nowSeconds(), notAfter: nowSeconds() + 1000, defaults: [{ shell: 'sh', command: 'echo clear-text-command' }], peers: {} },
+        key.privateKeyPkcs8,
+      );
+      const body = { v: 1, kind: 'policy', to: uuidOf('laptop'), id, issuedAt: nowSeconds(), expiresAt: nowSeconds() + 1000, payload: policy };
+      return { body, signature: signDocument(DOCUMENT_DOMAIN, body as unknown as Json, key.privateKeyPkcs8) } as unknown as SignedDocument;
+    }
+
+    it('a clear (version 1) document signed by the admin is refused loudly, never installed, deleted, and audited ONCE even when the relay hands it over again', async () => {
+      await enroll('laptop');
+      const doc = await plaintextPolicyDocument(documentId('clear one'));
+      await putRaw(uuidOf('laptop'), doc);
+      const { loop } = loopFor('laptop');
+      await loop.ready;
+      expect(loadNetwork(dirOf('laptop'), nowSeconds()).policy).toBeUndefined();
+      expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+      expect(auditText('laptop')).toMatch(/document-rejected/);
+      expect(auditText('laptop')).toMatch(/"reason":"plaintext"/);
+      expect(logs.join('\n')).toMatch(/PLAINTEXT/);
+      expect(logs.join('\n')).toMatch(/machine cli update/);
+      // The content never reaches the log or the audit log.
+      expect(logs.join('\n') + auditText('laptop')).not.toContain('clear-text-command');
+      expect(existsSync(join(dirOf('laptop'), 'inbox-state.json'))).toBe(false);
+
+      await putRaw(uuidOf('laptop'), doc);
+      await loop.runOnce();
+      expect(auditLines('laptop').filter((l) => l.includes('"reason":"plaintext"'))).toHaveLength(1);
+      expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+    });
+
+    it('a clear document that the admin key did not sign is junk: counted in the summary, not audited one by one', async () => {
+      await enroll('laptop');
+      const stranger = generateSigningKeyPair();
+      const body = { v: 1, kind: 'policy', to: uuidOf('laptop'), id: documentId('clear forged'), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 1000, payload: {} };
+      const forged = { body, signature: signDocument(DOCUMENT_DOMAIN, body as unknown as Json, stranger.privateKeyPkcs8) };
+      await putRaw(uuidOf('laptop'), forged as unknown as SignedDocument);
+      const { loop } = loopFor('laptop');
+      await loop.ready;
+      expect(auditText('laptop')).not.toMatch(/document-rejected/);
+      expect(auditText('laptop')).toMatch(/documents-unverified/);
+      expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+    });
+
+    it('a document sealed to ANOTHER machine key is refused as unreadable (audited, deleted so that the admin can send it again), nothing is installed', async () => {
+      await enroll('laptop');
+      await enroll('server');
+      const real = relay.inbox(uuidOf('laptop'))[0] as { id: string; document: SignedDocument };
+      await createRelayClient({ baseUrl: relay.url, token: relay.token }).deleteInboxDocument(uuidOf('laptop'), real.id);
+      const key = await unlockAdminKey(adminDir, pass);
+      // Addressed to laptop, sealed to the key of server.
+      const wrong = sealedFor('server', { kind: 'peer', to: uuidOf('laptop'), id: real.id, issuedAt: real.document.body.issuedAt, expiresAt: real.document.body.expiresAt, payload: payloadOf(real.document, 'laptop') }, key.privateKeyPkcs8);
+      await adminClient().putInboxDocument(uuidOf('laptop'), wrong);
+      const { loop } = loopFor('laptop');
+      await loop.ready;
+      expect(machineNames('laptop')).toEqual([]);
+      expect(auditText('laptop')).toMatch(/"reason":"cannot-open"/);
+      expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+      expect(logs.join('\n')).toMatch(/machine admin distribute/);
+
+      // The retry of the admin (same id, now sealed to the right key) is installed: the refused one was not remembered.
+      await adminClient().putInboxDocument(uuidOf('laptop'), real.document);
+      await loop.runOnce();
+      expect(machineNames('laptop')).toEqual(['server']);
+    });
   });
 
   it('an entry whose id is not a canonical id is never used as a key and never sent back in a DELETE', async () => {
@@ -281,10 +372,7 @@ describe('the inbox loop: documents from the admin', () => {
     // The first policy comes back in a document with ANOTHER id (the id of the first one is remembered, see the replay tests below).
     const key = await unlockAdminKey(adminDir, pass);
     const again = (source: SignedDocument, label: string) =>
-      buildDocument(
-        { kind: 'policy', to: uuidOf('laptop'), id: documentId(label), issuedAt: source.body.issuedAt, expiresAt: source.body.expiresAt, payload: source.body.payload },
-        key.privateKeyPkcs8,
-      );
+      sealedFor('laptop', { kind: 'policy', to: uuidOf('laptop'), id: documentId(label), issuedAt: source.body.issuedAt, expiresAt: source.body.expiresAt, payload: payloadOf(source, 'laptop') }, key.privateKeyPkcs8);
     await adminClient().putInboxDocument(uuidOf('laptop'), again(v1, 'v1 again'));
     await loop.runOnce();
     expect(loadNetwork(dirOf('laptop'), nowSeconds()).policy?.version).toBe(2);
@@ -344,8 +432,9 @@ describe('the inbox loop: documents from the admin', () => {
 
     // The same registration comes again in a NEW document (the id of the first one is remembered): the revocation list refuses it.
     const key = await unlockAdminKey(adminDir, pass);
-    const again = buildDocument(
-      { kind: 'peer', to: uuidOf('laptop'), id: documentId('peer again'), issuedAt: oldPeerDocument.body.issuedAt, expiresAt: oldPeerDocument.body.expiresAt, payload: oldPeerDocument.body.payload },
+    const again = sealedFor(
+      'laptop',
+      { kind: 'peer', to: uuidOf('laptop'), id: documentId('peer again'), issuedAt: oldPeerDocument.body.issuedAt, expiresAt: oldPeerDocument.body.expiresAt, payload: payloadOf(oldPeerDocument, 'laptop') },
       key.privateKeyPkcs8,
     );
     await adminClient().putInboxDocument(uuidOf('laptop'), again);
@@ -399,7 +488,7 @@ describe('the inbox loop: documents from the admin', () => {
       { v: 1, target: info.uuid, version: 1, baseVersion: 0, adminKeyId: admin.adminKeyId, issuedAt: future, notBefore: future, notAfter: future + 1000, defaults: [{ shell: 'sh', command: 'echo later' }], peers: {} },
       key.privateKeyPkcs8,
     );
-    const doc = buildDocument({ kind: 'policy', to: info.uuid, id: documentId('later'), issuedAt: future, expiresAt: future + 1000, payload: signed as unknown as Json }, key.privateKeyPkcs8);
+    const doc = sealedFor('laptop', { kind: 'policy', to: info.uuid, id: documentId('later'), issuedAt: future, expiresAt: future + 1000, payload: signed as unknown as Json }, key.privateKeyPkcs8);
     await adminClient().putInboxDocument(info.uuid, doc);
     const { loop } = loopFor('laptop');
     await loop.ready;
@@ -495,10 +584,7 @@ describe('the inbox loop: replays (the relay keeps no tombstone of acknowledged 
     await enroll('laptop');
     const stranger = generateSigningKeyPair();
     const info = exportMachineInfo(dirOf('laptop'));
-    const forged = buildDocument(
-      { kind: 'revocation', to: info.uuid, id: documentId('forged'), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 100, payload: { body: { v: 1 }, signature: 'x' } as unknown as Json },
-      stranger.privateKeyPkcs8,
-    );
+    const forged = sealedFor('laptop', { kind: 'revocation', to: info.uuid, id: documentId('forged'), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 100, payload: { body: { v: 1 }, signature: 'x' } as unknown as Json }, stranger.privateKeyPkcs8);
     await adminClient().putInboxDocument(info.uuid, forged);
     const { loop } = loopFor('laptop');
     await loop.ready;
@@ -582,8 +668,8 @@ describe('the inbox loop: transient causes are kept, permanent ones are refused'
     const real = relay.inbox(uuidOf('laptop'))[0] as { id: string; document: SignedDocument };
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).deleteInboxDocument(uuidOf('laptop'), real.id);
     const key = await unlockAdminKey(adminDir, pass);
-    const payload = { ...(real.document.body.payload as Record<string, unknown>), sealedPairSecret: sealTo(generateSigningKeyPair().publicKey, new Uint8Array(32), 'pair-secret:none:x:y') };
-    const bad = buildDocument({ kind: 'peer', to: uuidOf('laptop'), id: real.id, issuedAt: real.document.body.issuedAt, expiresAt: real.document.body.expiresAt, payload: payload as unknown as Json }, key.privateKeyPkcs8);
+    const payload = { ...(payloadOf(real.document, 'laptop') as object), sealedPairSecret: sealTo(generateSigningKeyPair().publicKey, new Uint8Array(32), 'pair-secret:none:x:y') };
+    const bad = sealedFor('laptop', { kind: 'peer', to: uuidOf('laptop'), id: real.id, issuedAt: real.document.body.issuedAt, expiresAt: real.document.body.expiresAt, payload: payload as unknown as Json }, key.privateKeyPkcs8);
     await adminClient().putInboxDocument(uuidOf('laptop'), bad);
     const { loop } = loopFor('laptop');
     await loop.ready;
@@ -603,8 +689,9 @@ describe('the inbox loop: transient causes are kept, permanent ones are refused'
     await createRelayClient({ baseUrl: relay.url, token: relay.token }).deleteInboxDocument(uuidOf('laptop'), real.id);
     // Addressed to laptop but carrying the registration of laptop (the one the document for the server holds).
     const key = await unlockAdminKey(adminDir, pass);
-    const selfDoc = buildDocument(
-      { kind: 'peer', to: uuidOf('laptop'), id: documentId('self'), issuedAt: real.document.body.issuedAt, expiresAt: real.document.body.expiresAt, payload: toServer.body.payload },
+    const selfDoc = sealedFor(
+      'laptop',
+      { kind: 'peer', to: uuidOf('laptop'), id: documentId('self'), issuedAt: real.document.body.issuedAt, expiresAt: real.document.body.expiresAt, payload: payloadOf(toServer, 'server') },
       key.privateKeyPkcs8,
     );
     await adminClient().putInboxDocument(uuidOf('laptop'), selfDoc);
@@ -639,7 +726,7 @@ describe('the inbox loop: transient causes are kept, permanent ones are refused'
 
 describe('the inbox loop: floods and lies of the relay', () => {
   const forgery = (n: number) =>
-    buildDocument({ kind: 'revocation', to: uuidOf('laptop'), id: documentId(`forged ${n}`), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 100, payload: { body: { v: 1 }, signature: 'x' } as unknown as Json }, generateSigningKeyPair().privateKeyPkcs8);
+    sealedFor('laptop', { kind: 'revocation', to: uuidOf('laptop'), id: documentId(`forged ${n}`), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 100, payload: { body: { v: 1 }, signature: 'x' } as unknown as Json }, generateSigningKeyPair().privateKeyPkcs8);
 
   it('sixty forged documents: all deleted, ONE summary line in the audit log, and the same flood again within the hour adds nothing', async () => {
     await enroll('laptop');

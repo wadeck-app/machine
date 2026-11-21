@@ -43,6 +43,10 @@ export interface HistoryEntry {
   command?: string;
   id?: string;
   reason?: string;
+  /** Refusals: the closest typed entry and the rule that failed (token number and rule, never the value). LOCAL only, never sent to the caller. */
+  detail?: string;
+  /** Runs: the template of the typed entry that matched, as signed. */
+  template?: string;
   /** Runs: `completed`, `failed`, or `accepted` (no completion in the log: a crash or a cut). */
   outcome?: string;
   exitCode?: number | null;
@@ -188,6 +192,8 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
       ...(command !== undefined ? { command } : {}),
       ...(id !== undefined ? { id } : {}),
       ...(reason !== undefined ? { reason } : {}),
+      ...(str(entry['detail']) !== undefined ? { detail: str(entry['detail']) as string } : {}),
+      ...(str(entry['template']) !== undefined ? { template: str(entry['template']) as string } : {}),
     };
     if (event === 'accepted') {
       row.outcome = 'accepted';
@@ -263,15 +269,18 @@ export function describeHistory(h: HistoryEntry): string {
   switch (h.kind) {
     case 'run': {
       const call = `${h.shell ?? '?'} "${h.command ?? '?'}"`;
+      const typed = h.template !== undefined ? ` [typed: ${h.template}]` : '';
       if (h.outcome === 'completed') {
         const exit = h.exitCode === null || h.exitCode === undefined ? 'none' : String(h.exitCode);
-        return `${call} -> exit ${exit}${h.timedOut ? ' (timed out)' : ''}${h.durationMs !== undefined ? ` in ${(h.durationMs / 1000).toFixed(1)} s` : ''}`;
+        return `${call} -> exit ${exit}${h.timedOut ? ' (timed out)' : ''}${h.durationMs !== undefined ? ` in ${(h.durationMs / 1000).toFixed(1)} s` : ''}${typed}`;
       }
-      if (h.outcome === 'failed') return `${call} -> could not run${h.error !== undefined ? `: ${h.error}` : ''}`;
-      return `${call} -> accepted, no completion in the log (crash or cut)`;
+      if (h.outcome === 'failed') {
+        return `${call} -> could not run${h.error !== undefined ? `: ${h.error}` : ''}${typed}`;
+      }
+      return `${call} -> accepted, no completion in the log (crash or cut)${typed}`;
     }
     case 'refused':
-      return `(${h.reason ?? 'unknown reason'})${h.shell !== undefined ? ` ${h.shell} "${h.command ?? '?'}"` : ''}`;
+      return `(${h.reason ?? 'unknown reason'})${h.shell !== undefined ? ` ${h.shell} "${h.command ?? '?'}"` : ''}${h.detail !== undefined ? `: ${h.detail}` : ''}`;
     default:
       return `${h.event}${h.reason !== undefined ? ` (${h.reason})` : ''}`;
   }

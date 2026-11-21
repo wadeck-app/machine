@@ -17,7 +17,7 @@ import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
-import { EXIT, type CommandContext } from './cliTypes.js';
+import { EXIT, parseIndex, type CommandContext } from './cliTypes.js';
 import { runRemoteRequests } from './cliRequestsRemote.js';
 import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
 import { connectWithWake } from './wakeConnect.js';
@@ -172,15 +172,23 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       return EXIT.ok;
     }
     if (sub === 'allow') {
-      const usage = 'usage: machine admin allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] -- <command...> | machine admin allow <machine> --remove [--shell <shell>] -- <command...> | machine admin allow <machine> --list';
+      const usage = 'usage: machine admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--out <file>] -- <command...> | machine admin allow <machine> --remove [--shell <shell>] (-- <command...> | --index <n>) | machine admin allow <machine> --list';
       if (first === undefined) return fail(usage, EXIT.usage);
       if (args.list && args.remove) return fail(`--list and --remove cannot be combined. ${usage}`, EXIT.usage);
       if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
       // The command is what follows "--", or the words after the machine; sent byte for byte like `machine run`.
       const words = args.passthrough.length > 0 ? args.passthrough : rest.slice(2);
+      const parsedIndex = parseIndex(args.index);
+      const index = parsedIndex.ok ? parsedIndex.index : undefined;
+      if (!parsedIndex.ok) {
+        return fail(parsedIndex.message, EXIT.usage);
+      }
+      if (index !== undefined && words.length > 0) {
+        return fail(`--index replaces the command: give one or the other. ${usage}`, EXIT.usage);
+      }
       if (args.list) {
         if (words.length > 0) return fail(`--list takes no command. ${usage}`, EXIT.usage);
-      } else {
+      } else if (index === undefined) {
         if (words.length === 0) return fail(usage, EXIT.usage);
         if (words.length > 1 && words.some((word) => /[\s"'`]/.test(word))) {
           return fail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is allowed exactly as written', EXIT.usage);
@@ -192,7 +200,9 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         const r = await runAllow(configDir, {
           reference: first,
           mode,
-          ...(mode !== 'list' ? { command: words.join(' ') } : {}),
+          ...(mode !== 'list' && index === undefined ? { command: words.join(' ') } : {}),
+          ...(index !== undefined ? { index } : {}),
+          ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
           ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
           ...(args.out !== undefined ? { out: args.out } : {}),
           prompt,

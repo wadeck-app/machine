@@ -1,16 +1,25 @@
 import { createHash, createHmac, hkdfSync } from 'node:crypto';
-import type { Json } from './canonical.js';
+import { canonicalize, type Json } from './canonical.js';
 import { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, signBytes, tryKeyId } from './keys.js';
 import { POLICY_DOMAIN, assertPolicyBody, type SignedPolicy } from './policy.js';
 import { verifyRegistration, type RegistrationBody, type SignedRegistration } from './registration.js';
 import { verifyRevocation, type SignedRevocation } from './revocation.js';
-import { openSealed } from './seal.js';
+import { openSealed, sealTo } from './seal.js';
 import { signDocument, verifyDocument as verifySigned } from './signed.js';
 
 // Documents distributed through the relay (distribution.md): a JSON object signed by the admin key and addressed to ONE
 // machine. The relay only stores them; the recipient verifies everything locally. No I/O.
+//
+// Decision 78: the payload of EVERY document is sealed to the identity key of the addressee (envelope version 2). The relay sees the
+// addressee, the type tag, the id, the dates and the size, never a policy, a revocation or a registration. The signature (admin key)
+// covers the envelope including the sealed blob: it is the authenticity, the sealing is the confidentiality. A version 1 envelope
+// (clear payload) is recognised only to be refused loudly; nothing builds one any more.
 
+/** Signature domain of the version 1 envelope (clear payload): kept only to recognise, and refuse, what an older admin machine sent. */
 export const DOCUMENT_DOMAIN = 'machine/document/v1';
+/** Signature domain of the version 2 envelope (sealed payload). */
+export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
+export const DOCUMENT_VERSION = 2;
 export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation'] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 /** What the relay accepts for one document. */
@@ -22,8 +31,14 @@ export const DOCUMENT_SKEW_SECONDS = 30;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 
+/** What the relay stores as the payload of a document: one sealed blob (`sealTo` of the canonical JSON of the real payload). */
+export interface SealedPayload {
+  sealed: string;
+}
+
 export interface DocumentBody {
-  v: 1;
+  v: 2;
+  /** The type tag: the relay and everybody on the path can read it. */
   kind: DocumentKind;
   /** UUID of the ONE machine this document is for. */
   to: string;
@@ -31,7 +46,12 @@ export interface DocumentBody {
   id: string;
   issuedAt: number;
   expiresAt: number;
-  payload: Json;
+  payload: SealedPayload;
+}
+
+/** The purpose the payload of a document is sealed for: the envelope version, the type, the addressee and the id. A sealed payload opens only there. */
+export function documentSealContext(kind: DocumentKind, to: string, id: string): string {
+  return `document-payload:v2:${kind}:${to}:${id}`;
 }
 
 export interface SignedDocument {
@@ -54,7 +74,14 @@ export interface DocumentInput {
   id: string;
   issuedAt: number;
   expiresAt: number;
+  /** The real payload, in clear: it is validated, then sealed. It never leaves the admin machine in clear. */
   payload: Json;
+  /**
+   * The identity public key of the addressee (its signed registration): the payload is sealed to it. Required at run time, `buildDocument` throws without
+   * it, there is no plaintext document. Optional in the TYPE only so that a caller that was not converted yet (the browser `policyDocumentFor`, see
+   * distribution.md "Rollout") still compiles and fails loudly instead of sending a clear document.
+   */
+  recipientIdentityPublicKey?: string;
 }
 
 /** The id of a document: the first 16 bytes of the SHA-256 of a stable string, base64url (22 characters). Same string, same id: a re-PUT is idempotent. */
@@ -130,11 +157,13 @@ function assertId(id: unknown): asserts id is string {
   }
 }
 
-/** Shape of the body, payload excluded. Throws an Error naming the first problem. */
-function assertEnvelope(body: unknown): asserts body is DocumentBody {
+/** Shape of the body, payload excluded. `version` is the envelope version being checked (1 only to recognise a plaintext document). Throws an Error naming the first problem. */
+function assertEnvelope(body: unknown, version: 1 | 2 = 2): asserts body is DocumentBody {
   if (!isObject(body)) throw new Error('document: the body must be an object');
   assertKeys(body, ['v', 'kind', 'to', 'id', 'issuedAt', 'expiresAt', 'payload'], 'document');
-  if (body.v !== 1) throw new Error(`document: unsupported version ${String(body.v)} (this build reads version 1)`);
+  if (body.v !== version) {
+    throw new Error(`document: unsupported envelope version ${String(body.v)} (this build reads version ${DOCUMENT_VERSION}, sealed payloads): update machine on this machine, or on the admin machine if it is the older one (\`machine cli update\`)`);
+  }
   if (typeof body.kind !== 'string' || !(DOCUMENT_KINDS as readonly string[]).includes(body.kind)) {
     throw new Error(`document: kind must be one of ${DOCUMENT_KINDS.join(', ')} (got ${JSON.stringify(body.kind)}): update machine if the sender is newer`);
   }
@@ -180,15 +209,38 @@ function sizeOf(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value));
 }
 
-/** Admin side: build and sign a document. Refuses to sign what no machine would accept. */
+function assertSealedPayload(payload: unknown): asserts payload is SealedPayload {
+  if (!isObject(payload)) {
+    throw new Error('document: the payload must be an object holding one sealed blob ({ sealed })');
+  }
+  assertKeys(payload, ['sealed'], 'document payload');
+  const sealed = payload.sealed;
+  if (typeof sealed !== 'string' || sealed.length === 0 || Buffer.from(sealed, 'base64url').toString('base64url') !== sealed) {
+    throw new Error('document payload: sealed must be unpadded base64url text');
+  }
+}
+
+/**
+ * Admin side: validate the real payload, seal it to the addressee and sign the envelope. Refuses to sign what no machine would accept.
+ * There is no plaintext mode: an input without the key of the addressee is an error.
+ */
 export function buildDocument(input: DocumentInput, adminPrivateKeyPkcs8: Uint8Array): SignedDocument {
-  const body: DocumentBody = { v: 1, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: input.payload };
-  assertEnvelope(body);
-  assertPayloadShape(body.kind, body.payload);
-  const signed: SignedDocument = { body, signature: signDocument(DOCUMENT_DOMAIN, body as unknown as Json, adminPrivateKeyPkcs8) };
+  if (typeof input.recipientIdentityPublicKey !== 'string' || input.recipientIdentityPublicKey.length === 0) {
+    throw new Error(
+      'document: recipientIdentityPublicKey is required: every document is sealed to the identity key of its addressee because the relay must not read it, and there is no plaintext mode. Take the key from the registration of the addressee that this machine signed',
+    );
+  }
+  // The shape of the clear payload is checked first: a payload no machine would accept is never sealed.
+  assertEnvelope({ v: 2, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: {} });
+  assertPayloadShape(input.kind, input.payload);
+  const sealed = sealTo(input.recipientIdentityPublicKey, Buffer.from(canonicalize(input.payload), 'utf8'), documentSealContext(input.kind, input.to, input.id));
+  const body: DocumentBody = { v: 2, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: { sealed } };
+  const signed: SignedDocument = { body, signature: signDocument(DOCUMENT_DOMAIN_V2, body as unknown as Json, adminPrivateKeyPkcs8) };
   const size = sizeOf(signed);
   if (size > MAX_DOCUMENT_BYTES) {
-    throw new Error(`document ${input.id} is too large: ${size} bytes, the relay accepts at most ${MAX_DOCUMENT_BYTES} bytes (16 KiB). A policy this big must be split or reduced`);
+    throw new Error(
+      `document ${input.id} is too large: ${size} bytes once sealed (the sealed form is a third bigger than the clear one), the relay accepts at most ${MAX_DOCUMENT_BYTES} bytes (16 KiB). A policy or a revocation list this big must be split or reduced`,
+    );
   }
   return signed;
 }
@@ -203,7 +255,13 @@ export type DocumentFailure =
   | 'expired'
   | 'invalid-payload'
   | 'self-peer'
-  | 'revoked';
+  | 'revoked'
+  /** An envelope version 1 document (clear payload) signed by the admin: refused, the relay could read it. */
+  | 'plaintext'
+  /** The sealed payload does not open with this identity key (sealed to another machine, altered, or sealed for another type, addressee or id). */
+  | 'cannot-open'
+  /** The caller gave no identity key: the document is valid but nobody here can read it. */
+  | 'sealed-unopened';
 
 export interface VerifyDocumentContext {
   /** The admin public key pinned on this machine. */
@@ -214,7 +272,11 @@ export interface VerifyDocumentContext {
   now: number;
   skewSeconds?: number;
   isRevoked?: (uuid: string, serial: number) => boolean;
+  /** The identity private key (PKCS8) of the addressee: needed to open the sealed payload. Without it only `verifyDocumentEnvelope` can say something. */
+  identityPrivateKeyPkcs8?: Uint8Array;
 }
+
+export type EnvelopeContext = Pick<VerifyDocumentContext, 'adminPublicKey' | 'selfUuid' | 'now' | 'skewSeconds'>;
 
 export type VerifiedDocument =
   | { ok: true; kind: 'peer'; body: DocumentBody; registration: RegistrationBody; signedRegistration: SignedRegistration; sealedPairSecret: string; adminUuid: string | null }
@@ -228,10 +290,11 @@ const fail = (reason: DocumentFailure, message: string, signed = true): Document
 const unsigned = (reason: DocumentFailure, message: string): DocumentResult => fail(reason, message, false);
 
 /**
- * Receiver side. Order: shape, size, pinned key, signature, addressee, time window, payload. Nothing is installed here:
- * the caller installs through the existing validators (importPeer, installPolicy, installRevocation), which check again.
+ * Everything that can be verified WITHOUT opening the payload: shape, size, pinned key, signature, addressee, time window, and that
+ * the payload is one sealed blob. A version 1 document (clear payload) signed by the admin is refused as `plaintext`. This is what the
+ * admin side can check about a document addressed to another machine; the addressee uses `verifyDocument`.
  */
-export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): DocumentResult {
+export function verifyDocumentEnvelope(signed: unknown, ctx: EnvelopeContext): { ok: true; kind: DocumentKind; body: DocumentBody } | { ok: false; reason: DocumentFailure; message: string; signed: boolean } {
   if (!isObject(signed) || typeof signed.signature !== 'string' || !isObject(signed.body)) {
     return unsigned('malformed', 'document refused: it is not a signed document ({ body, signature })');
   }
@@ -242,16 +305,23 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
     return unsigned('malformed', 'document refused: it cannot be serialized');
   }
   if (size > MAX_DOCUMENT_BYTES) return unsigned('too-large', `document refused: ${size} bytes, the limit is ${MAX_DOCUMENT_BYTES} bytes (16 KiB)`);
+  const version = signed.body.v === 1 ? 1 : 2;
   try {
     assertKeys(signed, ['body', 'signature'], 'document');
-    assertEnvelope(signed.body);
+    assertEnvelope(signed.body, version);
   } catch (e) {
     return unsigned('malformed', `document refused: ${(e as Error).message}`);
   }
-  const body = signed.body as DocumentBody;
+  const body = signed.body as unknown as DocumentBody;
   if (tryKeyId(ctx.adminPublicKey) === undefined) return unsigned('invalid-admin-key', INVALID_ADMIN_KEY_MESSAGE);
-  if (!verifySigned(DOCUMENT_DOMAIN, body as unknown as Json, ctx.adminPublicKey, signed.signature)) {
+  if (!verifySigned(version === 1 ? DOCUMENT_DOMAIN : DOCUMENT_DOMAIN_V2, body as unknown as Json, ctx.adminPublicKey, signed.signature)) {
     return unsigned('bad-signature', `document ${body.id} has an invalid signature; it was altered or not signed by the admin key pinned on this machine`);
+  }
+  if (version === 1) {
+    return fail(
+      'plaintext',
+      `document ${body.id} (${body.kind}) arrived in PLAINTEXT (envelope version 1): the relay could read it, so this machine refuses it and never installs it. The admin machine runs an older build: run \`machine cli update\` there, then \`machine admin distribute\` again (for a policy: \`machine admin distribute --policy <file>\`)`,
+    );
   }
   if (body.to !== ctx.selfUuid) return fail('wrong-recipient', `document ${body.id} is addressed to machine ${body.to}, not to this machine (${ctx.selfUuid})`);
   const skew = ctx.skewSeconds ?? DOCUMENT_SKEW_SECONDS;
@@ -261,14 +331,50 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
   if (ctx.now - skew > body.expiresAt) {
     return fail('expired', `document ${body.id} expired at ${new Date(body.expiresAt * 1000).toISOString()}; ask the admin to distribute it again (\`machine admin distribute\`), or check the clock of this machine`);
   }
-
   try {
-    assertPayloadShape(body.kind, body.payload);
+    assertSealedPayload(body.payload);
+  } catch (e) {
+    return fail('malformed', `document ${body.id} refused: ${(e as Error).message}`);
+  }
+  return { ok: true, kind: body.kind, body };
+}
+
+/**
+ * Receiver side. Order: shape, size, pinned key, signature, addressee, time window, opening of the sealed payload, payload. Nothing is
+ * installed here: the caller installs through the existing validators (importPeer, installPolicy, installRevocation), which check again.
+ */
+export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): DocumentResult {
+  const envelope = verifyDocumentEnvelope(signed, ctx);
+  if (!envelope.ok) {
+    return envelope;
+  }
+  const skew = ctx.skewSeconds ?? DOCUMENT_SKEW_SECONDS;
+  const body = envelope.body;
+  if (ctx.identityPrivateKeyPkcs8 === undefined) {
+    return fail('sealed-unopened', `document ${body.id} (${body.kind}) is sealed to its addressee: it can only be read with the identity key of machine ${body.to}, which this check was not given`);
+  }
+  let plain: unknown;
+  try {
+    const bytes = openSealed(ctx.identityPrivateKeyPkcs8, body.payload.sealed, documentSealContext(body.kind, body.to, body.id));
+    plain = undefined;
+    try {
+      plain = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    } catch {
+      return fail('malformed', `document ${body.id} refused: its sealed payload opened but is not JSON (it was sealed by something else than machine admin): ask the admin to distribute it again`);
+    }
+  } catch (e) {
+    return fail(
+      'cannot-open',
+      `document ${body.id} (${body.kind}) cannot be opened, ask the admin to run \`machine admin distribute\` again: it is not sealed to the identity key of this machine, was altered, or is bound to another type, addressee or id (${(e as Error).message})`,
+    );
+  }
+  try {
+    assertPayloadShape(body.kind, plain);
   } catch (e) {
     return fail('malformed', `document ${body.id} refused: ${(e as Error).message}`);
   }
   if (body.kind === 'peer') {
-    const payload = body.payload as unknown as PeerPayload;
+    const payload = plain as unknown as PeerPayload;
     const registration = verifyRegistration(payload.registration, {
       adminPublicKey: ctx.adminPublicKey,
       now: ctx.now,
@@ -283,7 +389,7 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
     return { ok: true, kind: 'peer', body, registration: registration.body, signedRegistration: payload.registration, sealedPairSecret: payload.sealedPairSecret, adminUuid: payload.adminUuid };
   }
   if (body.kind === 'policy') {
-    const policy = body.payload as unknown as SignedPolicy;
+    const policy = plain as unknown as SignedPolicy;
     if (policy.body.target !== body.to) {
       return fail('invalid-payload', `document ${body.id} carries a policy written for machine ${policy.body.target}, not for the addressee ${body.to}`);
     }
@@ -292,7 +398,7 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
     }
     return { ok: true, kind: 'policy', body, policy };
   }
-  const revocation = body.payload as unknown as SignedRevocation;
+  const revocation = plain as unknown as SignedRevocation;
   const checked = verifyRevocation(revocation, { adminPublicKey: ctx.adminPublicKey });
   if (!checked.ok) return fail('invalid-payload', `document ${body.id} carries a revocation list that is not valid (${checked.reason}): ${checked.message}`);
   return { ok: true, kind: 'revocation', body, revocation };

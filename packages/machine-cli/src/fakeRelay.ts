@@ -542,9 +542,10 @@ export async function startFakeRelay(options: FakeRelayOptions = {}): Promise<Fa
       if (refusal !== undefined) throw new Error(`fake relay: approving ${id} is refused (the real relay answers 429 too_many_machines, limit ${refusal.limit}): ${refusal.message}`);
       entry.status = 'approved';
       // An approval built by buildApproval is sealed now that the random it answers is known.
-      completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));
-      const bindable = options.bind !== false && typeof approval === 'object' && approval !== null && !Array.isArray(approval) && !('random' in approval);
-      entry.approval = bindable ? { ...(approval as object), random: entry.random } : approval;
+      const sealed = completeDraft(approval, typeof (approval as { random?: unknown } | null)?.random === 'string' ? (approval as { random: string }).random : String(entry.random));
+      const stored = sealed ?? approval;
+      const bindable = options.bind !== false && typeof stored === 'object' && stored !== null && !Array.isArray(stored) && !('random' in stored);
+      entry.approval = bindable ? { ...(stored as object), random: entry.random } : stored;
       bindAtApproval(id);
     },
     reject: (id) => {

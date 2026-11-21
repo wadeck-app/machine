@@ -307,6 +307,9 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
       selfUuid,
       now: o.now(),
       isRevoked: (uuid, serial) => isRevoked(network.revocations, uuid, serial),
+      // Every document is sealed to this machine (decision 78). A clear (version 1) document, or one that does not open with this key, is refused
+      // below like any verdict on a document of the admin: audited once, deleted (so that the admin can send it again), never installed.
+      identityPrivateKeyPkcs8: o.self.identity.privateKeyPkcs8,
     });
     if (!verified.ok) {
       if (verified.reason === 'invalid-admin-key') {

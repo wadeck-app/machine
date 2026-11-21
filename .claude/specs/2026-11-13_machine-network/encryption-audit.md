@@ -5,7 +5,7 @@ Question: are ALL messages between machines encrypted? Facts come from the code 
 ## Verdict
 
 - Machine to machine: every byte after the TCP handshake is TLS 1.3, mutual, key-pinned. One code path opens a peer socket [code]. No clear mode, flag, fallback or loopback exception exists [code, grep of all non-test sources].
-- Machine to relay: HTTPS enforced in code (http only for `127.0.0.1` and `localhost`). Transport encryption is not end to end: the relay reads policies, revocations, registrations, addresses, names (G1).
+- Machine to relay: HTTPS enforced in code (http only for the literals `127.0.0.1` and `[::1]` since decision 78). Since decision 78 every inbox document and every approval is sealed to its addressee: the relay no longer reads policies, revocations, registrations or approvals (G1 fixed). It still reads what it must use: addresses, candidacies, presence, and the routing metadata (see "What the relay still reads").
 - Plain by design: loopback API, module to daemon, UDP wake packet.
 
 ## Table
@@ -30,16 +30,43 @@ Question: are ALL messages between machines encrypted? Facts come from the code 
 |---|---|---|---|
 | Pairing claim, device login | HTTPS JSON | code, label, deviceCode (it issues them) | single use, 5 min |
 | Candidacy | HTTPS JSON | name, hostname, identity public key, random, uuid, source IP | public data; human compares the security code |
-| Approval (decision) | HTTPS JSON | registrations (name, uuid, key, validity), admin public key | signed by admin |
-| Pair secret in approval and in `peer` inbox documents | sealed (X25519 ephemeral, HKDF, AES-256-GCM) | no | `machine-core/src/seal.ts`; `approval.ts:55`, `distribute.ts:118`; a clear `pairSecret` in an approval is refused `approval.ts:61-67` |
-| `policy` inbox document | the signed policy as is | YES: target, version, every allowed shell + command line per peer | signature only (`distribute.ts:232`; spec `distribution.md:51` "not secret") |
-| `revocation` inbox document | the signed list as is | YES: revoked uuids | signature only (`distribute.ts:200-205`) |
+| Approval (decision) | HTTPS JSON `{ v: 2, random, sealed }` | no (was: registrations, admin public key, before decision 78) | sealed to the candidate key, context `approval:v2:<uuid>:<random>`; `approvalSealed.test.ts`, `distribute.test.ts` "the approval the relay stores ... one sealed blob" |
+| Pair secret in approval and in `peer` inbox documents | sealed twice now (inner secret and whole payload) | no | `machine-core/src/seal.ts`; a clear `pairSecret` in an approval is refused |
+| `policy` inbox document | envelope version 2, `payload = { sealed }` | no: addressee, type tag, id, dates, size only (was: every allowed shell and command line) | `documentSealed.test.ts`, `distribute.test.ts` "no byte the relay received ... holds a command", real relay: `onboarding.relaytest.ts` "admin allow" |
+| `revocation` inbox document | envelope version 2, `payload = { sealed }` | no (was: revoked uuids) | same |
 | Address record | signed, plain | host:port of the machine | signature (T-33) |
 | Heartbeat, machine list, whoami, version | HTTPS | presence, uuids | token scope |
 
 Peer traffic (commands, stdout, stderr, results) never touches the relay [code].
 
-## Gaps, ranked
+## Status after decision 78 (2026-11-21)
+
+| # | Status | Evidence |
+|---|---|---|
+| G1 | Fixed for inbox documents and approvals. Open for the Allow button of the page until `policyWeb.ts` and `policyEdit.ts` are converted (the page seals, the daemon check and `policyDocumentFor` are not adapted yet: that path fails loudly, never in clear) | `documentSealed.test.ts` (23), `distribute.test.ts` ("what the relay can read", 6), `inboxLoop.test.ts` ("plaintext and unreadable documents", 3), `relayClient.test.ts` ("never sends a clear document", 2), `allowFlow.test.ts`, real relay `onboarding.relaytest.ts` |
+| G2 | Open, accepted (T-33) | unchanged |
+| G3 | Open, no fix needed | unchanged |
+| G4 | Fixed: the startup line prints the bound host, a `[warn]` when off loopback without an explicit `--peer-host`; the default bind is unchanged (the peers must reach it) | `peerBindNotice.test.ts` (11). The `cli.ts` wiring has no test (the `daemon` command blocks until stopped) |
+| G5 | Fixed: `redirect: 'error'`, a redirect becomes an actionable `RelayError` | `relayClient.test.ts`; the error text of a real Node redirect (`TypeError: fetch failed`, cause `unexpected redirect`) was checked against a local server |
+| G6 | Fixed: http only for `127.0.0.1` and `[::1]`; `localhost` refused by name (the resolver decides where a name points; the cost is one line to rewrite a URL) | `relayClient.test.ts`, `candidacies.test.ts`, `health.test.ts` |
+| G7 | Open: `machine admin register --out` writes a bundle with the pair secret in clear for the human to carry (file flow, decision 48); not a relay message | unchanged |
+| G8 | Open: `peers.json` holds pair secrets in clear at rest, mode 0600 | unchanged |
+| G9 | Fixed: `NODE_TLS_REJECT_UNAUTHORIZED=0` makes `createRelayClient` (and the two module copies) refuse, naming the variable and the fix | `relayClient.test.ts`, `candidacies.test.ts`, `health.test.ts` |
+
+### What the relay still reads, and why each item must be readable
+
+| Item | Why the relay needs it |
+|---|---|
+| Addressee uuid of a document, id, type tag (`kind`), `issuedAt`, `expiresAt`, size, `storedAt` | routing, retention (30 days), the 16 KiB and 256 documents caps, the inbox count in the heartbeat |
+| Who writes (admin token) and who reads (machine token) which inbox, when | authorization and audit (`machine_inbox_put`: uuid, id, size) |
+| Candidacy: name, hostname, identity public key, random, uuid, source IP | the admin reads it BEFORE any trust exists, to approve (nothing to seal it to yet) |
+| Address record (signed, plain): host:port | served to every trusted peer; the relay is the directory |
+| Heartbeat, presence, machine list, uuids | presence; `GET /api/machines` |
+| Pairing and device-login codes | the relay issues them |
+
+Not readable any more: commands, allow-lists, revocation lists, registrations, admin public key of an approval, pair secrets. Residual: documents stored in clear by a build before decision 78 stay readable until read or 30 days.
+
+## Gaps, ranked (as found, before decision 78)
 
 | # | Gap | Evidence | Fix | Protocol change |
 |---|---|---|---|---|

@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'n
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import register from './index.js';
+import { runHealth } from './health.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
 const MACHINE_TOKEN = 'machine-token-secret-value';
@@ -243,6 +244,37 @@ describe('GET /health', () => {
   it('admin-token: a relay url over plain http to a remote host is ok:false (invalid config)', async () => {
     writeSecret('relay-admin.json', tokenFile('http://example.invalid', ADMIN_TOKEN));
     expect(check((await health()).body, 'admin-token').ok).toBe(false);
+  });
+
+  it('admin-token: http://localhost is ok:false (a name is not loopback), with the 127.0.0.1 fix', async () => {
+    writeSecret('relay-admin.json', tokenFile('http://localhost:8080', ADMIN_TOKEN));
+    const c = check((await health()).body, 'admin-token');
+    expect(c.ok).toBe(false);
+    expect(c.detail).toContain('http://127.0.0.1:<port>');
+  });
+
+  it('relay: http://[::1] is accepted as loopback (the check reaches the network step)', async () => {
+    writeSecret('relay.json', tokenFile('http://[::1]:1', MACHINE_TOKEN));
+    const c = check((await health()).body, 'relay');
+    expect(c.ok).toBe(true);
+    expect(c.detail).toMatch(/^relay unreachable: /);
+  });
+
+  it('relay and admin-token: NODE_TLS_REJECT_UNAUTHORIZED=0 is ok:false, names the variable and the fix, and no request is made', async () => {
+    let hits = 0;
+    const port = await listen(() => { hits++; return { status: 200, body: { scopes: null } }; });
+    writeSecret('relay.json', tokenFile(`http://127.0.0.1:${port}`, MACHINE_TOKEN));
+    writeSecret('relay-admin.json', tokenFile(`http://127.0.0.1:${port}`, ADMIN_TOKEN));
+    const body = (await runHealth(configDir, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }));
+    for (const name of ['relay', 'admin-token']) {
+      const c = check(body as Health, name);
+      expect(c.ok).toBe(false);
+      expect(c.detail).toContain('NODE_TLS_REJECT_UNAUTHORIZED');
+      expect(c.detail).toContain('disables certificate validation for the whole process');
+      expect(c.detail).toMatch(/unset/i);
+    }
+    expect(hits).toBe(0);
+    expect(JSON.stringify(body)).not.toContain(MACHINE_TOKEN);
   });
 
   it('config-files: a corrupt network file is ok:false with its path and the fix', async () => {

@@ -9,7 +9,7 @@ const common = (version: string) => ({
   bundle: true,
   format: 'cjs' as const,
   platform: 'node' as const,
-  target: 'node22',
+  target: 'node24',
   // Sources use import.meta.url (the version fallback, the launcher lookup); in a CommonJS bundle it is the file itself.
   banner: { js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
   define: { 'import.meta.url': '__importMetaUrl', __MACHINE_VERSION__: JSON.stringify(version) },

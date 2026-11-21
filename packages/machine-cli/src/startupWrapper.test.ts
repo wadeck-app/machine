@@ -270,7 +270,7 @@ describe.runIf(process.platform === 'win32')('the wrapper form end to end throug
     const en = await cli(configDir, ['startup', 'enable'], undefined, { startup: ctxWith(installed()) });
     expect(en.code, en.err).toBe(0);
     expect(en.out).toMatch(/form: staged launcher through a wscript wrapper/);
-    expect(en.out).toContain('Node >= 22');
+    expect(en.out).toContain('Node >= 24');
     stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: commandOf('1.0.0') }) } });
     const st = await cli(configDir, ['startup', 'status'], undefined, { startup: ctxWith(installed()) });
     expect(st.out).toMatch(/registered form: staged launcher through a wscript wrapper/);

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { entryMatches, type Shell } from '@wadeck-app/machine-core';
 import { readAdminPin } from './admin.js';
 import { policyRecordFile, readPolicyRecord } from './adminAllow.js';
 import { pendingPolicyNote } from './noPolicy.js';
@@ -27,7 +28,8 @@ export function pendingPolicyLine(
       version: record.body.version,
       issuedAt: record.body.issuedAt,
       now,
-      recordAllowsCommand: entries.some((e) => e.shell === refusal.shell && e.command === refusal.command),
+      // The platform of the target is not known here: the strict answer (reserved device names refused) is the safe one for a hint.
+      recordAllowsCommand: entries.some((e) => entryMatches(e, { shell: refusal.shell as Shell, command: refusal.command }, 'windows')),
     });
   } catch (e) {
     warn(`the policy record of ${peer.name} could not be read, so the refusal cannot say whether a policy is in transit: ${(e as Error).message}`);

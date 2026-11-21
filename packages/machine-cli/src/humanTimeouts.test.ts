@@ -401,7 +401,8 @@ describe('admin approve and join: the relay flow', () => {
     });
 
     it('an approval without random is refused (older admin, or a replay)', async () => {
-      await refused(await approvalFor(), false, /no "random" binding it to this candidacy/);
+      // An approval of an older admin build: clear, and without the random (a sealed approval always carries it, it is its seal context).
+      await refused({ v: 1, self: {}, admin: {}, adminUuid: null, peers: [] }, false, /no "random" binding it to this candidacy/);
     });
 
     it('an approval with the right random passes', async () => {

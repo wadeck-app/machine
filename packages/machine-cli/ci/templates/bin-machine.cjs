@@ -26,7 +26,7 @@ function run(deps) {
   }
   const result = deps.spawnSync(deps.execPath, [deps.bundlePath, ...deps.argv], { stdio: 'inherit' });
   if (result.error) {
-    deps.stderr('[fail] cannot start node (' + result.error.message + '): install Node.js 22 or newer and put it on PATH.\n');
+    deps.stderr('[fail] cannot start node (' + result.error.message + '): install Node.js 24 or newer and put it on PATH.\n');
     return 1;
   }
   if (result.status === null) {

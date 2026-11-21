@@ -6,7 +6,8 @@
 export const PLACEHOLDER = '<sealed when the relay stores the approval>';
 
 interface Draft {
-  complete: (random: string) => void;
+  /** Seals the pair secrets, then the whole approval to the candidate (decision 78): returns what the relay stores. */
+  complete: (random: string) => unknown;
   secrets: { self: string; peers: string[] };
 }
 
@@ -16,9 +17,12 @@ export function registerDraft(approval: object, draft: Draft): void {
   drafts.set(approval, draft);
 }
 
-/** Seal the draft for this candidacy random; a value that is not a draft is left alone. */
-export function completeDraft(approval: unknown, random: string): void {
-  if (typeof approval === 'object' && approval !== null) drafts.get(approval)?.complete(random);
+/** Seal the draft for this candidacy random and return the sealed approval the relay stores; undefined for a value that is not a draft (it is stored as is). */
+export function completeDraft(approval: unknown, random: string): unknown {
+  if (typeof approval === 'object' && approval !== null) {
+    return drafts.get(approval)?.complete(random);
+  }
+  return undefined;
 }
 
 /** The clear pair secrets of a draft: what the admin knows, never what the relay sees. */

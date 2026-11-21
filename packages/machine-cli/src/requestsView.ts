@@ -48,7 +48,8 @@ export type RequestsAnswer = { initialized: false; message: string } | { initial
  */
 export function isListed(policy: PolicyBody | undefined, peer: string, shell: string, command: string, now: number, mode: PolicyMode): boolean {
   if (policy === undefined) return false;
-  const decision = authorize(policy, peer, { shell: shell as never, command }, now, () => 0, mode);
+  // Runs on the target: the platform decides the reserved device names, exactly as when the command arrives.
+  const decision = authorize(policy, peer, { shell: shell as never, command }, now, () => 0, mode, undefined, process.platform === 'win32' ? 'windows' : 'posix');
   return decision.allowed || (decision.reason !== 'not-listed' && decision.reason !== 'invalid-request');
 }
 

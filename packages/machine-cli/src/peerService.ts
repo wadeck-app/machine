@@ -53,6 +53,8 @@ export interface PeerServiceDeps {
   policy: () => PolicyBody | undefined;
   /** Who manages the allow list of this machine; only the wording of a refusal depends on it. Absent: the admin. */
   policyMode?: () => PolicyMode;
+  /** The platform of THIS machine: reserved device names are refused for a `name` value on `windows`. Absent: this process's platform. */
+  platform?: 'windows' | 'posix';
   usage: UsageStore;
   audit: AuditSink;
   /** Epoch seconds. */
@@ -404,9 +406,15 @@ class PeerService {
     // The shell and the command are recorded (they passed verifyRequest: known shell, 1 to 2048 printable ASCII): `machine requests` lists them.
     if (!policy) return this.refuse(session, body.id, 'no-policy', noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), { shell: body.shell, command: body.command });
 
-    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode, deps.self.name);
+    const platform = deps.platform ?? (process.platform === 'win32' ? 'windows' : 'posix');
+    const decision = authorize(policy, body.source, { shell: body.shell, command: body.command }, now, (key) => deps.usage.count(key), policyMode, deps.self.name, platform);
     if (!decision.allowed) {
-      return this.refuse(session, body.id, decision.reason, decision.message, { shell: body.shell, command: body.command }, decision.allowedShells);
+      // `decision.detail` (the closest typed entry, the token and the rule that failed) goes to the LOCAL audit log only, never to the caller.
+      const logged: Record<string, Json> = { shell: body.shell, command: body.command };
+      if (decision.detail !== undefined) {
+        logged.detail = decision.detail;
+      }
+      return this.refuse(session, body.id, decision.reason, decision.message, logged, decision.allowedShells);
     }
     if (this.inFlight >= (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)) {
       return this.refuse(session, body.id, 'busy', 'this machine is already running its maximum number of commands; retry shortly');
@@ -414,7 +422,8 @@ class PeerService {
 
     // No audit, no execution: the acceptance is recorded BEFORE the command can run.
     try {
-      this.recordStrict({ event: 'accepted', source: session.peerId, id: body.id, shell: body.shell, command: body.command });
+      // A typed entry that matched is named (its template as signed), so the log says which rule let this command through.
+      this.recordStrict({ event: 'accepted', source: session.peerId, id: body.id, shell: body.shell, command: body.command, ...(decision.template !== undefined ? { template: decision.template } : {}) });
     } catch (e) {
       this.problem(`cannot write the audit log (${(e as Error).message}): commands are refused until it works again`);
       return this.refuse(session, body.id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); nothing was run. Fix the disk or permissions of the machine's audit log`);

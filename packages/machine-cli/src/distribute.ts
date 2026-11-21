@@ -55,7 +55,17 @@ export interface Sender {
   adminUuid: string | null;
   /** Epoch seconds. Only used to refuse an already expired document and to date a freshly signed revocation. */
   now: () => number;
+  /**
+   * The config directory of this admin machine: where the registrations (and so the identity keys the documents are sealed to) are read.
+   * Needed to seal a document for a machine that is not already named by the caller (a policy); `adminRelayAccess` records it for the
+   * client it makes, so a caller that took its client from there need not repeat it.
+   */
+  configDir?: string;
 }
+
+// The config directory a client was made for (see `adminRelayAccess`): lets `distributePolicy` find the registration of its target
+// without the caller repeating the directory.
+const clientConfigDir = new WeakMap<RelayClient, string>();
 
 interface Recipient {
   uuid: string;
@@ -116,14 +126,18 @@ function peerDocument(sender: Sender, to: SignedRegistration, about: SignedRegis
     throw new Error(`the registration of "${to.body.name}" or of "${about.body.name}" is older than the 30 days the relay keeps a document, or has expired: approve the machine again (or \`machine admin register\`) instead of distributing it`);
   }
   const sealedPairSecret = sealTo(to.body.identityPublicKey, decodeBase64urlStrict(secret, 32, 'pair secret'), pairSecretDocumentContext(sender.adminUuid, to.body.uuid, about.body.uuid));
+  // The whole payload is sealed to the addressee as well (decision 78): the relay learns the type, the addressee and the size, nothing else.
+  // `v2:` keeps this id apart from the one an older build gave the same content in clear: a clear document still waiting in an inbox under the
+  // old id must not make the relay answer id_conflict for the sealed one.
   return buildDocument(
     {
       kind: 'peer',
       to: to.body.uuid,
-      id: documentId(`peer:${to.body.uuid}:${to.body.serial}:${about.body.uuid}:${about.body.serial}`),
+      id: documentId(`v2:peer:${to.body.uuid}:${to.body.serial}:${about.body.uuid}:${about.body.serial}`),
       issuedAt,
       expiresAt,
       payload: { registration: about, sealedPairSecret, adminUuid: sender.adminUuid } as unknown as Json,
+      recipientIdentityPublicKey: to.body.identityPublicKey,
     },
     sender.adminPrivateKeyPkcs8,
   );
@@ -199,10 +213,11 @@ export async function distributeRevocation(configDir: string, revokedUuid: strin
         {
           kind: 'revocation',
           to: to.uuid,
-          id: documentId(`revocation:${to.uuid}:${signed.signature}`),
+          id: documentId(`v2:revocation:${to.uuid}:${signed.signature}`),
           issuedAt: signed.body.issuedAt,
           expiresAt: signed.body.issuedAt + DOCUMENT_RETENTION_SECONDS,
           payload: signed as unknown as Json,
+          recipientIdentityPublicKey: r.body.identityPublicKey,
         },
         sender.adminPrivateKeyPkcs8,
       ),
@@ -229,11 +244,37 @@ export async function distributePolicy(signed: SignedPolicy, sender: Sender): Pr
     const expiresAt = Math.min(issuedAt + DOCUMENT_RETENTION_SECONDS, signed.body.notAfter);
     if (expiresAt <= sender.now()) throw new Error(`the policy could be applied until ${new Date(signed.body.notAfter * 1000).toISOString()}, which has passed: sign it again`);
     return buildDocument(
-      { kind: 'policy', to: to.uuid, id: documentId(`policy:${to.uuid}:${signed.body.version}:${signed.signature}`), issuedAt, expiresAt, payload: signed as unknown as Json },
+      {
+        kind: 'policy',
+        to: to.uuid,
+        id: documentId(`v2:policy:${to.uuid}:${signed.body.version}:${signed.signature}`),
+        issuedAt,
+        expiresAt,
+        payload: signed as unknown as Json,
+        recipientIdentityPublicKey: recipientKeyOf(sender, to.uuid),
+      },
       sender.adminPrivateKeyPkcs8,
     );
   });
   return report;
+}
+
+/**
+ * The identity key a document for `uuid` is sealed to: from the registration this admin machine holds for it. There is no other source and no
+ * plaintext fallback: when the machine is unknown here, nothing is sent and the message says how to fix it.
+ */
+function recipientKeyOf(sender: Sender, uuid: string): string {
+  const configDir = sender.configDir ?? clientConfigDir.get(sender.client);
+  if (configDir === undefined) {
+    throw new Error('internal: the config directory of the admin machine is unknown, so the registration of the addressee cannot be read to seal the document to it. Nothing was sent (there is no plaintext mode)');
+  }
+  const registration = trustedRegistrations(configDir, sender.now()).find((r) => r.body.uuid === uuid);
+  if (registration === undefined) {
+    throw new Error(
+      `this machine holds no valid registration for machine ${uuid}, so the document cannot be sealed to its identity key, and documents are never sent in plaintext (the relay must not read them). Approve the machine here first (\`machine admin approve\`), or run this command on the admin machine that approved it. Nothing was sent`,
+    );
+  }
+  return registration.body.identityPublicKey;
 }
 
 export interface AdminRelayAccess {
@@ -245,7 +286,9 @@ export interface AdminRelayAccess {
 export function adminRelayAccess(configDir: string, injected?: RelayClient): AdminRelayAccess | undefined {
   const config = readRelayAdminConfig(configDir);
   if (config === undefined) return undefined;
-  return { client: injected ?? createRelayClient({ baseUrl: config.relayUrl, token: config.token }), relayUrl: config.relayUrl };
+  const client = injected ?? createRelayClient({ baseUrl: config.relayUrl, token: config.token });
+  clientConfigDir.set(client, configDir);
+  return { client, relayUrl: config.relayUrl };
 }
 
 export const noAdminRelayTokenMessage = (configDir: string): string =>
@@ -265,6 +308,9 @@ export interface FormattedDistribution {
   failed: boolean;
 }
 
+const SEALED_NOTICE =
+  '[info] the documents are sealed to each machine (the relay cannot read them). A machine on an older build deletes them unread and counts them as failed verification: run `machine cli update` on every machine, then send what they lost with `machine admin distribute` (`machine --help` lists the forms)';
+
 /** `what` names what was decided ("the approval", "the revocation", "the policy"); `retry` is the exact command that finishes the job. */
 export function formatDistribution(report: DistributionReport, what: string, retry: string): FormattedDistribution {
   const failed = report.failures.length > 0;
@@ -273,6 +319,10 @@ export function formatDistribution(report: DistributionReport, what: string, ret
   if (report.machines === 0 && !failed) out = '[ok] no other peer to inform\n';
   else if (report.delivered > 0 || report.alreadyThere > 0) {
     out = `[ok] ${report.delivered} document(s) stored by the relay for ${report.machines} machine(s)${already}${failed ? ', but some failed (see below)' : ''}\n`;
+  }
+  // The admin cannot know the build of a target: say what an older one does (distribution.md, "Rollout of sealed documents").
+  if (report.delivered > 0) {
+    out += `${SEALED_NOTICE}\n`;
   }
   if (!failed) return { out, err: '', failed: false };
   const lines = report.failures.map((f) => `[error] ${f.toName} (${f.toUuid}): ${f.kind === 'machine' ? '' : `${f.kind} document${f.id ? ` ${f.id}` : ''} not stored: `}${f.message}`);

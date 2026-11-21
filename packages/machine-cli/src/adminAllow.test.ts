@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
-import { cli, fakeTiming, ok } from './testing.js';
+import { cli, fakeTiming, ok, openDocumentFor } from './testing.js';
 
 // `machine admin allow` (decision 54): one command instead of a hand-written draft, `admin sign-policy --out` and `policy install`.
 
@@ -24,7 +24,13 @@ let relay: FakeRelay;
 let passphrase: string;
 
 type PolicyDoc = { body: { kind: string; payload: { body: { version: number; baseVersion: number; target: string; defaults: { shell: string; command: string }[]; peers: Record<string, unknown> } } } };
-const policyDocs = (uuid: string): PolicyDoc[] => relay.inbox(uuid).map((d) => d.document as unknown as PolicyDoc).filter((d) => d.body.kind === 'policy');
+// The documents are sealed to the machine in `b` (decision 78): opened here with its key, so the assertions read the clear payload as before.
+const policyDocs = (uuid: string): PolicyDoc[] =>
+  relay
+    .inbox(uuid)
+    .map((d) => d.document as unknown as { body: PolicyDoc['body'] })
+    .filter((d) => d.body.kind === 'policy')
+    .map((d) => ({ body: { ...d.body, payload: openDocumentFor(b, d) as PolicyDoc['body']['payload'] } }));
 const allow = (args: string[], ask: (l: string) => Promise<string> = yes, pass: (l: string) => Promise<string> = async () => passphrase) => cli(a, ['admin', 'allow', ...args], pass, { ask });
 
 beforeEach(async () => {

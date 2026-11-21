@@ -1,4 +1,6 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { INPUT, MODAL_BACKDROP, MODAL_PANEL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
 // approve and revoke later). It is NOT a registry component on purpose (no @registryCategory): it can never be wired from a view, so the passphrase
@@ -32,13 +34,12 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), [href], [tabin
 export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, needsPassphrase = true, onConfirm, onCancel }: ConfirmSignModalProps) {
   const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
-  const cancel = useRef<HTMLButtonElement>(null);
   const passphrase = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
 
   // Cancel is the default focus: Enter without thinking must never sign.
   useEffect(() => {
-    cancel.current?.focus();
+    root.current?.querySelector<HTMLElement>('[data-footer] button')?.focus();
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -47,9 +48,13 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
       onCancel();
       return;
     }
-    if (e.key !== 'Tab' || root.current === null) return;
+    if (e.key !== 'Tab' || root.current === null) {
+      return;
+    }
     const items = Array.from(root.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      return;
+    }
     const first = items[0] as HTMLElement;
     const last = items[items.length - 1] as HTMLElement;
     if (e.shiftKey && document.activeElement === first) {
@@ -63,7 +68,9 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy) return;
+    if (busy) {
+      return;
+    }
     const input = passphrase.current;
     if (input === null || input.value === '') {
       setLocalError('Enter the admin passphrase to sign. Nothing was signed.');
@@ -79,40 +86,33 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
 
   const shown = localError ?? error;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onKeyDown={onKeyDown}>
-      <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex w-full max-w-xl flex-col gap-3 rounded-lg border border-gray-300 bg-white p-5 text-gray-900 shadow-xl dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100">
-        <h2 id={titleId} className="text-lg font-semibold">{title}</h2>
+    <div className={MODAL_BACKDROP} onKeyDown={onKeyDown}>
+      <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} className={MODAL_PANEL}>
+        <h2 id={titleId} className="text-lg font-semibold text-content">{title}</h2>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
           {details.map(d => (
             <React.Fragment key={d.label}>
-              <dt className="text-gray-600 dark:text-gray-400">{d.label}</dt>
+              <dt className={TEXT_MUTED}>{d.label}</dt>
               <dd className="break-all font-mono">{d.value}</dd>
             </React.Fragment>
           ))}
         </dl>
         {notes.map(n => (
-          <p key={n} className="text-sm text-gray-700 dark:text-gray-300">{n}</p>
+          <p key={n} className={TEXT_MUTED_SM}>{n}</p>
         ))}
-        {needsPassphrase && (
-          <p className="rounded border border-amber-400 bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">{warning}</p>
-        )}
+        {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}
         <form className="flex flex-col gap-3" onSubmit={submit}>
           {needsPassphrase && (
             <label className="flex flex-col gap-1 text-sm">
               Admin passphrase
-              <input ref={passphrase} type="password" autoComplete="off" disabled={busy} className="rounded border border-gray-400 bg-white px-2 py-1 dark:bg-gray-800" />
+              {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
+              <input ref={passphrase} type="password" autoComplete="off" disabled={busy} className={INPUT} />
             </label>
           )}
-          {shown !== null && <div role="alert" className="text-sm text-red-700 dark:text-red-400">{shown}</div>}
-          <div className="flex justify-end gap-2">
-            <button ref={cancel} type="button" onClick={onCancel} disabled={busy} className="rounded border border-gray-400 px-3 py-1 text-sm disabled:opacity-50">
-              {needsPassphrase ? 'Cancel' : 'Close'}
-            </button>
-            {needsPassphrase && (
-              <button type="submit" disabled={busy} className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-50">
-                {busy ? 'Signing...' : confirmLabel}
-              </button>
-            )}
+          {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
+          <div data-footer="" className="flex justify-end gap-2">
+            <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} />
+            {needsPassphrase && <ButtonAction type="submit" label={busy ? 'Signing...' : confirmLabel} variant="primary" disabled={busy} />}
           </div>
         </form>
       </div>

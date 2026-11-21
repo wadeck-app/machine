@@ -11,7 +11,7 @@ import { readMachine } from './identity.js';
 import { exportMachineInfo, loadNetwork } from './network.js';
 import { createRelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile, writeRelayAdminConfig } from './relayStore.js';
-import { cli, fakeTiming, makeAdmin, ok, type TestAdmin } from './testing.js';
+import { cli, fakeTiming, makeAdmin, ok, openApprovalFor, type TestAdmin } from './testing.js';
 
 let root: string;
 let cand: string;
@@ -380,10 +380,12 @@ describe('machine admin approve: deciding', () => {
     expect(approved.out).not.toContain(candidateCode);
     expect(decisions()).toHaveLength(1);
     expect(decisions()[0]?.authorization).toBe(`Bearer ${relay.adminToken}`);
-    const body = decisions()[0]?.body as { decision: string; approval: { v: number; self: unknown; admin: { adminKeyId: string }; peers: unknown[] } };
+    const body = decisions()[0]?.body as { decision: string; approval: unknown };
     expect(body.decision).toBe('approve');
-    expect(body.approval.admin.adminKeyId).toBe(admin.adminKeyId);
-    expect(body.approval.peers).toHaveLength(1);
+    // The relay stores one sealed blob (decision 78); the candidate opens it.
+    const inner = openApprovalFor(cand, body.approval) as { admin: { adminKeyId: string }; peers: unknown[] };
+    expect(inner.admin.adminKeyId).toBe(admin.adminKeyId);
+    expect(inner.peers).toHaveLength(1);
     noToken(approved.out, approved.err);
 
     const random = (relay.candidacies.get(id) as unknown as { random: string }).random;
@@ -414,8 +416,8 @@ describe('machine admin approve: deciding', () => {
   it('the pair secrets travel sealed to the identity key of the candidate, bound to admin, candidate, candidacy random and slot', async () => {
     const r = await approve([id]);
     expect(r.code, r.err).toBe(0);
-    const approval = decisions()[0]?.body as unknown as { approval: { adminUuid: string; random: string; self: Record<string, unknown>; peers: Record<string, unknown>[] } };
-    const sent = approval.approval;
+    const approval = decisions()[0]?.body as unknown as { approval: unknown };
+    const sent = openApprovalFor(cand, approval.approval) as { adminUuid: string; random: string; self: Record<string, unknown>; peers: Record<string, unknown>[] };
     const adminUuid = readMachine(adminDir).uuid;
     const candidateUuid = readMachine(cand).uuid;
     const adminKeyOfCandidate = (JSON.parse(readFileSync(join(adminDir, '_secrets_', 'peers.json'), 'utf8')) as { peers: { pairSecret: string }[] }).peers[0] as { pairSecret: string };

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { derivePairSecretV2, generateSigningKeyPair, newCandidacyRandom, openPairSecret, verifyInboxDocument, type SignedRegistration } from '@wadeck-app/machine-core';
+import { derivePairSecretV2, documentId, generateSigningKeyPair, newCandidacyRandom, openPairSecret, verifyInboxDocument, type SignedRegistration } from '@wadeck-app/machine-core';
 import { unlockAdminKey } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
@@ -33,7 +33,8 @@ async function enroll(name: string, options: { ask?: (l: string) => Promise<stri
 }
 
 const inboxOf = (name: string) => relay.inbox(uuidOf(name));
-const verified = (name: string, document: unknown) => verifyInboxDocument(document, { adminPublicKey: admin.adminPublicKey, selfUuid: uuidOf(name), now: nowSeconds() });
+const verified = (name: string, document: unknown) =>
+  verifyInboxDocument(document, { adminPublicKey: admin.adminPublicKey, selfUuid: uuidOf(name), now: nowSeconds(), identityPrivateKeyPkcs8: readMachine(dirOf(name)).identity.privateKeyPkcs8 });
 const inboxPuts = () => relay.requests.filter((q) => q.method === 'PUT' && /\/inbox\//.test(q.path));
 
 beforeEach(async () => {
@@ -382,6 +383,10 @@ describe('machine admin revoke distributes the revocation', () => {
 });
 
 describe('policies signed by the admin', () => {
+  // A policy is sealed to the identity key of its target: the admin must hold the registration of the target (it approved it).
+  beforeEach(async () => {
+    await enroll('laptop');
+  });
   const draft = () => {
     const file = join(root, 'draft.json');
     writeFileSync(file, JSON.stringify({ v: 1, target: uuidOf('laptop'), version: 1, baseVersion: 0, defaults: [{ shell: 'sh', command: 'echo hi' }], peers: {} }));
@@ -447,6 +452,103 @@ describe('policies signed by the admin', () => {
   });
 });
 
+describe('what the relay can read (decision 78: every document is sealed to its addressee)', () => {
+  const SECRET_COMMAND = 'echo very-secret-command-text';
+
+  async function networkWithPolicyAndRevocation() {
+    await enroll('laptop');
+    await enroll('server');
+    const file = join(root, 'secret-draft.json');
+    writeFileSync(file, JSON.stringify({ v: 1, target: uuidOf('laptop'), version: 1, baseVersion: 0, defaults: [{ shell: 'sh', command: SECRET_COMMAND }], peers: {} }));
+    const signed = await cli(adminDir, ['admin', 'sign-policy', file, '--out', join(root, 'secret-policy.json')], pass);
+    expect(signed.code, signed.err).toBe(0);
+    const revoked = await cli(adminDir, ['admin', 'revoke', 'server'], pass, { ask: yes });
+    expect(revoked.code, revoked.err).toBe(0);
+  }
+
+  it('no byte the relay received (inbox documents, every request body) holds a command, a shell, a machine name, a registration or a revoked uuid', async () => {
+    await networkWithPolicyAndRevocation();
+    const puts = relay.requests.filter((q) => q.method === 'PUT' && /\/inbox\//.test(q.path));
+    // peer (2), policy (1), revocation (1): the test would be empty otherwise.
+    expect(puts.length).toBeGreaterThanOrEqual(4);
+    const stored = ['desktop', 'laptop', 'server'].flatMap((name) => inboxOf(name).map((d) => d.document));
+    expect(stored.length).toBeGreaterThanOrEqual(3);
+    const uuids = ['desktop', 'laptop', 'server'].map(uuidOf);
+    for (const document of [...puts.map((q) => q.body), ...stored]) {
+      const text = JSON.stringify(document);
+      const to = (document as { body: { to: string } }).body.to;
+      // The addressee is in clear (the relay routes by it); no OTHER machine appears, so who is revoked and who is paired with whom stays hidden.
+      const forbiddenUuids = uuids.filter((u) => u !== to);
+      for (const forbidden of ['very-secret-command-text', 'echo ', '"shell"', '"command"', '"defaults"', '"entries"', '"registration"', '"identityPublicKey"', '"name"', 'laptop', 'server', ...forbiddenUuids]) {
+        expect(text, `a document sent to the relay must not contain ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('the approval the relay stores for a candidacy is one sealed blob too: no registration, no admin key, no machine name', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    const decisions = relay.requests.filter((q) => q.method === 'PUT' && /\/candidacies\/[^/]+\/decision$/.test(q.path));
+    expect(decisions).toHaveLength(2);
+    for (const d of decisions) {
+      const approval = (d.body as { approval: Record<string, unknown> }).approval;
+      expect(Object.keys(approval).sort()).toEqual(['random', 'sealed', 'v']);
+      expect(approval.v).toBe(2);
+      const text = JSON.stringify(d.body);
+      for (const forbidden of ['"registration"', '"self"', '"peers"', 'adminPublicKey', 'adminUuid', 'identityPublicKey', 'laptop', 'server', 'desktop', admin.adminPublicKey, uuidOf('desktop')]) {
+        expect(text, `the decision must not contain ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('every stored document is the envelope version 2: the type tag, the addressee, the id and the dates in clear, the payload one sealed blob', async () => {
+    await networkWithPolicyAndRevocation();
+    const kinds = new Set<string>();
+    for (const name of ['laptop', 'server']) {
+      for (const d of inboxOf(name)) {
+        const body = (d.document as { body: { v: number; kind: string; to: string; id: string; issuedAt: number; expiresAt: number; payload: Record<string, unknown> } }).body;
+        kinds.add(body.kind);
+        expect(Object.keys(body).sort()).toEqual(['expiresAt', 'id', 'issuedAt', 'kind', 'payload', 'to', 'v']);
+        expect(body.v).toBe(2);
+        expect(Object.keys(body.payload)).toEqual(['sealed']);
+      }
+    }
+    expect([...kinds].sort()).toEqual(['peer', 'policy', 'revocation']);
+  });
+
+  it('the addressee opens its documents, another machine does not', async () => {
+    await networkWithPolicyAndRevocation();
+    const policyDoc = inboxOf('laptop').map((d) => d.document).find((d) => (d as { body: { kind: string } }).body.kind === 'policy');
+    expect(verified('laptop', policyDoc)).toMatchObject({ ok: true, kind: 'policy' });
+    const asServer = verifyInboxDocument(policyDoc, {
+      adminPublicKey: admin.adminPublicKey,
+      selfUuid: uuidOf('laptop'),
+      now: nowSeconds(),
+      identityPrivateKeyPkcs8: readMachine(dirOf('server')).identity.privateKeyPkcs8,
+    });
+    expect(asServer).toMatchObject({ ok: false, reason: 'cannot-open' });
+  });
+
+  it('a policy for a machine this admin holds no registration for is refused before anything is sent, naming the fix', async () => {
+    await enroll('laptop');
+    const file = join(root, 'stranger.json');
+    writeFileSync(file, JSON.stringify({ v: 1, target: '99999999-9999-4999-8999-999999999999', version: 1, baseVersion: 0, defaults: [{ shell: 'sh', command: 'echo hi' }], peers: {} }));
+    const mark = inboxPuts().length;
+    const r = await cli(adminDir, ['admin', 'sign-policy', file, '--out', join(root, 'stranger-policy.json')], pass);
+    expect(inboxPuts().length).toBe(mark);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/registration/);
+    expect(r.err).toMatch(/no plaintext|sealed/i);
+  });
+
+  it('the id of a sealed document differs from the id an older admin build gave the same content (a clear document waiting under the old id cannot hide the sealed one)', async () => {
+    await networkWithPolicyAndRevocation();
+    const policyDoc = inboxOf('laptop').map((d) => d.document).find((d) => (d as { body: { kind: string } }).body.kind === 'policy') as { body: { id: string } };
+    const signed = JSON.parse(readFileSync(join(root, 'secret-policy.json'), 'utf8')) as { body: { target: string; version: number }; signature: string };
+    expect(policyDoc.body.id).not.toBe(documentId(`policy:${signed.body.target}:${signed.body.version}:${signed.signature}`));
+  });
+});
+
 describe('HELP', () => {
   it('names distribute, and says that approve, revoke and sign-policy use the relay', async () => {
     const r = await cli(adminDir, ['--help']);
@@ -463,5 +565,22 @@ describe('what the admin is told', () => {
     const { result } = await enroll('server');
     expect(result.out).toMatch(/document\(s\) stored by the relay for 1 machine/);
     expect(result.out).not.toMatch(/delivered/i);
+  });
+
+  it('says that the documents are sealed and what a machine on an older build does with them, since the admin cannot know the version of the targets', async () => {
+    await enroll('laptop');
+    const { result } = await enroll('server');
+    const lines = result.out.split('\n').filter((l) => /sealed/.test(l));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/\[info\]/);
+    // The consequence for an older machine, the fix on that machine, and the retry on this one.
+    expect(lines[0]).toMatch(/older build/);
+    expect(lines[0]).toMatch(/machine cli update/);
+    expect(lines[0]).toMatch(/machine admin distribute/);
+  });
+
+  it('prints nothing about sealing when nothing was stored (no other peer yet)', async () => {
+    const { result } = await enroll('laptop');
+    expect(result.out).not.toMatch(/sealed/);
   });
 });

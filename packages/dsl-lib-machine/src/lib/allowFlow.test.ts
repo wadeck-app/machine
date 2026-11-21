@@ -128,15 +128,29 @@ describe('signAndSubmitAllow', () => {
 
   it('another machine: also posts the inbox document, which machine-core verifies for that machine, and the policy is the one in it', async () => {
     const api = stubApi({ get: { '/admin-key': { file: keyFile } }, post: { ok: true, target: { uuid: PEER, name: 'laptop' }, version: 1, delivery: 'inbox' } });
-    const ctx = context({ target: { uuid: PEER, name: 'laptop' }, toSelf: false, delivery: 'inbox', source: 'the last one signed here' });
+    const targetKeys = generateSigningKeyPair();
+    const ctx = context({ target: { uuid: PEER, name: 'laptop', identityPublicKey: targetKeys.publicKey }, toSelf: false, delivery: 'inbox', source: 'the last one signed here' });
     await signAndSubmitAllow(api, ctx, { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW);
     const body = api.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy; document: unknown };
     expect(Object.keys(body).sort()).toEqual(['document', 'policy']);
-    const verified = verifyInboxDocument(body.document, { adminPublicKey: admin.publicKey, selfUuid: PEER, now: NOW });
+    // Sealed to the target (decision 78): the page, the backend and the relay never carry the command in the document.
+    expect(JSON.stringify(body.document)).not.toContain('uptime');
+    const verified = verifyInboxDocument(body.document, { adminPublicKey: admin.publicKey, selfUuid: PEER, now: NOW, identityPrivateKeyPkcs8: targetKeys.privateKeyPkcs8 });
     expect(verified.ok).toBe(true);
     if (verified.ok && verified.kind === 'policy') expect(verified.policy).toEqual(body.policy);
     expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
   }, 120_000);
+
+  it('another machine, but the backend sent no identity key for it: nothing is signed or posted, and the message says to update the module', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    const ctx = context({ target: { uuid: PEER, name: 'laptop' }, toSelf: false, delivery: 'inbox' });
+    const error = await signAndSubmitAllow(api, ctx, { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/identity key of "laptop"/);
+    expect((error as Error).message).toMatch(/update the machine module/i);
+    // Not even the key file was read: nothing was unlocked.
+    expect(api.sent).toEqual([]);
+  });
 
   it('a wrong passphrase posts nothing and does not echo the passphrase', async () => {
     const api = stubApi({ get: { '/admin-key': { file: keyFile } } });

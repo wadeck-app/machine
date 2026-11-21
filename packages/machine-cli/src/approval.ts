@@ -1,4 +1,4 @@
-import { decodeBase64urlStrict, isUuid, openSealed, sealTo, verifyRegistration, type RegistrationBody, type SignedRegistration } from '@wadeck-app/machine-core';
+import { canonicalize, decodeBase64urlStrict, isUuid, openSealed, sealTo, verifyRegistration, type Json, type RegistrationBody, type SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinCompatible, parseAdminPinDocument, pinAdminDocument, type AdminPin } from './admin.js';
 import { importPeer, type MachineInfo, type PeerBundle } from './network.js';
 
@@ -55,6 +55,29 @@ export function sealBundle(bundle: PeerBundle, candidateIdentityPublicKey: strin
   return { registration: bundle.registration, sealedPairSecret: sealTo(candidateIdentityPublicKey, secret, pairSecretContext(parts)) };
 }
 
+/** What the relay stores as the approval of a candidacy (decision 78): the whole approval sealed to the candidate. Only the `random` the relay already holds is in clear. */
+export interface SealedApproval {
+  v: 2;
+  random: string;
+  /** `sealTo(identity key of the candidate, canonical JSON of the Approval, approvalSealContext(...))`. */
+  sealed: string;
+}
+
+/** The purpose an approval is sealed for: this candidate machine and this candidacy. A sealed approval opens nowhere else. */
+export function approvalSealContext(candidateUuid: string, random: string): string {
+  return `approval:v2:${candidateUuid}:${random}`;
+}
+
+/** Admin side: seal the whole approval (registrations, admin key, sealed secrets) to the identity key of the candidate. */
+export function sealApproval(approval: Approval | Record<string, unknown>, candidateIdentityPublicKey: string, candidateUuid: string): SealedApproval {
+  const random = (approval as { random?: unknown }).random;
+  if (typeof random !== 'string') {
+    throw new Error('internal: the approval has no random binding it to the candidacy: nothing was sealed or sent');
+  }
+  return { v: 2, random, sealed: sealTo(candidateIdentityPublicKey, Buffer.from(canonicalize(approval as unknown as Json), 'utf8'), approvalSealContext(candidateUuid, random)) };
+}
+
+const OUTER_KEYS = ['v', 'random', 'sealed'];
 const KEYS = ['v', 'self', 'admin', 'adminUuid', 'peers', 'random'];
 const asObject = (value: unknown): Record<string, unknown> | undefined => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
@@ -89,14 +112,50 @@ function openBundle(bundle: SealedBundle, where: string, identityPrivateKey: Uin
  * This proves the approval is consistent, NOT that the admin key is the right one: only the final code does (T-05).
  */
 export function checkApproval(raw: unknown, self: MachineInfo, now: number, candidacyRandom: string, identityPrivateKey: Uint8Array): CheckedApproval {
-  const o = asObject(raw);
-  if (!o) throw new Error('the approval is not a JSON object');
+  const outer = asObject(raw);
+  if (!outer) {
+    throw new Error('the approval is not a JSON object');
+  }
   // First of all: an approval that answers another candidacy (an old one replayed, or mixed up by the relay) is not examined further.
-  if (typeof o.random !== 'string') {
+  if (typeof outer.random !== 'string') {
     throw new Error('the approval carries no "random" binding it to this candidacy: it comes from an older admin version or from a replay. Ask the admin to approve again after `machine join --resume`');
   }
-  if (o.random !== candidacyRandom) {
+  if (outer.random !== candidacyRandom) {
     throw new Error('the approval answers another candidacy (its random differs from the one of this machine): it is a replay of an old approval or the relay mixed candidacies up. Nothing was trusted; ask the admin to approve again after `machine join --resume`');
+  }
+  // Decision 78: an approval is sealed as a whole. A clear one (envelope version 1) was readable by the relay: refused, nothing is pinned.
+  if (outer.v === 1 || 'self' in outer) {
+    throw new Error(
+      'the approval arrived in PLAINTEXT (envelope version 1): the relay could read the registrations and the admin key in it, so it is refused and nothing was pinned or imported. The admin machine runs an older build: run `machine cli update` there, then ask the admin to approve again after `machine join --resume`',
+    );
+  }
+  for (const key of Object.keys(outer)) {
+    if (!OUTER_KEYS.includes(key)) {
+      throw new Error(`the approval has an unknown field "${key}": it may come from an incompatible version`);
+    }
+  }
+  if (outer.v !== 2) {
+    throw new Error(`the approval has envelope version ${String(outer.v)}, this build reads version 2 (sealed): update machine or ask the admin to update`);
+  }
+  if (typeof outer.sealed !== 'string') {
+    throw new Error('the approval has no "sealed" payload: it may come from an incompatible version');
+  }
+  let inner: unknown;
+  try {
+    const plain = openSealed(identityPrivateKey, outer.sealed, approvalSealContext(self.uuid, outer.random));
+    inner = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plain));
+  } catch (e) {
+    const detail = e instanceof SyntaxError || e instanceof TypeError ? 'it opened but is not JSON: it was not sealed by machine admin approve' : (e as Error).message;
+    throw new Error(
+      `cannot open the approval: it is not sealed to the identity key of this machine, was altered, or answers another candidacy (${detail}). Nothing was trusted; ask the admin to approve again after \`machine join --resume\``,
+    );
+  }
+  const o = asObject(inner);
+  if (!o) {
+    throw new Error('the sealed approval is not a JSON object (it is not an approval): nothing was trusted; ask the admin to approve again after `machine join --resume`');
+  }
+  if (o.random !== candidacyRandom) {
+    throw new Error('the sealed approval answers another candidacy (its random differs from the one of this machine): nothing was trusted; ask the admin to approve again after `machine join --resume`');
   }
   for (const key of Object.keys(o)) {
     if (!KEYS.includes(key)) throw new Error(`the approval has an unknown field "${key}": it may come from an incompatible version`);

@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { signRegistration, unlockAdminKey, type UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
+import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { INPUT, TEXT_ERROR } from '../lib/styleTokens.js';
 
 // Where the secrets live (decision D25): the passphrase only in the input element, read at submit and cleared at once; the
 // unlocked key only in a ref, as a NON-EXTRACTABLE CryptoKey. Neither goes through $setVar, $publishOutput, a URL, a prop
@@ -52,7 +54,9 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
   const [error, setError] = useState<string | null>(null);
 
   const lock = useCallback(() => {
-    if (timer.current !== null) clearTimeout(timer.current);
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+    }
     timer.current = null;
     keyRef.current?.lock();
     keyRef.current = null;
@@ -74,14 +78,18 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
       const file = await readKeyFile(keyFileUrl);
       const key = await unlockAdminKey(file, passphrase, { extractable: false });
       keyRef.current = key;
-      if (timer.current !== null) clearTimeout(timer.current);
+      if (timer.current !== null) {
+        clearTimeout(timer.current);
+      }
       timer.current = setTimeout(lock, unlockSeconds * 1000);
       setUnlocked(true);
       onUnlocked?.({ keyId: key.keyId, publicKey: key.publicKey, isLocked: () => key.isLocked() });
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      if (passphraseInput.current) passphraseInput.current.value = '';
+      if (passphraseInput.current) {
+        passphraseInput.current.value = '';
+      }
       setBusy(false);
     }
   };
@@ -104,8 +112,8 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
     <div className="flex flex-col gap-3">
       {unlocked ? (
         <div className="flex gap-2">
-          <button type="button" onClick={sign} className="rounded bg-blue-600 px-3 py-1 text-sm text-white">Sign</button>
-          <button type="button" onClick={lock} className="rounded border px-3 py-1 text-sm">Lock now</button>
+          <ButtonAction label="Sign" variant="primary" onClick={sign} />
+          <ButtonAction label="Lock now" variant="secondary" onClick={lock} />
         </div>
       ) : (
         <form
@@ -117,14 +125,15 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
         >
           <label className="flex flex-col gap-1 text-sm">
             Admin passphrase
-            <input ref={passphraseInput} type="password" autoComplete="off" className="rounded border px-2 py-1" />
+            {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}
+            <input ref={passphraseInput} type="password" autoComplete="off" className={INPUT} />
           </label>
-          <button type="submit" disabled={busy} className="self-start rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-50">
-            {busy ? 'Unlocking...' : 'Unlock'}
-          </button>
+          <div>
+            <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />
+          </div>
         </form>
       )}
-      {error !== null && <div role="alert" className="text-sm text-red-700">{error}</div>}
+      {error !== null && <div role="alert" className={TEXT_ERROR}>{error}</div>}
     </div>
   );
 }

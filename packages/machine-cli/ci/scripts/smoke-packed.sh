@@ -11,7 +11,7 @@
 #   <expected version>  the build version (CalVer): what `machine --version` must print. The platform package has its own hash-reuse
 #                   version (<build>-bin.<hash>); the wrapper is pinned to it in a COPY, the way publish-platform-packages.mjs pins it.
 #   <platforms>     the same comma list as the platform packages of the artifact; the host must be one of them.
-# Run locally: Linux, macOS (or git-bash on Windows, where the exec-bit check is skipped: modes mean nothing there), node >= 22.18,
+# Run locally: Linux, macOS (or git-bash on Windows, where the exec-bit check is skipped: modes mean nothing there), node >= 24,
 #              after `generate-platform-packages.mjs --out <dir> --version <CalVer>`.
 set -euo pipefail
 

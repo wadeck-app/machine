@@ -9,7 +9,7 @@ import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { readRelayAdminConfig, readRelayConfig } from './relayStore.js';
 import { makeOrchStub, type OrchStub } from './orchStub.js';
-import { cli, fakeTiming, ok } from './testing.js';
+import { cli, fakeTiming, ok, openApprovalFor, openDocumentFor } from './testing.js';
 
 // Bootstrap of a network: the very first machine is also the admin machine (candidate == admin), then a second machine
 // joins and is approved by the first. Everything through the command line, one fake relay, no shortcut.
@@ -449,7 +449,7 @@ describe('relay with ownership bound at approval', () => {
       expect(asked).toHaveLength(1);
       expect(decisions()).toHaveLength(1);
       // The approval carries the registration of this machine and no peer at all (a machine is not its own peer).
-      const sent = (decisions()[0]?.body as { approval: { adminUuid: string; self: { registration: { body: { uuid: string } } }; peers: unknown[] } }).approval;
+      const sent = openApprovalFor(a, (decisions()[0]?.body as { approval: unknown }).approval) as { adminUuid: string; self: { registration: { body: { uuid: string } } }; peers: unknown[] };
       expect(sent.peers).toEqual([]);
       expect(sent.self.registration.body.uuid).toBe(readMachine(a).uuid);
       expect(sent.adminUuid).toBe(readMachine(a).uuid);
@@ -572,7 +572,7 @@ describe('relay with ownership bound at approval', () => {
       expect(JSON.parse((await ok(a, ['status', '--json'])).out), why).toMatchObject({ enrolled: true, peers: 1, problems: [] });
       expect(JSON.parse((await ok(b, ['status', '--json'])).out), why).toMatchObject({ enrolled: true, peers: 1, problems: [] });
       // The second approval was sealed to the key of the second machine, with the first machine as the only peer.
-      const sent = (decisions()[1]?.body as { approval: { adminUuid: string; random: string; peers: { sealedPairSecret: string }[] } }).approval;
+      const sent = openApprovalFor(b, (decisions()[1]?.body as { approval: unknown }).approval) as { adminUuid: string; random: string; peers: { sealedPairSecret: string }[] };
       expect(sent.peers, why).toHaveLength(1);
       const opened = Buffer.from(openSealed(readMachine(b).identity.privateKeyPkcs8, sent.peers[0]?.sealedPairSecret as string, pairSecretContext({ adminUuid: ua, candidateUuid: ub, random: sent.random, slot: `peer:${ua}` }))).toString('base64url');
       expect(opened, why).toBe((peersOf(b)[0] as { pairSecret: string }).pairSecret);
@@ -596,7 +596,8 @@ describe('relay with ownership bound at approval', () => {
       expect(approved.code, approved.err).toBe(0);
       expect(approved.out).toContain('2 document(s) stored by the relay for 1 machine(s)');
       const [ua, ub, uc] = [readMachine(a).uuid, readMachine(b).uuid, readMachine(c).uuid];
-      const about = (uuid: string) => relay.inbox(uuid).map((d) => ((d.document as { body: { kind: string; payload: { registration: { body: { uuid: string } } } } }).body.payload.registration.body.uuid));
+      const dirOfUuid = new Map([[ua, a], [ub, b], [uc, c]]);
+      const about = (uuid: string) => relay.inbox(uuid).map((d) => (openDocumentFor(dirOfUuid.get(uuid) as string, d.document) as { registration: { body: { uuid: string } } }).registration.body.uuid);
       expect(relay.inbox(ua)).toEqual([]);
       expect(about(ub)).toEqual([uc]);
       expect(about(uc)).toEqual([ub]);

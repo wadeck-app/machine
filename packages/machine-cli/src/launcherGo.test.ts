@@ -243,16 +243,16 @@ describe('the built launcher against a stub bundle (argument fidelity, stdio, ex
 });
 
 describe('node missing from PATH', () => {
-  it('exits 1 with the cause, the Node >= 22 requirement and the fix, on stderr and in the launcher log', async () => {
+  it('exits 1 with the cause, the Node >= 24 requirement and the fix, on stderr and in the launcher log', async () => {
     const dir = join(root, 'cfg-no-node');
     const r = await launch(exe, ['daemon', '--config-dir', dir], { env: { ...envWithoutNode(), LAUNCHER_BUNDLE_OVERRIDE: stub } });
     expect(r.code).toBe(1);
-    for (const text of ['machine: cannot start', '`node` was not found in PATH', 'Node.js 22 or newer', 'https://nodejs.org', 'PATH of the process that starts machine']) {
+    for (const text of ['machine: cannot start', '`node` was not found in PATH', 'Node.js 24 or newer', 'https://nodejs.org', 'PATH of the process that starts machine']) {
       expect(r.stderr).toContain(text);
     }
     const logFile = readdirSync(join(dir, 'logs')).find(f => f.endsWith('-launcher.log'));
     expect(logFile).toBeDefined();
-    expect(readFileSync(join(dir, 'logs', logFile as string), 'utf8')).toContain('Node.js 22 or newer');
+    expect(readFileSync(join(dir, 'logs', logFile as string), 'utf8')).toContain('Node.js 24 or newer');
   });
 });
 

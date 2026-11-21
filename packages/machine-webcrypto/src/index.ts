@@ -4,7 +4,7 @@ export { keyId, tryKeyId } from './keys.js';
 export { signBody, verifyBody, type SignedBody } from './signed.js';
 export { MAX_ITERATIONS, MIN_ITERATIONS, adminKeyHint, unlockAdminKey, type UnlockedAdminKey } from './adminKey.js';
 export {
-  DOCUMENT_DOMAIN,
+  DOCUMENT_DOMAIN_V2,
   DOCUMENT_KINDS,
   DOCUMENT_RETENTION_SECONDS,
   MAX_DOCUMENT_BYTES,
@@ -18,12 +18,14 @@ export {
   buildDocument,
   commandTextProblem,
   documentId,
+  documentSealContext,
   pairSecretDocumentContext,
+  sealedPolicyDocument,
   signPolicy,
   signRegistration,
   signRevocation,
 } from './documents.js';
-export { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, policyDocumentFor, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
+export { DEFAULT_APPLY_WINDOW_SECONDS, entryFromText, nextPolicyBody, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
 export { candidacyCode, finalCode, formatFinalCode, formatVerificationCode } from './sas.js';
 export { ed25519PublicToX25519, sealTo } from './seal.js';
 export { PAIR_SECRET_V2_DOMAIN, derivePairSecretFromSignature, type PairMember } from './pairSecret.js';

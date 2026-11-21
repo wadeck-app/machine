@@ -23,7 +23,7 @@
     "@wadeck-app/singleton-daemon-kit": "latest"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "devDependencies": {
     "esbuild": "^0.27.7"

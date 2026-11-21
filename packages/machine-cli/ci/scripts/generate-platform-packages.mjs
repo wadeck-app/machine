@@ -1,7 +1,7 @@
 // Generates the publishable folders: <out>/machine-cli-dist (wrapper) and <out>/machine-cli-<platform> x3.
 // Usage: node ci/scripts/generate-platform-packages.mjs --out <dir> --version <CalVer> [--launchers <dir>] [--bundle-dir <dir>] [--no-strict]
 // Defaults: --launchers packages/machine-cli/dist-launcher, --bundle-dir <repo>/dist. Strict by default (CI).
-// Node 22.18 or newer imports the TypeScript sources directly (as scripts/bundle.mjs does).
+// Node 24 or newer imports the TypeScript sources directly (as scripts/bundle.mjs does).
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -36,7 +36,7 @@ let generatePackages;
 try {
   ({ generatePackages } = await import(pathToFileURL(resolve(packageDir, 'src', 'packaging', 'packagesWriter.ts')).href));
 } catch (e) {
-  fail(`cannot load the packaging sources (${e.message}): this script needs Node 22.18 or newer (running ${process.version})`);
+  fail(`cannot load the packaging sources (${e.message}): this script needs Node 24 or newer (running ${process.version})`);
 }
 
 try {

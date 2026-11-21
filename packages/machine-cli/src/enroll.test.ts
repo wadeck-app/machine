@@ -13,7 +13,7 @@ import { readMachine } from './identity.js';
 import { exportMachineInfo, loadNetwork } from './network.js';
 import { candidacyFile, readCandidacy, readRelayConfig } from './relayStore.js';
 import { draftSecrets } from './approvalDraft.js';
-import { buildApproval, cli, fakeTiming, makeAdmin, ok, type TestAdmin } from './testing.js';
+import { buildApproval, cli, fakeTiming, makeAdmin, ok, rewriteApprovalFor, type TestAdmin } from './testing.js';
 
 let root: string;
 let cand: string;
@@ -361,8 +361,10 @@ describe('machine join: the pair secrets are sealed to this machine', () => {
         if (n !== 1) return;
         const id = relay.pendingIds()[0] as string;
         relay.approve(id, approval);
-        const stored = relay.candidacies.get(id)?.approval as { self: { sealedPairSecret: string }; peers: { sealedPairSecret: string }[] };
-        (stored.peers[0] as { sealedPairSecret: string }).sealedPairSecret = stored.self.sealedPairSecret;
+        // The relay stores one sealed blob; the test plays a hostile admin side that moves a sealed value, then seals the approval again.
+        rewriteApprovalFor(cand, relay.candidacies.get(id)?.approval, (inner: { self: { sealedPairSecret: string }; peers: { sealedPairSecret: string }[] }) => {
+          (inner.peers[0] as { sealedPairSecret: string }).sealedPairSecret = inner.self.sealedPairSecret;
+        });
       }),
       ask: yes,
     });
@@ -382,9 +384,10 @@ describe('machine join: the pair secrets are sealed to this machine', () => {
         if (n !== 1) return;
         const id = relay.pendingIds()[0] as string;
         relay.approve(id, approval);
-        const stored = relay.candidacies.get(id)?.approval as { peers: { sealedPairSecret: string }[] };
-        const [a, b] = stored.peers as [{ sealedPairSecret: string }, { sealedPairSecret: string }];
-        [a.sealedPairSecret, b.sealedPairSecret] = [b.sealedPairSecret, a.sealedPairSecret];
+        rewriteApprovalFor(cand, relay.candidacies.get(id)?.approval, (inner: { peers: { sealedPairSecret: string }[] }) => {
+          const [a, b] = inner.peers as [{ sealedPairSecret: string }, { sealedPairSecret: string }];
+          [a.sealedPairSecret, b.sealedPairSecret] = [b.sealedPairSecret, a.sealedPairSecret];
+        });
       }),
       ask: yes,
     });
@@ -417,10 +420,13 @@ describe('machine join: the pair secrets are sealed to this machine', () => {
         const id = relay.pendingIds()[0] as string;
         relay.approve(id, approval);
         // The relay knows the candidate public key and every part of the context: it can seal a secret of its own.
-        const stored = relay.candidacies.get(id) as unknown as { random: string; approval: { peers: { sealedPairSecret: string }[] } };
+        const stored = relay.candidacies.get(id) as unknown as { random: string; approval: unknown };
         const slot = `peer:${readMachine(peerDir).uuid}`;
         const context = pairSecretContext({ adminUuid: null, candidateUuid: readMachine(cand).uuid, random: stored.random, slot });
-        (stored.approval.peers[0] as { sealedPairSecret: string }).sealedPairSecret = sealTo(readMachine(cand).identity.publicKey, forged, context);
+        // Seal the whole approval is a public-key operation too: the relay would redo it around the forged secret (the test reuses the helper).
+        rewriteApprovalFor(cand, stored.approval, (inner: { peers: { sealedPairSecret: string }[] }) => {
+          (inner.peers[0] as { sealedPairSecret: string }).sealedPairSecret = sealTo(readMachine(cand).identity.publicKey, forged, context);
+        });
       }),
       ask: yes,
     });

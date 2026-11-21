@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPolicyBody, commandForHint, nextPolicyBody, POLICY_DOMAIN, resolveMachineRef, resolveRunShell, signPolicy, verifyDocument, type PolicyBody, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
+import { assertPolicyBody, commandForHint, isTyped, nextPolicyBody, parseTemplate, POLICY_DOMAIN, resolveMachineRef, resolveRunShell, signPolicy, templateExamples, verifyDocument, type LifetimeInput, type PolicyBody, type PolicyEdit, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
 import type { Json } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
+import { buildAllowEntry, entryLine, platformOfShell, renewalLines, typedSummary } from './allowText.js';
+import { unsafeTypedWarnings } from './allowSafety.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { ConnectionsError, readConnections } from './connectionsStore.js';
@@ -48,8 +50,12 @@ export function readPolicyRecord(configDir: string, uuid: string, adminPublicKey
 export interface AllowOptions {
   reference: string;
   mode: 'allow' | 'remove' | 'list';
-  /** The command line, for `allow` and `remove`. */
+  /** The command line (or the template), for `allow` and `remove`. */
   command?: string;
+  /** `allow`: --times, --for or --until (permanent when none). */
+  lifetime?: LifetimeInput;
+  /** `remove`: the 1-based place in the list shown by `machine allowed`, instead of the command. */
+  index?: number;
   /** Absent: the platform of this machine (said), for `allow`; every shell, for `remove`. */
   shell?: Shell;
   /** Also write the signed policy to this file (the only delivery without an admin relay token). */
@@ -65,7 +71,7 @@ export interface AllowOptions {
 
 export type AllowResult =
   | { kind: 'listed'; uuid: string; version: number }
-  | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' }
+  | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' | 'bad-index' | 'ambiguous' }
   | { kind: 'signed'; uuid: string; name: string; version: number; delivery: 'inbox' | 'installed' | 'file'; failed: boolean; out: string };
 
 /**
@@ -86,7 +92,22 @@ export function runHint(configDir: string, name: string, uuid: string, shell: Sh
   return `machine run ${name} --shell ${shell} -- ${quoted} (or make ${shell} the default for that machine: machine peer connect ${name} --shell ${shell})`;
 }
 
-const line = (e: PolicyEntry): string => `${e.shell}  ${JSON.stringify(e.command)}${e.limits ? `  limits ${JSON.stringify(e.limits)}` : ''}`;
+/**
+ * What `--remove` says when it did not change anything: the cause and the fix, with the matching entries and their number when several
+ * share the text (`--index` takes it).
+ */
+export function unchangedMessage(edit: Extract<PolicyEdit, { changed: false }>, what: string, command: string | undefined, index: number | undefined, now: number, removeCommand: string): string {
+  switch (edit.reason) {
+    case 'already-allowed':
+      return `already allowed on ${what}: ${command === undefined ? '' : JSON.stringify(command)}. Nothing was signed\n`;
+    case 'not-allowed':
+      return `${command === undefined ? 'this entry' : JSON.stringify(command)} is not allowed on ${what}: nothing to remove, nothing was signed. \`machine allowed\` lists the entries with their number\n`;
+    case 'bad-index':
+      return `there is no entry number ${String(index)} in the list of ${what}: nothing to remove, nothing was signed. \`machine allowed\` lists the entries with their number\n`;
+    case 'ambiguous':
+      return `${JSON.stringify(command)} matches several entries of ${what}: nothing was signed. Say which one: add --shell <shell>, or ${removeCommand} --index <number> with one of:\n${edit.candidates.map((c) => `  #${c.index} ${entryLine(c.entry, now)}`).join('\n')}\n`;
+  }
+}
 
 export async function runAllow(configDir: string, o: AllowOptions): Promise<AllowResult> {
   if (!existsSync(adminKeyFile(configDir))) {
@@ -119,8 +140,10 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
       return { kind: 'listed', uuid: target.uuid, version: 0 };
     }
     o.say(`Allowed on "${target.name}" (policy version ${current.version}, ${source}):\n`);
-    o.say(current.defaults.length === 0 ? '  (nothing by default)\n' : `${current.defaults.map((e) => `  ${line(e)}`).join('\n')}\n`);
-    for (const [peer, entries] of Object.entries(current.peers)) o.say(`  only for ${nameOf(peer)} (own list, it replaces the default):\n${entries.map((e) => `    ${line(e)}`).join('\n')}\n`);
+    // The number is the place in the list: what `--remove --index <n>` takes.
+    const numbered = (entries: PolicyEntry[], indent: string): string => entries.map((e, i) => `${indent}#${i + 1} ${entryLine(e, o.now())}`).join('\n');
+    o.say(current.defaults.length === 0 ? '  (nothing by default)\n' : `${numbered(current.defaults, '  ')}\n`);
+    for (const [peer, entries] of Object.entries(current.peers)) o.say(`  only for ${nameOf(peer)} (own list, it replaces the default):\n${numbered(entries, '    ')}\n`);
     return { kind: 'listed', uuid: target.uuid, version: current.version };
   }
 
@@ -133,9 +156,17 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
   if (o.mode === 'allow' && o.shell === undefined) {
     o.say(`[info] shell "${shell}" chosen from this machine's platform (the platform of "${target.name}" is not known here): pass --shell cmd|ps|bash|sh if it differs\n`);
   }
-  const edit = nextPolicyBody(current, { target: target.uuid, adminKeyId: pin.adminKeyId, now: o.now() }, o.mode === 'allow' ? { kind: 'allow', entry: { shell, command } } : { kind: 'remove', command, ...(o.shell !== undefined ? { shell: o.shell } : {}) });
+  // The entry is built (and every refusal of its text or lifetime said) before anything else happens.
+  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now()) : undefined;
+  // For a typed entry the `machine run` hint shows a command the validator accepts.
+  const hintCommand = entry !== undefined && isTyped(entry) ? (templateExamples(parseTemplate(entry.template, shell), platformOfShell(shell)).accepted[0] ?? command) : command;
+  const edit = nextPolicyBody(
+    current,
+    { target: target.uuid, adminKeyId: pin.adminKeyId, now: o.now() },
+    entry !== undefined ? { kind: 'allow', entry } : { kind: 'remove', ...(o.index !== undefined ? { index: o.index } : { command }), ...(o.shell !== undefined ? { shell: o.shell } : {}) },
+  );
   if (!edit.changed) {
-    o.say(edit.reason === 'already-allowed' ? `already allowed on "${target.name}": ${shell}  ${JSON.stringify(command)}. Nothing was signed\n` : `${JSON.stringify(command)} is not allowed on "${target.name}": nothing to remove, nothing was signed\n`);
+    o.say(unchangedMessage(edit, `"${target.name}"`, o.index !== undefined ? undefined : command, o.index, o.now(), `machine admin allow ${o.reference} --remove`));
     return { kind: 'unchanged', reason: edit.reason };
   }
 
@@ -149,12 +180,24 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
   o.say(
     [
       `Policy for "${target.name}" (${target.uuid}): version ${body.baseVersion} -> ${body.version}`,
-      ...edit.added.map((e) => `  + ${line(e)}`),
-      ...edit.removed.map((e) => `  - ${line(e)}`),
+      ...edit.added.map((e) => `  + ${entryLine(e, o.now())}`),
+      ...edit.removed.map((e) => `  - ${entryLine(e, o.now())}`),
+      ...renewalLines(edit.renewed, o.now()),
       `  ${body.defaults.length} entr${body.defaults.length === 1 ? 'y' : 'ies'} allowed to every trusted peer after this change; may be applied until ${clockText(body.notAfter, o.now())} (${relativeText(body.notAfter, o.now())})`,
       '',
     ].join('\n'),
   );
+  // The summary of a typed entry and the cases a type cannot make safe come BEFORE the question and the passphrase.
+  if (entry !== undefined) {
+    const summary = typedSummary(entry, o.now());
+    if (summary.length > 0) {
+      o.say(`${summary.join('\n')}\n\n`);
+    }
+    for (const warning of unsafeTypedWarnings(entry)) o.say(warning);
+  }
+  if (body.v === 2) {
+    o.say(`[info] this policy is version 2 (it holds typed entries): "${target.name}" must run a build that knows typed entries, otherwise it refuses it with "unsupported version 2": run \`machine cli update\` there first\n`);
+  }
   if (!toSelf && current === undefined) {
     o.say(`[info] no policy signed here for "${target.name}" on record: this assumes it has none (the new policy is version 1, edited from 0). If it already has a policy signed from another machine, it refuses this one with "policy changed, reload": see its version with \`machine status\` there\n`);
   }
@@ -195,7 +238,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     failed = formatted.failed;
     out += formatted.out;
     if (formatted.failed) out += formatted.err;
-    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it within about a minute (the daemon must run there: \`machine startup enable\`).${o.mode === 'allow' ? ` Then: ${runHint(configDir, target.name, target.uuid, shell, command, o.say)}` : ''}\n`;
+    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it within about a minute (the daemon must run there: \`machine startup enable\`).${o.mode === 'allow' ? ` Then: ${runHint(configDir, target.name, target.uuid, shell, hintCommand, o.say)}` : ''}\n`;
   }
   o.say(out);
   return { kind: 'signed', uuid: target.uuid, name: target.name, version: body.version, delivery, failed, out };

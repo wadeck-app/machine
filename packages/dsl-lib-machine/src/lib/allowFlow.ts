@@ -1,4 +1,4 @@
-import { commandTextProblem, nextPolicyBody, policyDocumentFor, POLICY_DOMAIN, SHELLS, signPolicy, unlockAdminKey, verifyBody, type PolicyEdit } from '@wadeck-app/machine-webcrypto';
+import { commandTextProblem, nextPolicyBody, sealedPolicyDocument, POLICY_DOMAIN, SHELLS, signPolicy, unlockAdminKey, verifyBody, type PolicyEdit } from '@wadeck-app/machine-webcrypto';
 import type { PolicyBody, PolicyEntry, SignedPolicy } from '@wadeck-app/machine-core';
 import { appFetcher, elevate } from './shellApi.js';
 
@@ -36,7 +36,8 @@ export function shellAllowApi(): AllowApi {
 
 export interface AllowContext {
   ok: true;
-  target: { uuid: string; name: string };
+  /** `identityPublicKey`: the key of the target from the registration the admin signed; the inbox document is sealed to it (decision 78). Needed for `delivery: 'inbox'`. */
+  target: { uuid: string; name: string; identityPublicKey?: string };
   /** The target is this machine: the policy is installed here, no relay is involved. */
   toSelf: boolean;
   policyMode: 'admin' | 'local';
@@ -66,7 +67,8 @@ export interface AllowPrepared {
   body: PolicyBody;
 }
 
-export type AllowPreview = AllowPrepared | { changed: false; reason: 'already-allowed' | 'not-allowed' };
+// This flow only allows one EXACT entry: 'ambiguous' and 'bad-index' belong to `--remove` and cannot happen here (the type is the one of the shared edit).
+export type AllowPreview = AllowPrepared | { changed: false; reason: 'already-allowed' | 'not-allowed' | 'ambiguous' | 'bad-index' };
 
 export interface AllowResult {
   ok: true;
@@ -134,6 +136,13 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
   if (!prepared.changed) {
     throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
   }
+  // Decision 78: the document is sealed to the target, so its key is needed BEFORE anything is unlocked. No key, no document (never a clear one).
+  const targetKey = context.target.identityPublicKey;
+  if (context.delivery === 'inbox' && (typeof targetKey !== 'string' || targetKey.length === 0)) {
+    throw new Error(
+      `the module backend did not send the identity key of "${context.target.name}", so the policy cannot be sealed to it (a policy is never sent to the relay in clear). Nothing was signed. Update the machine module (\`app-core-cli update\`) and reload the page`,
+    );
+  }
   const answer = await api.get('/admin-key');
   if (!isObject(answer) || typeof answer['file'] !== 'string') throw unexpected('the admin key file');
 
@@ -144,7 +153,7 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
       throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
     }
     const policy = await signPolicy(prepared.body, key.privateKey);
-    body = context.delivery === 'inbox' ? { policy, document: await policyDocumentFor(policy, now, key.privateKey) } : { policy };
+    body = context.delivery === 'inbox' ? { policy, document: await sealedPolicyDocument(policy, now, key.privateKey, targetKey as string) } : { policy };
   } finally {
     // Locked before anything goes to the network: a failure of the post never leaves an unlocked key behind.
     key.lock();

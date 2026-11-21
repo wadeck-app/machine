@@ -62,10 +62,10 @@ describe('machine cli self-check', () => {
     expect(r.checks.find((c) => c.name === 'version')?.detail).toMatch(/0\.1\.0.*not a release/);
   });
 
-  it('fails on node older than 22 and names the requirement', async () => {
+  it('fails on node older than 24 and names the requirement', async () => {
     const r = await runSelfCheck(deps({ nodeVersion: 'v20.11.0' }));
     expect(r.ok).toBe(false);
-    expect(r.checks.find((c) => c.name === 'node')?.detail).toMatch(/v20\.11\.0.*22/);
+    expect(r.checks.find((c) => c.name === 'node')?.detail).toMatch(/v20\.11\.0.*24/);
   });
 
   it('fails when the platform package is not installed (npm skips a failing optional dependency in silence)', async () => {

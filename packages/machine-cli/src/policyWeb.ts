@@ -3,10 +3,11 @@ import {
   assertPolicyBody,
   canonicalize,
   DOCUMENT_RETENTION_SECONDS,
+  documentId,
   POLICY_DOMAIN,
   resolveMachineRef,
   verifyDocument,
-  verifyInboxDocument,
+  verifyDocumentEnvelope,
   type Json,
   type PolicyMode,
   type SignedDocument,
@@ -70,7 +71,8 @@ export function adminKeyText(configDir: string): { ok: true; file: string } | Fa
 
 export interface AllowContextOk {
   ok: true;
-  target: { uuid: string; name: string };
+  /** `identityPublicKey`: the key of the target from the registration this admin holds; the page seals the inbox document to it (decision 78). */
+  target: { uuid: string; name: string; identityPublicKey: string };
   /** The target is this machine: the policy is installed here, no relay is involved. */
   toSelf: boolean;
   policyMode: PolicyMode;
@@ -83,17 +85,32 @@ export interface AllowContextOk {
   delivery: 'install' | 'inbox';
 }
 
-/** The names the target of a policy can be reached by, from this machine. */
-function everyone(configDir: string, now: number): { uuid: string; name: string }[] {
-  const self = exportMachineInfo(configDir);
-  return [{ uuid: self.uuid, name: self.name }, ...loadNetwork(configDir, now).directory.machines()];
+/** A machine the admin can address: the identity key is the one of its registration, the key an inbox document for it is sealed to (decision 78). */
+interface Addressee {
+  uuid: string;
+  name: string;
+  identityPublicKey: string;
 }
 
-function resolveTarget(configDir: string, reference: string, now: number): { ok: true; target: { uuid: string; name: string }; toSelf: boolean } | Failure {
+/** The names the target of a policy can be reached by, from this machine, with the identity key of each. */
+function everyone(configDir: string, now: number): Addressee[] {
+  const self = exportMachineInfo(configDir);
+  const network = loadNetwork(configDir, now);
+  const peers: Addressee[] = [];
+  for (const machine of network.directory.machines()) {
+    const peer = network.directory.find(machine.uuid);
+    if (peer !== undefined) {
+      peers.push({ uuid: machine.uuid, name: machine.name, identityPublicKey: peer.identityPublicKey });
+    }
+  }
+  return [{ uuid: self.uuid, name: self.name, identityPublicKey: self.identityPublicKey }, ...peers];
+}
+
+function resolveTarget(configDir: string, reference: string, now: number): { ok: true; target: Addressee; toSelf: boolean } | Failure {
   const machines = everyone(configDir, now);
   const resolved = resolveMachineRef(reference, machines, readAliases(configDir));
   if (!resolved.ok) return fail('unknown-machine', `${resolved.message} (see \`machine list\`)`);
-  const target = machines.find((m) => m.uuid === resolved.uuid) as { uuid: string; name: string };
+  const target = machines.find((m) => m.uuid === resolved.uuid) as Addressee;
   return { ok: true, target, toSelf: target.uuid === exportMachineInfo(configDir).uuid };
 }
 
@@ -247,13 +264,20 @@ export async function submitPolicy(configDir: string, payload: unknown, now: num
   }
 }
 
-/** The inbox document must be the one a policy of this admin needs: admin signature, addressed to the target, carrying exactly this policy. */
+/**
+ * The inbox document must be the one a policy of this admin needs. It is sealed to the target (decision 78), so this machine CANNOT open it and does
+ * not try: it checks what the envelope shows (admin signature, version 2, addressed to the target, kind policy, time window, one sealed blob), that
+ * the id is the one derived from THIS policy (target, version, signature: the rule of `distributePolicy`) and that it does not outlive the relay
+ * retention. What is inside the sealed blob is the browser's word: the target opens it and checks the policy again itself (admin signature, target,
+ * base version), so a page that sealed another policy gets it refused there, never installed.
+ */
 function checkDocument(raw: unknown, policy: SignedPolicy, adminPublicKey: string, targetUuid: string, now: number): SignedDocument | string {
   if (raw === undefined) return `the inbox document is missing: ${BAD_PAYLOAD}. Nothing was stored or sent`;
-  const checked = verifyInboxDocument(raw, { adminPublicKey, selfUuid: targetUuid, now });
+  const checked = verifyDocumentEnvelope(raw, { adminPublicKey, selfUuid: targetUuid, now });
   if (!checked.ok) return `the inbox document is refused (${checked.reason}): ${checked.message}. Nothing was stored or sent`;
-  if (checked.kind !== 'policy' || canonicalize(checked.policy as unknown as Json) !== canonicalize(policy as unknown as Json)) {
-    return 'the inbox document does not carry the policy that was signed: the page and this machine disagree. Nothing was stored or sent';
+  const expectedId = documentId(`v2:policy:${policy.body.target}:${policy.body.version}:${policy.signature}`);
+  if (checked.kind !== 'policy' || checked.body.id !== expectedId) {
+    return 'the inbox document does not carry the policy that was signed (its kind or id is not the one of this policy): the page and this machine disagree. Nothing was stored or sent';
   }
   if (checked.body.expiresAt - checked.body.issuedAt > DOCUMENT_RETENTION_SECONDS) return 'the inbox document lives longer than the relay keeps it. Nothing was stored or sent';
   return raw as SignedDocument;

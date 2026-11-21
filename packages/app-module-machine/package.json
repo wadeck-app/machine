@@ -21,7 +21,7 @@
     "@wadeck-app/shared-cli": "latest"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "devDependencies": {
     "@wadeck-app/app-core-cli": "latest",

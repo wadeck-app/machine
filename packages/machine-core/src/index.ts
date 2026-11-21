@@ -44,20 +44,32 @@ export {
   commandTextProblem,
   effectiveList,
   entryKey,
+  entryMatches,
+  entryText,
+  hasTypedEntry,
+  isTyped,
+  POLICY_MAX_VERSION,
   signPolicy,
+  UPDATE_HINT,
   type ApplyPolicyContext,
   type CommandRequest,
   type Decision,
+  type ExactEntry,
   type Limits,
   type PolicyBody,
   type PolicyEntry,
   type PolicyFailure,
+  type PolicyReadOptions,
   type PolicyResult,
   type PolicyState,
   type Shell,
   type SignedPolicy,
+  type TypedEntry,
 } from './policy.js';
-export { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
+export { DEFAULT_APPLY_WINDOW_SECONDS, entryFromText, nextPolicyBody, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
+export { describeLimits, limitsEqual, MAX_LIFETIME_SECONDS, MAX_TIMES, parseLifetime, type LifetimeInput, type LifetimeLimits } from './lifetime.js';
+export { canonicalEntry, hasAngleBracket, looksLikePlaceholder, matchTemplate, MAX_PLACEHOLDERS, MAX_TEXT, parseEntryText, parseTemplate, templateExamples, type EntryText, type Template, type TemplateMatch, type Token } from './template.js';
+export { canonicalType, checkValue, describeType, parseTypeSpec, sampleValues, TemplateError, type Platform, type TypeSpec, type ValueCheck } from './typedParams.js';
 export { candidacyCode, finalCode, formatFinalCode, newCandidacyRandom } from './sas.js';
 export { HINT_MAX_LENGTH, MIN_ITERATIONS, PASSPHRASE_MIN_LENGTH, PASSPHRASE_RECOMMENDED_LENGTH, adminKeyHint, checkHint, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
 export { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry, type NormalizedName, type Resolution } from './reference.js';
@@ -122,17 +134,23 @@ export { openSealed, sealTo } from './seal.js';
 // `verifyDocument` of document.ts is exported as `verifyInboxDocument`: `verifyDocument` above is the low-level signature check.
 export {
   DOCUMENT_DOMAIN,
+  DOCUMENT_DOMAIN_V2,
   DOCUMENT_KINDS,
   DOCUMENT_RETENTION_SECONDS,
   DOCUMENT_SKEW_SECONDS,
+  DOCUMENT_VERSION,
   MAX_DOCUMENT_BYTES,
   buildDocument,
   derivePairSecret,
   derivePairSecretV2,
   documentId,
+  documentSealContext,
   openPairSecret,
   pairSecretDocumentContext,
   verifyDocument as verifyInboxDocument,
+  verifyDocumentEnvelope,
+  type EnvelopeContext,
+  type SealedPayload,
   type DocumentBody,
   type DocumentFailure,
   type DocumentInput,

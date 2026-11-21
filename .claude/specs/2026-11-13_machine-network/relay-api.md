@@ -37,7 +37,7 @@ Errors: `{ "success": false, "error": "<code>", "message": "<what happened and t
 
 Field rules: `name` matches `^[a-z0-9][a-z0-9-]{0,31}$`; `hostname` printable ASCII, 1-64 characters (self-declared, informative); `identityPublicKey` unpadded base64url of 32 bytes; `random` unpadded base64url of 16 bytes; `id` is 128 random bits (base64url), chosen by the relay; `observedIp` is the peer address seen by the relay (server side, never client supplied).
 
-`approval` is an opaque JSON object for the relay, at most 16 KiB; its format is in the Approval section. Its pair secrets are sealed to the candidate identity key, so the relay cannot read them (T-36).
+`approval` is an opaque JSON object for the relay, at most 16 KiB; its format is in the Approval section. The whole approval is sealed to the candidate identity key, so the relay cannot read the registrations, the admin key or the pair secrets in it (decision 78, T-25, T-36). Inbox documents are sealed the same way: `body.payload = { sealed }`, envelope version 2 (distribution.md, "Sealed payloads"); the inbox routes below are unchanged because the relay validates only `body.to`, `body.id` and the size.
 
 Limits: a candidate re-posting the same `identityPublicKey` while pending replaces its entry (same `id`, expiry restarted). At most 4 pending per token and 32 in total; beyond that `429`.
 
@@ -48,6 +48,10 @@ The verification code (decision 35a) is computed by the CLI and by the admin pag
 ## Approval (decisions 35, 35a, 48)
 
 `approval` is the JSON object the admin console puts in `PUT .../decision` and the candidate reads back. The relay stores it as is. Documents reuse the formats of the manual flow (decision 48), so one code path verifies both.
+
+**Wire form (decision 78, envelope version 2):** the relay stores `{ "v": 2, "random": "<random of the candidacy>", "sealed": "<base64url>" }` only. `sealed` is `sealTo(candidate identity key, canonical JSON of the object below, "approval:v2:<candidate uuid>:<random>")`. The relay keeps validating only "a JSON object of at most 16 KiB" (poc-node `checkDecision`, tested against the real relay), so no change is needed there. The sealed form is a third bigger, so fewer peers fit in the 16 KiB (the admin refuses to send an approval over the cap, naming the number of peers). A candidate refuses the former clear form (`{ "v": 1, "self": ... }`) as plaintext.
+
+The object below is what `sealed` contains:
 
 ```json
 { "v": 1,

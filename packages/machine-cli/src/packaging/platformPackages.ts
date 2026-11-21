@@ -80,7 +80,7 @@ export function wrapperPackageJson(options: WrapperOptions): PackageJson {
     type: 'commonjs',
     bin: { machine: 'bin/machine.js' },
     files: ['bin/machine.js', ...options.files],
-    engines: { node: '>=22' },
+    engines: { node: '>=24' },
     optionalDependencies,
     publishConfig: { registry: REGISTRY, access: 'public' },
   };

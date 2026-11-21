@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -40,6 +41,58 @@ describe('VerticalTimeline', () => {
     expect(button).toHaveAccessibleDescription('Answers: substitution of the key.');
     expect(screen.getAllByRole('button')).toHaveLength(2);
     expect(screen.getAllByRole('tooltip')).toHaveLength(2);
+  });
+
+  it('shows a distinct state per step with the semantic tokens of the app, never a palette class or a hex value', () => {
+    const { container } = render(<VerticalTimeline steps={STEPS} />);
+    const markers = Array.from(container.querySelectorAll('[data-part="marker"]'));
+    expect(markers[0]).toHaveClass('bg-success', 'border-success', 'text-on-solid');
+    expect(markers[1]).toHaveClass('border-primary', 'bg-surface', 'text-primary');
+    expect(markers[2]).toHaveClass('border-muted', 'bg-surface', 'text-muted');
+    const statuses = Array.from(container.querySelectorAll('[data-part="status"]'));
+    expect(statuses.map(s => s.className)).toEqual(['text-xs text-success-text', 'text-xs text-primary', 'text-xs text-muted']);
+    // The connector after a done step is the success colour, the others the border token.
+    const connectors = Array.from(container.querySelectorAll('[data-part="connector"]'));
+    expect(connectors).toHaveLength(2);
+    expect(connectors[0]).toHaveClass('bg-success');
+    expect(connectors[1]).toHaveClass('bg-border');
+    // No Tailwind palette class (a hue name, with or without a shade number) and no arbitrary colour anywhere in the markup.
+    const palette = /(?:^|\s)(?:[a-z-]+:)*(?:bg|text|border|ring|fill|stroke|divide|from|to|via)-(?:white|black|slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)(?:-\d{2,3})?(?:\/\d+)?(?=\s|$)/;
+    const classes = Array.from(container.querySelectorAll('[class]')).map(el => el.getAttribute('class') ?? '');
+    for (const value of classes) {
+      expect(value, `palette class in "${value}"`).not.toMatch(palette);
+      expect(value, `arbitrary colour in "${value}"`).not.toMatch(/\[#|\[rgb|\[hsl/);
+    }
+  });
+
+  it('opens the explanation on hover and on keyboard focus, closes it on leave, blur and Escape', async () => {
+    render(<VerticalTimeline steps={STEPS} />);
+    const button = screen.getByRole('button', { name: 'About: Candidacy received' });
+    const tip = document.getElementById(button.getAttribute('aria-describedby') as string) as HTMLElement;
+    expect(tip).toHaveAttribute('role', 'tooltip');
+    expect(tip).toHaveTextContent('Answers: a stranger posting a candidacy.');
+    expect(tip).toHaveAttribute('data-open', 'false');
+    await userEvent.hover(button);
+    expect(tip).toHaveAttribute('data-open', 'true');
+    await userEvent.unhover(button);
+    expect(tip).toHaveAttribute('data-open', 'false');
+    await userEvent.tab();
+    expect(button).toHaveFocus();
+    expect(tip).toHaveAttribute('data-open', 'true');
+    await userEvent.keyboard('{Escape}');
+    expect(tip).toHaveAttribute('data-open', 'false');
+    await userEvent.tab();
+    expect(tip).toHaveAttribute('data-open', 'false');
+  });
+
+  it('puts the explanation at the side of the button (never above it, over the title) with a bounded width and a visible focus ring', () => {
+    render(<VerticalTimeline steps={STEPS} />);
+    const button = screen.getByRole('button', { name: 'About: Candidacy received' });
+    const tip = screen.getAllByRole('tooltip')[0] as HTMLElement;
+    expect(tip).toHaveClass('left-full', 'z-50');
+    expect(tip.className).not.toMatch(/bottom-full|top-full/);
+    expect(tip.firstElementChild).toHaveClass('max-w-xs', 'bg-surface', 'text-content', 'border-border');
+    expect(button).toHaveClass('focus-visible:ring-2', 'focus-visible:ring-primary');
   });
 
   it('refuses an empty list loudly instead of rendering nothing', () => {

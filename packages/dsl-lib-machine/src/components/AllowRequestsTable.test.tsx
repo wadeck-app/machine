@@ -214,7 +214,8 @@ describe('signing in the page', () => {
   }, 120_000);
 
   it('for another machine the document is posted too (the inbox delivery)', async () => {
-    answers.context = context({ toSelf: false, delivery: 'inbox' });
+    // The document is sealed to the target (decision 78): the backend sends the identity key of the target in the context.
+    answers.context = context({ target: { uuid: SELF, name: 'desktop', identityPublicKey: generateSigningKeyPair().publicKey }, toSelf: false, delivery: 'inbox' });
     answers.post = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'inbox' };
     render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));

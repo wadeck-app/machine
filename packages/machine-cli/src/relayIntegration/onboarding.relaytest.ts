@@ -172,6 +172,11 @@ describe('onboarding with the real relay', () => {
     const inbox = await relayGet(`/api/machines/${uuidLaptop}/inbox`, w.relay.adminToken);
     expect(inbox.status).toBe(200);
     expect((inbox.body.documents as unknown[]).length).toBeGreaterThan(0);
+    // Decision 77: what the REAL relay stores is sealed. It accepted the version 2 envelope (it only checks to, id and size) and holds no command text.
+    const stored = JSON.stringify(inbox.body.documents);
+    expect(stored).toContain('"v":2');
+    expect(stored).toContain('"sealed"');
+    for (const forbidden of ['hello-from-laptop', 'echo ', '"shell"', '"defaults"', '"registration"']) expect(stored).not.toContain(forbidden);
   });
 
   it('the daemons start, publish their address record on the real relay and install what waited in the inbox', async () => {

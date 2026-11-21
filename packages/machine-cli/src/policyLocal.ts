@@ -9,19 +9,29 @@ import {
   commandForHint,
   decryptAdminKey,
   encryptAdminKey,
+  entryKey,
   generateSigningKeyPair,
+  isTyped,
   keyId,
   nextPolicyBody,
+  parseTemplate,
   resolveMachineRef,
   signPolicy,
+  templateExamples,
   type AdminKeyEnvelope,
+  type LifetimeInput,
   type PolicyBody,
   type PolicyEntry,
   type Shell,
   type SigningKeyPair,
 } from '@wadeck-app/machine-core';
 import { PASSPHRASE_ATTEMPTS, askHint, type PassphraseIo, type Prompt } from './admin.js';
+import { unchangedMessage } from './adminAllow.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
+import { unsafeTypedWarnings } from './allowSafety.js';
+import { buildAllowEntry, entryLine, leftOutLines, platformOfShell, renewalLines, typedSummary } from './allowText.js';
+import { FileUsageStore } from './stores.js';
+import { join } from 'node:path';
 import { writeFileAtomic } from './fsutil.js';
 import { clockText, relativeText } from './humanTime.js';
 import { exportMachineInfo, installPolicy, loadNetwork, activePolicyState } from './network.js';
@@ -61,7 +71,6 @@ async function confirm(io: LocalIo, question: string, whatNotDone: string, comma
   if (!isYes(answer)) throw new Error(`not confirmed: ${whatNotDone}`);
 }
 
-const entryLine = (e: PolicyEntry): string => `${e.shell}  ${JSON.stringify(e.command)}${e.limits ? `  limits ${JSON.stringify(e.limits)}` : ''}`;
 
 /** A file that appears complete or not at all, and never over an existing file. */
 function writeNewFile(file: string, content: string, mode: number): void {
@@ -194,7 +203,7 @@ export async function runLocalEnable(configDir: string, o: LocalIo & { hint?: st
     ].join('\n'),
   );
   if (inForce !== undefined && (inForce.defaults.length > 0 || Object.keys(inForce.peers).length > 0)) {
-    const lines = [...inForce.defaults.map((e) => `    ${entryLine(e)}`), ...Object.entries(inForce.peers).map(([peer, entries]) => `    only for ${peer}: ${entries.map(entryLine).join('; ')}`)];
+    const lines = [...inForce.defaults.map((e) => `    ${entryLine(e, o.now())}`), ...Object.entries(inForce.peers).map(([peer, entries]) => `    only for ${peer}: ${entries.map((e) => entryLine(e, o.now())).join('; ')}`)];
     o.say(`The list signed by the admin (version ${inForce.version}) stops applying and is kept on disk, unused:\n${lines.join('\n')}\nAdd again what you still want with \`machine policy allow\`.\n\n`);
     await confirm(o, 'Stop applying the admin-signed list and manage it locally? [y/N] ', 'Nothing was created or changed', 'machine policy local enable');
   }
@@ -265,7 +274,12 @@ export async function runDelegate(configDir: string, o: LocalIo): Promise<Delega
 
 export interface LocalAllowOptions extends LocalIo {
   mode: 'allow' | 'remove' | 'list';
+  /** The command line (or the template), for `allow` and `remove`. */
   command?: string;
+  /** `allow`: --times, --for or --until (permanent when none). */
+  lifetime?: LifetimeInput;
+  /** `remove`: the 1-based place in the list shown by `machine allowed` (or `--list`), instead of the command. */
+  index?: number;
   shell?: Shell;
   /** A peer (name, alias, uuid): its OWN list is edited. */
   peer?: string;
@@ -274,7 +288,7 @@ export interface LocalAllowOptions extends LocalIo {
 
 export type LocalAllowResult =
   | { kind: 'listed'; version: number; policyMode: 'admin' | 'local' }
-  | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' }
+  | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' | 'bad-index' | 'ambiguous' }
   | { kind: 'signed'; version: number; keyId: string };
 
 /** `machine policy allow`: the next policy of THIS machine, signed with the local policy key and installed here (no relay involved). */
@@ -292,8 +306,17 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
       return { kind: 'listed', version: 0, policyMode: mode.mode };
     }
     o.say(`Allowed on this machine "${self.name}" (policy version ${current.version}, ${managed}):\n`);
-    o.say(current.defaults.length === 0 ? '  (nothing by default)\n' : `${current.defaults.map((e) => `  ${entryLine(e)}`).join('\n')}\n`);
-    for (const [peer, entries] of Object.entries(current.peers)) o.say(`  only for ${nameOf(peer)} (own list, it replaces the default):\n${entries.map((e) => `    ${entryLine(e)}`).join('\n')}\n`);
+    // The counters live here: a limited entry shows the calls left. A counter file that cannot be read is said, never skipped.
+    let counters: FileUsageStore | undefined;
+    try {
+      counters = new FileUsageStore(join(configDir, 'usage.json'));
+    } catch (e) {
+      o.warn(`[warn] ${(e as Error).message}; the calls left are not shown\n`);
+    }
+    const numbered = (entries: PolicyEntry[], scope: string, indent: string): string =>
+      entries.map((e, i) => `${indent}#${i + 1} ${entryLine(e, o.now(), e.limits?.maxCalls === undefined || counters === undefined ? undefined : counters.count(entryKey(scope, e)))}`).join('\n');
+    o.say(current.defaults.length === 0 ? '  (nothing by default)\n' : `${numbered(current.defaults, 'default', '  ')}\n`);
+    for (const [peer, entries] of Object.entries(current.peers)) o.say(`  only for ${nameOf(peer)} (own list, it replaces the default):\n${numbered(entries, peer, '    ')}\n`);
     return { kind: 'listed', version: current.version, policyMode: mode.mode };
   }
 
@@ -321,14 +344,18 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
   if (o.mode === 'allow' && o.shell === undefined) {
     o.say(`[info] shell "${shell}" chosen from this machine's platform (the commands run here): pass --shell cmd|ps|bash|sh to allow another\n`);
   }
+  // The entry is built (and every refusal of its text or lifetime said) before anything else happens.
+  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now()) : undefined;
   const edit = nextPolicyBody(
     current,
     { target: self.uuid, adminKeyId: mode.localKeyId, now: o.now(), windowSeconds: DEFAULT_APPLY_WINDOW_SECONDS },
-    o.mode === 'allow' ? { kind: 'allow', entry: { shell, command }, ...(peerUuid !== undefined ? { peer: peerUuid } : {}) } : { kind: 'remove', command, ...(o.shell !== undefined ? { shell: o.shell } : {}), ...(peerUuid !== undefined ? { peer: peerUuid } : {}) },
+    entry !== undefined
+      ? { kind: 'allow', entry, ...(peerUuid !== undefined ? { peer: peerUuid } : {}) }
+      : { kind: 'remove', ...(o.index !== undefined ? { index: o.index } : { command }), ...(o.shell !== undefined ? { shell: o.shell } : {}), ...(peerUuid !== undefined ? { peer: peerUuid } : {}) },
   );
   const scope = peerUuid === undefined ? 'every trusted peer' : `"${nameOf(peerUuid)}" only`;
   if (!edit.changed) {
-    o.say(edit.reason === 'already-allowed' ? `already allowed on this machine for ${scope}: ${shell}  ${JSON.stringify(command)}. Nothing was signed\n` : `${JSON.stringify(command)} is not allowed on this machine for ${scope}: nothing to remove, nothing was signed\n`);
+    o.say(unchangedMessage(edit, `this machine for ${scope}`, o.index !== undefined ? undefined : command, o.index, o.now(), `machine policy allow${peerUuid === undefined ? '' : ` --peer ${nameOf(peerUuid)}`} --remove`));
     return { kind: 'unchanged', reason: edit.reason };
   }
 
@@ -336,14 +363,25 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
   o.say(
     [
       `Policy for this machine "${self.name}" (${self.uuid}): version ${body.baseVersion} -> ${body.version}`,
-      ...edit.added.map((e) => `  + ${entryLine(e)}  (for ${scope})`),
-      ...edit.removed.map((e) => `  - ${entryLine(e)}  (for ${scope})`),
+      ...edit.added.map((e) => `  + ${entryLine(e, o.now())}  (for ${scope})`),
+      ...edit.removed.map((e) => `  - ${entryLine(e, o.now())}  (for ${scope})`),
+      ...renewalLines(edit.renewed, o.now()),
       `  ${body.defaults.length} entr${body.defaults.length === 1 ? 'y' : 'ies'} allowed to every trusted peer after this change; may be applied until ${clockText(body.notAfter, o.now())} (${relativeText(body.notAfter, o.now())})`,
       '',
     ].join('\n'),
   );
+  // The summary of a typed entry and the cases a type cannot make safe come BEFORE the question and the passphrase.
+  if (entry !== undefined) {
+    const summary = typedSummary(entry, o.now());
+    if (summary.length > 0) {
+      o.say(`${summary.join('\n')}\n\n`);
+    }
+    for (const warning of unsafeTypedWarnings(entry)) o.say(warning);
+  }
   if (edit.seededPeerList && peerUuid !== undefined) {
-    o.say(`[warn] "${nameOf(peerUuid)}" had no list of its own: it now has one, starting with the ${body.defaults.length} default entr${body.defaults.length === 1 ? 'y' : 'ies'} plus this one, and later changes of the default list no longer reach it\n`);
+    const kept = (body.peers[peerUuid] as PolicyEntry[]).length - 1;
+    o.say(`[warn] "${nameOf(peerUuid)}" had no list of its own: it now has one, starting with the ${kept} permanent default entr${kept === 1 ? 'y' : 'ies'} plus this one, and later changes of the default list no longer reach it\n`);
+    for (const text of leftOutLines(edit.leftOut, nameOf(peerUuid), o.now())) o.say(`${text}\n`);
   } else if (edit.peersWithOwnList.length > 0 && peerUuid === undefined) {
     o.say(`[warn] these peers have their own list and are NOT affected by this change: ${edit.peersWithOwnList.map(nameOf).join(', ')}\n`);
   }
@@ -361,7 +399,9 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
   o.say(`[ok] policy version ${body.version} signed with the local policy key and installed on this machine: \`machine policy allow --list\` shows it, the daemon applies it within seconds\n`);
   // The shell is part of the exact entry and the caller may run another platform: the peer types it (decision 71).
   if (o.mode === 'allow') {
-    o.say(`Then, from another machine: machine run ${self.name} --shell ${shell} -- ${commandForHint(command)} (or make ${shell} its default there: machine peer connect ${self.name} --shell ${shell})\n`);
+    // For a typed entry the hint shows a command the validator accepts.
+    const hintCommand = entry !== undefined && isTyped(entry) ? (templateExamples(parseTemplate(entry.template, shell), platformOfShell(shell)).accepted[0] ?? command) : command;
+    o.say(`Then, from another machine: machine run ${self.name} --shell ${shell} -- ${commandForHint(hintCommand)} (or make ${shell} its default there: machine peer connect ${self.name} --shell ${shell})\n`);
   }
   return { kind: 'signed', version: body.version, keyId: mode.localKeyId };
 }

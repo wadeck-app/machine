@@ -70,6 +70,12 @@ export interface Parsed {
   name?: string;
   /** `machine policy allow --peer <machine>`: edit the own list of that peer instead of the default list. */
   peer?: string;
+  /** `admin allow` / `policy allow`: the lifetime of the entry, at most one of the three (permanent by default). Text, validated by machine-core. */
+  times?: string;
+  for?: string;
+  until?: string;
+  /** `admin allow --remove` / `policy allow --remove`: the number shown by `machine allowed` instead of the command. Text, validated by the command. */
+  index?: string;
   out?: string;
   configDir?: string;
   address?: string;
@@ -142,6 +148,20 @@ export interface Parsed {
 }
 
 export class UsageError extends Error {}
+
+export type ParsedIndex = { ok: true; index: number | undefined } | { ok: false; message: string };
+
+/** The number of `--index <n>` (undefined when the flag is absent), or the message when it is not a number from 1 to 200 (the entries of a list). */
+export function parseIndex(text: string | undefined): ParsedIndex {
+  if (text === undefined) {
+    return { ok: true, index: undefined };
+  }
+  const n = Number(text);
+  if (!/^[1-9][0-9]{0,2}$/.test(text) || n > 200) {
+    return { ok: false, message: `--index must be the number shown by \`machine allowed\` before an entry, from 1 to 200, got ${JSON.stringify(text)}` };
+  }
+  return { ok: true, index: n };
+}
 
 export interface CommandContext {
   args: Parsed;

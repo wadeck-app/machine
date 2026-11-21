@@ -62,7 +62,7 @@ interface World {
   now: { value: number };
 }
 
-async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRun?: boolean; maxConcurrent?: number; noPolicy?: boolean; onProblem?: (m: string) => void; maxRefusalsPerSession?: number } = {}): Promise<World> {
+async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRun?: boolean; maxConcurrent?: number; noPolicy?: boolean; onProblem?: (m: string) => void; maxRefusalsPerSession?: number; platform?: 'windows' | 'posix' } = {}): Promise<World> {
   const admin = generateSigningKeyPair();
   const a = generateSigningKeyPair();
   const b = generateSigningKeyPair();
@@ -74,7 +74,8 @@ async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRu
   let policy: PolicyBody | undefined;
   const setPolicy = (entries: PolicyEntry[], peerEntries: Record<string, PolicyEntry[]> = {}) => {
     const body: PolicyBody = {
-      v: 1,
+      // Version 2 only when a typed entry exists, like `nextPolicyBody`.
+      v: [entries, ...Object.values(peerEntries)].some((list) => list.some((e) => e.template !== undefined)) ? 2 : 1,
       target: B,
       version: (policy?.version ?? 0) + 1,
       baseVersion: policy?.version ?? 0,
@@ -112,6 +113,7 @@ async function world(over: { run?: (o: RunOptions) => Promise<RunResult>; realRu
     ...(over.maxConcurrent !== undefined ? { maxConcurrent: over.maxConcurrent } : {}),
     ...(over.onProblem ? { onProblem: over.onProblem } : {}),
     ...(over.maxRefusalsPerSession !== undefined ? { maxRefusalsPerSession: over.maxRefusalsPerSession } : {}),
+    ...(over.platform !== undefined ? { platform: over.platform } : {}),
   };
   const listener = await startPeerListener(deps, { host: '127.0.0.1', port: 0 });
   closers.push(() => listener.close());
@@ -373,5 +375,110 @@ describe('peer service resilience', () => {
     const hanging = { peerPublicKey: 'k', peerId: 'p', send: () => undefined, next: () => new Promise<unknown>(() => undefined), close: () => undefined };
     const w = await world();
     await expect(runOnPeer(hanging, { identity: w.a, source: A, target: B, shell: SHELL as 'cmd', command: 'echo hello', now: w.now.value, timeoutMs: 50 })).rejects.toThrow(/no answer.*50 ms.*peer/s);
+  });
+});
+
+describe('peer service: typed entries (typed-parameters.md)', () => {
+  const T = `orch logs <job:name> --tail <n:int(1,500)>`;
+  const typedEntry = (template: string, limits?: PolicyEntry['limits']): PolicyEntry => ({ shell: SHELL as 'cmd', template, ...(limits ? { limits } : {}) });
+
+  it('runs a command whose values pass their types, and the audit entry names the matching template', async () => {
+    const w = await world();
+    w.setPolicy([typedEntry(T)]);
+    const answer = await ask(w, 'orch logs build --tail 50');
+    expect(answer).toMatchObject({ type: 'result', exitCode: 0 });
+    expect(w.runs[0]).toMatchObject({ command: 'orch logs build --tail 50' });
+    expect(w.audit.entries[0]).toMatchObject({ event: 'accepted', command: 'orch logs build --tail 50', template: T });
+  });
+
+  it('an exact entry adds no template to the audit entry', async () => {
+    const w = await world();
+    await ask(w, 'echo hello');
+    expect(w.audit.entries[0]).not.toHaveProperty('template');
+  });
+
+  it('refuses a bad value with the generic wording: nothing of the template, the bound or the label reaches the caller; the audit detail names the rule', async () => {
+    const w = await world();
+    w.setPolicy([typedEntry(T)]);
+    const wrong = await ask(w, 'orch logs build --tail 9999');
+    const none = await ask(w, 'zzz logs build --tail 9999');
+    expect(wrong).toMatchObject({ type: 'refused', reason: 'not-listed' });
+    const wrongText = JSON.stringify(wrong);
+    expect(wrongText).not.toMatch(/int\(|1,500|\bjob\b|template|typed|range|token/);
+    expect((wrong as { message: string }).message.replace('orch logs build --tail 9999', 'CMD')).toBe((none as { message: string }).message.replace('zzz logs build --tail 9999', 'CMD'));
+    expect(Object.keys(wrong).sort()).toEqual(Object.keys(none).sort());
+    const logged = w.audit.entries[0] as Record<string, Json>;
+    expect(logged).toMatchObject({ event: 'refused', reason: 'not-listed', command: 'orch logs build --tail 9999' });
+    expect(String(logged.detail)).toContain(T);
+    expect(String(logged.detail)).toMatch(/token 5.*range/);
+    expect(String(logged.detail)).not.toContain('9999');
+    expect(w.audit.entries[1]).not.toHaveProperty('detail');
+    expect(w.runs).toHaveLength(0);
+  });
+
+  it('refuses the hostile values of a typed entry without running anything', async () => {
+    const w = await world();
+    w.setPolicy([typedEntry(T)]);
+    const session = await w.connect();
+    closers.push(() => session.close());
+    for (const value of ['--tail', '1;id', '$(id)', '1 2', '-1', '01', '0x10', '5\u0661']) {
+      const answer = await ask(w, `orch logs build --tail ${value}`, SHELL, session);
+      expect(answer, value).toMatchObject({ type: 'refused' });
+    }
+    expect(await ask(w, 'orch logs a;id --tail 5', SHELL, session)).toMatchObject({ type: 'refused' });
+    expect(w.runs).toHaveLength(0);
+  });
+
+  it('the usage is recorded BEFORE the command is launched', async () => {
+    let countedAtLaunch = -1;
+    let w!: World;
+    w = await world({
+      run: async () => {
+        countedAtLaunch = [...w.usage.counts.values()].reduce((x, y) => x + y, 0);
+        return okResult();
+      },
+    });
+    w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo hello', limits: { maxCalls: 2 } }]);
+    await ask(w, 'echo hello');
+    expect(countedAtLaunch).toBe(1);
+  });
+
+  it('two concurrent requests at maxCalls - 1 cannot both pass: one runs, the other is refused as exhausted', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const w = await world({
+      run: async () => {
+        await gate;
+        return okResult();
+      },
+    });
+    w.setPolicy([typedEntry('orch logs <job:name>', { maxCalls: 1 })]);
+    const first = ask(w, 'orch logs one');
+    const second = ask(w, 'orch logs two');
+    // The refused one answers at once; the accepted one waits at the gate.
+    const settled = await Promise.race([first.then((r) => ({ which: 'first', r })), second.then((r) => ({ which: 'second', r }))]);
+    expect(settled.r).toMatchObject({ type: 'refused', reason: 'exhausted' });
+    release();
+    const results = await Promise.all([first, second]);
+    expect(results.filter((r) => r.type === 'result')).toHaveLength(1);
+    expect(w.runs).toHaveLength(1);
+  });
+
+  it('an exhausted typed entry does not shadow a later one', async () => {
+    const w = await world();
+    w.setPolicy([typedEntry('orch logs <job:name>', { maxCalls: 1 }), typedEntry('orch logs <job:name(max=8)>')]);
+    expect(await ask(w, 'orch logs abc')).toMatchObject({ type: 'result' });
+    expect(await ask(w, 'orch logs abc')).toMatchObject({ type: 'result' });
+    expect(w.audit.entries.filter((e) => e.event === 'accepted').map((e) => e.template)).toEqual(['orch logs <job:name>', 'orch logs <job:name(max=8)>']);
+  });
+
+  it('the platform of this machine decides the reserved device names', async () => {
+    const win = await world({ platform: 'windows' });
+    win.setPolicy([typedEntry('type <f:name>')]);
+    expect(await ask(win, 'type nul')).toMatchObject({ type: 'refused', reason: 'not-listed' });
+    expect(await ask(win, 'type notes')).toMatchObject({ type: 'result' });
+    const posix = await world({ platform: 'posix' });
+    posix.setPolicy([typedEntry('type <f:name>')]);
+    expect(await ask(posix, 'type nul')).toMatchObject({ type: 'result' });
   });
 });

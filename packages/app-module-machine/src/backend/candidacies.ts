@@ -102,9 +102,13 @@ function normalizeRelayUrl(input: string, file: string): string {
   } catch {
     throw new RelayNotConfiguredError(`the relay URL in ${file} is not a URL: ${LOGIN_ADVICE}`);
   }
-  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+  // Only the IP literals: the resolver decides where a name (even "localhost") points. Same rule as machine-cli relayClient.ts.
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol === 'http:' && /^(.+\.)?localhost$/i.test(url.hostname)) {
+    throw new RelayNotConfiguredError(`the relay URL in ${file} uses the name ${url.hostname} over plain http: a name is resolved by the system, so it is not accepted as loopback. Use http://127.0.0.1:<port> (or http://[::1]:<port>), or an https URL; the token is not sent; ${LOGIN_ADVICE}`);
+  }
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new RelayNotConfiguredError(`the relay URL in ${file} must use https (plain http is only accepted for 127.0.0.1 and localhost): the token is not sent; ${LOGIN_ADVICE}`);
+    throw new RelayNotConfiguredError(`the relay URL in ${file} must use https (plain http is only accepted for the literals 127.0.0.1 and [::1]): the token is not sent; ${LOGIN_ADVICE}`);
   }
   return url.toString().replace(/\/+$/, '');
 }
@@ -241,7 +245,19 @@ async function readLimited(res: Response): Promise<string> {
   return text;
 }
 
-export async function listCandidacies(configDir: string, nowSeconds: number, doFetch: typeof fetch = globalThis.fetch): Promise<CandidacyListView[]> {
+/** Same rule as machine-cli relayClient.ts `insecureTlsProblem`: this variable turns certificate validation off for the whole process. */
+export function insecureTlsProblem(env: NodeJS.ProcessEnv): string | undefined {
+  if (env['NODE_TLS_REJECT_UNAUTHORIZED'] !== '0') {
+    return undefined;
+  }
+  return 'NODE_TLS_REJECT_UNAUTHORIZED=0 is set: it disables certificate validation for the whole process, so the relay could be impersonated and the token stolen. Unset it (remove it from the environment of the app that runs this module) and restart the app';
+}
+
+export async function listCandidacies(configDir: string, nowSeconds: number, doFetch: typeof fetch = globalThis.fetch, env: NodeJS.ProcessEnv = process.env): Promise<CandidacyListView[]> {
+  const insecure = insecureTlsProblem(env);
+  if (insecure !== undefined) {
+    throw new RelayNotConfiguredError(`refusing to talk to the relay: ${insecure}`);
+  }
   const { relayUrl, token } = readAdminConfig(configDir);
   let res: Response;
   try {

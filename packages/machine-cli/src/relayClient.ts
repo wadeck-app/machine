@@ -58,6 +58,16 @@ export interface RelayClientOptions {
   token?: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** Tests only: the environment checked for NODE_TLS_REJECT_UNAUTHORIZED (default: process.env). */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** `NODE_TLS_REJECT_UNAUTHORIZED=0` turns certificate validation off for the whole process: a client with a token must not run under it. */
+export function insecureTlsProblem(env: NodeJS.ProcessEnv): string | undefined {
+  if (env['NODE_TLS_REJECT_UNAUTHORIZED'] !== '0') {
+    return undefined;
+  }
+  return 'NODE_TLS_REJECT_UNAUTHORIZED=0 is set: it disables certificate validation for the whole process, so the relay could be impersonated and the token stolen. Unset it (for example `unset NODE_TLS_REJECT_UNAUTHORIZED`, or remove it from the environment of the service) and run the command again';
 }
 
 export interface ClaimAnswer {
@@ -148,9 +158,13 @@ export function normalizeRelayUrl(input: string): string {
   } catch {
     throw new Error(`invalid relay URL "${input}": expected something like https://relay.example.com`);
   }
-  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+  // Only the IP literals: the resolver decides where a name (even "localhost") points, so a name is never trusted as loopback.
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol === 'http:' && /^(.+\.)?localhost$/i.test(url.hostname)) {
+    throw new Error(`relay URL "${input}" uses the name ${url.hostname} over plain http: a name is resolved by the system, so it is not accepted as loopback. Use http://127.0.0.1:<port> (or http://[::1]:<port>), or an https URL`);
+  }
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new Error(`relay URL "${input}" must use https (plain http is only accepted for 127.0.0.1 and localhost): use an https URL such as https://relay.example.com`);
+    throw new Error(`relay URL "${input}" must use https (plain http is only accepted for the literals 127.0.0.1 and [::1]): use an https URL such as https://relay.example.com`);
   }
   if (url.username !== '' || url.password !== '') throw new Error('the relay URL must not contain credentials: the token is stored separately');
   if (url.search !== '' || url.hash !== '') throw new Error(`relay URL "${input}" must not contain a query or a fragment`);
@@ -265,6 +279,10 @@ const isAdminOnlyCall = (method: string, path: string): boolean => ADMIN_ONLY_CA
 const MACHINE_CODES_ON_403: ReadonlySet<string> = new Set(['not_owner', 'not_registered', 'too_many_machines', 'forbidden', 'full_access_required', 'scope_denied']);
 
 export function createRelayClient(options: RelayClientOptions): RelayClient {
+  const insecure = insecureTlsProblem(options.env ?? process.env);
+  if (insecure !== undefined) {
+    throw new Error(`refusing to talk to the relay: ${insecure}`);
+  }
   const baseUrl = normalizeRelayUrl(options.baseUrl);
   const doFetch = options.fetch ?? globalThis.fetch;
   const token = options.token;
@@ -311,14 +329,20 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         method: c.method,
         headers,
         ...(c.body !== undefined ? { body: JSON.stringify(c.body) } : {}),
+        // A redirect would carry the token (or the pairing code) to another host.
+        redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
       const name = (e as Error).name;
       const timedOut = name === 'TimeoutError' || name === 'AbortError';
+      const cause = (e as Error & { cause?: { message?: string } }).cause?.message ?? '';
+      const redirected = /redirect/i.test(`${(e as Error).message} ${cause}`);
       throw new RelayError({
         status: 0,
-        message: timedOut
+        message: redirected
+          ? `the relay ${baseUrl} answered with a redirect, which is refused (it could send your token to another host): check the relay URL (--relay <url>, the exact https address of the relay, no http-to-https or www redirect), then try again`
+          : timedOut
           ? `the relay ${baseUrl} did not answer within ${Math.round(timeoutMs / 1000)} s: check your connection and the URL, then try again`
           : `cannot reach the relay ${baseUrl} (${(e as Error).message}): check your connection and the URL (--relay <url>), then try again`,
       });
@@ -605,6 +629,18 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     async putInboxDocument(uuid, document) {
       const id = (document as { body?: { id?: unknown } } | null)?.body?.id;
       if (typeof id !== 'string' || id.length === 0) throw new Error('the document has no body.id: build it with machine-core buildDocument');
+      // Decision 77: the relay must not read what it stores. This is the last step before the network, so a document built by anything else than the current
+      // builder (an older build of the page, a script) is stopped here and never reaches the relay in clear.
+      const body = (document as { body: { v?: unknown; payload?: unknown } }).body;
+      if (body.v !== 2) {
+        throw new Error(
+          `document ${id} is not sealed (envelope version ${String(body.v)}): it would be stored by the relay in PLAINTEXT, and documents are never sent in plaintext. Nothing was sent. Update the program that built it (\`machine cli update\`; for the Allow button, update the machine module and reload the page), then send it again`,
+        );
+      }
+      const payload = body.payload as { sealed?: unknown } | null | undefined;
+      if (typeof payload !== 'object' || payload === null || Object.keys(payload).join() !== 'sealed' || typeof payload.sealed !== 'string') {
+        throw new Error(`document ${id} has an envelope version 2 but its payload is not one sealed blob ({ sealed }): nothing was sent. Build it with machine-core buildDocument`);
+      }
       await call({ method: 'PUT', path: `/api/machines/${uuidPath(uuid)}/inbox/${idPath(id)}`, body: document, inbox: { uuid: uuid.toLowerCase(), id } });
     },
 

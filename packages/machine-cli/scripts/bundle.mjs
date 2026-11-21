@@ -1,6 +1,6 @@
 // Builds the single-file CommonJS bundle of machine: <repo>/dist/machine.cjs (or --out <file>), version from BUNDLE_VERSION, else package.json.
 // The esbuild options live in src/bundle.ts (shared with the tests); Node strips the types when it imports that file
-// (Node 22.18 or newer, and the Node 24 used here).
+// (Node 24 or newer).
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -37,7 +37,7 @@ let bundleMachine;
 try {
   ({ bundleMachine } = await import(pathToFileURL(resolve(packageDir, 'src', 'bundle.ts')).href));
 } catch (e) {
-  fail(`cannot load src/bundle.ts (${e.message}): this script needs Node 22.18 or newer, which runs TypeScript files directly (running ${process.version})`);
+  fail(`cannot load src/bundle.ts (${e.message}): this script needs Node 24 or newer, which runs TypeScript files directly (running ${process.version})`);
 }
 
 // The updater bundle must stay small: it is spawned by the daemon every 30 minutes and runs from the install it replaces.

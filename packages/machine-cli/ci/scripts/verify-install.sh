@@ -2,7 +2,7 @@
 # Verifies, in an isolated temp environment, that a published version of @wadeck-app/machine-cli installs and works.
 #
 # Usage:       bash packages/machine-cli/ci/scripts/verify-install.sh <version>
-# Run locally: needs bash (git-bash on Windows), node >= 22, npm configured for GitHub Packages
+# Run locally: needs bash (git-bash on Windows), node >= 24, npm configured for GitHub Packages
 #              (@wadeck-app:registry=https://npm.pkg.github.com and a token with read:packages).
 #              Nothing outside a temp folder is touched: the global npm prefix, MACHINE_CONFIG_DIR, the app-core config folder and the
 #              home are redirected. The daemon it starts listens on loopback ports only and is stopped at the end (or on a failure).

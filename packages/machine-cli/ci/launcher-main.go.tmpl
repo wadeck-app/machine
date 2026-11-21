@@ -27,7 +27,7 @@ import (
 //   4. $HOME/.config/{{.DefaultConfigDir}}
 // No legacy migration here: only the CLI itself may move a folder.
 
-const nodeMissingFix = "install Node.js 22 or newer from https://nodejs.org and make sure `node` is in the PATH of the process that starts {{.AppName}} (for a startup job: the PATH of the orch daemon's session), then start it again"
+const nodeMissingFix = "install Node.js 24 or newer from https://nodejs.org and make sure `node` is in the PATH of the process that starts {{.AppName}} (for a startup job: the PATH of the orch daemon's session), then start it again"
 
 // configDirFromArgs returns the value of the last "--config-dir <dir>" found before the first "--" (everything after it
 // belongs to the remote command of `run`). A flag without a value, or whose value starts with "--", is a usage error that
@@ -65,7 +65,7 @@ func resolveConfigDir(args []string, envConfigDir string, defaultDir string) str
 
 // nodeMissingMessage is what the user reads when node cannot be found: the cause, the requirement and the fix.
 func nodeMissingMessage(app string, cause error) string {
-	return fmt.Sprintf("%s: cannot start, `node` was not found in PATH (%v). %s requires Node.js 22 or newer: %s.", app, cause, app, nodeMissingFix)
+	return fmt.Sprintf("%s: cannot start, `node` was not found in PATH (%v). %s requires Node.js 24 or newer: %s.", app, cause, app, nodeMissingFix)
 }
 
 // checkNode fails with an actionable message when node is not in PATH. The SDK reports the same fact but without the

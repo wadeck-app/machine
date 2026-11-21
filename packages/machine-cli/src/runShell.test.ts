@@ -135,7 +135,7 @@ describe('machine allowed <machine>', () => {
     expect(r.code).toBe(0);
     const lines = r.out.trimEnd().split('\n');
     expect(lines[0]).toMatch(/^Allowed on "laptop" per the policy signed here \(version 1, signed .+\):$/);
-    expect(lines.slice(1)).toEqual(['  by default, for every trusted peer without a list of its own:', '    sh', '      "ls"', '      "pwd"', '    cmd', '      "dir"', 'as installed on laptop: ask there with machine policy allow --list (remote view: machine requests/policy views are not built yet)']);
+    expect(lines.slice(1)).toEqual(['  by default, for every trusted peer without a list of its own:', '    sh', '      #1 "ls"', '      #3 "pwd"', '    cmd', '      #2 "dir"', 'as installed on laptop: ask there with machine policy allow --list (remote view: machine requests/policy views are not built yet)']);
   });
 
   it('is read-only: no passphrase and no question, and it does not touch the policy record', async () => {
@@ -161,7 +161,7 @@ describe('machine allowed <machine>', () => {
     const r = await cli(b, ['allowed', 'laptop']);
     expect(r.code).toBe(0);
     expect(r.out).toContain('Allowed on this machine "laptop" (installed policy version 1, mode admin)');
-    expect(r.out).toContain('      "ls"');
+    expect(r.out).toContain('      #1 "ls"');
     expect(r.out).not.toContain('as installed on');
   });
 

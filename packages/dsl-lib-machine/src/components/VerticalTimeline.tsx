@@ -1,6 +1,6 @@
 import React from 'react';
-import { Tooltip } from '@wadeck-app/dsl-ui';
-import { Check, Circle, Info } from 'lucide-react';
+import { Check, Circle } from 'lucide-react';
+import { InfoTip } from './InfoTip.js';
 
 export type TimelineStatus = 'done' | 'current' | 'todo';
 
@@ -21,11 +21,28 @@ export interface VerticalTimelineProps {
 
 const STATUS_LABEL: Record<TimelineStatus, string> = { done: 'Done', current: 'Current', todo: 'To do' };
 
+// Semantic tokens of the app only (dsl-ui theme): they follow the theme and the palette. The marker border of a step still to do is `muted`, not
+// `border`: the border token is a hairline (1.25:1 on the page), a marker must reach 3:1.
+// @formatter:off
+const MARKER_BASE = 'relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2';
 const MARKER_CLASS: Record<TimelineStatus, string> = {
-  done: 'bg-green-600 text-white border-green-600',
-  current: 'bg-white text-blue-700 border-blue-600',
-  todo: 'bg-white text-gray-400 border-gray-300',
+  done: 'border-success bg-success text-on-solid',
+  current: 'border-primary bg-surface text-primary',
+  todo: 'border-muted bg-surface text-muted',
 };
+const STATUS_TEXT_CLASS: Record<TimelineStatus, string> = {
+  done: 'text-success-text',
+  current: 'text-primary',
+  todo: 'text-muted',
+};
+const LIST = 'relative flex flex-col gap-0';
+const ITEM = 'relative flex gap-3 pb-6 last:pb-0';
+const CONNECTOR = 'absolute left-3 top-6 -ml-px h-full w-0.5 bg-border';
+const CONNECTOR_DONE = 'absolute left-3 top-6 -ml-px h-full w-0.5 bg-success';
+const TITLE = 'flex items-center gap-1 text-sm font-medium text-content';
+const DESCRIPTION = 'text-xs text-content';
+const ERROR = 'text-sm text-danger-text';
+// @formatter:on
 
 function problem(steps: TimelineStep[]): string | undefined {
   if (!Array.isArray(steps) || steps.length === 0) {
@@ -54,34 +71,28 @@ function problem(steps: TimelineStep[]): string | undefined {
 export function VerticalTimeline({ steps }: VerticalTimelineProps) {
   const error = problem(steps);
   if (error) {
-    return <div role="alert" className="text-sm text-red-700">{error}</div>;
+    return <div role="alert" className={ERROR}>{error}</div>;
   }
   return (
-    <ol className="relative flex flex-col gap-0">
+    <ol className={LIST}>
       {steps.map((step, index) => (
         <li
           key={step.id}
           data-status={step.status}
           aria-current={step.status === 'current' ? 'step' : undefined}
-          className="relative flex gap-3 pb-6 last:pb-0"
+          className={ITEM}
         >
-          {index < steps.length - 1 && <span aria-hidden="true" className="absolute left-3 top-6 -ml-px h-full w-px bg-gray-300" />}
-          <span aria-hidden="true" className={`relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${MARKER_CLASS[step.status]}`}>
-            {step.status === 'done' ? <Check size={14} /> : <Circle size={8} />}
+          {index < steps.length - 1 && <span aria-hidden="true" data-part="connector" className={step.status === 'done' ? CONNECTOR_DONE : CONNECTOR} />}
+          <span aria-hidden="true" data-part="marker" className={`${MARKER_BASE} ${MARKER_CLASS[step.status]}`}>
+            {step.status === 'done' ? <Check size={14} strokeWidth={3} /> : step.status === 'current' ? <Circle size={8} className="fill-current" /> : null}
           </span>
           <div className="flex flex-col">
-            <span className="flex items-center gap-1 text-sm font-medium">
+            <span className={TITLE}>
               {step.title}
-              {step.info !== undefined && (
-                <Tooltip content={step.info}>
-                  <button type="button" aria-label={`About: ${step.title}`} className="text-gray-500 hover:text-gray-800">
-                    <Info size={14} aria-hidden="true" />
-                  </button>
-                </Tooltip>
-              )}
+              {step.info !== undefined && <InfoTip label={`About: ${step.title}`} text={step.info} />}
             </span>
-            <span className="text-xs text-gray-500">{STATUS_LABEL[step.status]}</span>
-            {step.description !== undefined && <span className="text-xs text-gray-700">{step.description}</span>}
+            <span data-part="status" className={`text-xs ${STATUS_TEXT_CLASS[step.status]}`}>{STATUS_LABEL[step.status]}</span>
+            {step.description !== undefined && <span className={DESCRIPTION}>{step.description}</span>}
           </div>
         </li>
       ))}

@@ -2,7 +2,7 @@ import { adminLoginFix, capitalized, ADMIN_TOKEN_WHY } from './adminAccess.js';
 import { existsSync } from 'node:fs';
 import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
-import { sealBundle } from './approval.js';
+import { sealApproval, sealBundle } from './approval.js';
 import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
 import { expiryText, whenText } from './humanTime.js';
 import { PromptTimeoutError } from './prompt.js';
@@ -437,9 +437,13 @@ export async function runApprove(configDir: string, options: ApproveOptions): Pr
   const sealedPeers = peers.map((p) => sealBundle(p, view.identityPublicKey, parts(`peer:${p.registration.body.uuid}`)));
 
   // `random` binds the approval to this candidacy (unsigned: the relay can set it, so it only catches old or mixed-up approvals).
-  const approval = { v: 1, self: sealedSelf, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, adminUuid, peers: sealedPeers, random: view.random };
+  const plainApproval = { v: 1, self: sealedSelf, admin: { v: 1, adminPublicKey: pin.adminPublicKey, adminKeyId: pin.adminKeyId }, adminUuid, peers: sealedPeers, random: view.random };
+  // The whole approval is sealed to the candidate too (decision 78): the relay stores one blob and the `random` it already holds, never a registration or the admin key.
+  const approval = sealApproval(plainApproval, view.identityPublicKey, uuid);
   const size = Buffer.byteLength(JSON.stringify(approval));
-  if (size > MAX_APPROVAL_BYTES) throw new Error(`the approval is ${size} bytes, the relay accepts ${MAX_APPROVAL_BYTES}: nothing was sent`);
+  if (size > MAX_APPROVAL_BYTES) {
+    throw new Error(`the approval is ${size} bytes once sealed (a third bigger than in clear), the relay accepts ${MAX_APPROVAL_BYTES} bytes: nothing was sent. It lists ${peers.length} peer(s): too many for one approval`);
+  }
 
   stillPending('while the passphrase was typed');
 

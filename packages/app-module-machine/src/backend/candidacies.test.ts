@@ -236,6 +236,37 @@ describe('listCandidacies', () => {
     expect((error as Error).message).toContain('https');
   });
 
+  it('refuses http://localhost (a name is resolved by the system) and says to use 127.0.0.1, before sending the token', async () => {
+    writeAdminConfig('http://localhost:8080');
+    let called = false;
+    const spy = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
+    const error = await listCandidacies(configDir, NOW, spy).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RelayNotConfiguredError);
+    expect((error as Error).message).toContain('http://127.0.0.1:<port>');
+    expect(called).toBe(false);
+  });
+
+  it('accepts plain http on the literal [::1]', async () => {
+    writeAdminConfig('http://[::1]:8080');
+    let url = '';
+    const ok = (async (u: string) => { url = u; return new Response(JSON.stringify({ candidacies: [] }), { status: 200 }); }) as unknown as typeof fetch;
+    expect(await listCandidacies(configDir, NOW, ok)).toEqual([]);
+    expect(url).toBe('http://[::1]:8080/api/machines/candidacies');
+  });
+
+  it('refuses to run under NODE_TLS_REJECT_UNAUTHORIZED=0, naming the variable and the fix, and sends nothing', async () => {
+    writeAdminConfig('https://relay.example.com');
+    let called = false;
+    const spy = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
+    const error = await listCandidacies(configDir, NOW, spy, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RelayNotConfiguredError);
+    expect((error as Error).message).toContain('NODE_TLS_REJECT_UNAUTHORIZED');
+    expect((error as Error).message).toContain('disables certificate validation for the whole process');
+    expect((error as Error).message).toMatch(/unset/i);
+    expect((error as Error).message).not.toContain(TOKEN);
+    expect(called).toBe(false);
+  });
+
   it('turns a 401 into advice to log in again, with no token in the message', async () => {
     const relay = await fakeRelay(() => ({ status: 401, body: { error: 'invalid_token', message: 'nope' } }));
     writeAdminConfig(relay.url);

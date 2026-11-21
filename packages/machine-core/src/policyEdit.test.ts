@@ -54,11 +54,9 @@ describe('nextPolicyBody: the next signed version of a policy, built from the cu
     expect(r.changed).toBe(true);
   });
 
-  it('removes an entry by command (every shell) or by shell and command, and says what went', () => {
+  it('removes an entry by shell and command, and says what went; a command held under several shells is ambiguous (typed-parameters.md: --remove refuses and lists)', () => {
     const base = current({ defaults: [{ shell: 'sh', command: 'uptime' }, { shell: 'bash', command: 'uptime' }, { shell: 'sh', command: 'df' }] });
-    const all = nextPolicyBody(base, ctx, { kind: 'remove', command: 'uptime' });
-    expect(all.changed && all.body.defaults).toEqual([{ shell: 'sh', command: 'df' }]);
-    expect(all.changed && all.removed).toHaveLength(2);
+    expect(nextPolicyBody(base, ctx, { kind: 'remove', command: 'uptime' })).toMatchObject({ changed: false, reason: 'ambiguous' });
     const one = nextPolicyBody(base, ctx, { kind: 'remove', command: 'uptime', shell: 'bash' });
     expect(one.changed && one.body.defaults).toEqual([{ shell: 'sh', command: 'uptime' }, { shell: 'sh', command: 'df' }]);
   });

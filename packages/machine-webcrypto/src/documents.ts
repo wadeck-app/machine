@@ -1,8 +1,11 @@
-import type { DocumentBody, DocumentInput, PolicyBody, RegistrationBody, RevocationBody, SignedDocument, SignedPolicy, SignedRegistration, SignedRevocation } from '@wadeck-app/machine-core';
+import type { DocumentBody, DocumentInput, PolicyBody, PolicyEntry, RegistrationBody, RevocationBody, SignedDocument, SignedPolicy, SignedRegistration, SignedRevocation } from '@wadeck-app/machine-core';
 import { decodeBase64urlAny, decodeBase64urlStrict, encodeBase64url } from './base64url.js';
-import type { Json } from './canonical.js';
+import { canonicalize, type Json } from './canonical.js';
 import { sha256 } from './keys.js';
+import { sealTo } from './seal.js';
 import { signBody } from './signed.js';
+import { canonicalEntry, looksLikePlaceholder, parseTemplate, type Template } from './template.js';
+import { TemplateError } from './typedParams.js';
 
 // Signing of what the admin page produces: registrations, policies, revocation lists and the documents that carry them.
 // The shape validators are copies of the pure validators of machine-core (registration.ts, policy.ts, revocation.ts,
@@ -12,7 +15,9 @@ import { signBody } from './signed.js';
 export const REGISTRATION_DOMAIN = 'machine/registration/v1';
 export const POLICY_DOMAIN = 'machine/policy/v1';
 export const REVOCATION_DOMAIN = 'machine/revocation/v1';
-export const DOCUMENT_DOMAIN = 'machine/document/v1';
+// Envelope version 2: the payload of every document is sealed to the identity key of the addressee (decision 78). The version 1 domain
+// (clear payload) is not built any more: machine-core only recognises it to refuse it.
+export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
 export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation'] as const;
 export const SHELLS = ['cmd', 'ps', 'bash', 'sh'] as const;
 /** What the relay accepts for one document. */
@@ -118,7 +123,7 @@ function assertCommand(command: unknown, where: string): asserts command is stri
   if (problem) throw new Error(`policy: ${where} ${problem}`);
 }
 
-function assertEntries(list: unknown, where: string): void {
+function assertEntries(list: unknown, where: string, version: number): void {
   if (!Array.isArray(list)) throw new Error(`policy: ${where} must be a list`);
   if (list.length > MAX_ENTRIES_PER_LIST) throw new Error(`policy: ${where} has more than ${MAX_ENTRIES_PER_LIST} entries`);
   const seen = new Set<string>();
@@ -126,10 +131,44 @@ function assertEntries(list: unknown, where: string): void {
     const entry = raw as Record<string, unknown>;
     if (typeof entry !== 'object' || entry === null) throw new Error(`policy: every entry of ${where} must be an object`);
     for (const key of Object.keys(entry)) {
-      if (!['shell', 'command', 'limits'].includes(key)) throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
+      if (!['shell', 'command', 'template', 'limits'].includes(key)) {
+        throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
+      }
     }
     if (!(SHELLS as readonly unknown[]).includes(entry.shell)) throw new Error(`policy: shell must be one of ${SHELLS.join(', ')} (got ${String(entry.shell)})`);
-    assertCommand(entry.command, where);
+    if (('command' in entry) === ('template' in entry)) {
+      throw new Error(`policy: an entry of ${where} must hold exactly one of command (exact) or template (typed)`);
+    }
+    let canonical: string;
+    let shown: string;
+    if ('template' in entry) {
+      if (version < 2) {
+        throw new Error(`policy: ${where} holds a typed entry but the body is version ${version}: typed entries need version 2`);
+      }
+      const text = entry.template;
+      if (typeof text !== 'string') {
+        throw new Error(`policy: ${where} template must be a string`);
+      }
+      let parsed: Template;
+      try {
+        parsed = parseTemplate(text, entry.shell as PolicyEntry['shell']);
+      } catch (e) {
+        if (e instanceof TemplateError) {
+          throw new Error(`policy: ${where} template "${text}" is refused: ${e.detail}`);
+        }
+        throw e;
+      }
+      canonical = canonicalEntry(entry.shell as PolicyEntry['shell'], { kind: 'typed', template: parsed });
+      shown = text;
+    } else {
+      assertCommand(entry.command, where);
+      // An exact entry that looks like a placeholder would be read differently by a reader that knows typed entries.
+      if (looksLikePlaceholder(entry.command)) {
+        throw new Error(`policy: ${where} exact command "${entry.command}" holds a <label:type> placeholder: write it as a typed entry (policy version 2) or remove the angle brackets`);
+      }
+      canonical = canonicalEntry(entry.shell as PolicyEntry['shell'], { kind: 'exact', command: entry.command });
+      shown = entry.command;
+    }
     if ('limits' in entry && entry.limits === undefined) throw new Error(`policy: limits of an entry of ${where} must be omitted, not undefined`);
     if (entry.limits !== undefined) {
       const limits = entry.limits as Record<string, unknown>;
@@ -141,14 +180,31 @@ function assertEntries(list: unknown, where: string): void {
       if (limits.maxCalls !== undefined && !posInt(limits.maxCalls)) throw new Error('policy: limits.maxCalls must be a positive integer');
       if (limits.expiresAt !== undefined && !posInt(limits.expiresAt)) throw new Error('policy: limits.expiresAt must be epoch seconds (a positive integer)');
     }
-    const id = `${entry.shell as string}\u0000${entry.command as string}`;
-    if (seen.has(id)) throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${entry.command as string}"`);
-    seen.add(id);
+    if (seen.has(canonical)) {
+      throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${shown}" (labels and the order of enum members do not make an entry different)`);
+    }
+    seen.add(canonical);
   }
 }
 
-export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
+/** The highest policy body version this build reads (the same constants as machine-core policy.ts). */
+const POLICY_MAX_VERSION = 2;
+const UPDATE_HINT = 'run `machine cli update` on this machine';
+/** The whole body as JSON: 200 entries of 2048 characters are about 400 KiB. */
+const MAX_BODY_CHARS = 512 * 1024;
+
+export interface PolicyReadOptions {
+  /** The highest body version the reader knows (default POLICY_MAX_VERSION). A lower value simulates an older build. */
+  readsUpTo?: number;
+}
+
+export function assertPolicyBody(value: unknown, options: PolicyReadOptions = {}): asserts value is PolicyBody {
+  const readsUpTo = options.readsUpTo ?? POLICY_MAX_VERSION;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('policy: the body must be an object');
+  const size = JSON.stringify(value).length;
+  if (size > MAX_BODY_CHARS) {
+    throw new Error(`policy: the body is ${size} characters, above the limit of ${MAX_BODY_CHARS} characters (512 KiB): remove entries or peer lists`);
+  }
   const r = value as Record<string, unknown>;
   const fields = ['v', 'target', 'version', 'baseVersion', 'adminKeyId', 'issuedAt', 'notBefore', 'notAfter', 'defaults', 'peers'];
   for (const key of Object.keys(r)) {
@@ -157,7 +213,13 @@ export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
   for (const key of fields) {
     if (!(key in r)) throw new Error(`policy: missing field "${key}"`);
   }
-  if (r.v !== 1) throw new Error(`policy: unsupported version ${String(r.v)} (this build reads version 1)`);
+  if (r.v !== 1 && r.v !== 2) {
+    throw new Error(`policy: unsupported version ${String(r.v)} (this build reads versions 1 to ${readsUpTo}): ${UPDATE_HINT}`);
+  }
+  if (r.v > readsUpTo) {
+    throw new Error(`policy: unsupported version ${String(r.v)} (this reader knows versions 1 to ${readsUpTo}): ${UPDATE_HINT}, then apply the policy again`);
+  }
+  const bodyVersion = r.v;
   if (typeof r.target !== 'string' || !UUID_V4.test(r.target)) throw new Error('policy: target must be a lowercase version 4 UUID');
   if (typeof r.version !== 'number' || !Number.isSafeInteger(r.version) || r.version < 1) throw new Error('policy: version must be a positive integer');
   if (typeof r.baseVersion !== 'number' || !Number.isSafeInteger(r.baseVersion) || r.baseVersion < 0) throw new Error('policy: baseVersion must be a non-negative integer');
@@ -167,13 +229,15 @@ export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
     if (!posInt(r[key])) throw new Error(`policy: ${key} must be epoch seconds`);
   }
   if ((r.notAfter as number) <= (r.notBefore as number)) throw new Error('policy: notAfter must be after notBefore');
-  assertEntries(r.defaults, 'defaults');
+  assertEntries(r.defaults, 'defaults', bodyVersion);
   if (typeof r.peers !== 'object' || r.peers === null || Array.isArray(r.peers)) throw new Error('policy: peers must be an object keyed by peer UUID');
-  const peerIds = Object.keys(r.peers);
-  if (peerIds.length > MAX_PEERS) throw new Error(`policy: more than ${MAX_PEERS} peers`);
-  for (const id of peerIds) {
+  const peerLists = Object.entries(r.peers);
+  if (peerLists.length > MAX_PEERS) {
+    throw new Error(`policy: more than ${MAX_PEERS} peers`);
+  }
+  for (const [id, list] of peerLists) {
     if (!UUID_V4.test(id)) throw new Error(`policy: peer key "${id}" is not a lowercase version 4 UUID`);
-    assertEntries((r.peers as Record<string, unknown>)[id], `peers.${id}`);
+    assertEntries(list, `peers.${id}`, bodyVersion);
   }
 }
 
@@ -214,11 +278,18 @@ function assertId(id: unknown): asserts id is string {
   }
 }
 
+/** The purpose the payload of a document is sealed for: the envelope version, the type, the addressee and the id. Equal to machine-core `documentSealContext`. */
+export function documentSealContext(kind: string, to: string, id: string): string {
+  return `document-payload:v2:${kind}:${to}:${id}`;
+}
+
 /** Shape of the body, payload excluded. Throws an Error naming the first problem. */
-function assertEnvelope(body: unknown): asserts body is DocumentBody {
+function assertEnvelope(body: unknown): void {
   if (!isObject(body)) throw new Error('document: the body must be an object');
   assertKeys(body, ['v', 'kind', 'to', 'id', 'issuedAt', 'expiresAt', 'payload'], 'document');
-  if (body.v !== 1) throw new Error(`document: unsupported version ${String(body.v)} (this build reads version 1)`);
+  if (body.v !== 2) {
+    throw new Error(`document: unsupported envelope version ${String(body.v)} (this build reads version 2, sealed payloads): update machine on this machine, or on the admin machine if it is the older one (\`machine cli update\`)`);
+  }
   if (typeof body.kind !== 'string' || !(DOCUMENT_KINDS as readonly string[]).includes(body.kind)) {
     throw new Error(`document: kind must be one of ${DOCUMENT_KINDS.join(', ')} (got ${JSON.stringify(body.kind)}): update machine if the sender is newer`);
   }
@@ -257,15 +328,44 @@ function assertPayloadShape(kind: string, payload: unknown): void {
   else assertSignedPayload(payload, 'revocation');
 }
 
-/** Admin side: build and sign a document. Refuses to sign what no machine would accept (shape, lifetime, relay size limit). */
+/**
+ * The inbox document of a policy signed by the page, sealed to the target (decision 78). Same rule as `distributePolicy` of machine-cli: the id comes
+ * from the policy (`v2:` keeps it apart from the id of an older, clear document), it lives until the policy can no longer be applied (at most the 30 days
+ * the relay keeps it). `now` only refuses an already expired one. `recipientIdentityPublicKey` is the key of the target from the registration the admin signed.
+ */
+export async function sealedPolicyDocument(signed: SignedPolicy, now: number, adminPrivateKey: CryptoKey, recipientIdentityPublicKey: string): Promise<SignedDocument> {
+  const to = signed.body.target;
+  const issuedAt = signed.body.issuedAt;
+  const expiresAt = Math.min(issuedAt + DOCUMENT_RETENTION_SECONDS, signed.body.notAfter);
+  if (expiresAt <= now) {
+    throw new Error(`the policy could be applied until ${new Date(signed.body.notAfter * 1000).toISOString()}, which has passed: sign it again`);
+  }
+  return buildDocument(
+    { kind: 'policy', to, id: await documentId(`v2:policy:${to}:${signed.body.version}:${signed.signature}`), issuedAt, expiresAt, payload: signed as never, recipientIdentityPublicKey },
+    adminPrivateKey,
+  );
+}
+
+/**
+ * Admin side: validate the real payload, seal it to the addressee and sign the envelope. Refuses to sign what no machine would accept
+ * (shape, lifetime, relay size limit). There is no plaintext mode: an input without the key of the addressee is an error.
+ */
 export async function buildDocument(input: DocumentInput, adminPrivateKey: CryptoKey): Promise<SignedDocument> {
-  const body: DocumentBody = { v: 1, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: input.payload };
-  assertEnvelope(body);
-  assertPayloadShape(body.kind, body.payload);
-  const signed = (await signBody(DOCUMENT_DOMAIN, body as unknown as Json, adminPrivateKey)) as unknown as SignedDocument;
+  if (typeof input.recipientIdentityPublicKey !== 'string' || input.recipientIdentityPublicKey.length === 0) {
+    throw new Error(
+      'document: recipientIdentityPublicKey is required: every document is sealed to the identity key of its addressee because the relay must not read it, and there is no plaintext mode. Take the key from the registration of the addressee that this machine signed',
+    );
+  }
+  assertEnvelope({ v: 2, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: {} });
+  assertPayloadShape(input.kind, input.payload);
+  const sealed = await sealTo(input.recipientIdentityPublicKey, new TextEncoder().encode(canonicalize(input.payload as Json)), documentSealContext(input.kind, input.to, input.id));
+  const body: DocumentBody = { v: 2, kind: input.kind, to: input.to, id: input.id, issuedAt: input.issuedAt, expiresAt: input.expiresAt, payload: { sealed } };
+  const signed = (await signBody(DOCUMENT_DOMAIN_V2, body as unknown as Json, adminPrivateKey)) as unknown as SignedDocument;
   const size = new TextEncoder().encode(JSON.stringify(signed)).length;
   if (size > MAX_DOCUMENT_BYTES) {
-    throw new Error(`document ${input.id} is too large: ${size} bytes, the relay accepts at most ${MAX_DOCUMENT_BYTES} bytes (16 KiB). A policy this big must be split or reduced`);
+    throw new Error(
+      `document ${input.id} is too large: ${size} bytes once sealed (the sealed form is a third bigger than the clear one), the relay accepts at most ${MAX_DOCUMENT_BYTES} bytes (16 KiB). A policy or a revocation list this big must be split or reduced`,
+    );
   }
   return signed;
 }

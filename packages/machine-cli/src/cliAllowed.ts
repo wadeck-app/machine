@@ -1,4 +1,6 @@
-import { resolveMachineRef, type PolicyBody } from '@wadeck-app/machine-core';
+import { join } from 'node:path';
+import { entryKey, resolveMachineRef, type PolicyBody, type PolicyEntry } from '@wadeck-app/machine-core';
+import { FileUsageStore } from './stores.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { allowedByShell, recordedPolicy, REMOTE_VIEW_LINE } from './allowedView.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
@@ -16,9 +18,11 @@ const epochSecondsOf = (ctx: CommandContext): number => Math.floor((ctx.io.now?.
 
 const USAGE = 'usage: machine allowed <machine>   (name, alias, uuid or unique uuid prefix; read-only)';
 
-function peerBlocks(body: PolicyBody, nameOf: (uuid: string) => string): string[] {
-  const lines = ['  by default, for every trusted peer without a list of its own:', ...allowedByShell(body.defaults, '    ')];
-  for (const [peer, entries] of Object.entries(body.peers)) lines.push(`  only for ${nameOf(peer)} (own list, it replaces the default):`, ...allowedByShell(entries, '    '));
+/** `counters`: the call counters of THIS machine (only known on the target), absent for a policy signed here for another machine. */
+function peerBlocks(body: PolicyBody, nameOf: (uuid: string) => string, now: number, counters?: { count(key: string): number }): string[] {
+  const usedIn = (scope: string) => (counters === undefined ? undefined : (e: PolicyEntry): number | undefined => (e.limits?.maxCalls === undefined ? undefined : counters.count(entryKey(scope, e))));
+  const lines = ['  by default, for every trusted peer without a list of its own:', ...allowedByShell(body.defaults, '    ', now, usedIn('default'))];
+  for (const [peer, entries] of Object.entries(body.peers)) lines.push(`  only for ${nameOf(peer)} (own list, it replaces the default):`, ...allowedByShell(entries, '    ', now, usedIn(peer)));
   return lines;
 }
 
@@ -47,7 +51,14 @@ export function runAllowed(ctx: CommandContext): number {
         io.stdout(`Nothing is allowed on this machine "${target.name}" (mode ${network.policyMode}): no policy is installed, so every command is refused. ${network.policyMode === 'local' ? 'Allow one with `machine policy allow -- <command>`' : 'The admin allows one with `machine admin allow ' + target.name + ' -- <command>`'}\n`);
         return EXIT.ok;
       }
-      io.stdout(`${[`Allowed on this machine "${target.name}" (installed policy version ${body.version}, mode ${network.policyMode}):`, ...peerBlocks(body, nameOf)].join('\n')}\n`);
+      // The counters live on this machine: a limited entry shows the calls left. A counter file that cannot be read is said, never skipped.
+      let counters: FileUsageStore | undefined;
+      try {
+        counters = new FileUsageStore(join(configDir, 'usage.json'));
+      } catch (e) {
+        io.stderr(`[warn] ${(e as Error).message}; the calls left are not shown\n`);
+      }
+      io.stdout(`${[`Allowed on this machine "${target.name}" (installed policy version ${body.version}, mode ${network.policyMode}):`, ...peerBlocks(body, nameOf, now, counters)].join('\n')}\n`);
       return EXIT.ok;
     }
 
@@ -61,7 +72,7 @@ export function runAllowed(ctx: CommandContext): number {
       return EXIT.ok;
     }
     const { body } = record;
-    io.stdout(`${[`Allowed on "${target.name}" per the policy signed here (version ${body.version}, signed ${clockText(body.issuedAt, now)} (${relativeText(body.issuedAt, now)})):`, ...peerBlocks(body, nameOf), REMOTE_VIEW_LINE(target.name)].join('\n')}\n`);
+    io.stdout(`${[`Allowed on "${target.name}" per the policy signed here (version ${body.version}, signed ${clockText(body.issuedAt, now)} (${relativeText(body.issuedAt, now)})):`, ...peerBlocks(body, nameOf, now), REMOTE_VIEW_LINE(target.name)].join('\n')}\n`);
     return EXIT.ok;
   } catch (e) {
     if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);

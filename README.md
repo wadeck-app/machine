@@ -7,6 +7,7 @@ Security model:
 - Every machine registration and every allowlist (policy) is signed by the admin key. Nothing that widens rights is applied without that signature.
 - The allowlist is exact: a command runs only if it matches an entry byte for byte, for that peer. No wildcard, no regex.
 - The relay is untrusted and never carries commands. Peers talk directly.
+- No message between machines is readable by the relay: the documents the admin leaves in an inbox (allowlists, revocations, new peers) and the approval of a new machine are sealed to the key of the machine they are for. The relay still sees who is addressed, when, how big, the type of document, and the addresses and presence of the machines.
 - The admin key is protected by a passphrase you choose. It cannot be recovered.
 - Machines talk over mutual TLS 1.3 with pinned keys.
 - Every executed (or refused) command is written to a hash-chained audit log on the target.
@@ -15,7 +16,7 @@ Details: [threat model](.claude/specs/2026-11-13_machine-network/threat-model.md
 
 ## 1. Install
 
-Requires Node >= 22. The package is published on GitHub Packages (`https://npm.pkg.github.com`); npm needs the scope mapped to that registry and a token that can read packages (standard GitHub Packages setup, not covered here).
+Requires Node >= 24. The package is published on GitHub Packages (`https://npm.pkg.github.com`); npm needs the scope mapped to that registry and a token that can read packages (standard GitHub Packages setup, not covered here).
 
 ```
 # ~/.npmrc
@@ -130,6 +131,32 @@ machine admin sign-policy draft.json --out signed.json
 ```
 
 `version` must be `baseVersion + 1`, and `baseVersion` the version currently applied on the target. `machine resolve <machine>` shows which machine a reference means.
+
+### Typed entries and lifetimes
+
+An entry can be a template: fixed words and `<label:type>` placeholders, a whole word or after a flag. A value is accepted only if it is made of the characters its type allows (a short whitelist per type, nothing else) and it never starts with `-`.
+
+```
+machine admin allow laptop --shell sh -- "orch logs <job:name> --tail <n:int(1,500)>"
+machine admin allow laptop --shell sh --for 2h -- "journalctl -u <u:enum(ssh.service|machine.service)> --lines=<n:int(1,500)> --no-pager"
+machine admin allow laptop --shell sh --times 5 -- "task show <id:hexid(8)> --json"
+```
+
+| Type | Accepts |
+|---|---|
+| `int(min,max)` | digits only, no sign, no leading zero, 10 digits at most, inside 0..2147483647 |
+| `duration(min,max)` | digits then `s`, `m`, `h` or `d` (`90s`, `2h`), bounds in seconds, at most 365 days |
+| `name`, `name(dot)`, `name(max=N)` | letters, digits, `_`, inner `-` (inner single `.` with `dot`), 64 characters (128 at most with `max=`); Windows device names (`con`, `nul`...) refused on a Windows target |
+| `port` | `int(1,65535)` |
+| `hexid(n)`, `uuid` | lower-case hexadecimal, n characters (at most 64) / canonical 36 characters |
+| `enum(a\|b\|c)` | exactly one listed word (letters, digits and `. _ : @ + -`, 64 at most, not starting with `-`) |
+
+- Before the passphrase you read the template, the lifetime, and two accepted and two refused examples built by the same validator (a sanity check, not a safeguard). A malformed `<` or `>` is refused, never kept as an exact entry; an entry is at most 2048 characters with 8 placeholders, and the command it can build is at most 2048 characters.
+- A typed entry on a program that no type can make safe (`sudo`, `git -c`, `orch add`, `machine run`, `--token`...) is signed only after a loud `[warn]`. Prefer an exact entry there.
+- Lifetime: permanent by default; `--times N` (1 to 10000 calls, counted per entry, not per value), `--for 30m|2h|7d`, `--until 2027-02-01` (end of that day, UTC) or `--until 2027-02-01T18:00Z`; `--for` and `--until` reach at most 365 days. Allowing an entry again with other limits replaces them (`limits updated`). `machine allowed <machine>` shows each entry with its number, `[typed]` for a template and the lifetime (`3 of 5 calls left` on the target).
+- `--remove` takes the text of the entry, or `--index <n>` (the number shown by `machine allowed` or `--list`). Several matches (the same text under two shells) are listed and nothing is signed. `machine policy allow --peer <machine>` starts a per-peer list from the PERMANENT default entries only and names the limited ones it leaves out.
+- A policy with a typed entry is version 2: a target that is not up to date refuses it (`machine cli update` there first). An exact-only policy stays version 1.
+- The refusal a peer sees for a wrong value is the same as for an unknown command. The closest template and the failed rule (token number and rule, never the value) are in the audit log of the target: `machine requests --history`.
 
 ### Requests: what peers asked and could not run
 
@@ -334,9 +361,10 @@ machine startup disable     # stop starting at login, and end the running daemon
 ```
 
 - The daemon also checks for updates at start and every 30 minutes. `autoUpdate: false` in `<configDir>/config.yml` turns that off; `machine cli update` still works.
-- Before accepting an update, the updater runs `machine cli self-check` (release version, Node >= 22, platform package matching, writable folders). A failed check rolls back.
+- Before accepting an update, the updater runs `machine cli self-check` (release version, Node >= 24, platform package matching, writable folders). A failed check rolls back.
 - A remote command still running when the daemon restarts is cut. A development build refuses to update.
 - `machine startup disable` first ends the running daemon (`orch kill machine`), then removes the job. It removes only a job it owns; otherwise it refuses and names the command to run.
+- Update EVERY machine, then send again what was lost. Since the documents are sealed, a machine that still runs an older build deletes them unread (it logs `N document(s) failed verification and were deleted`). After `machine cli update` everywhere, run `machine admin distribute <machine>` (new or renewed machines, revocations by uuid) and `machine admin distribute --policy <signed.json>` (policies). A machine that receives a clear document from an older admin refuses it and says `PLAINTEXT ... machine cli update`.
 - Uninstall: `machine startup disable`, then `npm uninstall -g @wadeck-app/machine-cli`. Delete the configuration folder only if you accept losing the identity and, on the admin machine, the admin key.
 
 ## 7. Troubleshooting

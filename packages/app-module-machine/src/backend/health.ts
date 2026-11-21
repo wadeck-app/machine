@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { insecureTlsProblem } from './candidacies.js';
 import { SECRETS_DIRNAME } from './configDir.js';
 import { callDaemon } from './daemonClient.js';
 
@@ -117,8 +118,14 @@ function readTokenFile(file: string, fix: string): TokenFile {
   } catch {
     return bad('relayUrl is not a URL');
   }
-  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return bad('relayUrl must use https (http is only accepted for 127.0.0.1 and localhost)');
+  // Only the IP literals: the resolver decides where a name (even "localhost") points.
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol === 'http:' && /^(.+\.)?localhost$/i.test(url.hostname)) {
+    return bad(`relayUrl uses the name ${url.hostname} over plain http, which is not accepted as loopback: use http://127.0.0.1:<port> (or http://[::1]:<port>), or an https URL`);
+  }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    return bad('relayUrl must use https (http is only accepted for the literals 127.0.0.1 and [::1])');
+  }
   return { state: 'ok', relayUrl: url.toString().replace(/\/+$/, ''), token };
 }
 
@@ -177,12 +184,16 @@ function memoWhoami(): (relayUrl: string, token: string) => Promise<Whoami> {
 
 const originOf = (relayUrl: string): string => new URL(relayUrl).origin;
 
-async function checkRelay(configDir: string, ask: (u: string, t: string) => Promise<Whoami>): Promise<HealthCheck> {
+async function checkRelay(configDir: string, ask: (u: string, t: string) => Promise<Whoami>, env: NodeJS.ProcessEnv): Promise<HealthCheck> {
   const name = 'relay';
   const file = join(configDir, SECRETS_DIRNAME, 'relay.json');
   const cfg = readTokenFile(file, 'run `machine join <code>` again with a new code from the admin');
   if (cfg.state === 'absent') return pass(name, 'not joined to a relay (no relay.json): informational, run `machine join <code>` to join');
   if (cfg.state === 'bad') return fail(name, cfg.detail as string);
+  const insecure = insecureTlsProblem(env);
+  if (insecure !== undefined) {
+    return fail(name, `no request sent to the relay: ${insecure}`);
+  }
   const origin = originOf(cfg.relayUrl as string);
   const w = await ask(cfg.relayUrl as string, cfg.token as string);
   switch (w.kind) {
@@ -193,12 +204,16 @@ async function checkRelay(configDir: string, ask: (u: string, t: string) => Prom
   }
 }
 
-async function checkAdminToken(configDir: string, ask: (u: string, t: string) => Promise<Whoami>): Promise<HealthCheck> {
+async function checkAdminToken(configDir: string, ask: (u: string, t: string) => Promise<Whoami>, env: NodeJS.ProcessEnv): Promise<HealthCheck> {
   const name = 'admin-token';
   const file = join(configDir, SECRETS_DIRNAME, 'relay-admin.json');
   const cfg = readTokenFile(file, 'run `machine admin login` again (confirm the request in the relay console)');
   if (cfg.state === 'absent') return pass(name, 'no admin token (no relay-admin.json): informational, `machine admin login` is needed to approve machines');
   if (cfg.state === 'bad') return fail(name, cfg.detail as string);
+  const insecure = insecureTlsProblem(env);
+  if (insecure !== undefined) {
+    return fail(name, `no request sent to the relay: ${insecure}`);
+  }
   const w = await ask(cfg.relayUrl as string, cfg.token as string);
   switch (w.kind) {
     case 'ok': return pass(name, w.scopes === null ? 'admin token present, scopes: full access' : `admin token present, scopes: ${w.scopes.join(', ') || '(none)'}`);
@@ -230,14 +245,14 @@ async function guarded(name: string, run: () => HealthCheck | Promise<HealthChec
   }
 }
 
-export async function runHealth(configDir: string): Promise<HealthAnswer> {
+export async function runHealth(configDir: string, env: NodeJS.ProcessEnv = process.env): Promise<HealthAnswer> {
   const ask = memoWhoami();
   const checks = await Promise.all([
     guarded('config-dir', () => checkConfigDir(configDir)),
     guarded('identity', () => checkIdentity(configDir)),
     guarded('config-files', () => checkConfigFiles(configDir)),
-    guarded('relay', () => checkRelay(configDir, ask)),
-    guarded('admin-token', () => checkAdminToken(configDir, ask)),
+    guarded('relay', () => checkRelay(configDir, ask, env)),
+    guarded('admin-token', () => checkAdminToken(configDir, ask, env)),
     guarded('daemon', () => checkDaemon(configDir)),
   ]);
   return { ok: checks.every((c) => c.ok), checks };

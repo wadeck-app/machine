@@ -1,14 +1,16 @@
 import { createHmac, hkdfSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Json } from './canonical.js';
+import { canonicalize } from './canonical.js';
 import {
-  DOCUMENT_DOMAIN,
+  DOCUMENT_DOMAIN_V2,
   DOCUMENT_RETENTION_SECONDS,
   MAX_DOCUMENT_BYTES,
   buildDocument,
   derivePairSecret,
   derivePairSecretV2,
   documentId,
+  documentSealContext,
   openPairSecret,
   pairSecretDocumentContext,
   verifyDocument,
@@ -71,9 +73,10 @@ function setup() {
     issuedAt: NOW - 10,
     expiresAt: NOW + 1000,
     payload: peerPayload() as unknown as Json,
+    recipientIdentityPublicKey: recipient.publicKey,
     ...over,
   });
-  const ctx = (over: Record<string, unknown> = {}) => ({ adminPublicKey: admin.publicKey, selfUuid: TO, now: NOW, ...over });
+  const ctx = (over: Record<string, unknown> = {}) => ({ adminPublicKey: admin.publicKey, selfUuid: TO, now: NOW, identityPrivateKeyPkcs8: recipient.privateKeyPkcs8, ...over });
   return { admin, recipient, peerKeys, secret, registration, peerPayload, policyBody, input, ctx, sealedFor };
 }
 
@@ -81,8 +84,13 @@ type Setup = ReturnType<typeof setup>;
 const built = (s: Setup, over: Record<string, unknown> = {}) => buildDocument(s.input(over) as never, s.admin.privateKeyPkcs8);
 /** A document signed as is, bypassing the builder (to test what the verifier does with something a buggy or hostile admin would sign). */
 const signRaw = (s: Setup, body: Record<string, unknown>, extraTop: Record<string, unknown> = {}): SignedDocument =>
-  ({ body, signature: signDocument(DOCUMENT_DOMAIN, body as Json, s.admin.privateKeyPkcs8), ...extraTop }) as unknown as SignedDocument;
-const rawBody = (s: Setup, over: Record<string, unknown> = {}) => ({ v: 1, ...s.input(), ...over });
+  ({ body, signature: signDocument(DOCUMENT_DOMAIN_V2, body as Json, s.admin.privateKeyPkcs8), ...extraTop }) as unknown as SignedDocument;
+/** An envelope version 2 body, its payload sealed with the context of the FINAL kind, addressee and id (so a test changes one thing at a time). */
+const rawBody = (s: Setup, over: Record<string, unknown> = {}) => {
+  const { recipientIdentityPublicKey, payload, ...rest } = Object.assign({}, s.input(), over) as ReturnType<Setup['input']>;
+  const body = { v: 2, ...rest };
+  return { ...body, payload: { sealed: sealTo(recipientIdentityPublicKey, Buffer.from(canonicalize(payload)), documentSealContext(body.kind, body.to, body.id)) } };
+};
 
 describe('document ids', () => {
   it('are 22 characters of base64url, the first 16 bytes of the SHA-256 of a stable string, and stable', () => {
@@ -96,21 +104,22 @@ describe('document ids', () => {
 describe('buildDocument and verifyDocument: peer', () => {
   it('a document built by the admin verifies on the addressee and exposes the registration and the sealed secret', () => {
     const s = setup();
-    const doc = built(s);
+    const payload = s.peerPayload();
+    const doc = built(s, { payload: payload as unknown as Json });
     const result = verifyDocument(doc, s.ctx());
     expect(result.ok).toBe(true);
     if (!result.ok || result.kind !== 'peer') throw new Error('expected a verified peer document');
     expect(result.body.id).toBe(doc.body.id);
     expect(result.registration.uuid).toBe(PEER);
     // The signed registration itself, as importPeer needs it.
-    expect(result.signedRegistration).toEqual((doc.body.payload as { registration: unknown }).registration);
-    expect(result.sealedPairSecret).toBe((doc.body.payload as { sealedPairSecret: string }).sealedPairSecret);
+    expect(result.signedRegistration).toEqual(payload.registration);
+    expect(result.sealedPairSecret).toBe(payload.sealedPairSecret);
   });
 
-  it('the same input gives the same bytes (ed25519 is deterministic): a re-PUT is idempotent', () => {
+  it('the same input gives other bytes (the payload is sealed with a fresh ephemeral key): a re-PUT is answered id_conflict by the relay', () => {
     const s = setup();
     const payload = s.peerPayload() as unknown as Json;
-    expect(JSON.stringify(built(s, { payload }))).toBe(JSON.stringify(built(s, { payload })));
+    expect(JSON.stringify(built(s, { payload }))).not.toBe(JSON.stringify(built(s, { payload })));
   });
 
   it('opens the pair secret with the identity key of the addressee', () => {
@@ -188,7 +197,7 @@ describe('verifyDocument: tampering and addressing', () => {
       id: mutate({ id: documentId('another') }),
       issuedAt: mutate({ issuedAt: doc.body.issuedAt + 1 }),
       expiresAt: mutate({ expiresAt: doc.body.expiresAt + 1 }),
-      payload: mutate({ payload: { ...(doc.body.payload as object), sealedPairSecret: 'AAAA' } }),
+      payload: mutate({ payload: { ...(doc.body.payload as object), sealed: 'AAAA' } }),
       signature: { ...doc, signature: `${doc.signature.slice(0, -2)}${doc.signature.endsWith('AA') ? 'BB' : 'AA'}` },
     };
     for (const [field, tampered] of Object.entries(cases)) {
@@ -249,7 +258,7 @@ describe('verifyDocument: tampering and addressing', () => {
       // 22 characters whose last character carries bits beyond 16 bytes: not a canonical encoding
       { id: `${documentId('x').slice(0, 21)}B` },
       { kind: 'command' },
-      { v: 2 },
+      { v: 3 },
       { to: ADMIN_UUID.toUpperCase() },
       { issuedAt: '1800000000' },
       { expiresAt: NOW - 1000 },

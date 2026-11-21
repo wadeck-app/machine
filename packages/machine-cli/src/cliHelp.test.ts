@@ -163,3 +163,15 @@ describe('a bare group shows its read-only view (or its help), exit 0', () => {
     expect(r.err).toMatch(/--reject/);
   });
 });
+
+describe('typed parameters in the help (typed-parameters.md)', () => {
+  it.each([
+    [['admin', 'allow', '--help'], ['--times <n>', '--for <duration>', '--until <date>', '--index <n>', '<n:int(1,500)>', 'hexid(8)', 'enum(a|b)', 'never starts with "-"', '365d']],
+    [['policy', 'allow', '--help'], ['--times <n> | --for <duration> | --until <date>', '--index <n>', 'PERMANENT default entries']],
+    [['--help'], ['--times <n> | --for <duration> | --until <date>', 'TYPED template', 'a typed entry is version 2', '[typed]', 'machine cli']],
+  ])('%j documents the lifetime, the types and the numbered removal', async (args, wanted) => {
+    const r = await run(args);
+    expect(r.code, r.err).toBe(0);
+    for (const text of wanted) expect(r.out, text).toContain(text);
+  });
+});

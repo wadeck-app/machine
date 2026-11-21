@@ -335,7 +335,7 @@ describe('fake relay: presence and inbox as the real relay answers', () => {
     relay = await startFakeRelay({ scopes: null });
     relay.setOwner(uuidN(1), relay.token);
     const id = 'a'.repeat(22);
-    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putInboxDocument(uuidN(1), { body: { id, to: uuidN(1) } } as never);
+    await createRelayClient({ baseUrl: relay.url, token: relay.token }).putInboxDocument(uuidN(1), { body: { v: 2, kind: 'peer', id, to: uuidN(1), payload: { sealed: 'AAAA' } } } as never);
     const page = await get(`/api/machines/${uuidN(1)}/inbox`, relay.token);
     expect(page.body).toMatchObject({ success: true, more: false, next: null });
     expect(((page.body.documents as { storedAt: unknown }[])[0] as { storedAt: unknown }).storedAt).toMatch(isoPattern);

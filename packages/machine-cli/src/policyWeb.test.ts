@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildDocument, documentId, generateSigningKeyPair, keyId, nextPolicyBody, signPolicy, type PolicyBody, type SignedPolicy, type SignedDocument } from '@wadeck-app/machine-core';
+import { buildDocument, DOCUMENT_DOMAIN, documentId, generateSigningKeyPair, keyId, nextPolicyBody, signDocument, signPolicy, verifyInboxDocument, type PolicyBody, type SignedPolicy, type SignedDocument } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { unlockAdminKey } from './admin.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
@@ -66,8 +66,11 @@ async function browserSigns(machine: string, command: string, opts: { current?: 
   const edit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now: now() }, change);
   if (!edit.changed) throw new Error(`no change: ${edit.reason}`);
   const policy = signPolicy(edit.body, pair.privateKeyPkcs8);
+  // Sealed to the identity key of the target that the context gave (decision 78): the daemon cannot open it, the target can.
+  const recipient = context.target.identityPublicKey;
+  if (recipient === undefined) throw new Error('context: no identity key for the target');
   const document = buildDocument(
-    { kind: 'policy', to: policy.body.target, id: documentId(`policy:${policy.body.target}:${policy.body.version}:${policy.signature}`), issuedAt: policy.body.issuedAt, expiresAt: Math.min(policy.body.issuedAt + 30 * 86400, policy.body.notAfter), payload: policy as never },
+    { kind: 'policy', to: policy.body.target, id: documentId(`v2:policy:${policy.body.target}:${policy.body.version}:${policy.signature}`), issuedAt: policy.body.issuedAt, expiresAt: Math.min(policy.body.issuedAt + 30 * 86400, policy.body.notAfter), payload: policy as never, recipientIdentityPublicKey: recipient },
     pair.privateKeyPkcs8,
   );
   return { policy, document, body: edit.body };
@@ -132,6 +135,12 @@ describe('allowContext: what the page needs before it asks the passphrase', () =
     const context = allowContext(a, { machine: 'laptop' }, now());
     expect(context).toMatchObject({ ok: true, toSelf: false, delivery: 'inbox', target: { name: 'laptop' } });
     expect((context as { current: SignedPolicy }).current).toEqual(first.policy);
+  });
+
+  it('gives the identity key of the target (from the registration this admin holds): the page seals the inbox document to it', async () => {
+    await twoMachines();
+    expect(allowContext(a, { machine: 'laptop' }, now())).toMatchObject({ ok: true, target: { name: 'laptop', identityPublicKey: readMachine(b).identity.publicKey } });
+    expect(allowContext(a, { machine: readMachine(a).uuid }, now())).toMatchObject({ ok: true, target: { name: 'desktop', identityPublicKey: readMachine(a).identity.publicKey } });
   });
 
   it('for a peer without the admin relay token: refused BEFORE any passphrase, with the login command', async () => {
@@ -202,6 +211,10 @@ describe('submitPolicy: the signed document the browser produced', () => {
     const docs = policyDocs(readMachine(b).uuid);
     expect(docs).toHaveLength(1);
     expect(docs[0]?.document).toEqual(signed.document);
+    // Sealed: the relay (and this daemon) cannot read the entries, the target opens it with its identity key and finds the policy that was signed.
+    expect(JSON.stringify(docs[0]?.document)).not.toContain('echo hello');
+    const opened = verifyInboxDocument(docs[0]?.document, { adminPublicKey: JSON.parse(readFileSync(join(a, 'admin.json'), 'utf8')).adminPublicKey, selfUuid: readMachine(b).uuid, now: now(), identityPrivateKeyPkcs8: readMachine(b).identity.privateKeyPkcs8 });
+    expect(opened.ok && opened.kind === 'policy' ? opened.policy : undefined).toEqual(signed.policy);
     // The target accepts it as it is: signature, target, base version.
     const file = join(root, 'v1.json');
     writeFileSync(file, JSON.stringify(signed.policy));
@@ -273,6 +286,27 @@ describe('submitPolicy: the signed document the browser produced', () => {
     expect(await submitPolicy(a, { policy: one.policy }, now())).toMatchObject({ ok: false, reason: 'bad-document' });
     const tampered = { ...one.document, body: { ...one.document.body, to: readMachine(a).uuid } };
     expect(await submitPolicy(a, { policy: one.policy, document: tampered as SignedDocument }, now())).toMatchObject({ ok: false, reason: 'bad-document' });
+    expect(policyDocs(readMachine(b).uuid)).toHaveLength(0);
+  });
+
+  it('refuses a plaintext (version 1) document and a sealed one bound to another id, with the reason and nothing sent', async () => {
+    await twoMachines();
+    const one = await browserSigns('laptop', 'echo one');
+    const pair = await unlockAdminKey(a, async () => passphrase);
+    // A document signed with the old clear envelope (what an old page would build): refused, the relay must never carry the entries in clear.
+    const clear = { v: 1, kind: 'policy', to: one.policy.body.target, id: one.document.body.id, issuedAt: one.policy.body.issuedAt, expiresAt: one.document.body.expiresAt, payload: one.policy };
+    const plain = { body: clear, signature: signDocument(DOCUMENT_DOMAIN, clear as never, pair.privateKeyPkcs8) };
+    const plainAnswer = await submitPolicy(a, { policy: one.policy, document: plain }, now());
+    expect(plainAnswer).toMatchObject({ ok: false, reason: 'bad-document' });
+    expect((plainAnswer as { message: string }).message).toMatch(/plaintext/);
+    // Sealed and signed by the admin, but its id is not the one of this policy: it cannot be the document that carries it.
+    const other = buildDocument(
+      { kind: 'policy', to: one.policy.body.target, id: documentId('something else'), issuedAt: one.policy.body.issuedAt, expiresAt: one.document.body.expiresAt, payload: one.policy as never, recipientIdentityPublicKey: readMachine(b).identity.publicKey },
+      pair.privateKeyPkcs8,
+    );
+    const otherAnswer = await submitPolicy(a, { policy: one.policy, document: other }, now());
+    expect(otherAnswer).toMatchObject({ ok: false, reason: 'bad-document' });
+    expect((otherAnswer as { message: string }).message).toMatch(/does not carry the policy/);
     expect(policyDocs(readMachine(b).uuid)).toHaveLength(0);
   });
 

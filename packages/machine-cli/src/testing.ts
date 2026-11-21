@@ -5,11 +5,11 @@ import { adminInit } from './admin.js';
 import type { Timing } from './cliTypes.js';
 import { readMachine } from './identity.js';
 import type { PromptTimer } from './prompt.js';
-import { pairSecretContext, sealBundle, type SealedBundle } from './approval.js';
+import { approvalSealContext, pairSecretContext, sealApproval, sealBundle, type SealedBundle } from './approval.js';
 import { PLACEHOLDER, registerDraft } from './approvalDraft.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, registerMachine, type MachineInfo } from './network.js';
-import { sealTo } from '@wadeck-app/machine-core';
+import { documentSealContext, openSealed, sealTo } from '@wadeck-app/machine-core';
 
 // Test helpers (not shipped logic): drive the CLI in-process, and provision two machines that trust each other.
 
@@ -130,9 +130,35 @@ export async function buildApproval(
       // Fill the entries this draft created: a test may have replaced approval.self or approval.peers since.
       fill(placeholders.self, self, 'self');
       placeholders.peers.forEach((p, i) => fill(p, peers[i] as typeof self, `peer:${(peers[i] as typeof self).registration.body.uuid}`));
+      // The whole approval is sealed to the real candidate key like `machine admin approve` does (options.sealRecipientKey only breaks the pair secrets).
+      return sealApproval({ ...approval, random }, candidate.identityPublicKey, candidate.uuid);
     },
   });
   return approval;
+}
+
+/**
+ * The inner approval of what the relay stores for a candidacy (decision 78: it is one sealed blob). Tests only: it needs the identity key of the candidate,
+ * which the relay never has. Throws when the stored approval is not sealed to that candidate.
+ */
+export function openApprovalFor(candidateDir: string, stored: unknown): any {
+  const outer = stored as { random: string; sealed: string };
+  const me = readMachine(candidateDir);
+  return JSON.parse(Buffer.from(openSealed(me.identity.privateKeyPkcs8, outer.sealed, approvalSealContext(me.uuid, outer.random))).toString('utf8'));
+}
+
+/** The clear payload of an inbox document addressed to the machine in `dir` (decision 78: sealed to it). Tests only. */
+export function openDocumentFor(dir: string, document: unknown): any {
+  const { kind, to, id, payload } = (document as { body: { kind: 'peer' | 'policy' | 'revocation'; to: string; id: string; payload: { sealed: string } } }).body;
+  return JSON.parse(Buffer.from(openSealed(readMachine(dir).identity.privateKeyPkcs8, payload.sealed, documentSealContext(kind, to, id))).toString('utf8'));
+}
+
+/** What a hostile relay cannot do (it cannot open) but a test of the candidate's checks needs: change the inner approval of a stored one, sealed again in place. */
+export function rewriteApprovalFor(candidateDir: string, stored: unknown, change: (inner: any) => void): void {
+  const outer = stored as { v: 2; random: string; sealed: string };
+  const inner = openApprovalFor(candidateDir, stored);
+  change(inner);
+  outer.sealed = sealApproval(inner, exportMachineInfo(candidateDir).identityPublicKey, exportMachineInfo(candidateDir).uuid).sealed;
 }
 
 /** A clock that never waits: sleeping advances it, so a 15 minute wait costs nothing. `onSleep` is the admin's move. */

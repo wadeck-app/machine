@@ -33,7 +33,7 @@ describe('wrapperPackageJson', () => {
     expect(Object.keys(pkg.optionalDependencies as object).sort()).toEqual(Object.keys(PLATFORM_TARGETS).map(platformPackageName).sort());
     expect(Object.values(pkg.optionalDependencies as object)).toEqual([UNPINNED, UNPINNED, UNPINNED]);
     expect(pkg.bin).toEqual({ machine: 'bin/machine.js' });
-    expect(pkg.engines).toEqual({ node: '>=22' });
+    expect(pkg.engines).toEqual({ node: '>=24' });
     expect(pkg.type).toBe('commonjs');
     expect(pkg.files).toEqual(['bin/machine.js', 'machine.cjs']);
     expect(pkg).not.toHaveProperty('private');

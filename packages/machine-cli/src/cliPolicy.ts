@@ -2,7 +2,7 @@ import { SHELLS, type Shell } from '@wadeck-app/machine-core';
 import type { Prompt } from './admin.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { NotInitializedError } from './errors.js';
-import { EXIT, type CommandContext } from './cliTypes.js';
+import { EXIT, parseIndex, type CommandContext } from './cliTypes.js';
 import { readPolicyMode } from './policyMode.js';
 import { runDelegate, runLocalAllow, runLocalEnable, type LocalIo } from './policyLocal.js';
 import { unknownSubcommandMessage } from './cliHelp.js';
@@ -65,13 +65,21 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
     }
 
     // sub === 'allow'
-    const usage = 'usage: machine policy allow [--shell cmd|ps|bash|sh] [--peer <machine>] -- <command> | machine policy allow --remove [--shell <shell>] [--peer <machine>] -- <command> | machine policy allow --list';
+    const usage = 'usage: machine policy allow [--shell cmd|ps|bash|sh] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] -- <command> | machine policy allow --remove [--shell <shell>] [--peer <machine>] (-- <command> | --index <n>) | machine policy allow --list';
     if (args.list && args.remove) return fail(`--list and --remove cannot be combined. ${usage}`, EXIT.usage);
     if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
     const words = args.passthrough.length > 0 ? args.passthrough : rest.slice(1);
+    const parsedIndex = parseIndex(args.index);
+    const index = parsedIndex.ok ? parsedIndex.index : undefined;
+    if (!parsedIndex.ok) {
+      return fail(parsedIndex.message, EXIT.usage);
+    }
+    if (index !== undefined && words.length > 0) {
+      return fail(`--index replaces the command: give one or the other. ${usage}`, EXIT.usage);
+    }
     if (args.list) {
       if (words.length > 0 || args.peer !== undefined) return fail(`--list takes no command and no --peer. ${usage}`, EXIT.usage);
-    } else {
+    } else if (index === undefined) {
       if (words.length === 0) return fail(usage, EXIT.usage);
       if (words.length > 1 && words.some((word) => /[\s"'`]/.test(word))) {
         return fail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is allowed exactly as written', EXIT.usage);
@@ -81,7 +89,9 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
     const r = await runLocalAllow(configDir, {
       ...local,
       mode,
-      ...(mode !== 'list' ? { command: words.join(' ') } : {}),
+      ...(mode !== 'list' && index === undefined ? { command: words.join(' ') } : {}),
+      ...(index !== undefined ? { index } : {}),
+      ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
       ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
       ...(args.peer !== undefined ? { peer: args.peer } : {}),
       defaultShell: process.platform === 'win32' ? 'cmd' : 'sh',

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { Json } from './canonical.js';
 import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
+import { canonicalEntry, looksLikePlaceholder, matchTemplate, parseTemplate, type Template } from './template.js';
+import { TemplateError, type Platform } from './typedParams.js';
 
 export const POLICY_DOMAIN = 'machine/policy/v1';
 /**
@@ -30,14 +32,35 @@ export interface Limits {
 }
 
 /** One exact command: the shell and the full command line, compared byte for byte (decision 13). */
-export interface PolicyEntry {
+export interface ExactEntry {
   shell: Shell;
   command: string;
+  template?: never;
   limits?: Limits;
 }
 
+/** A typed entry (policy version 2): fixed words and `<label:type>` placeholders, see typed-parameters.md. */
+export interface TypedEntry {
+  shell: Shell;
+  template: string;
+  command?: never;
+  limits?: Limits;
+}
+
+export type PolicyEntry = ExactEntry | TypedEntry;
+
+/** The text of an entry as written and signed: the command of an exact entry, the template of a typed one. */
+export const entryText = (entry: PolicyEntry): string => (entry.template !== undefined ? entry.template : (entry.command as string));
+export const isTyped = (entry: PolicyEntry): entry is TypedEntry => entry.template !== undefined;
+/** True when a list holds a typed entry (such a policy needs body version 2). */
+export const hasTypedEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some(isTyped));
+
+/** The highest policy body version this build reads. Exact-only policies stay at version 1 so that older targets keep reading them. */
+export const POLICY_MAX_VERSION = 2;
+export const UPDATE_HINT = 'run `machine cli update` on this machine';
+
 export interface PolicyBody {
-  v: 1;
+  v: 1 | 2;
   /** UUID of the ONE machine this policy is written for. */
   target: string;
   version: number;
@@ -67,6 +90,8 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 const MAX_COMMAND = 2048;
 const MAX_ENTRIES_PER_LIST = 200;
 const MAX_PEERS = 64;
+/** The whole body as JSON: 200 entries of 2048 characters are about 400 KiB. */
+const MAX_BODY_CHARS = 512 * 1024;
 
 function posInt(x: unknown): x is number {
   return typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
@@ -86,7 +111,7 @@ function assertCommand(command: unknown, where: string): asserts command is stri
   if (problem) throw new Error(`policy: ${where} ${problem}`);
 }
 
-function assertEntries(list: unknown, where: string): asserts list is PolicyEntry[] {
+function assertEntries(list: unknown, where: string, version: number): asserts list is PolicyEntry[] {
   if (!Array.isArray(list)) throw new Error(`policy: ${where} must be a list`);
   if (list.length > MAX_ENTRIES_PER_LIST) throw new Error(`policy: ${where} has more than ${MAX_ENTRIES_PER_LIST} entries`);
   const seen = new Set<string>();
@@ -94,10 +119,44 @@ function assertEntries(list: unknown, where: string): asserts list is PolicyEntr
     const entry = raw as Record<string, unknown>;
     if (typeof entry !== 'object' || entry === null) throw new Error(`policy: every entry of ${where} must be an object`);
     for (const key of Object.keys(entry)) {
-      if (!['shell', 'command', 'limits'].includes(key)) throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
+      if (!['shell', 'command', 'template', 'limits'].includes(key)) {
+        throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
+      }
     }
     if (!SHELLS.includes(entry.shell as Shell)) throw new Error(`policy: shell must be one of ${SHELLS.join(', ')} (got ${String(entry.shell)})`);
-    assertCommand(entry.command, where);
+    if (('command' in entry) === ('template' in entry)) {
+      throw new Error(`policy: an entry of ${where} must hold exactly one of command (exact) or template (typed)`);
+    }
+    let canonical: string;
+    let shown: string;
+    if ('template' in entry) {
+      if (version < 2) {
+        throw new Error(`policy: ${where} holds a typed entry but the body is version ${version}: typed entries need version 2`);
+      }
+      const text = entry.template;
+      if (typeof text !== 'string') {
+        throw new Error(`policy: ${where} template must be a string`);
+      }
+      let parsed: Template;
+      try {
+        parsed = parseTemplate(text, entry.shell as Shell);
+      } catch (e) {
+        if (e instanceof TemplateError) {
+          throw new Error(`policy: ${where} template "${text}" is refused: ${e.detail}`);
+        }
+        throw e;
+      }
+      canonical = canonicalEntry(entry.shell as Shell, { kind: 'typed', template: parsed });
+      shown = text;
+    } else {
+      assertCommand(entry.command, where);
+      // An exact entry that looks like a placeholder would be read differently by a reader that knows typed entries.
+      if (looksLikePlaceholder(entry.command)) {
+        throw new Error(`policy: ${where} exact command "${entry.command}" holds a <label:type> placeholder: write it as a typed entry (policy version 2) or remove the angle brackets`);
+      }
+      canonical = canonicalEntry(entry.shell as Shell, { kind: 'exact', command: entry.command });
+      shown = entry.command;
+    }
     if ('limits' in entry && entry.limits === undefined) throw new Error(`policy: limits of an entry of ${where} must be omitted, not undefined`);
     if (entry.limits !== undefined) {
       const limits = entry.limits as Record<string, unknown>;
@@ -109,14 +168,25 @@ function assertEntries(list: unknown, where: string): asserts list is PolicyEntr
       if (limits.maxCalls !== undefined && !posInt(limits.maxCalls)) throw new Error('policy: limits.maxCalls must be a positive integer');
       if (limits.expiresAt !== undefined && !posInt(limits.expiresAt)) throw new Error('policy: limits.expiresAt must be epoch seconds (a positive integer)');
     }
-    const id = `${entry.shell as string}\u0000${entry.command}`;
-    if (seen.has(id)) throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${entry.command}"`);
-    seen.add(id);
+    if (seen.has(canonical)) {
+      throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${shown}" (labels and the order of enum members do not make an entry different)`);
+    }
+    seen.add(canonical);
   }
 }
 
-export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
+export interface PolicyReadOptions {
+  /** The highest body version the reader knows (default POLICY_MAX_VERSION). A lower value simulates an older build. */
+  readsUpTo?: number;
+}
+
+export function assertPolicyBody(value: unknown, options: PolicyReadOptions = {}): asserts value is PolicyBody {
+  const readsUpTo = options.readsUpTo ?? POLICY_MAX_VERSION;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('policy: the body must be an object');
+  const size = JSON.stringify(value).length;
+  if (size > MAX_BODY_CHARS) {
+    throw new Error(`policy: the body is ${size} characters, above the limit of ${MAX_BODY_CHARS} characters (512 KiB): remove entries or peer lists`);
+  }
   const r = value as Record<string, unknown>;
   const fields = ['v', 'target', 'version', 'baseVersion', 'adminKeyId', 'issuedAt', 'notBefore', 'notAfter', 'defaults', 'peers'];
   for (const key of Object.keys(r)) {
@@ -125,7 +195,13 @@ export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
   for (const key of fields) {
     if (!(key in r)) throw new Error(`policy: missing field "${key}"`);
   }
-  if (r.v !== 1) throw new Error(`policy: unsupported version ${String(r.v)} (this build reads version 1)`);
+  if (r.v !== 1 && r.v !== 2) {
+    throw new Error(`policy: unsupported version ${String(r.v)} (this build reads versions 1 to ${readsUpTo}): ${UPDATE_HINT}`);
+  }
+  if (r.v > readsUpTo) {
+    throw new Error(`policy: unsupported version ${String(r.v)} (this reader knows versions 1 to ${readsUpTo}): ${UPDATE_HINT}, then apply the policy again`);
+  }
+  const bodyVersion = r.v;
   if (typeof r.target !== 'string' || !UUID_V4.test(r.target)) throw new Error('policy: target must be a lowercase version 4 UUID');
   if (typeof r.version !== 'number' || !Number.isSafeInteger(r.version) || r.version < 1) throw new Error('policy: version must be a positive integer');
   if (typeof r.baseVersion !== 'number' || !Number.isSafeInteger(r.baseVersion) || r.baseVersion < 0) throw new Error('policy: baseVersion must be a non-negative integer');
@@ -135,13 +211,15 @@ export function assertPolicyBody(value: unknown): asserts value is PolicyBody {
     if (!posInt(r[key])) throw new Error(`policy: ${key} must be epoch seconds`);
   }
   if ((r.notAfter as number) <= (r.notBefore as number)) throw new Error('policy: notAfter must be after notBefore');
-  assertEntries(r.defaults, 'defaults');
+  assertEntries(r.defaults, 'defaults', bodyVersion);
   if (typeof r.peers !== 'object' || r.peers === null || Array.isArray(r.peers)) throw new Error('policy: peers must be an object keyed by peer UUID');
-  const peerIds = Object.keys(r.peers);
-  if (peerIds.length > MAX_PEERS) throw new Error(`policy: more than ${MAX_PEERS} peers`);
-  for (const id of peerIds) {
+  const peerLists = Object.entries(r.peers);
+  if (peerLists.length > MAX_PEERS) {
+    throw new Error(`policy: more than ${MAX_PEERS} peers`);
+  }
+  for (const [id, list] of peerLists) {
     if (!UUID_V4.test(id)) throw new Error(`policy: peer key "${id}" is not a lowercase version 4 UUID`);
-    assertEntries((r.peers as Record<string, unknown>)[id], `peers.${id}`);
+    assertEntries(list, `peers.${id}`, bodyVersion);
   }
 }
 
@@ -236,19 +314,32 @@ export interface CommandRequest {
  * The limits are part of the key: when the admin changes them (a renewal) the counter starts again, and
  * while they stay the same the counter survives new policy versions.
  */
-export function entryKey(scope: string, entry: CommandRequest & { limits?: Limits }): string {
+export function entryKey(scope: string, entry: { shell: Shell; command?: string; template?: string; limits?: Limits }): string {
   const limits = `${entry.limits?.maxCalls ?? ''}\u0000${entry.limits?.expiresAt ?? ''}`;
-  return `${scope}:${createHash('sha256').update(`${entry.shell}\u0000${entry.command}\u0000${limits}`).digest('hex').slice(0, 32)}`;
+  // An exact entry hashes as it always did (its counter survives the upgrade); a typed one hashes its template as signed.
+  const text = entry.template !== undefined ? entry.template : entry.command;
+  return `${scope}:${createHash('sha256').update(`${entry.shell}\u0000${text}\u0000${limits}`).digest('hex').slice(0, 32)}`;
 }
 
 export type Decision =
-  | { allowed: true; entryKey: string; entry: PolicyEntry }
+  | {
+      allowed: true;
+      entryKey: string;
+      entry: PolicyEntry;
+      /** The template of the typed entry that matched, as signed (absent for an exact entry): written in the audit log. */
+      template?: string;
+    }
   | {
       allowed: false;
       reason: 'invalid-request' | 'not-listed' | 'expired' | 'exhausted';
       message: string;
       /** `not-listed` only: the other shells under which the SAME command string is listed for this peer (the message says so). */
       allowedShells?: Shell[];
+      /**
+       * `not-listed` only, LOCAL ONLY (audit log and `machine requests`, never sent to the caller): the closest typed entry, the token
+       * and the rule that failed. It never holds the value.
+       */
+      detail?: string;
     };
 
 /** A command as written in a command line the user can paste: quoted when it holds spaces or quotes (the same rule as `machine run`). */
@@ -260,23 +351,88 @@ export function effectiveList(body: PolicyBody, peerUuid: string): { entries: Po
   return { entries: own ? (body.peers[peerUuid] as PolicyEntry[]) : body.defaults, own };
 }
 
+const templateCache = new Map<string, Template>();
+const TEMPLATE_CACHE_MAX = 2000;
+
+/** The parsed template of a typed entry (cached: a policy is asserted when it is loaded, so this does not fail on a loaded policy). */
+function templateOf(entry: TypedEntry): Template {
+  const key = `${entry.shell}\u0000${entry.template}`;
+  let parsed = templateCache.get(key);
+  if (parsed === undefined) {
+    parsed = parseTemplate(entry.template, entry.shell);
+    if (templateCache.size >= TEMPLATE_CACHE_MAX) {
+      templateCache.clear();
+    }
+    templateCache.set(key, parsed);
+  }
+  return parsed;
+}
+
+/** True when the entry allows exactly this shell and command line (an exact entry: same bytes; a typed one: every token valid). Limits are not looked at. */
+export function entryMatches(entry: PolicyEntry, request: CommandRequest, platform: Platform): boolean {
+  if (entry.shell !== request.shell) {
+    return false;
+  }
+  return isTyped(entry) ? matchTemplate(templateOf(entry), request.command, platform).ok : entry.command === request.command;
+}
+
+/** The typed entry that shares the most leading words with the request (same shell), and why it fails: for the LOCAL log only. */
+function closestDetail(list: PolicyEntry[], request: CommandRequest, platform: Platform): string | undefined {
+  const words = request.command.split(' ');
+  let best: { entry: TypedEntry; shared: number } | undefined;
+  for (const entry of list) {
+    if (!isTyped(entry) || entry.shell !== request.shell) {
+      continue;
+    }
+    const template = templateOf(entry);
+    if (template.tokens[0]?.kind === 'word' && template.tokens[0].text !== words[0]) {
+      continue;
+    }
+    let shared = 0;
+    while (shared < template.tokens.length && shared < words.length && template.tokens[shared]?.kind === 'word' && (template.tokens[shared] as { text: string }).text === words[shared]) shared += 1;
+    if (best === undefined || shared > best.shared) {
+      best = { entry, shared };
+    }
+  }
+  if (best === undefined) {
+    return undefined;
+  }
+  const result = matchTemplate(templateOf(best.entry), request.command, platform);
+  if (result.ok) {
+    return undefined;
+  }
+  return `closest typed entry "${best.entry.template}": ${result.tokenIndex === undefined ? '' : `token ${result.tokenIndex}: `}${result.rule}`;
+}
+
 /**
- * Exact match only (no normalization, no pattern). A peer with its own list uses only that list.
+ * Matches the request against EVERY entry of the list that applies to the peer and takes the first that allows it: an exhausted or expired
+ * entry never shadows a later one. An exact entry compares byte for byte; a typed one checks each value against its type (whitelists).
  * `usage` returns how many calls were already accepted for an entry key; the caller records a use after accepting.
  * `selfName`: the name of this machine, written in the hint of a `not-listed` refusal (absent: `<machine>`).
+ * `platform`: the platform of THIS machine (reserved device names); absent means the strict answer, `windows`.
  */
-export function authorize(body: PolicyBody, peerUuid: string, request: CommandRequest, now: number, usage: (key: string) => number, mode: PolicyMode = 'admin', selfName?: string): Decision {
+export function authorize(
+  body: PolicyBody,
+  peerUuid: string,
+  request: CommandRequest,
+  now: number,
+  usage: (key: string) => number,
+  mode: PolicyMode = 'admin',
+  selfName?: string,
+  platform: Platform = 'windows',
+): Decision {
   const who = mode === 'local' ? 'the owner of this machine (`machine policy allow` here)' : 'the admin';
   if (!SHELLS.includes(request.shell) || typeof request.command !== 'string' || request.command.length === 0 || request.command.length > MAX_COMMAND || !PRINTABLE_ASCII.test(request.command)) {
     return { allowed: false, reason: 'invalid-request', message: 'request refused: the shell must be known and the command must be 1 to 2048 printable ASCII characters' };
   }
   const { entries: list, own } = effectiveList(body, peerUuid);
   const scope = own ? peerUuid : 'default';
-  const entry = list.find(e => e.shell === request.shell && e.command === request.command);
-  if (entry === undefined) {
-    // What this refusal reveals (T-03): only entries whose command string equals the one the caller just sent, in the list that applies to this
-    // very caller, and only their shell names. Never another command of the list: the caller learns nothing it did not already write.
-    const otherShells = [...new Set(list.filter((e) => e.command === request.command && e.shell !== request.shell).map((e) => e.shell))];
+  const matching = list.filter((e) => entryMatches(e, request, platform));
+  if (matching.length === 0) {
+    // What this refusal reveals (T-03): only exact entries whose command string equals the one the caller just sent, in the list that applies
+    // to this very caller, and only their shell names. Never another command of the list, never a template, a bound or a label: the caller
+    // learns nothing it did not already write. A typed entry that did not match says nothing here (the detail stays local).
+    const otherShells = [...new Set(list.filter((e) => !isTyped(e) && e.command === request.command && e.shell !== request.shell).map((e) => e.shell))];
     if (otherShells.length > 0) {
       const name = selfName ?? '<machine>';
       const first = otherShells[0] as Shell;
@@ -287,18 +443,26 @@ export function authorize(body: PolicyBody, peerUuid: string, request: CommandRe
         message: `"${request.command}" is allowed with shell ${otherShells.join(' or ')}, not with ${request.shell}: run machine run ${name} --shell ${first} -- ${commandForHint(request.command)} (or: machine peer connect ${name} --shell ${first} to make it the default)`,
       };
     }
+    const detail = closestDetail(list, request, platform);
     return {
       allowed: false,
       reason: 'not-listed',
       message: `"${request.command}" (shell ${request.shell}) is not allowed for this peer; ${who} must add this exact string to the ${own ? 'peer list' : 'default list'}`,
+      ...(detail === undefined ? {} : { detail }),
     };
   }
-  const key = entryKey(scope, entry);
-  if (entry.limits?.expiresAt !== undefined && now > entry.limits.expiresAt) {
-    return { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask ${who} to renew it` };
+  let firstRefusal: Decision | undefined;
+  for (const entry of matching) {
+    const key = entryKey(scope, entry);
+    if (entry.limits?.expiresAt !== undefined && now > entry.limits.expiresAt) {
+      firstRefusal ??= { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask ${who} to renew it` };
+      continue;
+    }
+    if (entry.limits?.maxCalls !== undefined && usage(key) >= entry.limits.maxCalls) {
+      firstRefusal ??= { allowed: false, reason: 'exhausted', message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask ${who} to renew it` };
+      continue;
+    }
+    return { allowed: true, entryKey: key, entry, ...(isTyped(entry) ? { template: entry.template } : {}) };
   }
-  if (entry.limits?.maxCalls !== undefined && usage(key) >= entry.limits.maxCalls) {
-    return { allowed: false, reason: 'exhausted', message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask ${who} to renew it` };
-  }
-  return { allowed: true, entryKey: key, entry };
+  return firstRefusal as Decision;
 }

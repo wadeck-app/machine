@@ -12,7 +12,8 @@ import { runWake, runWakeInfo } from './cliWake.js';
 import { runRequests } from './cliRequests.js';
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
-import { startMachineDaemon } from './daemonEntry.js';
+import { DEFAULT_PEER_HOST, startMachineDaemon } from './daemonEntry.js';
+import { peerBindNotice } from './peerBindNotice.js';
 import { checkHint } from '@wadeck-app/machine-core';
 import { chooseMachineName, initMachine } from './identity.js';
 import { MachineNameError } from './errors.js';
@@ -42,7 +43,8 @@ Getting started (one command per machine; the name of a machine is the computer 
     machine admin approve            on the admin machine: shows the new machine, asks y/N and the passphrase, prints the
                                      security code (with several pending machines it lists them: pass the id)
   allow a command on a machine (admin machine):
-    machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it)
+    machine admin allow <machine> -- <command>      (--list shows what is allowed, --remove withdraws it; a typed template such as
+                                                    "orch logs <job:name> --tail <n:int(1,500)>" allows values of a type, --times/--for/--until limit it)
     machine allowed <machine>                       what is allowed there per the policy signed here (read-only)
     The shell is part of the exact entry: \`--shell sh\` on a Linux target even from Windows, then \`machine run <machine> --shell sh -- <command>\`
     (or once: \`machine peer connect <machine> --shell sh\`, the default shell of that machine on this one)
@@ -83,7 +85,8 @@ Commands:
                                      warning line, never an error)
   resolve <reference>                show which machine a reference means
   allowed <machine>                  what the machine allows: for a peer the last policy signed on THIS machine (entries per shell,
-                                     version, when it was signed here) and a line saying the installed list is asked there with
+                                     numbered for --remove --index, typed templates tagged [typed], the lifetime of each, the calls
+                                     left on this machine; version, when it was signed here) and a line saying the installed list is asked there with
                                      \`machine policy allow --list\`; for this machine the installed policy and its mode. Read-only, no passphrase
   alias list | set <alias> <ref> | rm <alias>
   run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] -- <command...>
@@ -162,7 +165,7 @@ Commands:
                                      The daemon also checks at start and every 30 minutes (autoUpdate: false in
                                      <config dir>/config.yml turns that off)
   cli rollback                       reinstall the version that preceded the last update, then refresh and restart as update
-  cli self-check [--quiet]           check the install (release version, Node >= 22, platform package pinned by this
+  cli self-check [--quiet]           check the install (release version, Node >= 24, platform package pinned by this
                                      package, writable config dir and launcher folder); run by the updater before it
                                      accepts an update. Exit 1 when a check fails
   cli logs [--follow | -f]           the updater and daemon log of today (<config dir>/logs)
@@ -214,13 +217,27 @@ Administration (enrollment through the relay, or by files):
                                      stolen machine could allow offline guessing, an encrypted copy of the key is on every
                                      machine). --generate, or an empty answer, makes a random one (100 bits, shown once). An optional hint
                                      (Enter = none, or --hint) is shown above every passphrase prompt on every machine
-  admin allow <machine> [--shell cmd|ps|bash|sh] [--out <file>] -- <command...>
-                                     allow ONE exact command on a machine (for every trusted peer): builds the next policy
+  admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--out <file>] -- <command...>
+                                     allow ONE command on a machine (for every trusted peer): builds the next policy
                                      version from the last one signed here, shows the difference, asks y/N and the admin
                                      passphrase, signs, and sends it through the relay inbox (or installs it here when the
                                      machine is this one; --out writes the signed file, the way without an admin relay
-                                     token). Without --shell: this machine's platform, said. --remove withdraws a command,
-                                     --list shows what is allowed. Nothing widens without your signature
+                                     token). Without --shell: this machine's platform, said. The command is exact (compared
+                                     byte for byte) or a TYPED template: fixed words and <label:type> placeholders, a whole
+                                     token or after a flag (--tail=<n:int(1,500)>). Types: int(min,max), duration(min,max)
+                                     (30s 5m 2h 1d, at most 365 days), name (name(dot), name(max=N), at most 128), port,
+                                     hexid(n), uuid, enum(a|b|c). Each type accepts a short whitelist of characters, nothing
+                                     else; a value never starts with "-". Before the passphrase you read the template, the
+                                     lifetime and two accepted and two refused examples (a sanity check, not a safeguard).
+                                     Lifetime: permanent by default, --times N (1 to 10000 calls), --for <duration> (30m, 2h,
+                                     7d, at most 365d) or --until <date> (2027-02-01 = end of that day UTC, or
+                                     2027-02-01T18:00Z; at most 365 days away). Allowing an entry again with other limits
+                                     replaces them ("limits updated"). A typed entry on a program that cannot be made safe
+                                     (sudo, git -c, orch add, ...) is signed with a loud [warn], never refused. A policy with
+                                     a typed entry is version 2: a target that is not up to date refuses it (machine cli
+                                     update there). --remove withdraws an entry by its text (--shell narrows it) or by
+                                     --index <n>, the number \`machine allowed\` shows; several matches are listed, nothing is
+                                     signed. --list shows what is allowed. Nothing widens without your signature
   admin sign-policy <draft.json>     sign a policy draft after showing it (--out <file>, else stdout); with the admin relay
                                      token it is also sent to its target machine through the relay
   admin register <info.json> --out <bundle.json> [--days <n>] [--secret-from <bundle.json>]
@@ -276,10 +293,12 @@ Administration (enrollment through the relay, or by files):
                                      its own list with its own policy key and a LOCAL passphrase (typed twice, asked every time you
                                      change the list, nothing is cached); admin-signed policies are then refused and the list starts
                                      EMPTY. It never enrols a machine and never lifts a revocation: those stay with the admin
-  policy allow [--shell <s>] [--peer <machine>] -- <command>
-                                     mode local: allow ONE exact command on THIS machine (difference, y/N, local passphrase, signed with
-                                     the local key, installed here, no relay); --remove withdraws it; --peer edits the own list of one
-                                     registered peer; --list shows what is allowed (read-only, no passphrase, any mode)
+  policy allow [--shell <s>] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] -- <command>
+                                     mode local: allow ONE command (exact, or a typed template, see admin allow) on THIS machine
+                                     (difference, y/N, local passphrase, signed with the local key, installed here, no relay);
+                                     --remove withdraws it (by text, or --index <n>); --peer edits the own list of one registered
+                                     peer (a new list copies only the PERMANENT default entries and names the ones it leaves out);
+                                     --list shows what is allowed with the calls left (read-only, no passphrase, any mode)
   policy delegate                    mode local: give the list back to the admin (asks the local passphrase). The list becomes EMPTY
                                      until the admin signs one; the local key is archived next to its place
 
@@ -363,6 +382,10 @@ function parse(argv: string[]): Parsed {
     else if (a === '--name') out.name = valueOf('--name');
     else if (a === '--hint') out.hint = valueOf('--hint');
     else if (a === '--peer') out.peer = valueOf('--peer');
+    else if (a === '--times' || a === '--for' || a === '--until' || a === '--index') {
+      // The lifetime of an allowed entry and the number of --remove --index: the value is validated by the command that uses it.
+      out[a.slice(2) as 'times' | 'for' | 'until' | 'index'] = valueOf(a);
+    }
     else if (a === '--out') out.out = valueOf('--out');
     else if (a === '--policy') out.policy = valueOf('--policy');
     else if (a === '--address') {
@@ -480,6 +503,18 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !policyAllow && !(peerConnect && args.remove && !args.list)) {
     return fail('--list and --remove only apply to `machine admin allow` and `machine policy allow` (`machine admin allow <machine> --list`, `machine policy allow --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
   }
+  const adminAllow = command === 'admin' && rest[0] === 'allow';
+  const lifetimeFlags: Array<[string, string | undefined]> = [['--times', args.times], ['--for', args.for], ['--until', args.until]];
+  const lifetimeFlag = lifetimeFlags.find(([, v]) => v !== undefined);
+  if (lifetimeFlag !== undefined && !adminAllow && !policyAllow) {
+    return fail(`${lifetimeFlag[0]} only applies to \`machine admin allow\` and \`machine policy allow\` (the lifetime of an allowed entry: permanent by default, --times N, --for <duration> or --until <date>)`, EXIT.usage);
+  }
+  if (lifetimeFlag !== undefined && (args.list || args.remove)) {
+    return fail(`${lifetimeFlag[0]} sets the lifetime of an entry you allow: it cannot be combined with --list or --remove`, EXIT.usage);
+  }
+  if (args.index !== undefined && !((adminAllow || policyAllow) && args.remove)) {
+    return fail('--index only applies to `machine admin allow <machine> --remove --index <n>` and `machine policy allow --remove --index <n>` (<n> is the number `machine allowed` shows before the entry)', EXIT.usage);
+  }
   if (args.peer !== undefined && !policyAllow && command !== 'requests') {
     return fail('--peer only applies to `machine policy allow` (`machine policy allow --peer <machine> -- <command>` edits the own list of a peer) and to `machine requests --history`', EXIT.usage);
   }
@@ -591,7 +626,11 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         ...(args.peerHost ? { peerHost: args.peerHost } : {}),
         log: (line) => io.stderr(`[machine] ${line}\n`),
       });
-      io.stdout(`[ok] machine daemon: local API 127.0.0.1:${daemon.port}, peers on port ${daemon.peerPort} (config ${configDir})\n`);
+      const bind = peerBindNotice({ host: args.peerHost ? args.peerHost : DEFAULT_PEER_HOST, explicit: Boolean(args.peerHost) });
+      io.stdout(`[ok] machine daemon: local API 127.0.0.1:${daemon.port}, peers on ${bind.host}:${daemon.peerPort} (config ${configDir})\n`);
+      if (bind.warning !== undefined) {
+        io.stderr(`${bind.warning}\n`);
+      }
       await daemon.stopped;
       return EXIT.ok;
     }

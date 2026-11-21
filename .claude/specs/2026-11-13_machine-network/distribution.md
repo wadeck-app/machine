@@ -1,6 +1,6 @@
 # Distribution of signed documents through the relay
 
-**Version:** v0.3 (2026-11-14), client implemented, relay deployed (sections at the end). Closes todos #15, #14c, #14e. The relay stays a dumb store: opaque documents, no trust decision.
+**Version:** v0.4 (2026-11-21), client implemented, relay deployed (sections at the end). Closes todos #15, #14c, #14e. The relay stays a dumb store: opaque documents, no trust decision. v0.4 (decision 78): the payload of EVERY document is sealed to its addressee; see "Sealed payloads" and "Rollout".
 
 ## Problem
 
@@ -11,17 +11,27 @@ After `machine admin approve`, only the admin and the new machine know each othe
 Every document is a JSON object signed by the admin key (domain-separated like registrations), addressed to one machine:
 
 ```json
-{ "body": { "v": 1, "kind": "peer" | "policy" | "revocation", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { } },
-  "signature": "<base64url Ed25519 over the canonical body, admin key>" }
+{ "body": { "v": 2, "kind": "peer" | "policy" | "revocation", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { "sealed": "<base64url>" } },
+  "signature": "<base64url Ed25519 over the canonical body, admin key, domain machine/document/v2>" }
 ```
 
-| kind | payload | Secret content |
-|---|---|---|
-| `peer` | the peer's signed registration and `sealedPairSecret` (sealed to the recipient identity key, context binds both uuids) | pair secret, only sealed |
-| `policy` | the signed policy for `to` (existing format) | none |
-| `revocation` | the signed revocation list (existing format) | none |
+| kind | clear payload (inside `sealed`) |
+|---|---|
+| `peer` | the peer's signed registration, `sealedPairSecret` (sealed again to the recipient, context binds admin, recipient, peer) and `adminUuid` |
+| `policy` | the signed policy for `to` (existing format, body opaque here) |
+| `revocation` | the signed revocation list (existing format) |
 
-The recipient verifies the admin signature against its pinned admin key, `to` equals its own uuid, `expiresAt` not passed, then installs through the existing validators (`importPeer`, `installPolicy`, `installRevocation`). A document that fails is dropped and reported in the audit log, never partly applied and never silent.
+The recipient verifies the admin signature against its pinned admin key, `to` equals its own uuid, `expiresAt` not passed, opens `sealed` with its identity key, then installs through the existing validators (`importPeer`, `installPolicy`, `installRevocation`). A document that fails is dropped and reported in the audit log, never partly applied and never silent.
+
+## Sealed payloads (decision 78)
+
+- Rule: no message between machines is readable by the relay. The signature is the authenticity, the sealing is the confidentiality: `payload.sealed = sealTo(identity key of the addressee, canonical JSON of the real payload, "document-payload:v2:<kind>:<to>:<id>")`. The context makes a sealed payload open only as that type, for that addressee, under that id. The key comes from the registration the admin signed for the addressee.
+- No plaintext mode: `buildDocument` throws without the key of the addressee; `putInboxDocument` refuses any document that is not envelope version 2 with `payload = { sealed }` before any request; the receiver refuses envelope version 1 (below). A policy for a machine the admin holds no registration for is refused, nothing is sent.
+- What the relay still reads of a document: addressee uuid, type tag (`kind`), id, `issuedAt`, `expiresAt`, size, arrival time (`storedAt`). The relay validates only `body.to`, `body.id` and the 16 KiB cap (poc-node `routes.js`); it does not look at `kind` or `payload`, so no change is needed there (tested against the real relay, `relay.test.ts`).
+- Size: the sealed form is a third bigger than the clear one (base64url) plus 61 bytes. The 16 KiB cap now holds about 11 KiB of clear payload; `buildDocument` refuses a bigger one and names the limit. The approval (16 KiB cap in the relay) holds fewer peers for the same reason.
+- Receiver refusals, all audited once (`document-rejected`) and the document deleted so that the admin can send it again: `plaintext` (envelope version 1 signed by the admin key: the message names the update of the admin machine), `cannot-open` (not sealed to this machine key, altered, or sealed for another type, addressee or id). A version 1 document that the admin key did not sign is junk, counted in the `documents-unverified` summary like any forgery.
+- Approval: the approval stored for a candidacy is `{ v: 2, random, sealed }` (`random` is the one the relay already holds); `sealed` holds the whole former approval (registrations, admin key, sealed secrets), context `approval:v2:<candidate uuid>:<random>`. A candidate refuses a clear approval (envelope version 1) with the update of the admin machine as the fix.
+- Not sealed, by need: address records and candidacies (see threat-model.md T-25).
 
 ## Relay resource (agreed with poc-owner)
 
@@ -48,7 +58,7 @@ Ownership: the owner of `uuid` is the token bound to it at approval (relay-api.m
 
 | Threat | Handling |
 |---|---|
-| Relay reads documents | `peer` documents hold only sealed secrets; policies and revocations are not secret |
+| Relay reads documents | every payload is sealed to the addressee (decision 78): the relay reads the type, the addressee, the id, the dates and the size, never a policy, a revocation, a registration or a pair secret. Documents stored in clear by a build before decision 78 stay readable until their addressee deletes them or 30 days pass |
 | Relay drops, delays or replays documents | detected or bounded client side: signatures, `expiresAt`, monotonic versions; dropping delays convergence only (an offline machine keeps its last policy and revocation list) |
 | Stolen machine token floods or reads | machine tokens cannot PUT; reads and deletes only on the owned uuid |
 | Squatting an ownerless inbox | needs the uuid (122-bit random, known to the admin and the machine); the admin can purge with `DELETE /api/machines/{uuid}` |
@@ -58,7 +68,7 @@ Ownership: the owner of `uuid` is the token bound to it at approval (relay-api.m
 
 ## Document format details (implemented, machine-core `document.ts`)
 
-- Domain `machine/document/v1`. Strict shape: unknown fields refused at every level, document at most 16 KiB (checked before the signature), `id` is 22 characters of canonical base64url.
+- Domain `machine/document/v2` (version 1, `machine/document/v1`, is only recognised to be refused). Strict shape: unknown fields refused at every level, document at most 16 KiB (checked before the signature), `id` is 22 characters of canonical base64url, `payload` is exactly `{ sealed }`.
 - Verify order: shape, size, pinned key, signature, addressee (`to`), time window (skew 30 s), payload. A failure before the end of the signature check is reported as `signed: false` (junk or forgery); after it, the failure is a verdict on a document of the admin. `expiresAt - issuedAt` is at most 30 days. A registration or a policy dated slightly ahead of the receiver clock is deferred (kept in the inbox), not rejected; `importPeer` has the same 30 s tolerance as the documents.
 - `peer` payload is `{ registration, sealedPairSecret, adminUuid }`. `adminUuid` (the admin machine, or null) is an addition to the draft: the receiver does not store it otherwise, and the document signature authenticates it.
 - Seal context of the pair secret: `pair-secret:<adminUuid|none>:<to>:<peerUuid>` (sender, addressee, subject). The document id is not in the context: the admin signature covers `id` and the sealed value together.
@@ -69,11 +79,12 @@ Ownership: the owner of `uuid` is the token bound to it at approval (relay-api.m
 
 | Kind | id = first 16 bytes of SHA-256 of | issuedAt / expiresAt |
 |---|---|---|
-| `peer` | `peer:<to>:<to serial>:<about>:<about serial>` | later `validFrom` of both registrations / min(+30 days, both `validTo`) |
-| `policy` | `policy:<target>:<version>:<signature>` | policy `issuedAt` / min(+30 days, `notAfter`) |
-| `revocation` | `revocation:<to>:<signature>` | signing time / +30 days |
+| `peer` | `v2:peer:<to>:<to serial>:<about>:<about serial>` | later `validFrom` of both registrations / min(+30 days, both `validTo`) |
+| `policy` | `v2:policy:<target>:<version>:<signature>` | policy `issuedAt` / min(+30 days, `notAfter`) |
+| `revocation` | `v2:revocation:<to>:<signature>` | signing time / +30 days |
 
-- Ed25519 is deterministic, but sealing is random: a re-PUT of a `peer` document has other bytes, so the relay answers `id_conflict`. The admin treats that as "already delivered" and reports it. `policy` documents are byte-identical on retry. A re-signed revocation has a new signature, hence a new id.
+- The `v2:` prefix keeps the id of a sealed document apart from the id an older build gave the same content in clear: a clear document still waiting in an inbox must not make the relay answer `id_conflict` for the sealed one.
+- Ed25519 is deterministic, but sealing is random (fresh ephemeral key): a re-PUT of ANY document has other bytes, so the relay answers `id_conflict`. The admin treats that as "already delivered" and reports it. A re-signed revocation has a new signature, hence a new id. Consequence: a sealed document that the target could not open is deleted by the target (not remembered), so the admin's resend is stored again.
 - Order: the decision first (approval PUT, local revocation install, policy file), then the documents. A distribution failure never undoes the decision: it is listed per machine and error on stderr, with the exact retry command, and the command exits 1.
 - `machine admin distribute <machine|uuid>` re-sends the peer documents of a trusted machine (both directions, to every other peer), or the revocation of a machine revoked here (by uuid) followed by `DELETE /api/machines/{uuid}`. `machine admin distribute --policy <signed.json>` sends a policy signed earlier. All need the admin relay token and the admin passphrase (same prompt and `--prompt-timeout` as the other admin commands).
 - A 401 or an unreachable relay stops the run at the first document (the error is said once). Without a relay admin token, `admin revoke` and `admin sign-policy` do their local work and print one line saying the others were not told and how to do it.
@@ -90,6 +101,24 @@ Ownership: the owner of `uuid` is the token bound to it at approval (relay-api.m
   - Valid: installed through `importPeer`, `installPolicy`, `installRevocation`; audited (`document-accepted`, kind, id); remembered; DELETEd. The same policy already in force is accepted as `already-installed`.
 - Not owner of the inbox: said once (no backoff), the inbox is tried again every round and recovers by itself.
 - A machine owns its inbox once the admin approved its candidacy (binding at approval). `not_registered` (not approved) and `not_owner` (another token bound) are said once, no backoff; the fix of `not_owner` is `machine join` again and an admin approval (rebind).
+
+## Rollout of sealed documents (decision 78)
+
+What an OLD target (before decision 78, reads envelope version 1 only) does with a sealed document, from `document.ts` and `inboxLoop.ts` of HEAD 7e3cec5:
+
+- The envelope check fails (`document: unsupported version 2`), which is a failure before the signature check: reason `malformed`, `signed: false`.
+- The document is deleted from the inbox, counted, and ONE summary line per round is written (log `inbox: N document(s) failed verification and were deleted (malformed: N)` and the audit event `documents-unverified`). Nothing names the document, its kind or the cause: the owner of that machine sees only the count.
+- The document is lost: the admin must send it again after that machine runs the new build. The admin cannot tell: the relay stores the document (`204`) whatever the target reads, and it reports no version of the target.
+
+Symmetric case, a NEW target and an OLD admin: the admin's clear (version 1) document is refused with the message `... arrived in PLAINTEXT ... run machine cli update there, then machine admin distribute`, audited once with its id, deleted, never installed. A new candidate with an old admin refuses the clear approval the same way (`machine join --resume` after the admin updated).
+
+What the user does, in this order:
+
+1. Run `machine cli update` on EVERY machine (the target first or at the same time as the admin; an old target loses what it reads before it is updated).
+2. On the admin machine, send again what was lost: `machine admin distribute <machine>` for each machine that was approved or renewed meanwhile, `machine admin distribute --policy <signed.json>` for a policy (the record of the last signed policy is `policies/<uuid>.json`), `machine admin distribute <uuid>` for a revocation. A candidate whose approval was refused runs `machine join --resume` and the admin approves again.
+3. A document stored in clear before the update stays readable by the relay until its addressee deletes it (an updated target refuses it and deletes it at its next read) or 30 days pass. Nothing sealed replaces it automatically: step 2 sends the sealed one under another id.
+
+What `machine admin distribute` (and `approve`, `revoke`, `sign-policy`, `allow`) prints when it stored documents: one `[info]` line saying the documents are sealed, that a machine on an older build deletes them unread and counts them as failed verification, `machine cli update` as the fix there, and that this command is run again afterwards. It is printed whenever at least one document was stored, because the admin cannot know the version of the targets. Nothing is printed when nothing was stored.
 
 ## Deployed behaviour (poc-owner, commit 4ff0469)
 

@@ -27,12 +27,18 @@ describe('refusalAllowedLine', () => {
 });
 
 describe('allowedByShell', () => {
-  it('groups the entries per shell, shells in the order of their first entry, limits kept', () => {
+  const NOW = 1_800_000_000;
+  it('groups the entries per shell, shells in the order of their first entry, numbered by their place in the list (the number `--index` takes), lifetime shown', () => {
     const e: PolicyEntry[] = [{ shell: 'sh', command: 'ls' }, { shell: 'cmd', command: 'dir' }, { shell: 'sh', command: 'pwd', limits: { maxCalls: 2 } }];
-    expect(allowedByShell(e, '  ')).toEqual(['  sh', '    "ls"', '    "pwd"  limits {"maxCalls":2}', '  cmd', '    "dir"']);
+    expect(allowedByShell(e, '  ', NOW)).toEqual(['  sh', '    #1 "ls"', '    #3 "pwd"  (2 calls)', '  cmd', '    #2 "dir"']);
+  });
+  it('shows a typed entry with its template as signed and the tag "typed", and the calls left when the counter is known', () => {
+    const e: PolicyEntry[] = [{ shell: 'sh', template: 'orch logs <j:name>', limits: { maxCalls: 5 } }];
+    expect(allowedByShell(e, '', NOW)).toEqual(['sh', '  #1 "orch logs <j:name>"  [typed]  (5 calls)']);
+    expect(allowedByShell(e, '', NOW, () => 2)).toEqual(['sh', '  #1 "orch logs <j:name>"  [typed]  (3 of 5 calls left)']);
   });
   it('nothing: one line that says so', () => {
-    expect(allowedByShell([], '  ')).toEqual(['  (nothing)']);
+    expect(allowedByShell([], '  ', NOW)).toEqual(['  (nothing)']);
   });
 });
 

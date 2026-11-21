@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { appendAudit, GENESIS_HASH } from './audit.js';
 import type { Json } from './canonical.js';
-import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, allowCommand, shellQuote, summarizeRequests, type SummarizeOptions } from './requests.js';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, allowCommand, describeHistory, shellQuote, summarizeRequests, type HistoryEntry, type SummarizeOptions } from './requests.js';
 
 const THINK = '11111111-1111-4111-8111-111111111111';
 const LAPTOP = '22222222-2222-4222-8222-222222222222';
@@ -182,5 +182,26 @@ describe('shellQuote and allowCommand', () => {
   it('builds the admin command, or the local one in mode local', () => {
     expect(allowCommand({ shell: 'sh', command: 'df -h' }, { name: 'laptop', policyMode: 'admin' })).toBe('machine admin allow laptop --shell sh -- "df -h"');
     expect(allowCommand({ shell: 'sh', command: 'ls' }, { name: 'laptop', policyMode: 'local' })).toBe('machine policy allow --shell sh -- ls');
+  });
+});
+
+describe('typed entries in the history (typed-parameters.md): the template that matched, the rule that failed', () => {
+  it('a refusal carries the local detail, and describeHistory prints it', () => {
+    const lines = log([refused(0, THINK, { command: 'orch logs build --tail 9999', detail: 'closest typed entry "orch logs <j:name> --tail <n:int(1,500)>": token 5: int: outside the allowed range' })]);
+    const r = summarizeRequests(lines, base());
+    expect(r.history[0]).toMatchObject({ kind: 'refused', detail: 'closest typed entry "orch logs <j:name> --tail <n:int(1,500)>": token 5: int: outside the allowed range' });
+    expect(describeHistory(r.history[0] as HistoryEntry)).toBe('(not-listed) sh "orch logs build --tail 9999": closest typed entry "orch logs <j:name> --tail <n:int(1,500)>": token 5: int: outside the allowed range');
+  });
+
+  it('an accepted run names the template that let it through', () => {
+    const lines = log([{ ts: iso(0), event: 'accepted', source: THINK, id: 'r1', shell: 'sh', command: 'orch logs build --tail 5', template: 'orch logs <j:name> --tail <n:int(1,500)>' }, { ts: iso(1), event: 'completed', id: 'r1', exitCode: 0, durationMs: 100 }]);
+    const r = summarizeRequests(lines, base());
+    expect(r.history[0]).toMatchObject({ kind: 'run', template: 'orch logs <j:name> --tail <n:int(1,500)>' });
+    expect(describeHistory(r.history[0] as HistoryEntry)).toBe('sh "orch logs build --tail 5" -> exit 0 in 0.1 s [typed: orch logs <j:name> --tail <n:int(1,500)>]');
+  });
+
+  it('an entry without them prints as before', () => {
+    const lines = log([refused(0, THINK)]);
+    expect(describeHistory(summarizeRequests(lines, base()).history[0] as HistoryEntry)).toBe('(not-listed) sh "ls"');
   });
 });

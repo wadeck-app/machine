@@ -28,7 +28,7 @@ export interface SelfCheckResult {
   checks: { name: string; ok: boolean; detail?: string }[];
 }
 
-const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MAJOR = 24;
 
 /** Creates and removes a probe file in `dir`: proves the folder can be created and written, without leaving a trace. */
 function probeWritable(dir: string): void {

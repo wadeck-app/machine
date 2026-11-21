@@ -24,19 +24,69 @@ describe('normalizeRelayUrl', () => {
   it('drops the trailing slash and accepts https and loopback http', () => {
     expect(normalizeRelayUrl('https://relay.example.test/')).toBe('https://relay.example.test');
     expect(normalizeRelayUrl('http://127.0.0.1:8080')).toBe('http://127.0.0.1:8080');
-    expect(normalizeRelayUrl('http://localhost:1')).toBe('http://localhost:1');
+    expect(normalizeRelayUrl('http://[::1]:8080')).toBe('http://[::1]:8080');
+  });
+  it.each(['http://localhost:1', 'http://LOCALHOST:1', 'http://foo.localhost:1'])('refuses the name %s over plain http and says to use 127.0.0.1', (url) => {
+    expect(() => normalizeRelayUrl(url)).toThrow(/http:\/\/127\.0\.0\.1:<port>/);
+  });
+  it('still accepts https on a name', () => {
+    expect(normalizeRelayUrl('https://localhost:1')).toBe('https://localhost:1');
   });
   it.each(['http://example.com', 'ftp://x', 'nonsense', 'https://u:p@example.com', 'https://example.com/?a=1'])('refuses %j with a fix', (url) => {
     expect(() => normalizeRelayUrl(url)).toThrow(/relay URL|credentials|query/);
   });
 });
 
-const GATE_TEXT = (method: string, path: string) =>
+describe('redirects (G5)', () => {
+  it('passes redirect: "error" to fetch, so a redirect never carries the token to another host', async () => {
+    let init: RequestInit | undefined;
+    const client = createRelayClient({
+      baseUrl: 'https://relay.example/',
+      token: 'SECRET-TOKEN',
+      fetch: (async (_u: string, i: RequestInit) => {
+        init = i;
+        return json(200, { machines: [] });
+      }) as unknown as typeof fetch,
+    });
+    await client.getMachines();
+    expect(init?.redirect).toBe('error');
+  });
+
+  it('a refused redirect becomes an actionable error naming the redirect and the relay, without the token', async () => {
+    const client = createRelayClient({
+      baseUrl: 'https://relay.example/',
+      token: 'SECRET-TOKEN',
+      fetch: (async () => {
+        throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+      }) as unknown as typeof fetch,
+    });
+    const redirectRefused = await failure(client.getMachines());
+    expect(redirectRefused.message).toContain('https://relay.example');
+    expect(redirectRefused.message).toMatch(/redirect/i);
+    expect(redirectRefused.message).toMatch(/--relay|relay URL/);
+    expect(redirectRefused.message).not.toContain('SECRET-TOKEN');
+  });
+});
+
+describe('NODE_TLS_REJECT_UNAUTHORIZED=0 (G9)', () => {
+  const make = (env: NodeJS.ProcessEnv) => createRelayClient({ baseUrl: 'https://relay.example/', token: 'SECRET-TOKEN', env, fetch: (async () => json(200, {})) as typeof fetch });
+  it('refuses to create a client, naming the variable, the consequence and the fix', () => {
+    expect(() => make({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toThrow(/NODE_TLS_REJECT_UNAUTHORIZED/);
+    expect(() => make({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toThrow(/disables certificate validation for the whole process/);
+    expect(() => make({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toThrow(/unset/);
+    expect(() => make({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).not.toThrow(/SECRET-TOKEN/);
+  });
+  it.each([undefined, '1', ''])('accepts the value %j', (value) => {
+    expect(() => make(value === undefined ? {} : { NODE_TLS_REJECT_UNAUTHORIZED: value })).not.toThrow();
+  });
+});
+
+const GATE_TEXT =(method: string, path: string) =>
   `This token is limited to the scope machine and cannot call ${method} ${path}: that endpoint needs a full-access token. Use a token of the right scope, or ask the person who runs the relay for a full-access token.`;
 
 describe('the real scope gate answer (403, free text in "error", no code)', () => {
   const ID = 'c'.repeat(22);
-  const doc = { body: { id: ID, to: UUID } } as never;
+  const doc = { body: { v: 2, kind: 'peer', id: ID, to: UUID, payload: { sealed: 'AAAA' } } } as never;
   const calls: Array<[string, (c: ReturnType<typeof createRelayClient>) => Promise<unknown>, string, string]> = [
     ['list candidacies', (c) => c.listCandidacies(), 'GET', '/api/machines/candidacies'],
     ['decide', (c) => c.decideCandidacy(ID, { decision: 'reject' } as never), 'PUT', `/api/machines/candidacies/${ID}/decision`],
@@ -56,6 +106,36 @@ describe('the real scope gate answer (403, free text in "error", no code)', () =
     const e = await failure(clientWith(() => json(403, { success: false, error: 'not_owner', message: 'no' })).putInboxDocument(UUID, doc));
     expect(e.message).toMatch(/does not own the inbox/);
     expect(e.message).not.toMatch(/machine admin login/);
+  });
+  describe('putInboxDocument never sends a clear document (decision 78): refused here, before any request, whoever built it', () => {
+    const sentRequests: string[] = [];
+    const recording = () => createRelayClient({ baseUrl: 'https://relay.example/', token: 'SECRET-TOKEN', fetch: (async (url: string) => (sentRequests.push(String(url)), json(204, undefined))) as unknown as typeof fetch });
+    const refusal = async (promise: Promise<unknown>): Promise<Error> => {
+      try {
+        await promise;
+      } catch (e) {
+        return e as Error;
+      }
+      throw new Error('expected the document to be refused');
+    };
+    const clear = { body: { v: 1, kind: 'policy', id: ID, to: UUID, issuedAt: 1, expiresAt: 2, payload: { body: { defaults: [{ shell: 'sh', command: 'echo secret' }] }, signature: 's' } }, signature: 's' } as never;
+
+    it('a version 1 document (clear payload) is refused with the cause and the fix, and nothing is sent', async () => {
+      sentRequests.length = 0;
+      const clearRefused = await refusal(recording().putInboxDocument(UUID, clear));
+      expect(clearRefused.message).toMatch(/PLAINTEXT|plaintext/);
+      expect(clearRefused.message).toMatch(/machine cli update/);
+      expect(clearRefused.message).not.toContain('echo secret');
+      expect(sentRequests).toEqual([]);
+    });
+
+    it('a version 2 document whose payload is not exactly one sealed blob is refused too', async () => {
+      sentRequests.length = 0;
+      const notSealed = { body: { v: 2, kind: 'policy', id: ID, to: UUID, payload: { defaults: [] } }, signature: 's' } as never;
+      const notSealedRefused = await refusal(recording().putInboxDocument(UUID, notSealed));
+      expect(notSealedRefused.message).toMatch(/sealed/);
+      expect(sentRequests).toEqual([]);
+    });
   });
   it('the same free text on a path a machine may call is not the admin advice', async () => {
     const e = await failure(clientWith(() => json(403, { success: false, error: GATE_TEXT('GET', '/api/whoami') })).whoami());
@@ -608,7 +688,7 @@ describe('inbox (documents distributed through the relay)', () => {
   });
   const TO = '11111111-1111-4111-8111-111111111111';
   const idOf = (n: number) => `${String(n).padStart(2, '0')}${'A'.repeat(20)}`;
-  const doc = (n: number, to = TO) => ({ body: { v: 1, kind: 'peer', to, id: idOf(n), issuedAt: 1, expiresAt: 2, payload: {} }, signature: 's' });
+  const doc = (n: number, to = TO) => ({ body: { v: 2, kind: 'peer', to, id: idOf(n), issuedAt: 1, expiresAt: 2, payload: { sealed: 'AAAA' } }, signature: 's' });
   const clients = async (options: Parameters<typeof startFakeRelay>[0] = {}) => {
     relay = await startFakeRelay(options);
     return { relay, machine: createRelayClient({ baseUrl: relay.url, token: relay.token }), admin: createRelayClient({ baseUrl: relay.url, token: relay.adminToken }) };
