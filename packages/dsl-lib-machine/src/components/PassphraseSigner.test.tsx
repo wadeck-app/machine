@@ -45,6 +45,19 @@ async function unlock(passphrase = PASSPHRASE) {
 }
 
 describe('PassphraseSigner', () => {
+  // User report 2026-11-21: the browser autofilled this field like the app-core PIN field (two anonymous password inputs with autocomplete="off",
+  // which Chrome ignores for passwords). The field must be distinguishable and say "not a saved login".
+  it('the passphrase field cannot be taken for a saved login: own name and id, new-password, password-manager opt-outs', () => {
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
+    const field = screen.getByLabelText('Admin passphrase');
+    expect(field).toHaveAttribute('name', 'machine-admin-passphrase');
+    expect(field).toHaveAttribute('id', 'machine-admin-passphrase');
+    expect(field).toHaveAttribute('autocomplete', 'new-password');
+    expect(field).toHaveAttribute('data-1p-ignore');
+    expect(field).toHaveAttribute('data-lpignore', 'true');
+    expect(field).toHaveAttribute('data-bwignore', 'true');
+  });
+
   it('starts locked: asks for the passphrase and offers no signing', () => {
     render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
     expect(screen.getByLabelText('Admin passphrase')).toHaveAttribute('type', 'password');

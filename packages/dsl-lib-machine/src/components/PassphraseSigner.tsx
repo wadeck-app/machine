@@ -126,7 +126,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
           <label className="flex flex-col gap-1 text-sm">
             Admin passphrase
             {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}
-            <input ref={passphraseInput} type="password" autoComplete="off" className={INPUT} />
+            <input ref={passphraseInput} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase" autoComplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore="true" className={INPUT} />
           </label>
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />

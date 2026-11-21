@@ -106,7 +106,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
             <label className="flex flex-col gap-1 text-sm">
               Admin passphrase
               {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
-              <input ref={passphrase} type="password" autoComplete="off" disabled={busy} className={INPUT} />
+              <input ref={passphrase} type="password" name="machine-admin-passphrase-confirm" id="machine-admin-passphrase-confirm" autoComplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore="true" disabled={busy} className={INPUT} />
             </label>
           )}
           {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
