@@ -118,6 +118,8 @@ export interface HoldDeps {
   capSeconds?: number;
   /** Poll interval of a hold (default 1 s): the delay between an Allow and the run is at most this. */
   pollMs?: number;
+  /** Called after a hold started and after one ended (the table already changed): the inbox poll cadence follows. Must not throw; if it does it is reported and the request goes on. */
+  onChange?: () => void;
 }
 
 export interface RequestsListDeps {
@@ -475,10 +477,12 @@ class PeerService {
       this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
       return { kind: 'answer', answer: this.refuse(session, id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); the request was not held. Fix the disk or permissions of the machine's audit log`) };
     }
+    this.holdChanged(holds);
     // Best effort and never awaited: the recipients are told once the request is safely held.
     this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline }));
     const finish = (outcome: string, extra: Record<string, Json> = {}): void => {
       table.end(id);
+      this.holdChanged(holds);
       this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
       this.notify((n) => n.ended(id, outcome as NoticeOutcome));
     };
@@ -556,6 +560,14 @@ class PeerService {
         table.end(id);
       }
       carrier.watch = watch;
+    }
+  }
+
+  private holdChanged(holds: HoldDeps): void {
+    try {
+      holds.onChange?.();
+    } catch (e) {
+      this.problem(`cannot tell the inbox loop that a hold changed (${(e as Error).message}); the request itself is not affected`);
     }
   }
 

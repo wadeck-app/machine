@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FAST_POLL_MS, FAST_POLL_WINDOW_MS, noPolicyMessage, pendingPolicyNote, pollDelayMs } from './noPolicy.js';
+import { FAST_POLL_MS, HOLD_POLL_MS,FAST_POLL_WINDOW_MS, noPolicyMessage, pendingPolicyNote, pollDelayMs } from './noPolicy.js';
 
 describe('noPolicyMessage (target side, decision 70)', () => {
   it('mode admin: says the policy may just be in transit, and names the admin command', () => {
@@ -87,5 +87,33 @@ describe('pollDelayMs (inbox cadence, decision 70)', () => {
 
   it('never slower than the normal cadence when that one is already faster', () => {
     expect(pollDelayMs({ normalMs: 5_000, failures: 0, needsPolicy: true, elapsedMs: 0 })).toBe(5_000);
+  });
+
+  describe('while a request is held (hold-for-approval)', () => {
+    it('documented constant', () => {
+      expect(HOLD_POLL_MS).toBe(5_000);
+    });
+
+    it('5 s while a hold is active, with no time window, whatever the elapsed time', () => {
+      expect(pollDelayMs({ normalMs: normal, failures: 0, needsPolicy: false, elapsedMs: 0, holdActive: true })).toBe(5_000);
+      expect(pollDelayMs({ normalMs: normal, failures: 0, needsPolicy: false, elapsedMs: 10_000_000, holdActive: true })).toBe(5_000);
+    });
+
+    it('wins over the 10 s policy cadence', () => {
+      expect(pollDelayMs({ normalMs: normal, failures: 0, needsPolicy: true, elapsedMs: 0, holdActive: true })).toBe(5_000);
+    });
+
+    it('normal when the hold is over or absent', () => {
+      expect(pollDelayMs({ normalMs: normal, failures: 0, needsPolicy: false, elapsedMs: 0, holdActive: false })).toBe(60_000);
+    });
+
+    it('a failing relay still backs off: an active hold never shortens the backoff', () => {
+      expect(pollDelayMs({ normalMs: normal, failures: 1, needsPolicy: false, elapsedMs: 0, holdActive: true })).toBe(120_000);
+      expect(pollDelayMs({ normalMs: normal, failures: 10, needsPolicy: false, elapsedMs: 0, holdActive: true })).toBe(600_000);
+    });
+
+    it('never slower than the normal cadence when that one is already faster', () => {
+      expect(pollDelayMs({ normalMs: 2_000, failures: 0, needsPolicy: false, elapsedMs: 0, holdActive: true })).toBe(2_000);
+    });
   });
 });

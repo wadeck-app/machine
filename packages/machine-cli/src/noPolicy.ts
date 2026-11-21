@@ -12,6 +12,8 @@ export const NORMAL_POLL_MS = 60_000;
 export const FAST_POLL_MS = 10_000;
 /** The fast cadence is bounded: from the start of the daemon, at most this long. After it, the normal cadence (a machine left without policy does not poll fast for ever). */
 export const FAST_POLL_WINDOW_MS = 300_000;
+/** Cadence while this machine HOLDS a request for approval (hold-for-approval.md): an Allow sent by the admin is installed within about 5 s. No time window: it lasts as long as a hold does (a hold has its own deadline). */
+export const HOLD_POLL_MS = 5_000;
 export const MAX_BACKOFF_MS = 600_000;
 /** A policy signed here more recently than this and not installed yet is "in transit"; an older one is not explained by the relay delay. */
 export const PENDING_NOTE_MAX_AGE_SECONDS = 900;
@@ -59,11 +61,16 @@ export interface PollDelayInput {
   needsPolicy: boolean;
   /** Time since the daemon started (the window of the fast cadence). */
   elapsedMs: number;
+  /** At least one request is held on this machine, waiting for an Allow. */
+  holdActive?: boolean;
 }
 
 /** Delay before the next round. A failing relay always backs off (doubling, capped), whatever is needed. */
 export function pollDelayMs(i: PollDelayInput): number {
   if (i.failures > 0) return Math.min(i.normalMs * 2 ** i.failures, MAX_BACKOFF_MS);
+  if (i.holdActive === true) {
+    return Math.min(HOLD_POLL_MS, i.normalMs);
+  }
   if (i.needsPolicy && i.elapsedMs < FAST_POLL_WINDOW_MS) return Math.min(FAST_POLL_MS, i.normalMs);
   return i.normalMs;
 }

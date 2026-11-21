@@ -942,6 +942,86 @@ describe('the inbox loop: the relay misbehaves or is not ready', () => {
       expect(timer.delays).toEqual([60_000]);
     });
 
+    describe('holdActive (a request is held on this machine)', () => {
+      function holdLoop(holdActive: () => boolean) {
+        const timer = fakeTimer();
+        const loop = startInboxLoop({
+          configDir: dirOf('laptop'),
+          self: readMachine(dirOf('laptop')),
+          client: createRelayClient({ baseUrl: relay.url, token: relay.token }),
+          audit: new FileAuditLog(join(dirOf('laptop'), 'audit.log')),
+          now: () => nowSeconds(),
+          log: (line) => logs.push(line),
+          timer,
+          holdActive,
+        });
+        loops.push(loop);
+        return { loop, timer };
+      }
+      const settle = () => new Promise((r) => setTimeout(r, 50));
+
+      it('5 s while a hold is active, back to 60 s once it ended', async () => {
+        let held = true;
+        const { loop, timer } = holdLoop(() => held);
+        await loop.ready;
+        expect(timer.delays).toEqual([5_000]);
+        timer.fire();
+        await settle();
+        expect(timer.delays).toEqual([5_000, 5_000]);
+        held = false;
+        timer.fire();
+        await settle();
+        expect(timer.delays).toEqual([5_000, 5_000, 60_000]);
+      });
+
+      it('a hold that starts while the 60 s timer sleeps brings the next round to 5 s (holdChanged), no round is run by it', async () => {
+        let held = false;
+        const { loop, timer } = holdLoop(() => held);
+        await loop.ready;
+        expect(timer.delays).toEqual([60_000]);
+        held = true;
+        loop.holdChanged();
+        // The sleeping timer was replaced, not added to: one 5 s timer is pending.
+        expect(timer.delays).toEqual([60_000, 5_000]);
+        expect(timer.pending()).toBe(1);
+      });
+
+      it('holdChanged with nothing to change keeps the pending timer (a hold that ends does not shorten anything)', async () => {
+        const { loop, timer } = holdLoop(() => false);
+        await loop.ready;
+        loop.holdChanged();
+        expect(timer.delays).toEqual([60_000, 60_000]);
+        expect(timer.pending()).toBe(1);
+      });
+
+      it('60 s when no hold is active', async () => {
+        const { loop, timer } = holdLoop(() => false);
+        await loop.ready;
+        expect(timer.delays).toEqual([60_000]);
+      });
+
+      it('a failing relay backs off even while a hold is active, and the 5 s cadence is back after the next success', async () => {
+        const { loop, timer } = holdLoop(() => true);
+        relay.force(`/api/machines/${uuidOf('laptop')}/heartbeat`, 500, { success: false, error: 'store_unavailable', message: 'down' }, {}, 'POST');
+        await loop.ready;
+        expect(timer.delays).toEqual([120_000]);
+        timer.fire();
+        await settle();
+        expect(timer.delays).toEqual([120_000, 5_000]);
+      });
+
+      it('a holdActive that throws: normal cadence, said once', async () => {
+        const { loop, timer } = holdLoop(() => {
+          throw new Error('hold table broken');
+        });
+        await loop.ready;
+        timer.fire();
+        await settle();
+        expect(timer.delays).toEqual([60_000, 60_000]);
+        expect(logs.filter((l) => /cannot tell whether a request is held \(hold table broken\)/.test(l))).toHaveLength(1);
+      });
+    });
+
     it('a needsPolicy that throws: normal cadence, said once', async () => {
       const { loop, timer } = fastLoop(() => {
         throw new Error('policy.json unreadable');

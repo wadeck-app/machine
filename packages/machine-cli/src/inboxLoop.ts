@@ -57,6 +57,11 @@ export interface InboxLoopOptions {
    * its start, then at the normal cadence. Absent: always the normal cadence. It must not throw; if it does, the normal cadence is used and the error is logged once.
    */
   needsPolicy?: () => boolean;
+  /**
+   * True while this machine holds at least one request for approval: the loop then runs every HOLD_POLL_MS (5 s) instead of the normal cadence, so an Allow
+   * is installed quickly. Only while the previous round succeeded (a failing relay backs off as always). It must not throw; if it does, the normal cadence is used and the error is logged once.
+   */
+  holdActive?: () => boolean;
   timer?: InboxTimer;
   /** Asked in every round, right AFTER the heartbeat: the address record is published by the same timer (one heartbeat, not two). It must not throw; if it does, the round goes on. */
   publisher?: { tick(): Promise<void> };
@@ -73,6 +78,11 @@ export interface InboxLoop {
   ready: Promise<void>;
   /** One round now, after the one in flight (tests, and a way for a command to ask for an immediate check). */
   runOnce(): Promise<void>;
+  /**
+   * A hold started or ended: the sleeping timer is replaced by one with the cadence that now applies (5 s while a request is held), so a hold that
+   * starts just after a round does not wait out a 60 s sleep. Runs no round itself; a round in flight picks the cadence when it ends.
+   */
+  holdChanged(): void;
   /** Cancels the timer. A round in flight finishes. */
   stop(): void;
 }
@@ -539,11 +549,25 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
         notice('needs-policy', `inbox: cannot tell whether a policy is installed (${safe((e as Error).message)}): the normal cadence is used`);
       }
     }
-    const delay = pollDelayMs({ normalMs: heartbeatMs, failures, needsPolicy, elapsedMs: (o.now() - startedAt) * 1000 });
+    let holdActive = false;
+    if (o.holdActive !== undefined && failures === 0) {
+      try {
+        holdActive = o.holdActive();
+      } catch (e) {
+        notice('hold-active', `inbox: cannot tell whether a request is held (${safe((e as Error).message)}): the normal cadence is used`);
+      }
+    }
+    const delay = pollDelayMs({ normalMs: heartbeatMs, failures, needsPolicy, elapsedMs: (o.now() - startedAt) * 1000, holdActive });
     handle = timer.set(() => void step(), delay);
   };
+  let inRound = false;
   const step = async (): Promise<void> => {
-    await round();
+    inRound = true;
+    try {
+      await round();
+    } finally {
+      inRound = false;
+    }
     schedule();
   };
 
@@ -551,6 +575,13 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
   return {
     ready,
     runOnce: round,
+    holdChanged: () => {
+      if (stopped || inRound || handle === undefined) {
+        return;
+      }
+      timer.clear(handle);
+      schedule();
+    },
     stop: () => {
       stopped = true;
       if (handle !== undefined) timer.clear(handle);

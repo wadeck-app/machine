@@ -32,6 +32,7 @@ async function world(over: { remoteDeny?: Recipients | 'absent'; auditFails?: bo
     throw new Error(applied.message);
   }
   const table = new HoldTable();
+  const holdChanges: number[] = [];
   const state = { auditFails: over.auditFails === true };
   const deps: PeerServiceDeps = {
     self: { uuid: B, name: 'b', createdAt: '', identity: b },
@@ -49,7 +50,7 @@ async function world(over: { remoteDeny?: Recipients | 'absent'; auditFails?: bo
     now: () => now.value,
     run: async () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false, truncated: false, outputNotUtf8: false, durationMs: 1 }),
     onProblem: (m) => void problems.push(m),
-    holds: { table, pollMs: 3 },
+    holds: { table, pollMs: 3, onChange: () => void holdChanges.push(table.list().length) },
     ...(over.remoteDeny === 'absent' ? {} : { remoteDeny: { recipients: over.remoteDeny ?? (() => [A]) } }),
   };
   const listener = await startPeerListener(deps, { host: '127.0.0.1', port: 0 });
@@ -78,7 +79,7 @@ async function world(over: { remoteDeny?: Recipients | 'absent'; auditFails?: bo
     }
     return { id: request.id, answer };
   };
-  return { audit, problems, now, state, exchange, holdOne, table };
+  return { audit, problems, now, state, exchange, holdOne, table, holdChanges };
 }
 
 describe('request-deny: a notice recipient refuses a held request (decision 85)', () => {
@@ -91,6 +92,15 @@ describe('request-deny: a notice recipient refuses a held request (decision 85)'
     expect(refused).toMatchObject({ type: 'refused', reason: 'denied', message: expect.stringContaining('not now') });
     const line = w.audit.find((e) => e['event'] === 'request-denied-remotely');
     expect(line).toMatchObject({ source: A, by: A, byName: 'a', id: held.id, note: 'not now' });
+  });
+
+  it('tells the daemon when a hold starts and when it ends (the inbox poll speeds up and slows down)', async () => {
+    const w = await world();
+    const held = await w.holdOne();
+    expect(w.holdChanges).toEqual([1]);
+    await w.exchange({ type: 'request-deny', id: held.id });
+    await held.answer;
+    expect(w.holdChanges).toEqual([1, 0]);
   });
 
   it('accepts the 8-character id that `machine requests` prints', async () => {
