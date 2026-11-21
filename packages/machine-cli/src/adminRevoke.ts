@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { keyId, mergeRevocations, resolveMachineRef, signRevocation } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { adminMachineUuid, adminRelayAccess, distributeRevocation, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
+import { directDeliveryFor } from './directDelivery.js';
 import { PromptTimeoutError } from './prompt.js';
 import { loadNetwork, registeredSerial, signAndInstallRevocation } from './network.js';
 import type { RelayClient } from './relayClient.js';
@@ -90,7 +91,7 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
   let report: DistributionReport;
   let formatted: FormattedDistribution;
   try {
-    report = await distributeRevocation(configDir, peer.peerId, peer.name, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir });
+    report = await distributeRevocation(configDir, peer.peerId, peer.name, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) });
     formatted = formatDistribution(report, 'the revocation', retryDistribution(peer.peerId));
   } catch (e) {
     report = { delivered: 0, alreadyThere: 0, failures: [{ toUuid: peer.peerId, toName: peer.name, kind: 'machine', id: undefined, message: (e as Error).message }], aborted: false, machines: 0 };

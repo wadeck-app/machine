@@ -21,6 +21,7 @@ import { adminKeyFile, readAdminPin } from './admin.js';
 import { policyRecordFile, readPolicyRecord, recordSignedPolicy } from './adminAllow.js';
 import { adminRelayError } from './adminRelay.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
+import { describeAttempt, describeDirect, type DirectCode, type DirectDelivery } from './directDelivery.js';
 import { adminRelayAccess } from './distribute.js';
 import { exportMachineInfo, installPolicy, loadNetwork } from './network.js';
 import { recordNoticeSent } from './noticeRecipientsSent.js';
@@ -211,8 +212,29 @@ export function allowContext(configDir: string, payload: unknown, now: number): 
 }
 
 export type SubmitAnswer =
-  | { ok: true; target: { uuid: string; name: string }; version: number; delivery: 'installed' | 'inbox'; /** The same policy was already installed here, or the relay already held the document. */ alreadyThere?: true; /** The list of notice recipients, sent with the policy to another machine. `failed`: the policy went through, the list did not (`noticeRecipientsMessage` says how to send it). */ noticeRecipients?: 'sent' | 'already-there' | 'failed'; noticeRecipientsMessage?: string }
+  | {
+      ok: true;
+      target: { uuid: string; name: string };
+      version: number;
+      /** `installed`: this machine is the target. `direct`: the target took the document over the peer channel (decision 86). `inbox`: stored in the relay inbox. */
+      delivery: 'installed' | 'direct' | 'inbox';
+      /** How the delivery reads for a person, in the words of the CLI (the page shows it as it is): the success colour for an installation, the warning colour for the relay inbox. */
+      deliveryText?: { tone: 'success' | 'warning'; text: string };
+      /** The same policy was already installed here, or the target already had it (direct), or the relay already held the document. */
+      alreadyThere?: true;
+      /** `delivery` direct: what the target answered and how long it took. */
+      direct?: { outcome: 'installed' | 'already-installed'; ms: number };
+      /** `delivery` inbox after a direct attempt: why the target was not reached directly. Absent when no direct attempt was made. */
+      fallback?: { code: DirectCode; cause: string };
+      /** The list of notice recipients, sent with the policy to another machine. `failed`: the policy went through, the list did not (`noticeRecipientsMessage` says how to send it). */
+      noticeRecipients?: 'sent' | 'already-there' | 'failed';
+      noticeRecipientsPath?: 'direct' | 'inbox';
+      noticeRecipientsMessage?: string;
+    }
   | (Failure & { recorded?: true });
+
+const installedText = (name: string): { tone: 'success'; text: string } => ({ tone: 'success', text: `Installed on ${name} (this machine)` });
+const inboxText = (name: string): string => `Stored in the relay inbox of ${name}: it installs it at its next poll (within 60 s, or 5 s while it holds a request)`;
 
 const BAD_PAYLOAD = 'expected {"policy": <signed policy>, "document": <signed inbox document, for another machine>, "noticeRecipients": {"signed": <signed list>, "document": <signed inbox document>}}: the page signs them in the browser';
 
@@ -220,7 +242,7 @@ const BAD_PAYLOAD = 'expected {"policy": <signed policy>, "document": <signed in
  * The signed policy (and, for another machine, the signed inbox document) the page produced. Verified against the pinned admin key and the
  * current version, then stored and delivered like `machine admin allow`. `client` is for tests.
  */
-export async function submitPolicy(configDir: string, payload: unknown, now: number, options: { client?: RelayClient } = {}): Promise<SubmitAnswer> {
+export async function submitPolicy(configDir: string, payload: unknown, now: number, options: { client?: RelayClient; /** Tries the peer channel before the inbox (decision 86). Absent: the inbox only. */ direct?: DirectDelivery } = {}): Promise<SubmitAnswer> {
   const p = typeof payload === 'object' && payload !== null ? (payload as { policy?: unknown; document?: unknown; noticeRecipients?: unknown }) : {};
   const policy = p.policy as SignedPolicy | undefined;
   if (typeof policy !== 'object' || policy === null || typeof policy.body !== 'object' || policy.body === null || typeof policy.signature !== 'string') return fail('bad-payload', BAD_PAYLOAD);
@@ -255,7 +277,7 @@ export async function submitPolicy(configDir: string, payload: unknown, now: num
   const currentVersion = base.current?.body.version ?? 0;
   // The very policy that is on record: a retry (the relay failed the first time, or the page was clicked twice). It is not a stale edit.
   const isRetry = base.current !== undefined && canonicalize(base.current as unknown as Json) === canonicalize(policy as unknown as Json);
-  if (isRetry && toSelf) return { ok: true, target, version: policy.body.version, delivery: 'installed', alreadyThere: true };
+  if (isRetry && toSelf) return { ok: true, target, version: policy.body.version, delivery: 'installed', alreadyThere: true, deliveryText: installedText(target.name) };
   if (!isRetry && policy.body.baseVersion !== currentVersion) {
     return fail('stale-base', `the policy of "${target.name}" is at version ${currentVersion} (${base.source}), and this one was edited from version ${policy.body.baseVersion}: reload the page and allow it again. Nothing was stored or sent`);
   }
@@ -288,17 +310,35 @@ export async function submitPolicy(configDir: string, payload: unknown, now: num
       return fail('refused', (e as Error).message);
     }
     recordSignedPolicy(configDir, policy);
-    return { ok: true, target, version: policy.body.version, delivery: 'installed' };
+    return { ok: true, target, version: policy.body.version, delivery: 'installed', deliveryText: installedText(target.name) };
   }
 
   // The record first, like the CLI: the next edit starts from it, and `machine admin distribute --policy` can resend it.
   recordSignedPolicy(configDir, policy);
+  // Direct delivery first (decision 86): the very same sealed document, straight to the target. Only an acknowledged installation counts.
+  const attempt = options.direct === undefined ? undefined : await options.direct(target, document as SignedDocument);
+  if (attempt?.ok === true) {
+    const answer = {
+      ok: true as const,
+      target,
+      version: policy.body.version,
+      delivery: 'direct' as const,
+      direct: { outcome: attempt.outcome, ms: attempt.ms },
+      deliveryText: { tone: 'success' as const, text: describeDirect(target.name, attempt.outcome, attempt.ms) },
+      ...(attempt.outcome === 'already-installed' ? { alreadyThere: true as const } : {}),
+    };
+    return list === undefined ? answer : { ...answer, ...(await deliverList(configDir, (access as NonNullable<typeof access>).client, target, list, pin.adminPublicKey, now, options.direct)) };
+  }
+  const fallback = {
+    ...(attempt === undefined || attempt.ok ? {} : { fallback: { code: attempt.code, cause: attempt.cause } }),
+    deliveryText: { tone: 'warning' as const, text: attempt === undefined || attempt.ok ? inboxText(target.name) : describeAttempt(target.name, attempt) },
+  };
   try {
     await (access as NonNullable<typeof access>).client.putInboxDocument(target.uuid, document as SignedDocument);
-    const answer = { ok: true as const, target, version: policy.body.version, delivery: 'inbox' as const };
-    return list === undefined ? answer : { ...answer, ...(await deliverList(configDir, (access as NonNullable<typeof access>).client, target, list, pin.adminPublicKey, now)) };
+    const answer = { ok: true as const, target, version: policy.body.version, delivery: 'inbox' as const, ...fallback };
+    return list === undefined ? answer : { ...answer, ...(await deliverList(configDir, (access as NonNullable<typeof access>).client, target, list, pin.adminPublicKey, now, options.direct)) };
   } catch (raw) {
-    if (raw instanceof RelayError && raw.code === 'id_conflict') return { ok: true, target, version: policy.body.version, delivery: 'inbox', alreadyThere: true };
+    if (raw instanceof RelayError && raw.code === 'id_conflict') return { ok: true, target, version: policy.body.version, delivery: 'inbox', alreadyThere: true, ...fallback };
     const message = (adminRelayError(raw) as Error).message;
     return { ...fail('relay-error', `the policy is signed and recorded (version ${policy.body.version}) but the relay did not store it for "${target.name}": ${message}. Run \`machine admin distribute --policy ${policyRecordFile(configDir, target.uuid)}\` to send it again; it is safe to run again`), recorded: true };
   }
@@ -372,7 +412,15 @@ function checkNoticeRecipients(configDir: string, raw: { signed: unknown; docume
  * After the policy went through: keep the list as the list of this admin machine (replace-newer), send it, record what was sent. A failure here never undoes
  * the policy: it is said, with the command that sends the list again.
  */
-async function deliverList(configDir: string, client: RelayClient, target: { uuid: string; name: string }, list: CheckedList, adminPublicKey: string, now: number): Promise<{ noticeRecipients: 'sent' | 'already-there' | 'failed'; noticeRecipientsMessage?: string }> {
+async function deliverList(
+  configDir: string,
+  client: RelayClient,
+  target: { uuid: string; name: string },
+  list: CheckedList,
+  adminPublicKey: string,
+  now: number,
+  direct?: DirectDelivery,
+): Promise<{ noticeRecipients: 'sent' | 'already-there' | 'failed'; noticeRecipientsPath?: 'direct' | 'inbox'; noticeRecipientsMessage?: string }> {
   const again = 'machine admin notify-to <machines that receive the notices>';
   const failed = (message: string): { noticeRecipients: 'failed'; noticeRecipientsMessage: string } => ({
     noticeRecipients: 'failed',
@@ -385,13 +433,19 @@ async function deliverList(configDir: string, client: RelayClient, target: { uui
   }
   let outcome: 'sent' | 'already-there' = 'sent';
   let problem: string | undefined;
-  try {
-    await client.putInboxDocument(target.uuid, list.document);
-  } catch (raw) {
-    if (raw instanceof RelayError && raw.code === 'id_conflict') {
-      outcome = 'already-there';
-    } else {
-      problem = `the relay did not store the list for "${target.name}": ${(adminRelayError(raw) as Error).message}`;
+  let path: 'direct' | 'inbox' = 'inbox';
+  const attempt = direct === undefined ? undefined : await direct(target, list.document);
+  if (attempt?.ok === true) {
+    path = 'direct';
+  } else {
+    try {
+      await client.putInboxDocument(target.uuid, list.document);
+    } catch (raw) {
+      if (raw instanceof RelayError && raw.code === 'id_conflict') {
+        outcome = 'already-there';
+      } else {
+        problem = `the relay did not store the list for "${target.name}": ${(adminRelayError(raw) as Error).message}`;
+      }
     }
   }
   let recordProblem: string | undefined;
@@ -403,5 +457,5 @@ async function deliverList(configDir: string, client: RelayClient, target: { uui
   if (problem !== undefined) {
     return failed(problem);
   }
-  return { noticeRecipients: outcome, ...(recordProblem === undefined ? {} : { noticeRecipientsMessage: `the record of what was sent could not be written: ${recordProblem}` }) };
+  return { noticeRecipients: outcome, noticeRecipientsPath: path, ...(recordProblem === undefined ? {} : { noticeRecipientsMessage: `the record of what was sent could not be written: ${recordProblem}` }) };
 }

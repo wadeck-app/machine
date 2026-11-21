@@ -5,6 +5,10 @@ import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type
 import { readAliases, removeAlias, setAlias } from './state.js';
 import { noticeHolders, type NoticeHoldersAnswer } from './adminNotifyTo.js';
 import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
+import { directDeliveryFor } from './directDelivery.js';
+import { holdProgressCommand, type HoldProgressAnswer } from './holdProgress.js';
+import { answerOf, reachabilityOnce, type ReachabilityAnswer } from './reachabilityWiring.js';
+import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -84,7 +88,7 @@ function stringField(payload: unknown, field: string): string {
 const epochSeconds = () => Math.floor(Date.now() / 1000);
 
 /** `version` is read only by `status`: a failure to determine it must not break the other commands. */
-export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds, holds?: HoldTable) {
+export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds, holds?: HoldTable, reachability?: ReachabilityProbe) {
   const everyone = (self: MachineIdentity): MachineEntry[] => [{ uuid: self.uuid, name: self.name }, ...loadNetwork(configDir, now()).directory.machines()];
   return {
     status(): StatusAnswer | NotInitialized {
@@ -164,6 +168,25 @@ export function makeCommands(configDir: string, version: string | (() => string)
       return noticeHolders(configDir, now());
     },
 
+    /**
+     * Can this machine reach each trusted peer DIRECTLY now (decision 86)? In the daemon: the answer of the background probe, from memory, at once (asking
+     * starts the probing for a while). In-process (no daemon): one probe of every peer, a few seconds at most. Never starts a wake, sends nothing.
+     */
+    async reachability(): Promise<ReachabilityAnswer | NotInitialized> {
+      const self = selfOf(configDir);
+      if ('initialized' in self) return self;
+      if (reachability !== undefined) return answerOf(reachability.ask(), now());
+      return await reachabilityOnce(configDir, now);
+    },
+
+    /**
+     * After an Allow (decision 86): is the request still held, or how did the hold end? For this machine from the hold table and the outcomes kept here, for
+     * another machine from the notices it sent. `unknown` is never a success. Read-only.
+     */
+    holdProgress(payload?: unknown): HoldProgressAnswer {
+      return holdProgressCommand(configDir, payload, now(), holds);
+    },
+
     /** The Requests page of the module (decision 73): the pending list and the last history entries of this machine's audit log. Read-only. */
     requests(): RequestsAnswer {
       return requestsAnswer(configDir, {}, now());
@@ -201,7 +224,8 @@ export function makeCommands(configDir: string, version: string | (() => string)
     },
 
     submitPolicy(payload?: unknown): Promise<SubmitAnswer> {
-      return submitPolicy(configDir, payload, now());
+      // Direct delivery first (decision 86): the target takes the signed document over the peer channel; the relay inbox only when it cannot.
+      return submitPolicy(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
     },
 
     /**

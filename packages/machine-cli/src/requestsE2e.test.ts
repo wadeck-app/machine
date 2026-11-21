@@ -148,7 +148,7 @@ describe('machine requests <machine> (the admin machine asks a peer)', () => {
     // Allow is the admin command of THIS machine; the Deny is run on the target (or `machine requests laptop --deny <id>` from here).
     expect(r.out).toContain(`  allow: machine admin allow laptop --shell ${SHELL} -- "echo held-here"`);
     expect(r.out).toMatch(/deny: machine requests laptop --deny <id> /);
-    expect(r.out).toMatch(/installs it within about a minute/);
+    expect(r.out).toMatch(/gets it at once if reachable, else via the relay inbox/);
     expect(Math.max(...r.out.split('\n').map((l) => l.length))).toBeLessThanOrEqual(100);
     // The held request is listed once: it is not a refused group yet.
     expect(r.out).not.toContain('REFUSED');

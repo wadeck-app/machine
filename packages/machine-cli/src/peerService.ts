@@ -7,6 +7,8 @@ import {
   MAX_REQUESTS_LISTS_PER_MINUTE,
   MAX_NOTICES_PER_MINUTE,
   parseRequestDeny,
+  MAX_DELIVERS_PER_MINUTE,
+  parseDeliverDocument,
   parseRequestNotice,
   parseRequestNoticeEnd,
   type NoticeOutcome,
@@ -31,6 +33,7 @@ import {
 import { runCommand, type RunOptions, type RunResult } from '@wadeck-app/machine-exec';
 import { DEFAULT_MAX_FRAME_BYTES, listenForPeers, type PeerListener, type PeerSession } from '@wadeck-app/machine-transport';
 import type { PeerRecord } from './directory.js';
+import { safe, type ApplyResult } from './documentApply.js';
 import type { MachineIdentity } from './identity.js';
 import { MAX_CATCHUPS_PER_MINUTE, RATE_LIMITED_MESSAGE, UNAVAILABLE_FRAME_MESSAGE, listsOfFrame, type RevocationSyncDeps } from './revocationSync.js';
 import { MAX_FUTURE_SECONDS } from './network.js';
@@ -98,6 +101,13 @@ export interface PeerServiceDeps {
   notifier?: RequestNotifier;
   /** The `request-deny` frame (decision 85): a machine of the notice-recipients list refuses a held request. Absent: it is an unknown message, as with an older build. */
   remoteDeny?: RemoteDenyDeps;
+  /** The `deliver-document` frame (decision 86): the admin machine hands a sealed document straight to this machine. Absent: it is an unknown message, as with an older build. */
+  documents?: DocumentDeliveryDeps;
+}
+
+export interface DocumentDeliveryDeps {
+  /** The SAME verification and installation as for a document of the relay inbox (documentApply.ts). Never trusts the sender: the document stands on the admin signature. */
+  apply: (document: unknown) => ApplyResult;
 }
 
 export interface RemoteDenyDeps {
@@ -108,7 +118,7 @@ export interface RemoteDenyDeps {
 /** Where received notices are kept: the peer service decides WHO sent them and WHEN; a failure here is reported, never thrown at the sender. */
 export interface NoticeStoreDeps {
   record: (notice: StoredNotice, now: number) => void;
-  end: (machine: string, id: string, now: number) => void;
+  end: (machine: string, id: string, now: number, outcome: NoticeOutcome) => void;
 }
 
 export interface HoldDeps {
@@ -120,6 +130,8 @@ export interface HoldDeps {
   pollMs?: number;
   /** Called after a hold started and after one ended (the table already changed): the inbox poll cadence follows. Must not throw; if it does it is reported and the request goes on. */
   onChange?: () => void;
+  /** Called when a hold ended, with how (allowed, denied, deadline, ...): the Requests page of this machine shows it after an Allow. Must not throw; if it does it is reported and the request goes on. */
+  onEnded?: (id: string, outcome: NoticeOutcome) => void;
 }
 
 export interface RequestsListDeps {
@@ -158,7 +170,7 @@ type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: strin
 type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
-type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string };
+type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string } | { type: 'deliver-ack'; id: string; outcome: 'installed' | 'already-installed' };
 
 
 interface SyncState {
@@ -485,6 +497,11 @@ class PeerService {
       this.holdChanged(holds);
       this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
       this.notify((n) => n.ended(id, outcome as NoticeOutcome));
+      try {
+        holds.onEnded?.(id, outcome as NoticeOutcome);
+      } catch (e) {
+        this.problem(`cannot record how a hold ended (${(e as Error).message}); the request itself is not affected`);
+      }
     };
     const refusal = (reason: string, text: string, allowedShells?: string[]): HoldOutcome => ({
       kind: 'answer',
@@ -508,7 +525,14 @@ class PeerService {
     try {
       for (;;) {
         let timer: NodeJS.Timeout | undefined;
-        await Promise.race([watch, new Promise<void>((resolve) => (timer = setTimeout(resolve, pollMs)))]);
+        // A document that was just installed (deliver-document) ends the wait of this round: the policy is looked at now, not at the next poll.
+        let wake: () => void = () => undefined;
+        const woken = new Promise<void>((resolve) => {
+          wake = resolve;
+          this.wakers.add(resolve);
+        });
+        await Promise.race([watch, woken, new Promise<void>((resolve) => (timer = setTimeout(resolve, pollMs)))]);
+        this.wakers.delete(wake);
         clearTimeout(timer);
         const seen = settled as Watched | undefined;
         if (seen?.kind === 'closed') {
@@ -560,6 +584,16 @@ class PeerService {
         table.end(id);
       }
       carrier.watch = watch;
+    }
+  }
+
+  /** The rounds of the holds that are waiting for their next poll. */
+  private readonly wakers = new Set<() => void>();
+
+  /** Every hold looks at its policy now. */
+  private wakeHolds(): void {
+    for (const wake of [...this.wakers]) {
+      wake();
     }
   }
 
@@ -640,7 +674,7 @@ class PeerService {
     }
     try {
       if (end?.ok === true) {
-        notices.end(session.peerId, id, now);
+        notices.end(session.peerId, id, now, end.end.outcome);
       } else {
         const { type: _type, ...notice } = (start as { ok: true; notice: { type: string } & Omit<StoredNotice, 'machine' | 'machineName' | 'receivedAt'> }).notice;
         // The label is the machine authenticated on this connection, never a name inside the frame.
@@ -712,6 +746,87 @@ class PeerService {
     return { type: 'deny-ack', id: hold.id };
   }
 
+  /** `deliver-document` frames per sender in the last minute, and the minute in which the limit was last audited. */
+  private readonly deliverTimes = new Map<string, number[]>();
+  private readonly deliverRateAudited = new Map<string, number>();
+
+  private deliverRateLimited(peerId: string): boolean {
+    const now = this.deps.now();
+    const recent = (this.deliverTimes.get(peerId) ?? []).filter((t) => now - t < 60);
+    if (recent.length >= MAX_DELIVERS_PER_MINUTE) {
+      this.deliverTimes.set(peerId, recent);
+      const last = this.deliverRateAudited.get(peerId);
+      if (last === undefined || now - last >= 60) {
+        this.deliverRateAudited.set(peerId, now);
+        this.recordQuiet({ event: 'document-delivery-rate-limited', source: peerId, limit: MAX_DELIVERS_PER_MINUTE });
+      }
+      return true;
+    }
+    recent.push(now);
+    this.deliverTimes.set(peerId, recent);
+    return false;
+  }
+
+  /** The refusal of a delivery: audited (never silent), with the cause and the fix for the sender. The document itself is never logged. */
+  private refuseDelivery(session: PeerSession, reason: string, message: string, detail: Record<string, Json> = {}): ServiceAnswer {
+    this.recordQuiet({ event: 'document-delivery-refused', source: session.peerId, reason, ...detail });
+    return { type: 'refused', reason, message };
+  }
+
+  /**
+   * `deliver-document` (decision 86): the admin machine hands over the SAME sealed, admin-signed document it would put in the relay inbox. The sender needs no
+   * authority (the document stands on the admin signature, checked by the shared applier against the pinned key, the addressee, the kind, the id and the
+   * serial rules); it must be a trusted, non-revoked peer (checked for every message of the session), bounded and rate limited. Grants nothing by itself.
+   */
+  private deliverFrame(session: PeerSession, message: unknown, documents: DocumentDeliveryDeps): ServiceAnswer {
+    if (this.deliverRateLimited(session.peerId)) {
+      return { type: 'refused', reason: 'rate-limited', message: `too many documents from this machine (limit ${MAX_DELIVERS_PER_MINUTE} per minute): the document was not looked at; it is stored in the relay inbox instead, or send it again in a minute` };
+    }
+    const parsed = parseDeliverDocument(message);
+    if (!parsed.ok) {
+      return this.refuseDelivery(session, 'bad-deliver', `${parsed.message}: the peer runs an incompatible version`);
+    }
+    let result: ApplyResult;
+    try {
+      result = documents.apply(parsed.document);
+    } catch (e) {
+      this.problem(`cannot apply a delivered document (${(e as Error).message})`);
+      return this.refuseDelivery(session, 'cannot-apply', `this machine could not apply the document: ${safe((e as Error).message, 400)}`);
+    }
+    switch (result.status) {
+      case 'installed':
+      case 'already-installed': {
+        try {
+          this.recordStrict({ event: 'document-delivered', source: session.peerId, kind: result.kind, id: result.id, outcome: result.status });
+        } catch (e) {
+          this.problem(`cannot write the audit log (${(e as Error).message}): delivered documents are refused until it works again`);
+          return { type: 'refused', reason: 'audit-unavailable', message: `this machine cannot write its audit log (${(e as Error).message}), so it does not record who delivers: fix the disk or permissions of its audit log` };
+        }
+        // What was installed may be what a held request waits for: look at it now.
+        if (result.status === 'installed') {
+          this.wakeHolds();
+        }
+        return { type: 'deliver-ack', id: result.id, outcome: result.status };
+      }
+      case 'not-enrolled':
+        return this.refuseDelivery(session, 'not-enrolled', 'this machine has not pinned an admin key yet, so it cannot verify any document: finish `machine join` there first');
+      case 'blocked':
+        return this.refuseDelivery(session, 'invalid-admin-key', safe(result.message, 600));
+      case 'unverified':
+        return this.refuseDelivery(session, 'unverified', `the document is not a valid document of this machine's admin (${safe(result.reason, 40)}): it was altered, signed by another key, or is not a document`, { kind: result.kind });
+      case 'deferred':
+        return this.refuseDelivery(session, 'not-yet-valid', safe(result.message, 600), { kind: result.kind, id: result.id });
+      case 'waiting':
+        return this.refuseDelivery(session, 'waiting-predecessor', safe(result.message, 600), { kind: result.kind, id: result.id });
+      case 'unopenable':
+        return this.refuseDelivery(session, 'cannot-open', safe(result.message, 600), { kind: result.kind, id: result.id });
+      case 'refused':
+        return this.refuseDelivery(session, safe(result.reason, 40), safe(result.message, 600), { kind: result.kind, id: result.id });
+      case 'error':
+        return this.refuseDelivery(session, 'cannot-apply', `this machine could not apply the document: ${safe(result.message, 400)}`, { kind: result.kind, id: result.id });
+    }
+  }
+
   private async handle(session: PeerSession, message: unknown, carrier: Carrier): Promise<ServiceAnswer | undefined> {
     const { deps } = this;
     const now = deps.now();
@@ -719,6 +834,9 @@ class PeerService {
     const kind = typeof message === 'object' && message !== null ? (message as { type?: unknown }).type : undefined;
     if (deps.notices && (kind === 'request-notice' || kind === 'request-notice-end')) {
       return this.noticeFrame(session, message, deps.notices);
+    }
+    if (deps.documents && kind === 'deliver-document') {
+      return this.deliverFrame(session, message, deps.documents);
     }
     if (deps.remoteDeny && kind === 'request-deny') {
       return this.denyFrame(session, message, deps.remoteDeny, deps.holds);

@@ -81,7 +81,7 @@ async function withRelay(candidacies: unknown[]): Promise<string> {
 
 describe('route registration', () => {
   it('registers the six read-only GET routes (the Activity page, run-log), the Deny post and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76)', () => {
-    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /candidacies', 'GET /health', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /deny', 'POST /requests/remote']);
+    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /deny', 'POST /requests/remote']);
   });
 });
 
@@ -140,8 +140,8 @@ describe('GET /machines', () => {
     const out = await call(routes(), 'GET /machines');
     expect(out.status).toBe(200);
     expect(out.body.machines).toEqual([
-      { uuid: UUID, name: 'alpha', self: true, role: 'this machine', aliasesText: '' },
-      { uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', self: false, role: 'peer', aliasesText: 'b, bee' },
+      { uuid: UUID, name: 'alpha', self: true, role: 'this machine', aliasesText: '', reachableState: 'self', reachable: 'this machine' },
+      { uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', self: false, role: 'peer', aliasesText: 'b, bee', reachableState: 'unknown', reachable: 'unknown' },
     ]);
     expect(out.body.enrolled).toBe(true);
     expect(out.body.count).toBe(2);
@@ -165,11 +165,41 @@ describe('GET /machines', () => {
     const out = await call(routes(), 'GET /machines');
     expect(out.status).toBe(200);
     expect(out.body.machines).toEqual([
-      { uuid: UUID, name: 'alpha', self: true, role: 'this machine', aliasesText: '', receivesNotices: 'yes', listHeldText: '' },
-      { uuid: BETA, name: 'beta', self: false, role: 'peer', aliasesText: '', receivesNotices: 'no', listHeldText: 'sent 2026-11-21T10:00:00.000Z, not confirmed' },
+      { uuid: UUID, name: 'alpha', self: true, role: 'this machine', aliasesText: '', receivesNotices: 'yes', listHeldText: '', reachableState: 'self', reachable: 'this machine' },
+      { uuid: BETA, name: 'beta', self: false, role: 'peer', aliasesText: '', receivesNotices: 'no', listHeldText: 'sent 2026-11-21T10:00:00.000Z, not confirmed', reachableState: 'unknown', reachable: 'unknown' },
     ]);
     expect(out.body.noticesText).toBe('Request notices go to alpha (this machine) (list serial 42).');
     expect(out.body.noticesNote).toBeUndefined();
+  });
+
+  it('adds whether each peer is reachable DIRECTLY now (decision 86), in the words of the CLI, and says the same of this machine as itself', async () => {
+    const BETA = '11111111-1111-4111-8111-111111111111';
+    const GAMMA = '22222222-2222-4222-8222-222222222222';
+    await withDaemon({
+      list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [{ uuid: BETA, name: 'beta', aliases: [] }, { uuid: GAMMA, name: 'gamma', aliases: [] }] },
+      reachability: {
+        initialized: true,
+        intervalSeconds: 30,
+        machines: [
+          { uuid: BETA, name: 'beta', state: 'direct', ms: 12, checkedAt: 100, text: 'direct now (12 ms, checked 8 s ago)' },
+          { uuid: GAMMA, name: 'gamma', state: 'not-direct', checkedAt: 100, text: 'not reachable directly (last seen 2 h ago; relay inbox only)' },
+        ],
+      },
+    });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.status).toBe(200);
+    const byName = Object.fromEntries((out.body.machines as Array<{ name: string }>).map((m) => [m.name, m]));
+    expect(byName['alpha']).toMatchObject({ reachableState: 'self', reachable: 'this machine' });
+    expect(byName['beta']).toMatchObject({ reachableState: 'direct', reachable: 'direct now (12 ms, checked 8 s ago)' });
+    expect(byName['gamma']).toMatchObject({ reachableState: 'not-direct', reachable: 'not reachable directly (last seen 2 h ago; relay inbox only)' });
+    expect(out.body.reachableNote).toBeUndefined();
+  });
+
+  it('says why when the daemon does not know reachability (an older daemon): a note with the fix, the column stays unknown', async () => {
+    await withDaemon({ list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [{ uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', aliases: [] }] } });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.body.reachableNote).toMatch(/older than this module.*machine cli update/s);
+    expect(out.body.machines[1]).toMatchObject({ reachableState: 'unknown', reachable: 'unknown' });
   });
 
   it('says why when the daemon cannot tell (older daemon, or no list yet), instead of leaving the columns empty', async () => {

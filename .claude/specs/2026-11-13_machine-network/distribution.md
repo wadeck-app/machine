@@ -129,6 +129,15 @@ What `machine admin distribute` (and `approve`, `revoke`, `sign-policy`, `allow`
 - An inbox written before the machine wrote its record is claimed by the first machine token that writes that uuid record; `DELETE /api/machines/{uuid}` resets.
 - The relay keeps no tombstone of acknowledged ids: a replayed PUT of an acknowledged id is stored again. The daemon therefore keeps its own persistent set of handled ids (above), on top of the version and serial rules.
 
+## Direct delivery first (decision 86)
+
+- Before a document goes to the inbox, the admin machine tries `deliver-document` (`{type, document}`, machine-core `documentDelivery.ts`) over the mutual-TLS channel: connect 3 s per address, 4 s overall, ONE attempt, no wake. The document is the one that would be put in the inbox (sealed to the addressee, signed, same id).
+- The addressee runs `createDocumentApplier` (`documentApply.ts`), the function the inbox loop also calls, and answers `deliver-ack` with `installed` or `already-installed`. Only these count as delivered: the document is then NOT put in the inbox. A `refused` answer carries a reason and a cause.
+- Any failure (unreachable, no answer, refusal, an older build answering `unknown-message`: `machine cli update`) falls back to the inbox unchanged and is reported. An older build is remembered for the rest of the command, as is an unreachable one.
+- After an installed delivery the target looks at its held requests at once (released within about a second).
+- Wording: `Delivered directly to <m> (installed, 0.4 s)` or `<m> is not reachable directly: stored in the relay inbox, it installs it when it comes back (next poll within 60 s, or 5 s while it holds a request). Cause: ...` in the CLI and the page.
+- Reachability: the admin daemon probes the trusted machines (handshake, no hello) and `machine list` and the Machines page print `direct now (12 ms, checked 8 s ago)`, `not reachable directly (last seen 2 h ago; relay inbox only)` or `unknown`. Relay presence is not used (the daemon does not expose it; `machine list` still prints it).
+
 
 ## Revocation reach (HIGH-2 mitigated between peers that talk to each other, todo #21)
 

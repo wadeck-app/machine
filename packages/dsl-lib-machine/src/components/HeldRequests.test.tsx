@@ -324,7 +324,7 @@ describe('Allow', () => {
     expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
     expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull();
     expect(onRefresh).toHaveBeenCalledWith('requests');
-    expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1 is installed on desktop/i);
+    expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1. Installed on desktop/i);
   }, 120_000);
 });
 

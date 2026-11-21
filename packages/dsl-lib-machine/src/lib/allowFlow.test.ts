@@ -1,6 +1,6 @@
 import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
-import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
+import { deliveryNotice, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
 
 // The flow of the Allow button without React: context, preview, unlock, signature, post. Real crypto (each unlock derives 600 000 PBKDF2 rounds:
 // a few in this file, not more). The server side is a recording stub, so the tests can read EVERY byte that leaves the page.
@@ -105,7 +105,37 @@ describe('prepareAllow (what the confirmation shows, before any passphrase)', ()
   });
 });
 
+describe('deliveryNotice: which path the policy took, in the words of the CLI (decision 86)', () => {
+  const target = { uuid: SELF, name: 'thinkcentre' };
+
+  it('shows the sentence of the daemon as it is, with its colour', () => {
+    expect(deliveryNotice({ ok: true, target, version: 2, delivery: 'direct', deliveryText: { tone: 'success', text: 'Delivered directly to thinkcentre (installed, 0.4 s)' } })).toEqual({ tone: 'success', text: 'Delivered directly to thinkcentre (installed, 0.4 s)' });
+    const fallback = { tone: 'warning' as const, text: 'thinkcentre is not reachable directly: stored in the relay inbox, it installs it when it comes back (next poll within 60 s, or 5 s while it holds a request). Cause: connect timed out' };
+    expect(deliveryNotice({ ok: true, target, version: 2, delivery: 'inbox', deliveryText: fallback })).toEqual(fallback);
+  });
+
+  it('an older daemon sends no sentence: the page words the path itself, never "within about a minute"', () => {
+    const inbox = deliveryNotice({ ok: true, target, version: 2, delivery: 'inbox' });
+    expect(inbox.tone).toBe('warning');
+    expect(inbox.text).toBe('Stored in the relay inbox of thinkcentre: it installs it at its next poll (within 60 s, or 5 s while it holds a request)');
+    expect(deliveryNotice({ ok: true, target, version: 2, delivery: 'installed' })).toEqual({ tone: 'success', text: 'Installed on thinkcentre' });
+    expect(deliveryNotice({ ok: true, target, version: 2, delivery: 'direct' })).toEqual({ tone: 'success', text: 'Delivered directly to thinkcentre' });
+  });
+});
+
 describe('signAndSubmitAllow', () => {
+  it('tells the progress that the policy is signed AFTER the signature and BEFORE the post, so the first step follows a real event', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    const events: string[] = [];
+    const original = api.post.bind(api);
+    api.post = async (path, body) => {
+      events.push('post');
+      return original(path, body);
+    };
+    await signAndSubmitAllow(api, context(), { shell: SHELL, command: 'uptime' }, PASSPHRASE, NOW, () => events.push('signed'));
+    expect(events).toEqual(['signed', 'post']);
+  });
+
   it('this machine: unlocks in the page, signs, posts ONLY the signed policy; machine-core accepts it and the passphrase appears nowhere in what was sent', async () => {
     const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
     const ctx = context({ current: signedBase(2, [{ shell: SHELL, command: 'ls' }]) });

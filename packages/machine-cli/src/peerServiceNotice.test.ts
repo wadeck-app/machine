@@ -29,7 +29,7 @@ async function world(over: { notices?: boolean; storeFails?: boolean; notifier?:
   const audit: Array<Record<string, Json>> = [];
   const problems: string[] = [];
   const stored: StoredNotice[] = [];
-  const ended: Array<{ machine: string; id: string }> = [];
+  const ended: Array<{ machine: string; id: string; outcome: string }> = [];
   const runs: unknown[] = [];
   const now = { value: 1_800_000_000 };
   const state = { revoked: false, storeFails: over.storeFails === true };
@@ -65,11 +65,11 @@ async function world(over: { notices?: boolean; storeFails?: boolean; notifier?:
               }
               stored.push(notice);
             },
-            end: (machine: string, id: string) => {
+            end: (machine: string, id: string, _now: number, outcome: string) => {
               if (state.storeFails) {
                 throw new Error('notices.json cannot be used (not valid JSON)');
               }
-              ended.push({ machine, id });
+              ended.push({ machine, id, outcome });
             },
           },
         }),
@@ -117,7 +117,8 @@ describe('request notices: recipient side', () => {
     const w = await world();
     const answer = await w.exchange(endFrame());
     expect(answer).toEqual({ type: 'notice-ack', id: NOTICE_ID });
-    expect(w.ended).toEqual([{ machine: A, id: NOTICE_ID }]);
+    // The outcome the sender reported goes to the store (decision 86): the Requests page tells the person how the hold ended.
+    expect(w.ended).toEqual([{ machine: A, id: NOTICE_ID, outcome: 'allowed' }]);
     expect(w.audit.find((e) => e.event === 'request-notice-end')).toMatchObject({ source: A, id: NOTICE_ID, outcome: 'allowed' });
   });
 

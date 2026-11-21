@@ -4,6 +4,7 @@ import { candidacyCode, finalCode, isUuid, machineNameProblem, tryKeyId } from '
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { sealApproval, sealBundle } from './approval.js';
 import { distributeAdminRenewal, distributeMachine, formatDistribution, type DistributionReport, type FormattedDistribution } from './distribute.js';
+import { directDeliveryFor } from './directDelivery.js';
 import { expiryText, whenText } from './humanTime.js';
 import { PromptTimeoutError } from './prompt.js';
 import { createSteps, trackedSay } from './steps.js';
@@ -485,7 +486,7 @@ export async function runApprove(configDir: string, options: ApproveOptions): Pr
       stepsOf?.begin('distribute');
       try {
         const unlocked = await unlockAdminKey(configDir, prompt);
-        report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir });
+        report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) });
         formatted = formatDistribution(report, 'the approval', retryRenewal);
       } catch (e) {
         formatted = {
@@ -506,7 +507,7 @@ export async function runApprove(configDir: string, options: ApproveOptions): Pr
     stepsOf?.begin('distribute');
     try {
       const unlocked = await unlockAdminKey(configDir, prompt);
-      report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir });
+      report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) });
       formatted = formatDistribution(report, 'the approval', retry);
     } catch (e) {
       formatted = {

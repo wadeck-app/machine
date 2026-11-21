@@ -22,6 +22,10 @@ import { FileAuditLog, FileUsageStore } from './stores.js';
 import { policyFingerprint } from './policyMode.js';
 import { makeRequestsListDeps } from './requestsView.js';
 import { createRequestNotifier, type RequestNotifier } from './requestNotifier.js';
+import { createDocumentApplier } from './documentApply.js';
+import { recordNoticeEndOutcome } from './noticeEnds.js';
+import { makeReachabilityProbe } from './reachabilityWiring.js';
+import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { makeNoticeConnect, makeNoticeRecipients, makeNoticeStoreDeps } from './noticeWiring.js';
 
 /** Default loopback port of the local API (orch 47900, queue 47910-47911); the kit walks up when it is taken. */
@@ -91,6 +95,12 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   let inbox: InboxLoop | undefined;
   let updateCheck: { stop: () => void } | undefined;
   let notifier: RequestNotifier | undefined;
+  // Can this machine reach each peer directly (decision 86): probes only while the page or the CLI asked recently.
+  let reachability: ReachabilityProbe | undefined;
+  const started = (): ReachabilityProbe => {
+    if (reachability === undefined) throw new Error('the daemon is still starting: ask again in a moment');
+    return reachability;
+  };
   let markStopped: () => void = () => undefined;
   const onProcessExit = () => removeDaemonPortFile(configDir, process.pid);
   const stopped = new Promise<void>((resolve) => (markStopped = resolve));
@@ -99,6 +109,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
       onShutdown: () => {
         updateCheck?.stop();
         notifier?.close();
+        reachability?.stop();
         inbox?.stop();
         listener?.close();
         removeDaemonPortFile(configDir, process.pid);
@@ -107,7 +118,12 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
       },
     },
     configDir,
-    commands: makeCommands(configDir, options.version, undefined, holds),
+    commands: makeCommands(configDir, options.version, undefined, holds, {
+      // The probe needs the machine identity and the network: it is created when the daemon is up, the first question finds it.
+      ask: () => started().ask(),
+      settled: () => started().settled(),
+      stop: () => reachability?.stop(),
+    }),
     port: options.port ?? DEFAULT_DAEMON_PORT,
     // A machine daemon runs until it is told to stop: peers must be able to reach it at any time.
     idleTimeout: null,
@@ -133,6 +149,8 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
     // Load once now so that a corrupt file stops the start instead of the first connection.
     network();
 
+    reachability = makeReachabilityProbe(configDir, now, { allowLocal: options.notices?.allowLocal === true });
+
     // Request notices (request-notices.md): told to the recipients of the signed list, best effort, over the same connection path as `machine run`.
     notifier = createRequestNotifier({
       self: { uuid: self.uuid, name: self.name },
@@ -142,6 +160,22 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
       audit: (entry) => audit.write({ ts: new Date(now() * 1000).toISOString(), ...entry }),
       problem: log,
       now,
+    });
+
+    // The documents of the admin that peers hand over directly (decision 86): the very verification and installation of the relay inbox.
+    const applyDocument = createDocumentApplier({
+      configDir,
+      self,
+      now,
+      log: (line) => log(line),
+      // A new peer or a new policy applies at once, like for a document of the inbox: no cache delay.
+      onInstalled: () => {
+        cached = undefined;
+      },
+      onRevocationInstalled: () => {
+        cached = undefined;
+        listener?.revalidate();
+      },
     });
 
     listener = await startPeerListener(
@@ -165,11 +199,13 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         },
         // The read-only `requests-list` exchange (decision 74): signed by the admin, answered from this machine's audit.log.
         requests: makeRequestsListDeps(configDir, now, log),
-        holds: { table: holds, onChange: () => inbox?.holdChanged() },
+        // The outcome of every hold is kept, so the Requests page can tell the person that the command was released (or why not) after an Allow.
+        holds: { table: holds, onChange: () => inbox?.holdChanged(), onEnded: (id, outcome) => recordNoticeEndOutcome(configDir, { machine: self.uuid, id, outcome, at: now() }, now()) },
         notices: makeNoticeStoreDeps(configDir),
         notifier,
         // A machine of the notice-recipients list may refuse a held request (decision 85).
         remoteDeny: { recipients: makeNoticeRecipients(configDir) },
+        documents: { apply: applyDocument },
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },

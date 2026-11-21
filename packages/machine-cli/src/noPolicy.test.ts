@@ -6,7 +6,9 @@ describe('noPolicyMessage (target side, decision 70)', () => {
     const m = noPolicyMessage('admin', 'thinkcentre');
     expect(m).toContain('no policy is installed on this machine yet');
     expect(m).toContain('If the admin just ran `machine admin allow thinkcentre`');
-    expect(m).toContain('within about a minute');
+    expect(m).toContain('directly when this machine is reachable');
+    expect(m).toContain('relay inbox (next poll within 60 s, or 5 s while it holds a request)');
+    expect(m).not.toContain('within about a minute');
     expect(m).toContain('retry shortly');
     expect(m).toContain('`machine admin allow thinkcentre -- <command>` on the admin machine');
   });

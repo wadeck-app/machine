@@ -17,6 +17,7 @@ import { runNotifyTo } from './adminNotifyTo.js';
 import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
+import { directDeliveryFor } from './directDelivery.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { EXIT, parseIndex, type CommandContext } from './cliTypes.js';
 import { runRemoteRequests } from './cliRequestsRemote.js';
@@ -253,7 +254,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         io.stderr(`[warn] policy NOT distributed to the relay: this machine has no admin relay token. Run \`machine admin login\` (confirm the request in the relay console), then \`${how}\`; or install the file on the target with \`machine policy install\`\n`);
         return EXIT.ok;
       }
-      const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: epochSeconds });
+      const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: epochSeconds, configDir, direct: directDeliveryFor(configDir) });
       const formatted = formatDistribution(report, 'the signed policy', args.out ? `machine admin distribute --policy ${args.out}` : 'machine admin distribute --policy <file>');
       if (formatted.out) io.stderr(formatted.out);
       if (formatted.failed) {

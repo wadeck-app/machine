@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
+import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
 import { DenyForm } from './DenyForm.js';
 
@@ -66,7 +66,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
 
@@ -96,13 +96,14 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   };
 
   const allowed = (row: HeldRequestRow, answer: AllowResult) => {
-    const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon fetches it at its next inbox poll (about 5 s while it holds a request, up to a minute otherwise)`;
-    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. The caller gets the result as soon as the daemon re-checks the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}`);
+    // Which path the policy took, in the words of the CLI (success colour: installed directly or here; warning colour: the relay inbox, with the cause).
+    const path = deliveryNotice(answer);
+    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. The caller gets the result as soon as ${answer.target.name} re-checks the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
     leave(row);
   };
 
   const denied = (row: HeldRequestRow) => {
-    setResult(`Denied ${row.shell} ${JSON.stringify(row.command)} from ${row.peerText}${row.machine !== undefined ? ` on ${row.machine.name} (${row.machine.name} was told over the authenticated channel)` : ''}: the caller was answered "refused: denied". Nothing was signed.`);
+    setResult({ tone: 'success', text: `Denied ${row.shell} ${JSON.stringify(row.command)} from ${row.peerText}${row.machine !== undefined ? ` on ${row.machine.name} (${row.machine.name} was told over the authenticated channel)` : ''}: the caller was answered "refused: denied". Nothing was signed.` });
     leave(row);
   };
 
@@ -113,7 +114,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
   return (
     <div className="flex flex-col gap-3">
       <h3 className="text-base font-semibold text-content">Held requests: a caller is waiting for your answer</h3>
-      {result !== null && <div role="status" className={NOTICE_SUCCESS}>{result}</div>}
+      {result !== null && <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}>{result.text}</div>}
       {allow !== undefined && !canAllow && allow.note !== '' && visible.length > 0 && <div className={NOTICE_NEUTRAL}>{allow.note}</div>}
       <ul className="flex flex-col gap-3">
         {visible.map((r) => {

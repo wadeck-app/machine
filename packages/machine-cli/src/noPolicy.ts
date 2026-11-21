@@ -23,7 +23,7 @@ export function noPolicyMessage(mode: 'admin' | 'local', selfName: string): stri
   if (mode === 'local') {
     return 'no policy is installed on this machine yet: it manages its own allow list (policy mode local) and every command is refused until its owner allows one. Run `machine policy allow -- <command>` on this machine';
   }
-  return `no policy is installed on this machine yet. If the admin just ran \`machine admin allow ${selfName}\`, the policy arrives through the relay within about a minute (the daemon polls it): retry shortly. Otherwise run \`machine admin allow ${selfName} -- <command>\` on the admin machine`;
+  return `no policy is installed on this machine yet. If the admin just ran \`machine admin allow ${selfName}\`, the policy arrives directly when this machine is reachable, or through the relay inbox (next poll within 60 s, or 5 s while it holds a request): retry shortly. Otherwise run \`machine admin allow ${selfName} -- <command>\` on the admin machine`;
 }
 
 export interface PendingPolicyInput {

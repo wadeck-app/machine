@@ -328,3 +328,5 @@ export {
   type StoredNotice,
 } from './requestNotice.js';
 export { MAX_DENY_FRAME_BYTES, buildRequestDeny, parseRequestDeny, type ParsedRequestDeny, type RequestDeny } from './requestDeny.js';
+export { MAX_DELIVER_FRAME_BYTES, MAX_DELIVERS_PER_MINUTE, buildDeliverDocument, parseDeliverAck, parseDeliverDocument, type DeliverDocumentFrame, type DeliverOutcome } from './documentDelivery.js';
+export { reachableText, type Reachable } from './reachability.js';

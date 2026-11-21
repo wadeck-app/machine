@@ -19,7 +19,7 @@ export const NOTICE_CONNECT_MS = 3000;
 export function makeNoticeStoreDeps(configDir: string): NoticeStoreDeps {
   return {
     record: (notice, now) => recordNotice(configDir, notice, now),
-    end: (machine, id, now) => recordNoticeEnd(configDir, machine, id, now),
+    end: (machine, id, now, outcome) => recordNoticeEnd(configDir, machine, id, now, outcome),
   };
 }
 

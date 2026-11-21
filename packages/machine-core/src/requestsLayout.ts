@@ -186,7 +186,7 @@ function notes(input: RequestsLayoutInput): string[] {
     if (machine.policyMode === 'local') {
       out.push(`mode local: allow ON ${machine.name}, it asks its local passphrase (\`--peer <machine>\` limits it to one peer)`);
     } else if (input.remote) {
-      out.push(`allow signs a policy: ${machine.name} installs it within about a minute, then the held request runs`);
+      out.push(`allow signs a policy: ${machine.name} gets it at once if reachable, else via the relay inbox`);
     } else if (input.adminKeyHere) {
       out.push('allow adds the command to the default list: every peer may then run it');
     } else {

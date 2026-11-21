@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
+import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
 
 export interface PendingRequestRow {
@@ -48,7 +48,7 @@ const rowKey = (r: PendingRequestRow): string => `${r.peer}\u0000${r.shell}\u000
 export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No request is waiting for approval', onRefresh }: AllowRequestsTableProps) {
   const [selected, setSelected] = useState<PendingRequestRow | null>(null);
   const [allowed, setAllowed] = useState<ReadonlySet<string>>(new Set());
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
 
@@ -59,8 +59,9 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
   const done = (row: PendingRequestRow, answer: AllowResult) => {
     setAllowed(prev => new Set(prev).add(rowKey(row)));
     setSelected(null);
-    const where = answer.delivery === 'installed' ? `installed on ${answer.target.name}` : `stored in the relay inbox of ${answer.target.name}: its daemon installs it within about a minute`;
-    setResult(`Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version} is ${where}. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}`);
+    // Which path the policy took, in the words of the CLI: delivered directly or installed here (success colour), or the relay inbox with the cause (warning colour).
+    const path = deliveryNotice(answer);
+    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
     // The page's own data catches up (the allowed command leaves the pending list); a failure is reported by the page's notifier.
     void onRefresh?.('requests');
   };
@@ -68,7 +69,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
   return (
     <div className="flex flex-col gap-3">
       {result !== null && (
-        <div role="status" className={NOTICE_SUCCESS}>{result}</div>
+        <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}>{result.text}</div>
       )}
       {allow !== undefined && !canAllow && allow.note !== '' && (
         <div className={NOTICE_NEUTRAL}>{allow.note}</div>

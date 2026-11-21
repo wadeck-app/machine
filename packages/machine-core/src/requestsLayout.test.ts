@@ -117,7 +117,8 @@ describe('layoutRequests: notes footer', () => {
 
   it('a remote listing says how an allow reaches the target and runs the held command', () => {
     const notes = layoutRequests(input({ waiting: [held(1, 'hostname')], remote: true })).join('\n');
-    expect(notes).toMatch(/installs it within about a minute/);
+    expect(notes).toMatch(/gets it at once if reachable, else via the relay inbox/);
+    expect(notes).not.toMatch(/within about a minute/);
   });
 
   it('shell cmd for a target that may be Linux/macOS: the caller probably needs --shell sh', () => {

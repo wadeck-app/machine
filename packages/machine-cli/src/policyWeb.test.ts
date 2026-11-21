@@ -9,6 +9,7 @@ import { readMachine } from './identity.js';
 import { adminKeyText, allowContext, submitPolicy } from './policyWeb.js';
 import { readPolicyRecord } from './adminAllow.js';
 import { adminRelayAccess } from './distribute.js';
+import type { DirectDelivery } from './directDelivery.js';
 import { readNoticeSent } from './noticeRecipientsSent.js';
 import { noticeRecipientsFile, readNoticeRecipients } from './noticeRecipientsStore.js';
 import { cli, fakeTiming, ok } from './testing.js';
@@ -211,6 +212,8 @@ describe('submitPolicy: the signed document the browser produced', () => {
     const signed = await browserSigns('laptop', 'echo hello');
     const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document }, now());
     expect(answer).toMatchObject({ ok: true, delivery: 'inbox', version: 1, target: { name: 'laptop' } });
+    // No direct attempt was made (a caller without it): the inbox is said as it is, with the real cadence of the target.
+    expect(answer).toMatchObject({ deliveryText: { tone: 'warning', text: 'Stored in the relay inbox of laptop: it installs it at its next poll (within 60 s, or 5 s while it holds a request)' } });
     const docs = policyDocs(readMachine(b).uuid);
     expect(docs).toHaveLength(1);
     expect(docs[0]?.document).toEqual(signed.document);
@@ -464,4 +467,60 @@ describe('the Allow button also sends the list of notice recipients (request-not
     expect(policyDocs(readMachine(b).uuid)).toHaveLength(1);
     expect(readNoticeSent(a)[readMachine(b).uuid]?.sent).toMatchObject({ stored: false });
   });
+
+  describe('direct delivery first (decision 86)', () => {
+    const delivered = (sent: SignedDocument[], outcome: 'installed' | 'already-installed' = 'installed'): DirectDelivery => async (_to, document) => {
+      sent.push(document);
+      return { ok: true, outcome, ms: 412 };
+    };
+    const unreachable = (sent: SignedDocument[]): DirectDelivery => async (_to, document) => {
+      sent.push(document);
+      return { ok: false, code: 'unreachable', cause: 'connect timed out', ms: 3000 };
+    };
+
+    it('a target that takes the policy directly gets it NOT through the relay, and the answer says the path and the time', async () => {
+      await twoMachines();
+      const signed = await browserSigns('laptop', 'echo hello');
+      const sent: SignedDocument[] = [];
+      const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document }, now(), { direct: delivered(sent) });
+      expect(answer).toMatchObject({ ok: true, delivery: 'direct', version: 1, target: { name: 'laptop' }, direct: { outcome: 'installed', ms: 412 } });
+      // The sentence of the page is the one of the CLI (same words, success colour).
+      expect(answer).toMatchObject({ deliveryText: { tone: 'success', text: 'Delivered directly to laptop (installed, 0.4 s)' } });
+      expect(sent).toEqual([signed.document]);
+      expect(policyDocs(readMachine(b).uuid)).toHaveLength(0);
+      // The record of the policy is kept all the same: the next edit starts from it.
+      expect(readPolicyRecord(a, readMachine(b).uuid, adminPublicKey())?.body.version).toBe(1);
+    });
+
+    it('a target that was already up to date is delivered, and says so', async () => {
+      await twoMachines();
+      const signed = await browserSigns('laptop', 'echo hello');
+      const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document }, now(), { direct: delivered([], 'already-installed') });
+      expect(answer).toMatchObject({ ok: true, delivery: 'direct', alreadyThere: true, direct: { outcome: 'already-installed' } });
+    });
+
+    it('a target that cannot be reached: the SAME document goes to the inbox and the answer keeps the cause of the fallback', async () => {
+      await twoMachines();
+      const signed = await browserSigns('laptop', 'echo hello');
+      const sent: SignedDocument[] = [];
+      const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document }, now(), { direct: unreachable(sent) });
+      expect(answer).toMatchObject({ ok: true, delivery: 'inbox', fallback: { code: 'unreachable', cause: 'connect timed out' } });
+      expect(answer).toMatchObject({ deliveryText: { tone: 'warning', text: 'laptop is not reachable directly: stored in the relay inbox, it installs it when it comes back (next poll within 60 s, or 5 s while it holds a request). Cause: connect timed out' } });
+      expect(policyDocs(readMachine(b).uuid)[0]?.document).toEqual(sent[0]);
+    });
+
+    it('the list of notice recipients goes directly too, and the answer says which path', async () => {
+      await twoMachines();
+      const signed = await browserSigns('laptop', 'echo hello');
+      const list = await browserSignsList('laptop');
+      const sent: SignedDocument[] = [];
+      const before = listsOf(b).length;
+      const answer = await submitPolicy(a, { policy: signed.policy, document: signed.document, noticeRecipients: list }, now(), { direct: delivered(sent) });
+      expect(answer).toMatchObject({ ok: true, delivery: 'direct', noticeRecipients: 'sent', noticeRecipientsPath: 'direct' });
+      expect(sent.map((d) => d.body.kind)).toEqual(['policy', 'notice-recipients']);
+      expect(listsOf(b)).toHaveLength(before);
+      expect(readNoticeSent(a)[readMachine(b).uuid]?.sent).toMatchObject({ serial: list.signed.body.serial, stored: true });
+    });
+  });
+
 });

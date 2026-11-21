@@ -11,6 +11,7 @@ import {
   revocationDigest,
   sealTo,
   signRevocation,
+  type DeliverOutcome,
   type DocumentKind,
   type Json,
   type SignedDocument,
@@ -20,6 +21,7 @@ import {
 } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin } from './admin.js';
 import { adminRelayError } from './adminRelay.js';
+import { describeAttempt, describeDirect, type DirectCode, type DirectDelivery } from './directDelivery.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, loadNetwork, revocationState, signAndInstallRevocation, trustedRegistrations } from './network.js';
 import { recordNoticeSent } from './noticeRecipientsSent.js';
@@ -53,6 +55,12 @@ export interface DistributionReport {
   noticeLists?: number;
   /** The machines those lists were stored for (names), so the output can say it even when there is no other peer to inform. */
   noticeNames?: string[];
+  /** Documents the addressee took straight over the peer channel (decision 86): they are NOT in the relay inbox. Lists of notice recipients are counted in `noticeDirectNames`. */
+  direct?: Array<{ toUuid: string; toName: string; kind: DocumentKind; outcome: DeliverOutcome; ms: number }>;
+  /** Documents whose direct delivery did not happen, so they went to the relay inbox: with the cause, for the one-line report. */
+  fallbacks?: Array<{ toUuid: string; toName: string; kind: DocumentKind; code: DirectCode; cause: string; ms: number }>;
+  /** The machines a list of notice recipients was delivered to directly. */
+  noticeDirectNames?: string[];
   /** Problems that do not fail the distribution (the record of what was sent could not be written): printed as `[warn]`. */
   warnings?: string[];
 }
@@ -70,6 +78,11 @@ export interface Sender {
    * client it makes, so a caller that took its client from there need not repeat it.
    */
   configDir?: string;
+  /**
+   * Tries the authenticated peer channel BEFORE the relay inbox, with the same sealed document (decision 86). Absent: the inbox only. Never throws; a delivery
+   * that did not happen returns its cause and the document goes to the inbox exactly as before.
+   */
+  direct?: DirectDelivery;
 }
 
 // The config directory a client was made for (see `adminRelayAccess`): lets `distributePolicy` find the registration of its target
@@ -106,6 +119,25 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
   } catch (e) {
     report.failures.push({ toUuid: to.uuid, toName: to.name, kind, id: undefined, message: (e as Error).message });
     return true;
+  }
+  // Direct delivery first: the very same document, sealed to the addressee. Only an acknowledged installation counts; anything else is a fallback.
+  if (sender.direct !== undefined) {
+    let attempt: Awaited<ReturnType<DirectDelivery>>;
+    try {
+      attempt = await sender.direct(to, document);
+    } catch (e) {
+      attempt = { ok: false, code: 'unreachable', cause: (e as Error).message, ms: 0 };
+    }
+    if (attempt.ok) {
+      if (kind === 'notice-recipients') {
+        report.noticeLists = (report.noticeLists ?? 0) + 1;
+        (report.noticeDirectNames ??= []).push(to.name);
+      } else {
+        (report.direct ??= []).push({ toUuid: to.uuid, toName: to.name, kind, outcome: attempt.outcome, ms: attempt.ms });
+      }
+      return true;
+    }
+    (report.fallbacks ??= []).push({ toUuid: to.uuid, toName: to.name, kind, code: attempt.code, cause: attempt.cause, ms: attempt.ms });
   }
   try {
     await sender.client.putInboxDocument(to.uuid, document);
@@ -262,7 +294,7 @@ export async function distributeRevocation(configDir: string, revokedUuid: strin
 export async function distributePolicy(signed: SignedPolicy, sender: Sender): Promise<DistributionReport> {
   const report = emptyReport();
   report.machines = 1;
-  const to = { uuid: signed.body.target, name: signed.body.target };
+  const to = { uuid: signed.body.target, name: nameOfRecipient(sender, signed.body.target) };
   await put(sender, report, to, 'policy', () => {
     const issuedAt = signed.body.issuedAt;
     const expiresAt = Math.min(issuedAt + DOCUMENT_RETENTION_SECONDS, signed.body.notAfter);
@@ -345,6 +377,19 @@ export async function putNoticeRecipients(sender: Sender, report: DistributionRe
   }
 }
 
+/** The name this admin machine knows `uuid` by (from its registration), else the uuid itself: what a message to the person calls the machine. */
+function nameOfRecipient(sender: Sender, uuid: string): string {
+  const configDir = sender.configDir ?? clientConfigDir.get(sender.client);
+  if (configDir === undefined) {
+    return uuid;
+  }
+  try {
+    return trustedRegistrations(configDir, sender.now()).find((r) => r.body.uuid === uuid)?.body.name ?? uuid;
+  } catch {
+    return uuid;
+  }
+}
+
 /**
  * The identity key a document for `uuid` is sealed to: from the registration this admin machine holds for it. There is no other source and no
  * plaintext fallback: when the machine is unknown here, nothing is sent and the message says how to fix it.
@@ -402,13 +447,21 @@ export function formatDistribution(report: DistributionReport, what: string, ret
   const failed = report.failures.length > 0;
   const already = report.alreadyThere > 0 ? `, ${report.alreadyThere} already there` : '';
   let out = '';
+  // Which path every machine was reached by (decision 86): directly (the success form), or through the relay inbox with the cause (the warning form).
+  const pathLines = directPathLines(report);
+  const storedMachines = report.fallbacks !== undefined && report.direct !== undefined ? new Set(report.fallbacks.map((f) => f.toUuid)).size : report.machines;
   if (report.machines === 0 && !failed) out = '[ok] no other peer to inform\n';
   else if (report.delivered > 0 || report.alreadyThere > 0) {
-    out = `[ok] ${report.delivered} document(s) stored by the relay for ${report.machines} machine(s)${already}${failed ? ', but some failed (see below)' : ''}\n`;
+    out = `[ok] ${report.delivered} document(s) stored by the relay for ${storedMachines} machine(s)${already}${failed ? ', but some failed (see below)' : ''}\n`;
   }
+  out = `${pathLines}${out}`;
+
   // The admin cannot know the build of a target: say what an older one does (distribution.md, "Rollout of sealed documents").
   if (report.delivered > 0) {
     out += `${SEALED_NOTICE}\n`;
+  }
+  if (report.noticeDirectNames !== undefined && report.noticeDirectNames.length > 0) {
+    out += `[ok] request notices list delivered directly to ${[...new Set(report.noticeDirectNames)].join(', ')}\n`;
   }
   if (report.noticeNames !== undefined && report.noticeNames.length > 0) {
     out += `[ok] request notices list stored by the relay for ${[...new Set(report.noticeNames)].join(', ')} (each reads it at its next inbox check)\n`;
@@ -422,4 +475,25 @@ export function formatDistribution(report: DistributionReport, what: string, ret
   if (report.aborted) lines.push('[error] the relay or the admin token cannot be used: the remaining documents were not attempted');
   lines.push(`[warn] ${what} stands: nothing was undone. The machines above do not know it yet (they learn it when the document reaches them). Run \`${retry}\` to send what is missing; it is safe to run again`);
   return { out, err: `${warned}${lines.join('\n')}\n`, failed: true };
+}
+
+/** One line per machine for the documents that were delivered directly (success form) and for those that fell back to the inbox (warning form). */
+function directPathLines(report: DistributionReport): string {
+  let out = '';
+  const direct = new Map<string, NonNullable<DistributionReport['direct']>>();
+  for (const d of report.direct ?? []) {
+    direct.set(d.toName, [...(direct.get(d.toName) ?? []), d]);
+  }
+  for (const [name, entries] of direct) {
+    const ms = entries.reduce((sum, e) => sum + e.ms, 0);
+    const outcomes = [...new Set(entries.map((e) => e.outcome))].join(' and ');
+    out += `[ok] ${describeDirect(name, entries.length === 1 ? outcomes : `${entries.length} documents, ${outcomes}`, ms)}\n`;
+  }
+  const seen = new Set<string>();
+  for (const f of report.fallbacks ?? []) {
+    if (seen.has(f.toName)) continue;
+    seen.add(f.toName);
+    out += `[warn] ${describeAttempt(f.toName, { ok: false, code: f.code, cause: f.cause, ms: f.ms })}\n`;
+  }
+  return out;
 }

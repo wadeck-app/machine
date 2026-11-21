@@ -175,7 +175,7 @@ describe('signing in the page', () => {
     // The row is gone, the other one stays, and the success is said with what happened.
     expect(screen.queryByText('df -h')).toBeNull();
     expect(screen.getByText('ls')).toBeInTheDocument();
-    expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1 is installed on desktop/i);
+    expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1. Installed on desktop/i);
     expect(onRefresh).toHaveBeenCalledWith('requests');
   }, 120_000);
 
@@ -217,7 +217,7 @@ describe('signing in the page', () => {
   it('for another machine the document is posted too (the inbox delivery)', async () => {
     // The document is sealed to the target (decision 78): the backend sends the identity key of the target in the context.
     answers.context = context({ target: { uuid: SELF, name: 'desktop', identityPublicKey: generateSigningKeyPair().publicKey }, toSelf: false, delivery: 'inbox' });
-    answers.post = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'inbox' };
+    answers.post = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'inbox', fallback: { code: 'unreachable', cause: 'connect timed out' }, deliveryText: { tone: 'warning', text: 'desktop is not reachable directly: stored in the relay inbox, it installs it when it comes back (next poll within 60 s, or 5 s while it holds a request). Cause: connect timed out' } };
     render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
@@ -225,7 +225,24 @@ describe('signing in the page', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
     const body = calls.find((c) => c.url.startsWith('POST'))?.body as { policy: unknown; document: unknown };
     expect(Object.keys(body).sort()).toEqual(['document', 'policy']);
-    expect(await screen.findByRole('status')).toHaveTextContent(/relay inbox/i);
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent(/desktop is not reachable directly: stored in the relay inbox.*Cause: connect timed out/);
+    // The relay inbox is the warning colour, and nothing promises "within about a minute" any more.
+    expect(status).toHaveClass('border-warning');
+    expect(status).not.toHaveTextContent(/within about a minute/);
+  }, 120_000);
+
+  it('a policy delivered directly is said in the success colour, with the outcome and the time', async () => {
+    answers.context = context({ target: { uuid: SELF, name: 'desktop', identityPublicKey: generateSigningKeyPair().publicKey }, toSelf: false, delivery: 'inbox' });
+    answers.post = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'direct', direct: { outcome: 'installed', ms: 412 }, deliveryText: { tone: 'success', text: 'Delivered directly to desktop (installed, 0.4 s)' } };
+    render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Delivered directly to desktop (installed, 0.4 s)');
+    expect(status).toHaveClass('border-success');
   }, 120_000);
 });
 

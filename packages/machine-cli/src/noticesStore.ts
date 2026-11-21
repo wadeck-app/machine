@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MAX_NOTICES, applyNotice, endNotice, parseRequestNotice, type StoredNotice } from '@wadeck-app/machine-core';
+import { MAX_NOTICES, applyNotice, endNotice, parseRequestNotice, type NoticeOutcome, type StoredNotice } from '@wadeck-app/machine-core';
 import { withFileLock, writeFileAtomic } from './fsutil.js';
+import { recordNoticeEndOutcome } from './noticeEnds.js';
 
 // <configDir>/notices.json: the request notices other machines sent to this one (request-notices.md, decision 83). Information about requests held on
 // OTHER machines, not verified live; never an authority. Bounded (200 newest, 7 days), written atomically, damaged file refused loudly.
@@ -78,7 +79,13 @@ export function recordNotice(configDir: string, notice: StoredNotice, now: numbe
   update(configDir, (list) => applyNotice(list, notice, now));
 }
 
-/** The end of a request: its notice is dropped (also ages the others out). */
-export function recordNoticeEnd(configDir: string, machine: string, id: string, now: number): void {
+/**
+ * The end of a request: its notice is dropped (also ages the others out). With `outcome`, how it ended is kept as well (notice-ends.json), so the Requests page
+ * can tell the person that the held command was released, denied or timed out (decision 86).
+ */
+export function recordNoticeEnd(configDir: string, machine: string, id: string, now: number, outcome?: NoticeOutcome): void {
   update(configDir, (list) => endNotice(list, machine, id).filter((n) => now - n.receivedAt <= 7 * 86_400));
+  if (outcome !== undefined) {
+    recordNoticeEndOutcome(configDir, { machine, id, outcome, at: now }, now);
+  }
 }

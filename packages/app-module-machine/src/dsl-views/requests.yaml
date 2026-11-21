@@ -5,6 +5,8 @@ $sources:
   # The trusted machines (this one and its peers): the machine filter and the machines the admin machine asks for their requests.
   machines:
     url: GET /api/modules/machine/machines
+    # The reachability badge of the held requests follows the probe of the daemon.
+    poll: 10s
 
 # What the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`, decision 73), and, on the admin
 # machine, the same for every OTHER trusted machine, loaded on demand (decision 74): the page signs a read-only requests-list per peer IN THE BROWSER

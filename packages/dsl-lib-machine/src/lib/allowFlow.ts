@@ -101,7 +101,13 @@ export interface AllowResult {
   ok: true;
   target: { uuid: string; name: string };
   version: number;
-  delivery: 'installed' | 'inbox';
+  /** `installed`: the target is this machine. `direct`: the target took the policy over the peer channel and installed it (decision 86). `inbox`: stored in the relay inbox. */
+  delivery: 'installed' | 'direct' | 'inbox';
+  /** The sentence of the CLI for this delivery (the same words), with the colour it deserves: shown as it is. Absent: an older daemon. */
+  deliveryText?: { tone: 'success' | 'warning'; text: string };
+  /** Why the target was not reached directly (delivery `inbox` after a direct attempt). */
+  fallback?: { code: string; cause: string };
+  direct?: { outcome: 'installed' | 'already-installed'; ms: number };
   alreadyThere?: true;
   /** The list of notice recipients sent with the policy to another machine: `sent`, `already-there`, `failed` (the daemon, with its message) or `skipped` (the backend is older: nothing was sent). */
   noticeRecipients?: 'sent' | 'already-there' | 'failed' | 'skipped';
@@ -184,7 +190,7 @@ export async function prepareAllow(context: AllowContext, change: AllowChange, n
  * Unlock the admin key with `passphrase`, sign the policy (and its inbox document for another machine), lock the key, and post the signed documents.
  * Throws with the actionable sentence of whoever refused: wrong passphrase, another key than the pinned one, the daemon (stale base, mode local ...).
  */
-export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string, now: number): Promise<AllowResult> {
+export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string, now: number, onSigned?: () => void): Promise<AllowResult> {
   const prepared = await prepareAllow(context, change, now);
   if (!prepared.changed) {
     throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
@@ -221,6 +227,8 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
     // Locked before anything goes to the network: a failure of the post never leaves an unlocked key behind.
     key.lock();
   }
+  // The signature is made and the key is locked: the one event of the progress that happens before the network.
+  onSigned?.();
   const result = await api.post('/allow', body);
   if (!isObject(result) || result['ok'] === false) throw unexpected('the signed policy');
   const allowResult = result as unknown as AllowResult;
@@ -228,4 +236,19 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
     return { ...allowResult, noticeRecipients: 'skipped', noticeRecipientsMessage: SKIPPED_MESSAGE };
   }
   return allowResult;
+}
+
+/**
+ * Which path the policy took, in the words of the CLI and with the colour it deserves: the success colour for an installation (directly or here), the warning
+ * colour for the relay inbox. The daemon sends the sentence (`deliveryText`); an older daemon does not, and the page words the path itself.
+ */
+export function deliveryNotice(result: AllowResult): { tone: 'success' | 'warning'; text: string } {
+  if (result.deliveryText !== undefined) {
+    return result.deliveryText;
+  }
+  const name = result.target.name;
+  if (result.delivery === 'inbox') {
+    return { tone: 'warning', text: `Stored in the relay inbox of ${name}: it installs it at its next poll (within 60 s, or 5 s while it holds a request)` };
+  }
+  return { tone: 'success', text: result.delivery === 'direct' ? `Delivered directly to ${name}` : `Installed on ${name}` };
 }

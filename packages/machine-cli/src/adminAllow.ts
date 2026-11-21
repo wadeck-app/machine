@@ -7,6 +7,7 @@ import { buildAllowEntry, entryLine, platformOfShell, renewalLines, typedSummary
 import { unsafeTypedWarnings } from './allowSafety.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
+import { directDeliveryFor } from './directDelivery.js';
 import { ConnectionsError, readConnections } from './connectionsStore.js';
 import { writeFileAtomic } from './fsutil.js';
 import { exportMachineInfo, installPolicy, loadNetwork } from './network.js';
@@ -72,7 +73,7 @@ export interface AllowOptions {
 export type AllowResult =
   | { kind: 'listed'; uuid: string; version: number }
   | { kind: 'unchanged'; reason: 'already-allowed' | 'not-allowed' | 'bad-index' | 'ambiguous' }
-  | { kind: 'signed'; uuid: string; name: string; version: number; delivery: 'inbox' | 'installed' | 'file'; failed: boolean; out: string };
+  | { kind: 'signed'; uuid: string; name: string; version: number; delivery: 'inbox' | 'direct' | 'installed' | 'file'; failed: boolean; out: string };
 
 /**
  * The `machine run` that matches the entry just allowed (the shell is part of the exact entry, decision 71). `--shell` is left out only when it equals
@@ -219,7 +220,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
   const signed = signPolicy(body, pair.privateKeyPkcs8);
   recordSignedPolicy(configDir, signed);
 
-  let delivery: 'inbox' | 'installed' | 'file' = 'file';
+  let delivery: 'inbox' | 'direct' | 'installed' | 'file' = 'file';
   let failed = false;
   let out = '';
   if (o.out !== undefined) {
@@ -232,13 +233,18 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     out += `[ok] policy version ${body.version} installed on this machine (it is the target): \`machine status\` shows it\n`;
   } else if (access !== undefined) {
     delivery = 'inbox';
-    const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir });
+    const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) });
     const retry = `machine admin distribute --policy ${o.out ?? policyRecordFile(configDir, target.uuid)}`;
     const formatted = formatDistribution(report, 'the signed policy', retry);
     failed = formatted.failed;
     out += formatted.out;
+    // The path is said by formatDistribution above (directly, or the relay inbox with the cause); this line says what it means for the target.
+    const direct = (report.direct ?? []).some((d) => d.kind === 'policy');
+    if (direct) delivery = 'direct';
+    const then = o.mode === 'allow' ? ` Then: ${runHint(configDir, target.name, target.uuid, shell, hintCommand, o.say)}` : '';
     if (formatted.failed) out += formatted.err;
-    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it within about a minute (the daemon must run there: \`machine startup enable\`).${o.mode === 'allow' ? ` Then: ${runHint(configDir, target.name, target.uuid, shell, hintCommand, o.say)}` : ''}\n`;
+    else if (direct) out += `[ok] policy version ${body.version} is in force on "${target.name}" now.${then}\n`;
+    else out += `[ok] policy version ${body.version} is in the relay inbox of "${target.name}": its daemon installs it at its next inbox poll (within 60 s, or 5 s while it holds a request; the daemon must run there: \`machine startup enable\`).${then}\n`;
   }
   o.say(out);
   return { kind: 'signed', uuid: target.uuid, name: target.name, version: body.version, delivery, failed, out };

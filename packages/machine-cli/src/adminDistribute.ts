@@ -1,3 +1,4 @@
+import { directDeliveryFor } from './directDelivery.js';
 import { readFileSync } from 'node:fs';
 import { isUuid, resolveMachineRef, type SignedPolicy } from '@wadeck-app/machine-core';
 import { unlockAdminKey, type Prompt } from './admin.js';
@@ -75,7 +76,7 @@ export async function runDistribute(configDir: string, o: DistributeOptions): Pr
     const signed = readSignedPolicy(o.policyFile);
     o.say('Enter the admin passphrase to sign the policy document, Ctrl-C to cancel.\n');
     const key = await unlockAdminKey(configDir, o.prompt);
-    const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir };
+    const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) };
     const report = await distributePolicy(signed, sender);
     const formatted = formatDistribution(report, 'the policy', `machine admin distribute --policy ${o.policyFile}`);
     return { what: `policy version ${signed.body.version} for ${signed.body.target}`, report, formatted };
@@ -94,7 +95,7 @@ export async function runDistribute(configDir: string, o: DistributeOptions): Pr
   }
   o.say('Enter the admin passphrase to sign the documents, Ctrl-C to cancel.\n');
   const key = await unlockAdminKey(configDir, o.prompt);
-  const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir };
+  const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) };
   if (revoked !== undefined) {
     const report = await distributeRevocation(configDir, revoked.uuid, gone?.ok ? (gone.machine.name ?? revoked.uuid) : revoked.uuid, sender);
     return { what: `the revocation of ${revoked.uuid}`, report, formatted: formatDistribution(report, 'the revocation', retryDistribution(revoked.uuid)) };

@@ -765,6 +765,18 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
             return { text: [`[warn] ${e.message}`], document: { error: e.message } };
           }
         })();
+        // Can this machine reach each trusted peer directly now (decision 86)? Only the daemon knows (its probe): from memory, no network here. A daemon that cannot answer is a warning line.
+        const reachLines: string[] = [];
+        const reachability: Array<{ uuid: string; name: string; state: string; text: string }> = [];
+        if (daemon.running && r.peers > 0) {
+          try {
+            const answer = (await (client as unknown as { send(command: string): Promise<unknown> }).send('reachability')) as { machines?: typeof reachability };
+            reachability.push(...(answer.machines ?? []));
+            reachLines.push(...reachability.map((m) => `reachable: ${m.name}: ${m.text}`));
+          } catch (e) {
+            reachLines.push(`[warn] reachability is not shown: ${(e as Error).message}${/Unknown command/.test((e as Error).message) ? ': the running daemon is older than this CLI, run \`machine cli update\` and restart it' : ''}`);
+          }
+        }
         const notices = noticeRecipientsStatus(configDir, { uuid: r.uuid, name: r.name }, Math.floor((io.now?.() ?? new Date()).getTime() / 1000));
         const lines = [
           `${r.name} (${r.uuid})`,
@@ -779,10 +791,11 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           ...revokedBlock(r.revoked ?? [], Math.floor((io.now?.() ?? new Date()).getTime() / 1000)),
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
+          ...reachLines,
           ...(notices === undefined ? [] : [notices.line]),
           ...runLines.text,
         ];
-        emit({ ...r, daemon, runDefaults: runLines.document, ...(notices === undefined ? {} : { noticeRecipients: { state: notices.state, recipients: notices.recipients } }) }, `${lines.join('\n')}\n`);
+        emit({ ...r, daemon, ...(reachability.length > 0 ? { reachability } : {}), runDefaults: runLines.document, ...(notices === undefined ? {} : { noticeRecipients: { state: notices.state, recipients: notices.recipients } }) }, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {
@@ -791,11 +804,21 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         // With a relay: the addresses and the presence the relay knows. A relay problem is a warning line here, never an error of `list`.
         const nowSeconds = Math.floor((io.now?.() ?? new Date()).getTime() / 1000);
         const view = await addRelayView(configDir, r, nowSeconds, undefined, { allowLocal: io.allowLoopbackPeers === true });
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''} policy: ${r.policyMode}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''} policy: unknown`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds)])];
+        // Can this machine reach each peer directly now (decision 86)? The daemon answers from its probe; without a daemon this probes once. A failure is a warning, never an error of `list`.
+        let reach = new Map<string, { state: string; text: string }>();
+        if (r.peers.length > 0) {
+          try {
+            const answer = (await (client as unknown as { send(command: string): Promise<unknown> }).send('reachability')) as { machines?: Array<{ uuid: string; state: string; text: string }> };
+            reach = new Map((answer.machines ?? []).map((m) => [m.uuid, m]));
+          } catch (e) {
+            io.stderr(`[warn] reachability is not shown: ${(e as Error).message}${/Unknown command/.test((e as Error).message) ? ': the running daemon is older than this CLI, run `machine cli update` and restart it' : ''}\n`);
+          }
+        }
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''} policy: ${r.policyMode}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''} policy: unknown`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds), ...(reach.has(p.uuid) ? [`  reachable: ${reach.get(p.uuid)?.text}`] : [])])];
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
-        emit(view, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}${bareView ? 'more: machine peer --help (info, import, connect, wake, forget-record)\n' : ''}`);
+        emit({ ...view, peers: view.peers.map((p) => ({ ...p, ...(reach.has(p.uuid) ? { reachable: reach.get(p.uuid) } : {}) })) }, `${lines.join('\n')}\n${r.note ? `${r.note}\n` : ''}${bareView ? 'more: machine peer --help (info, import, connect, wake, forget-record)\n' : ''}`);
         return EXIT.ok;
       }
       case 'resolve': {

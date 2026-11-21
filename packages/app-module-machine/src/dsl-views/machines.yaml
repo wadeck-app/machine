@@ -1,6 +1,8 @@
 $sources:
   machines:
     url: GET /api/modules/machine/machines
+    # The Reachable column comes from the probe of the daemon (every 30 s while somebody asks): the page asks again to follow it.
+    poll: 10s
 
 $type: PageContent
 sections:
@@ -33,6 +35,13 @@ sections:
     items:
       - $type: Markdown
         text: $sources.machines.noticesNote
+  # Which machines the admin machine reaches DIRECTLY (decision 86): a document goes straight to them; the others get it through the relay inbox.
+  - $type: Card
+    $if: $sources.machines.reachableNote
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.reachableNote
   - $type: DataTable
     rows: $sources.machines.machines
     emptyMessage: No machine
@@ -40,6 +49,7 @@ sections:
       - { key: "name", label: "Name", nowrap: true }
       - { key: "role", label: "Role", nowrap: true }
       - { key: "aliasesText", label: "Aliases" }
+      - { key: "reachable", label: "Reachable" }
       - { key: "receivesNotices", label: "Receives notices", nowrap: true }
       - { key: "listHeldText", label: "Notice list held" }
       - { key: "uuid", label: "UUID", nowrap: true }

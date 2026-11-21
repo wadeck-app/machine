@@ -230,6 +230,40 @@ async function noticeColumns(dir: string): Promise<{ decorate: <R extends { uuid
   };
 }
 
+interface ReachabilityLike {
+  machines?: Array<{ uuid?: unknown; state?: unknown; text?: unknown }>;
+}
+
+/**
+ * Can this machine reach each peer DIRECTLY now (decision 86), from the daemon command `reachability` (the probe of the daemon, from memory). The text is the one of the CLI.
+ * Never fails the machines list: an older daemon gets a note that names the fix, and the column says `unknown` instead of staying empty.
+ */
+async function reachabilityColumns(dir: string): Promise<{ decorate: <R extends { uuid: string; self: boolean }>(row: R) => R; note?: string }> {
+  const byUuid = new Map<string, { state: string; text: string }>();
+  let note: string | undefined;
+  try {
+    const answer = (await callDaemon(dir, 'reachability')) as ReachabilityLike & { initialized?: unknown };
+    if (answer.initialized !== false) {
+      for (const m of answer.machines ?? []) {
+        if (typeof m.uuid === 'string' && typeof m.state === 'string' && typeof m.text === 'string') byUuid.set(m.uuid, { state: m.state, text: m.text });
+      }
+    }
+  } catch (err) {
+    const failure = failureOf(err);
+    note = failure.kind === 'daemon_error' && failure.error.includes('older than this module')
+      ? 'The daemon is older than this module and cannot tell which machines are reachable directly: update it with `machine cli update` and restart it.'
+      : `Which machines are reachable directly is not shown: ${failure.error}`;
+  }
+  return {
+    decorate: <R extends { uuid: string; self: boolean }>(row: R): R => {
+      if (row.self) return { ...row, reachableState: 'self', reachable: 'this machine' };
+      const known = byUuid.get(row.uuid);
+      return { ...row, reachableState: known?.state ?? 'unknown', reachable: known?.text ?? 'unknown' };
+    },
+    ...(note === undefined ? {} : { note }),
+  };
+}
+
 function candidacyRow(view: CandidacyListView): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
   let bindingText = '';
   if (view.rebind) {
@@ -280,11 +314,13 @@ export default function register(ctx: ModuleContextLike): void {
       }
       const list = answer as ListAnswerLike;
       const notices = await noticeColumns(configDir());
-      const machines = machineRows(list).map((row) => notices.decorate(row));
+      const reachability = await reachabilityColumns(configDir());
+      const machines = machineRows(list).map((row) => reachability.decorate(notices.decorate(row)));
       return reply.code(200).send({
         machines,
         ...(notices.text === undefined ? {} : { noticesText: notices.text }),
         ...(notices.note === undefined ? {} : { noticesNote: notices.note }),
+        ...(reachability.note === undefined ? {} : { reachableNote: reachability.note }),
         count: machines.length,
         enrolled: list.enrolled === true,
         ...(typeof list.note === 'string' ? { note: list.note } : {}),
@@ -306,6 +342,32 @@ export default function register(ctx: ModuleContextLike): void {
         return reply.code(failure.status).send(failure);
       }
       return reply.code(200).send(requestsPage(answer, Math.floor(Date.now() / 1000)));
+    } catch (err) {
+      const failure = failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  });
+
+  // The progress of an Allow (decision 86): is the request still held, or how did the hold end? Read-only like /requests (it reveals what the Requests page
+  // shows): the page asks every 2 s while a step is pending. `self` is this machine; another machine is its uuid, name or alias.
+  ctx.registerRoute('GET', '/hold-progress/:machine/:id', async (req, reply) => {
+    const params = typeof req === 'object' && req !== null ? (req as { params?: { machine?: unknown; id?: unknown } }).params : undefined;
+    const machine = params?.machine;
+    const id = params?.id;
+    if (typeof id !== 'string' || !/^[0-9a-f-]{6,36}$/.test(id)) {
+      return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'the request id must be 6 to 36 hexadecimal characters and "-" (`machine requests` prints it): /hold-progress/<machine|self>/<request id>' });
+    }
+    if (typeof machine !== 'string' || machine.length === 0 || machine.length > 64) {
+      return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'the machine must be "self" or the name, alias or uuid of a machine, 1 to 64 characters: /hold-progress/<machine|self>/<request id>' });
+    }
+    try {
+      const answer = (await callDaemon(configDir(), 'holdProgress', undefined, machine === 'self' ? { id } : { id, machine })) as { ok?: unknown; reason?: unknown; message?: unknown };
+      if (answer.ok === false) {
+        const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
+        const status = reason === 'unknown-peer' ? 404 : reason === 'bad-payload' ? 400 : 502;
+        return reply.code(status).send({ status, kind: reason, error: typeof answer.message === 'string' ? answer.message : 'the daemon refused the holdProgress command' });
+      }
+      return reply.code(200).send(answer);
     } catch (err) {
       const failure = failureOf(err);
       return reply.code(failure.status).send(failure);

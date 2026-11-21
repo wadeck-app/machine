@@ -1,11 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalize, isRevoked, openPairSecret, verifyInboxDocument, type Json, type VerifiedDocument } from '@wadeck-app/machine-core';
-import { readAdminPin } from './admin.js';
+import type { Json } from '@wadeck-app/machine-core';
 import { writeFileAtomic } from './fsutil.js';
 import type { MachineIdentity } from './identity.js';
-import { importPeer, installPolicy, installRevocation, loadNetwork } from './network.js';
-import { installNoticeRecipients } from './noticeRecipientsStore.js';
+import { createDocumentApplier, safe } from './documentApply.js';
 import { pollDelayMs } from './noPolicy.js';
 import { RelayError, type InboxEntry, type RelayClient } from './relayClient.js';
 
@@ -157,19 +155,8 @@ export class HandledIds {
   }
 }
 
-/** Printable ASCII only and bounded: text that came from the relay or from a document never reaches a log or the audit log raw. */
-const safe = (text: string, max = 300): string => text.replace(/[^\x20-\x7e]/g, '?').slice(0, max);
-
 /** An id as `documentId` makes it: 22 characters of canonical base64url. Anything else is never used as a key, in state or in a request. */
 const isCanonicalId = (id: unknown): id is string => typeof id === 'string' && /^[A-Za-z0-9_-]{22}$/.test(id) && Buffer.from(id, 'base64url').toString('base64url') === id;
-
-function describeKind(document: unknown): string {
-  const kind = (document as { body?: { kind?: unknown } } | null)?.body?.kind;
-  return typeof kind === 'string' ? safe(kind, 20) : 'unknown';
-}
-
-/** Failures of the installation validators that are verdicts on the document (permanent), as opposed to trouble of this machine. */
-const REFUSAL = /^(this machine does not trust that registration|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|revocation refused \()/;
 
 type Outcome = 'installed' | 'waiting' | 'other';
 
@@ -265,41 +252,14 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
     }
   };
 
-  const install = (verified: VerifiedDocument, networkPolicy: unknown): { reason?: string } => {
-    const now = o.now();
-    if (verified.kind === 'peer') {
-      const pairSecret = openPairSecret(verified, o.self.identity.privateKeyPkcs8);
-      importPeer(o.configDir, { registration: verified.signedRegistration, pairSecret }, { now });
-      o.onInstalled?.();
-      return {};
-    }
-    if (verified.kind === 'policy') {
-      try {
-        installPolicy(o.configDir, verified.policy, { now });
-      } catch (e) {
-        // The same policy again (a second document carrying what is already in force) is not an alarm.
-        const sameAsInForce = networkPolicy !== undefined && canonicalize(networkPolicy as Json) === canonicalize(verified.policy.body as unknown as Json);
-        if (sameAsInForce && /policy refused \((stale-base|rollback)\)/.test((e as Error).message)) return { reason: 'already-installed' };
-        throw e;
-      }
-      o.onInstalled?.();
-      return {};
-    }
-    if (verified.kind === 'notice-recipients') {
-      // Information only (request-notices.md): the list decides who receives notices, never a right. The replace-newer rule keeps an older list out.
-      const installed = installNoticeRecipients(o.configDir, verified.noticeRecipients, readAdminPin(o.configDir).adminPublicKey);
-      return installed.changed ? {} : { reason: 'already-installed' };
-    }
-    if (verified.revocation.body.entries.some((entry) => entry.uuid === selfUuid)) {
-      o.log('inbox: THIS machine is on the revocation list of the admin: its peers no longer trust it');
-    }
-    const installed = installRevocation(o.configDir, verified.revocation, { now });
-    if (installed.changed) {
-      o.onRevocationInstalled?.();
-      o.onInstalled?.();
-    }
-    return installed.changed ? {} : { reason: 'already-installed' };
-  };
+  const apply = createDocumentApplier({
+    configDir: o.configDir,
+    self: o.self,
+    now: o.now,
+    log: o.log,
+    ...(o.onInstalled ? { onInstalled: o.onInstalled } : {}),
+    ...(o.onRevocationInstalled ? { onRevocationInstalled: o.onRevocationInstalled } : {}),
+  });
 
   const handleEntry = async (entry: InboxEntry): Promise<Outcome> => {
     if (!isCanonicalId(entry.id)) {
@@ -312,77 +272,50 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
       await acknowledge(entry.id);
       return 'other';
     }
-    const kind = describeKind(entry.document);
-    const network = loadNetwork(o.configDir, o.now());
-    if (!network.enrolled) {
-      notice('not-enrolled', 'inbox: documents are waiting but this machine has not pinned an admin key yet: nothing can be verified. Finish `machine join` first; the documents are kept in the inbox');
-      return 'other';
-    }
-    const verified = verifyInboxDocument(entry.document, {
-      adminPublicKey: readAdminPin(o.configDir).adminPublicKey,
-      selfUuid,
-      now: o.now(),
-      isRevoked: (uuid, serial) => isRevoked(network.revocations, uuid, serial),
-      // Every document is sealed to this machine (decision 78). A clear (version 1) document, or one that does not open with this key, is refused
-      // below like any verdict on a document of the admin: audited once, deleted (so that the admin can send it again), never installed.
-      identityPrivateKeyPkcs8: o.self.identity.privateKeyPkcs8,
-    });
-    if (!verified.ok) {
-      if (verified.reason === 'invalid-admin-key') {
-        notice('invalid-admin-key', `inbox: ${safe(verified.message)} The documents are kept in the inbox`);
+    // The verification and the installation are the same code as for a document delivered directly by a peer (documentApply.ts).
+    const result = apply(entry.document, entry.id);
+    switch (result.status) {
+      case 'not-enrolled':
+        notice('not-enrolled', 'inbox: documents are waiting but this machine has not pinned an admin key yet: nothing can be verified. Finish `machine join` first; the documents are kept in the inbox');
         return 'other';
-      }
-      if (!verified.signed) {
-        await dropUnverified(entry.id, verified.reason);
+      case 'blocked':
+        notice('invalid-admin-key', `inbox: ${safe(result.message)} The documents are kept in the inbox`);
         return 'other';
-      }
-      if (verified.reason === 'not-yet-valid') {
-        keep(entry.id, kind, 'not-yet-valid', `inbox: document ${entry.id} (${kind}) is not valid yet: ${safe(verified.message)}. It stays in the inbox and is looked at again at every round`);
+      case 'unverified':
+        await dropUnverified(entry.id, result.reason);
         return 'other';
-      }
-      await refuse(entry.id, kind, verified.reason, verified.message);
-      return 'other';
-    }
-    if (verified.body.id !== entry.id) {
-      await dropUnverified(entry.id, 'id-mismatch');
-      return 'other';
-    }
-    let outcome: { reason?: string };
-    try {
-      outcome = install(verified, network.policy);
-    } catch (e) {
-      const message = (e as Error).message;
-      if (/not-yet-valid/.test(message)) {
-        keep(entry.id, kind, 'not-yet-valid', `inbox: document ${entry.id} (${kind}) is not valid yet: ${safe(message)}. It stays in the inbox and is looked at again at every round`);
+      case 'deferred':
+        keep(entry.id, result.kind, 'not-yet-valid', `inbox: document ${entry.id} (${result.kind}) is not valid yet: ${safe(result.message)}. It stays in the inbox and is looked at again at every round`);
         return 'other';
-      }
-      if (/^cannot open the sealed pair secret/.test(message)) {
+      case 'unopenable':
         // Not remembered, not deleted: the admin may be able to fix and send again, and a document that cannot be opened must not vanish quietly.
-        sayOnce(`seal:${entry.id}`, `inbox: ${safe(message, 600)}. The document stays in the inbox; this machine cannot use it`);
+        sayOnce(`seal:${entry.id}`, `inbox: ${safe(result.message, 600)}. The document stays in the inbox; this machine cannot use it`);
         return 'other';
-      }
-      if (verified.kind === 'policy' && /policy refused \(stale-base\)/.test(message) && verified.policy.body.baseVersion > (network.policy?.version ?? 0)) {
+      case 'waiting':
         keep(
           entry.id,
-          kind,
+          result.kind,
           'waiting-predecessor',
-          `inbox: document ${entry.id} (policy version ${verified.policy.body.version}) is waiting: version ${verified.policy.body.baseVersion} is not installed here yet. It stays in the inbox until its predecessor arrives or it expires`,
+          `inbox: document ${entry.id} (policy version ${result.version}) is waiting: version ${result.baseVersion} is not installed here yet. It stays in the inbox until its predecessor arrives or it expires`,
         );
         return 'waiting';
-      }
-      if (REFUSAL.test(message)) {
-        await refuse(entry.id, kind, 'install-refused', message);
+      case 'refused':
+        await refuse(entry.id, result.kind, result.reason, result.message);
         return 'other';
+      case 'error':
+        // Anything else is trouble of this machine (disk, unreadable files): the document is neither deleted nor remembered.
+        failed(`document ${entry.id} (${result.kind}) could not be installed: ${result.message}`);
+        return 'other';
+      case 'installed':
+      case 'already-installed': {
+        const reason = result.status === 'already-installed' ? 'already-installed' : undefined;
+        if (!record({ event: 'document-accepted', kind: result.kind, id: entry.id, ...(reason ? { reason } : {}) })) return 'other';
+        handled.add(entry.id);
+        o.log(`inbox: document ${entry.id} (${result.kind}) accepted${reason ? ` (${reason})` : ''}`);
+        await acknowledge(entry.id);
+        return 'installed';
       }
-      // Anything else is trouble of this machine (disk, unreadable files): the document is neither deleted nor remembered.
-      failed(`document ${entry.id} (${kind}) could not be installed: ${message}`);
-      return 'other';
     }
-    if (!record({ event: 'document-accepted', kind, id: entry.id, ...(outcome.reason ? { reason: outcome.reason } : {}) })) return 'other';
-    handled.add(entry.id);
-    o.log(`inbox: document ${entry.id} (${kind}) accepted${outcome.reason ? ` (${outcome.reason})` : ''}`);
-    await acknowledge(entry.id);
-    return 'installed';
   };
 
   /** One line per round for everything that failed verification, and the same line again only after an hour. */

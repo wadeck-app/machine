@@ -1,3 +1,4 @@
+import { directDeliveryFor } from './directDelivery.js';
 import { existsSync } from 'node:fs';
 import { resolveMachineRef } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
@@ -157,7 +158,7 @@ export async function runNotifyTo(configDir: string, o: NotifyToOptions): Promis
     now: o.now(),
     recipients: [...chosen.keys()],
   });
-  const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: self.uuid, now: o.now, configDir };
+  const sender: Sender = { client: access.client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: self.uuid, now: o.now, configDir, direct: directDeliveryFor(configDir, { now: o.now }) };
   const targets = trustedRegistrations(configDir, o.now()).map((r) => ({ uuid: r.body.uuid, name: r.body.name }));
   const report: DistributionReport = { delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: targets.length };
   await putNoticeRecipients(sender, report, signed, targets);
