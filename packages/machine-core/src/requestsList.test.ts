@@ -151,6 +151,23 @@ describe('parseRequestsListAnswer (what the admin machine reads from a peer: unt
     expect(r.ok && r.answer.waiting).toEqual([]);
   });
 
+  it('reads the serial of the notice-recipients list the peer holds: a number, null (no list), or absent (older build)', () => {
+    const id = 'a1b2c3d4-0000-4000-8000-000000000000';
+    const withSerial = parseRequestsListAnswer({ ...valid(), noticeRecipientsSerial: 1234 }, id);
+    expect(withSerial.ok && withSerial.answer.noticeRecipientsSerial).toBe(1234);
+    const none = parseRequestsListAnswer({ ...valid(), noticeRecipientsSerial: null }, id);
+    expect(none.ok && none.answer.noticeRecipientsSerial).toBeNull();
+    const older = parseRequestsListAnswer(valid(), id);
+    expect(older.ok && 'noticeRecipientsSerial' in older.answer).toBe(false);
+    expect(parseRequestsListAnswer({ ...valid(), noticeRecipientsSerial: 'x' }, id)).toMatchObject({ ok: false });
+    expect(parseRequestsListAnswer({ ...valid(), noticeRecipientsSerial: -1 }, id)).toMatchObject({ ok: false });
+  });
+
+  it('the answer a machine builds carries its list serial when it has one to tell', () => {
+    const built = JSON.parse(JSON.stringify(buildRequestsListAnswer({ ...data([]), noticeRecipientsSerial: 77 }, 1_048_576))) as Record<string, unknown>;
+    expect(built['noticeRecipientsSerial']).toBe(77);
+  });
+
   it('refuses a malformed held request and more of them than a machine can hold', () => {
     const id = 'a1b2c3d4-0000-4000-8000-000000000000';
     const v = valid();

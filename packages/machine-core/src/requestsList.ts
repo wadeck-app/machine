@@ -129,6 +129,8 @@ export interface RequestsListData {
   waiting: WaitingRequest[];
   /** Newest first. */
   pending: PendingGroup[];
+  /** Serial of the notice-recipients list this machine holds (request-notices.md); null: it holds none. Absent: an older build, which does not know the field. */
+  noticeRecipientsSerial?: number | null;
 }
 
 export interface RequestsListAnswer extends RequestsListData {
@@ -191,6 +193,10 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
       deadline: w['deadline'],
     });
   }
+  const serial = a['noticeRecipientsSerial'];
+  if (serial !== undefined && serial !== null && !isInt(serial)) {
+    return bad('noticeRecipientsSerial');
+  }
   const pending: PendingGroup[] = [];
   for (const g of a['pending'] as Array<Record<string, unknown>>) {
     if (typeof g !== 'object' || g === null || typeof g['peer'] !== 'string' || typeof g['shell'] !== 'string' || typeof g['command'] !== 'string' || typeof g['reason'] !== 'string') return bad('a group');
@@ -220,6 +226,7 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
       waiting,
       pending,
       truncated: a['truncated'],
+      ...(serial === undefined ? {} : { noticeRecipientsSerial: serial }),
     },
   };
 }

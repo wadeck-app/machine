@@ -6,6 +6,9 @@ import { newCandidacyRandom, verifyInboxDocument } from '@wadeck-app/machine-cor
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
 import { exportMachineInfo } from './network.js';
+import { putNoticeRecipients, type DistributionReport, type Sender } from './distribute.js';
+import { readAdminPin, unlockAdminKey } from './admin.js';
+import { noticeSentFile, readNoticeSent, recordNoticeConfirmed } from './noticeRecipientsSent.js';
 import { readNoticeRecipients } from './noticeRecipientsStore.js';
 import { cli, makeAdmin, ok, type TestAdmin } from './testing.js';
 
@@ -90,6 +93,86 @@ describe('the list of notice recipients rides the distributions the admin alread
     const r = await cli(adminDir, ['admin', 'revoke', 'server'], pass, { ask: yes });
     expect(r.code, r.err).toBe(0);
     expect(listsOf('laptop')).toHaveLength(1);
+  });
+});
+
+describe('the admin machine records what it sent, and says it', () => {
+  it('approve records the list sent to the new machine (serial, time, stored by the relay)', async () => {
+    await enroll('laptop');
+    const stored = readNoticeRecipients(adminDir, admin.adminPublicKey);
+    const entry = readNoticeSent(adminDir)[uuidOf('laptop')];
+    expect(entry?.sent).toMatchObject({ serial: stored?.body.serial, stored: true });
+    expect(entry?.confirmed).toBeUndefined();
+  });
+
+  it('a send the relay refused is recorded as not stored', async () => {
+    await enroll('laptop');
+    const key = await unlockAdminKey(adminDir, pass);
+    const signed = readNoticeRecipients(adminDir, readAdminPin(adminDir).adminPublicKey);
+    const client = { putInboxDocument: async () => { throw new Error('relay down'); } } as unknown as Sender['client'];
+    const sender: Sender = { client, adminPrivateKeyPkcs8: key.privateKeyPkcs8, adminUuid: uuidOf('desktop'), now: nowSeconds, configDir: adminDir };
+    const report: DistributionReport = { delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: 1 };
+    await putNoticeRecipients(sender, report, signed as NonNullable<typeof signed>, [{ uuid: uuidOf('laptop'), name: 'laptop' }]);
+    expect(report.failures).toHaveLength(1);
+    expect(readNoticeSent(adminDir)[uuidOf('laptop')]?.sent).toMatchObject({ stored: false });
+  });
+
+  it('distribute of the only machine says it sent the list, even though there is no other peer to inform', async () => {
+    await enroll('laptop');
+    const r = await cli(adminDir, ['admin', 'distribute', 'laptop'], pass);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/no other peer to inform/);
+    expect(r.out).toMatch(/request notices list.*laptop/);
+  });
+});
+
+describe('machine admin notify-to --list: who holds the list', () => {
+  const listText = async () => {
+    const r = await cli(adminDir, ['admin', 'notify-to', '--list'], async () => {
+      throw new Error('--list must not ask for a passphrase');
+    });
+    expect(r.code, r.err).toBe(0);
+    return r.out;
+  };
+  const lineOf = (out: string, name: string) => out.split('\n').find((l) => new RegExp(`^  ${name}\\s`).test(l) && /list|sent|unknown|failed/.test(l)) ?? '';
+
+  it('one line per trusted machine: sent but not confirmed, then confirmed, then an older list, then unknown', async () => {
+    await enroll('laptop');
+    await enroll('server');
+    const serial = readNoticeRecipients(adminDir, admin.adminPublicKey)?.body.serial ?? 0;
+    const sentOnly = await listText();
+    expect(lineOf(sentOnly, 'laptop')).toMatch(/sent .*, not confirmed/);
+    expect(lineOf(sentOnly, 'server')).toMatch(/sent .*, not confirmed/);
+    // The hint says what to run, with the recipients of the current list.
+    expect(sentOnly).toMatch(/machine admin notify-to desktop/);
+    expect(sentOnly).toMatch(/machine requests <machine>/);
+
+    recordNoticeConfirmed(adminDir, uuidOf('laptop'), { serial, at: nowSeconds() + 5 });
+    recordNoticeConfirmed(adminDir, uuidOf('server'), { serial: serial - 10, at: nowSeconds() + 5 });
+    const confirmed = await listText();
+    expect(lineOf(confirmed, 'laptop')).toContain(`has the current list (serial ${serial}`);
+    expect(lineOf(confirmed, 'server')).toContain(`has an older list (serial ${serial - 10}`);
+
+    rmSync(noticeSentFile(adminDir));
+    const unknown = await listText();
+    expect(lineOf(unknown, 'laptop')).toMatch(/unknown \(older build or never asked\)/);
+  });
+
+  it('when every machine holds the current list there is nothing to run', async () => {
+    await enroll('laptop');
+    const serial = readNoticeRecipients(adminDir, admin.adminPublicKey)?.body.serial ?? 0;
+    recordNoticeConfirmed(adminDir, uuidOf('laptop'), { serial, at: nowSeconds() + 5 });
+    const out = await listText();
+    expect(out).toMatch(/every trusted machine holds the current list/);
+    expect(out).not.toMatch(/machine admin notify-to desktop/);
+  });
+
+  it('a damaged record is a warning with the fix and the recipients are still listed', async () => {
+    await enroll('laptop');
+    writeFileSync(noticeSentFile(adminDir), '{not json');
+    const out = await listText();
+    expect(out).toMatch(/Request notices go to/);
+    expect(out).toMatch(/\[warn\].*notice-recipients-sent\.json.*Delete it/);
   });
 });
 

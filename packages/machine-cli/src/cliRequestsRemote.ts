@@ -7,6 +7,7 @@ import { EXIT, type CommandContext } from './cliTypes.js';
 import { connectWithWake } from './wakeConnect.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
+import { confirmFromAnswer } from './noticeRecipientsSent.js';
 import { listRequestsOnPeer } from './requestsRemote.js';
 
 // `machine requests <machine>` and `machine requests --all` (decision 74): the ADMIN machine asks peers for the requests they refused because
@@ -89,6 +90,11 @@ export async function runRemoteRequests(ctx: CommandContext, prompt: Prompt): Pr
         if (result.ok) {
           outcome.ok = true;
           outcome.answer = result.answer;
+          // Which notice-recipients list this peer holds, kept for `machine admin notify-to --list`; a record that cannot be written is a warning, never a failure.
+          const recordProblem = confirmFromAnswer(configDir, peer.peerId, result.answer, epochSeconds());
+          if (recordProblem !== undefined) {
+            io.stderr(`[warn] ${recordProblem}\n`);
+          }
         } else outcome.error = `${result.reason}: ${result.message}`;
       } finally {
         connected.session.close();

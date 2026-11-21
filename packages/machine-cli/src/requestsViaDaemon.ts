@@ -4,6 +4,7 @@ import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
 import { pinnedOf } from './cliWake.js';
+import { confirmFromAnswer } from './noticeRecipientsSent.js';
 import { sendSignedRequestsList, type ListRequestsResult } from './requestsRemote.js';
 import { readAliases } from './state.js';
 
@@ -46,7 +47,15 @@ export async function remoteRequestsCommand(configDir: string, payload: unknown,
     return fail('unreachable', `cannot reach ${peer.name}: ${(e as Error).message}${warnings.length > 0 ? ` (${warnings.join('; ')})` : ''}`);
   }
   try {
-    return await sendSignedRequestsList(session, p.request as SignedRequestsList);
+    const result = await sendSignedRequestsList(session, p.request as SignedRequestsList);
+    if (result.ok) {
+      // Which notice-recipients list this peer holds, kept for `machine admin notify-to --list` and the Machines page. A record that cannot be written is told in the answer.
+      const recordProblem = confirmFromAnswer(configDir, peer.peerId, result.answer, now);
+      if (recordProblem !== undefined) {
+        return { ...result, warnings: [recordProblem] };
+      }
+    }
+    return result;
   } catch (e) {
     return fail('no-answer', (e as Error).message);
   } finally {

@@ -20,7 +20,8 @@ export interface ListRequestsInput {
   timeoutMs?: number;
 }
 
-export type ListRequestsResult = { ok: true; answer: RequestsListAnswer } | { ok: false; reason: string; message: string };
+/** `warnings`: problems of this machine's own bookkeeping that do not change the answer (shown, never fatal). */
+export type ListRequestsResult = { ok: true; answer: RequestsListAnswer; warnings?: string[] } | { ok: false; reason: string; message: string };
 
 /** Signs a request with the admin key (CLI path) and sends it. */
 export async function listRequestsOnPeer(session: PeerSession, input: ListRequestsInput): Promise<ListRequestsResult> {

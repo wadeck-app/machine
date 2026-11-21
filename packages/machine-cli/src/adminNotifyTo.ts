@@ -1,5 +1,6 @@
+import { existsSync } from 'node:fs';
 import { resolveMachineRef } from '@wadeck-app/machine-core';
-import { readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
+import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import {
   adminMachineIdentity,
@@ -13,6 +14,7 @@ import {
   type Sender,
 } from './distribute.js';
 import { loadNetwork, trustedRegistrations } from './network.js';
+import { holdingOf, readNoticeSent, type Holding, type NoticeSentRecord } from './noticeRecipientsSent.js';
 import { noticeRecipientsFile, readNoticeRecipients, signNoticeRecipientsFor } from './noticeRecipientsStore.js';
 import type { RelayClient } from './relayClient.js';
 import { readAliases } from './state.js';
@@ -35,6 +37,8 @@ export interface NotifyToResult {
   report?: DistributionReport;
   formatted?: FormattedDistribution;
   recipients: Array<{ uuid: string; name: string }>;
+  /** `--list` on the admin machine: what each trusted machine holds (from the local record). */
+  holders?: HolderView[];
 }
 
 /** The name this machine knows a uuid by: a trusted peer, this machine itself, or the bare uuid. */
@@ -57,7 +61,63 @@ export function listNoticeRecipients(configDir: string, now: number): NotifyToRe
   }
   const recipients = signed.body.recipients.map((uuid) => ({ uuid, name: nameOf(configDir, uuid, now) }));
   const lines = recipients.length === 0 ? ['  (nobody: the list is empty)'] : recipients.map((r) => `  ${r.name}  ${r.uuid}`);
-  return { out: `Request notices go to (list serial ${signed.body.serial}, signed ${new Date(signed.body.issuedAt * 1000).toISOString()}):\n${lines.join('\n')}\n`, recipients };
+  const head = `Request notices go to (list serial ${signed.body.serial}, signed ${new Date(signed.body.issuedAt * 1000).toISOString()}):\n${lines.join('\n')}\n`;
+  // Only the admin machine signs and sends the list: it alone has a record of who holds it.
+  if (!existsSync(adminKeyFile(configDir))) {
+    return { out: head, recipients };
+  }
+  const holders = holdersOf(configDir, signed.body.serial, recipients.map((r) => r.name), now);
+  return { out: `${head}${holders.text}`, recipients, holders: holders.machines };
+}
+
+export interface HolderView {
+  uuid: string;
+  name: string;
+  holding: Holding;
+}
+
+const dateText = (at: number): string => new Date(at * 1000).toISOString();
+
+/** What each Holding says in the terminal. */
+export function holdingText(h: Holding): string {
+  switch (h.state) {
+    case 'current':
+      return `has the current list (serial ${h.serial}, confirmed ${dateText(h.at)})`;
+    case 'newer':
+      return `has a newer list (serial ${h.serial}, confirmed ${dateText(h.at)}): another admin machine signed it`;
+    case 'sent':
+      return `sent ${dateText(h.at)}, not confirmed`;
+    case 'send-failed':
+      return `the last send FAILED (${dateText(h.at)}): nothing reached its inbox`;
+    case 'older':
+      return `has an older list (serial ${h.serial}, confirmed ${dateText(h.at)})`;
+    case 'none':
+      return `has no list (confirmed ${dateText(h.at)})`;
+    case 'unknown':
+      return 'unknown (older build or never asked)';
+  }
+}
+
+/** One line per trusted machine, from the record of this admin machine (no network, no passphrase), and the command that fixes what is missing. */
+function holdersOf(configDir: string, currentSerial: number, recipientNames: string[], now: number): { text: string; machines: HolderView[] } {
+  let record: NoticeSentRecord;
+  try {
+    record = readNoticeSent(configDir);
+  } catch (e) {
+    return { text: `[warn] ${(e as Error).message}\n`, machines: [] };
+  }
+  const machines = trustedRegistrations(configDir, now).map((r) => ({ uuid: r.body.uuid, name: r.body.name, holding: holdingOf(currentSerial, record[r.body.uuid]) }));
+  if (machines.length === 0) {
+    return { text: '', machines };
+  }
+  const width = Math.max(...machines.map((m) => m.name.length));
+  const lines = machines.map((m) => `  ${m.name.padEnd(width)}  ${holdingText(m.holding)}`);
+  const missing = machines.filter((m) => m.holding.state !== 'current' && m.holding.state !== 'newer');
+  const fix =
+    missing.length === 0
+      ? 'every trusted machine holds the current list\n'
+      : `To send the list to the machines that do not hold it: machine admin notify-to ${recipientNames.length > 0 ? recipientNames.join(' ') : '<machine>...'} (signs a new list with the same recipients and sends it to every trusted machine; any \`machine admin allow\` also carries the current one). To confirm what a machine holds: machine requests <machine>. \`machine admin distribute <machine>\` tells the OTHER machines about it, it is not the way to send the list to that machine alone\n`;
+  return { text: `\nWho holds the list (recorded on this machine; a machine is confirmed only when it answered \`machine requests\` or the Requests page):\n${lines.join('\n')}\n${fix}`, machines };
 }
 
 export async function runNotifyTo(configDir: string, o: NotifyToOptions): Promise<NotifyToResult> {

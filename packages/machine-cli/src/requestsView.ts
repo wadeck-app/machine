@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authorize, isUuid, resolveMachineRef, summarizeRequests, visibleNotices, type HistoryKind, type PolicyBody, type PolicyMode, type RequestsSummary, type StoredNotice } from '@wadeck-app/machine-core';
-import { adminKeyFile, readAdminPin } from './admin.js';
+import { adminKeyFile, adminPinFile, readAdminPin } from './admin.js';
+import { readNoticeRecipients } from './noticeRecipientsStore.js';
 import type { RequestsListDeps } from './peerService.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
@@ -123,6 +124,19 @@ export function requestsAnswer(configDir: string, query: RequestsQuery, now: num
   };
 }
 
+/** The serial of the notice-recipients list stored here; null when there is none, no admin key to check it against, or the file cannot be used (said in the log). */
+function heldListSerial(configDir: string, log: (line: string) => void): number | null {
+  try {
+    if (!existsSync(adminPinFile(configDir))) {
+      return null;
+    }
+    return readNoticeRecipients(configDir, readAdminPin(configDir).adminPublicKey)?.body.serial ?? null;
+  } catch (e) {
+    log(`requests-list: the notice-recipients list is not told to the admin: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** The two readers the peer service needs for `requests-list` (decision 74): the pinned admin key and the pending groups of this machine's log. */
 export function makeRequestsListDeps(configDir: string, now: () => number, log: (line: string) => void): RequestsListDeps {
   return {
@@ -147,6 +161,8 @@ export function makeRequestsListDeps(configDir: string, now: () => number, log: 
         allowedNow: summary.allowedNow,
         waiting: summary.waiting,
         pending: summary.pending,
+        // The admin machine learns who holds its list from this (request-notices.md): null when this machine holds none or cannot read it.
+        noticeRecipientsSerial: heldListSerial(configDir, log),
       };
     },
   };

@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PolicyBody } from '@wadeck-app/machine-core';
+import { generateSigningKeyPair, keyId, signNoticeRecipients, type PolicyBody } from '@wadeck-app/machine-core';
+import { installNoticeRecipients, noticeRecipientsFile } from './noticeRecipientsStore.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { initMachine } from './identity.js';
 import { isListed, makeRequestsListDeps, requestsAnswer, type RequestsView } from './requestsView.js';
@@ -102,6 +103,22 @@ describe('makeRequestsListDeps (what the daemon hands to the requests-list excha
     expect(data.chain).toEqual({ ok: true });
     expect(data.pendingTotal).toBe(2);
     expect(data.pending.map((g) => g.command)).toEqual(['df -h']);
+  });
+
+  it('tells the serial of the notice-recipients list it holds, null when it holds none or cannot use it', () => {
+    initMachine(dir, 'target');
+    expect(makeRequestsListDeps(dir, () => NOW, () => undefined).list(5).noticeRecipientsSerial).toBeNull();
+    const admin = generateSigningKeyPair();
+    writeFileSync(join(dir, 'admin.json'), JSON.stringify({ v: 1, adminPublicKey: admin.publicKey, adminKeyId: keyId(admin.publicKey) }));
+    expect(makeRequestsListDeps(dir, () => NOW, () => undefined).list(5).noticeRecipientsSerial).toBeNull();
+    const signed = signNoticeRecipients({ v: 1, adminKeyId: keyId(admin.publicKey), serial: 4242, issuedAt: 4242, recipients: [PEER] }, admin.privateKeyPkcs8);
+    installNoticeRecipients(dir, signed, admin.publicKey);
+    expect(makeRequestsListDeps(dir, () => NOW, () => undefined).list(5).noticeRecipientsSerial).toBe(4242);
+    // A damaged file is reported in the daemon log and answered as "no usable list": the admin then sees it as missing.
+    writeFileSync(noticeRecipientsFile(dir), '{not json');
+    const logged: string[] = [];
+    expect(makeRequestsListDeps(dir, () => NOW, (m) => logged.push(m)).list(5).noticeRecipientsSerial).toBeNull();
+    expect(logged.join('\n')).toMatch(/notice-recipients\.json/);
   });
 
   it('reports a broken chain by its line', () => {

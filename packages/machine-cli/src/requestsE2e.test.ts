@@ -2,7 +2,13 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { newRequestsList, signNoticeRecipients, signRequestsList } from '@wadeck-app/machine-core';
+import { readAdminPin, unlockAdminKey } from './admin.js';
 import { startMachineDaemon } from './daemonEntry.js';
+import { readMachine } from './identity.js';
+import { readNoticeSent } from './noticeRecipientsSent.js';
+import { installNoticeRecipients } from './noticeRecipientsStore.js';
+import { remoteRequestsCommand } from './requestsViaDaemon.js';
 import { cli, provision } from './testing.js';
 
 // The admin machine ("desktop", A) lists the requests refused by a peer ("laptop", B) over the real peer channel, on loopback.
@@ -32,6 +38,34 @@ afterEach(async () => {
 
 const refuseOnce = (command: string[]) => cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', SHELL, '--', ...command]);
 const prompt = async () => passphrase;
+
+describe('the answer tells which notice-recipients list the peer holds, and the admin machine records it', () => {
+  const laptopUuid = () => readMachine(b).uuid;
+
+  it('machine requests <machine>: no list on the peer is recorded as confirmed "none", then the serial once it holds one', async () => {
+    const first = await cli(a, ['requests', 'laptop', '--address', address], prompt);
+    expect(first.code, first.err).toBe(0);
+    expect(readNoticeSent(a)[laptopUuid()]?.confirmed).toMatchObject({ serial: null });
+    const key = await unlockAdminKey(a, prompt);
+    const pin = readAdminPin(b);
+    installNoticeRecipients(b, signNoticeRecipients({ v: 1, adminKeyId: pin.adminKeyId, serial: 777, issuedAt: 777, recipients: [readMachine(a).uuid] }, key.privateKeyPkcs8), pin.adminPublicKey);
+    const second = await cli(a, ['requests', 'laptop', '--address', address], prompt);
+    expect(second.code, second.err).toBe(0);
+    expect(readNoticeSent(a)[laptopUuid()]?.confirmed).toMatchObject({ serial: 777 });
+  });
+
+  it('the Requests page path (the daemon forwards a request signed in the browser) records it the same way', async () => {
+    const key = await unlockAdminKey(a, prompt);
+    const pin = readAdminPin(b);
+    installNoticeRecipients(b, signNoticeRecipients({ v: 1, adminKeyId: pin.adminKeyId, serial: 888, issuedAt: 888, recipients: [readMachine(a).uuid] }, key.privateKeyPkcs8), pin.adminPublicKey);
+    await cli(a, ['peer', 'connect', 'laptop', '--address', address]);
+    const now = Math.floor(Date.now() / 1000);
+    const request = signRequestsList(newRequestsList({ source: readMachine(a).uuid, target: laptopUuid(), limit: 10, now }), key.privateKeyPkcs8);
+    const answer = await remoteRequestsCommand(a, { peer: 'laptop', request }, now);
+    expect(answer.ok, JSON.stringify(answer)).toBe(true);
+    expect(readNoticeSent(a)[laptopUuid()]?.confirmed).toMatchObject({ serial: 888 });
+  });
+});
 
 describe('machine requests <machine> (the admin machine asks a peer)', () => {
   it('shows the pending requests of the peer with the exact command to allow them', async () => {

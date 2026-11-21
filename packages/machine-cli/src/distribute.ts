@@ -22,6 +22,7 @@ import { adminKeyFile, readAdminPin } from './admin.js';
 import { adminRelayError } from './adminRelay.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, loadNetwork, revocationState, signAndInstallRevocation, trustedRegistrations } from './network.js';
+import { recordNoticeSent } from './noticeRecipientsSent.js';
 import { signNoticeRecipientsFor } from './noticeRecipientsStore.js';
 import { createRelayClient, RelayError, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile } from './relayStore.js';
@@ -50,6 +51,10 @@ export interface DistributionReport {
   machines: number;
   /** Lists of notice recipients stored or already there: they ride every distribution and are not counted above, so the output stays about what the admin decided. */
   noticeLists?: number;
+  /** The machines those lists were stored for (names), so the output can say it even when there is no other peer to inform. */
+  noticeNames?: string[];
+  /** Problems that do not fail the distribution (the record of what was sent could not be written): printed as `[warn]`. */
+  warnings?: string[];
 }
 
 export interface Sender {
@@ -106,6 +111,7 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
     await sender.client.putInboxDocument(to.uuid, document);
     if (kind === 'notice-recipients') {
       report.noticeLists = (report.noticeLists ?? 0) + 1;
+      (report.noticeNames ??= []).push(to.name);
     }
     else report.delivered++;
     return true;
@@ -113,6 +119,7 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
     if (raw instanceof RelayError && raw.code === 'id_conflict') {
       if (kind === 'notice-recipients') {
         report.noticeLists = (report.noticeLists ?? 0) + 1;
+        (report.noticeNames ??= []).push(to.name);
       }
       else report.alreadyThere++;
       return true;
@@ -307,6 +314,7 @@ export async function putNoticeRecipients(sender: Sender, report: DistributionRe
     if (to.uuid === sender.adminUuid) {
       continue;
     }
+    const before = report.noticeLists ?? 0;
     const next = await put(sender, report, to, 'notice-recipients', () => {
       const now = sender.now();
       return buildDocument(
@@ -322,6 +330,15 @@ export async function putNoticeRecipients(sender: Sender, report: DistributionRe
         sender.adminPrivateKeyPkcs8,
       );
     });
+    // What this machine sent, for `machine admin notify-to --list` and the Machines page; display only, a failure to write it is a warning.
+    const recordDir = sender.configDir ?? clientConfigDir.get(sender.client);
+    if (recordDir !== undefined) {
+      try {
+        recordNoticeSent(recordDir, to.uuid, { serial: signed.body.serial, at: sender.now(), stored: (report.noticeLists ?? 0) > before });
+      } catch (e) {
+        (report.warnings ??= []).push((e as Error).message);
+      }
+    }
     if (!next) {
       return;
     }
@@ -393,9 +410,16 @@ export function formatDistribution(report: DistributionReport, what: string, ret
   if (report.delivered > 0) {
     out += `${SEALED_NOTICE}\n`;
   }
-  if (!failed) return { out, err: '', failed: false };
+  if (report.noticeNames !== undefined && report.noticeNames.length > 0) {
+    out += `[ok] request notices list stored by the relay for ${[...new Set(report.noticeNames)].join(', ')} (each reads it at its next inbox check)\n`;
+  }
+  const warned = (report.warnings ?? []).map((w) => `[warn] ${w}\n`).join('');
+  // Not every caller prints `err` when nothing failed: a warning rides `out` then, so it is never lost.
+  if (!failed) {
+    return { out: `${out}${warned}`, err: '', failed: false };
+  }
   const lines = report.failures.map((f) => `[error] ${f.toName} (${f.toUuid}): ${f.kind === 'machine' ? '' : `${f.kind} document${f.id ? ` ${f.id}` : ''} not stored: `}${f.message}`);
   if (report.aborted) lines.push('[error] the relay or the admin token cannot be used: the remaining documents were not attempted');
   lines.push(`[warn] ${what} stands: nothing was undone. The machines above do not know it yet (they learn it when the document reaches them). Run \`${retry}\` to send what is missing; it is safe to run again`);
-  return { out, err: `${lines.join('\n')}\n`, failed: true };
+  return { out, err: `${warned}${lines.join('\n')}\n`, failed: true };
 }

@@ -11,6 +11,7 @@ import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.
 import { runWake, runWakeInfo } from './cliWake.js';
 import { runDefaultsDocument, runDefaultsStatusLine, runDefaultsView, runRunDefaults } from './cliRunDefaults.js';
 import { RunDefaultsError } from './runDefaultsStore.js';
+import { noticeRecipientsStatus } from './noticeRecipientsStatus.js';
 import { runRequests } from './cliRequests.js';
 import { logOnlyFlagProblem, runActivityLog } from './cliActivity.js'; // run-log
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
@@ -759,6 +760,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
             return { text: [`[warn] ${e.message}`], document: { error: e.message } };
           }
         })();
+        const notices = noticeRecipientsStatus(configDir, { uuid: r.uuid, name: r.name }, Math.floor((io.now?.() ?? new Date()).getTime() / 1000));
         const lines = [
           `${r.name} (${r.uuid})`,
           `version: ${r.version}`,
@@ -772,9 +774,10 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           ...revokedBlock(r.revoked ?? [], Math.floor((io.now?.() ?? new Date()).getTime() / 1000)),
           ...(r.peersBehind ?? []).map((p) => `[warn] ${p.name} announced revocation version ${p.revocationVersionSeen} at its last handshake (this machine holds ${r.revocationVersion}) and its revocations differ from this machine's: it may still trust a revoked machine until it meets a peer that has the lists; run "machine admin distribute <revoked machine>" or make it connect to one`),
           ...(r.problems ?? []).map((p) => `[warn] ${p}`),
+          ...(notices === undefined ? [] : [notices.line]),
           ...runLines.text,
         ];
-        emit({ ...r, daemon, runDefaults: runLines.document }, `${lines.join('\n')}\n`);
+        emit({ ...r, daemon, runDefaults: runLines.document, ...(notices === undefined ? {} : { noticeRecipients: { state: notices.state, recipients: notices.recipients } }) }, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {
