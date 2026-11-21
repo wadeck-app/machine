@@ -2,8 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DOCUMENT_DOMAIN, buildDocument, documentId, documentSealContext, newCandidacyRandom, openSealed, sealTo, signDocument, signPolicy, type DocumentInput, type Json, type SignedDocument, generateSigningKeyPair } from '@wadeck-app/machine-core';
-import { unlockAdminKey } from './admin.js';
+import { DOCUMENT_DOMAIN, buildDocument, documentId, documentSealContext, newCandidacyRandom, openSealed, sealTo, signDocument, signNoticeRecipients, signPolicy, type DocumentInput, type Json, type SignedDocument, generateSigningKeyPair } from '@wadeck-app/machine-core';
+import { readAdminPin, unlockAdminKey } from './admin.js';
+import { readNoticeRecipients } from './noticeRecipientsStore.js';
 import { startMachineDaemon } from './daemonEntry.js';
 import { startFakeRelay, type FakeRelay } from './fakeRelay.js';
 import { readMachine } from './identity.js';
@@ -25,6 +26,7 @@ let loops: InboxLoop[];
 const yes = async () => 'y';
 const pass = async () => admin.passphrase;
 const dirOf = (name: string) => join(root, name);
+const readAdminPinKey = () => readAdminPin(dirOf('laptop')).adminPublicKey;
 const uuidOf = (name: string) => readMachine(dirOf(name)).uuid;
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 const adminClient = () => createRelayClient({ baseUrl: relay.url, token: relay.adminToken });
@@ -75,6 +77,12 @@ async function enroll(name: string): Promise<void> {
   relay.addCandidacy(id, { name: info.name, hostname: 'h', identityPublicKey: info.identityPublicKey, random: newCandidacyRandom(), uuid: info.uuid });
   const r = await cli(adminDir, ['admin', 'approve', id, '--relay', relay.url], pass, { ask: yes });
   if (r.code !== 0) throw new Error(`approve ${name} failed: ${r.err}`);
+  // The list of notice recipients rides every approval (request-notices.md): these tests are about the other documents, the list has its own describe below.
+  for (const machine of ['desktop', 'laptop', 'server']) {
+    for (const d of relay.inbox(uuidOf(machine))) {
+      if ((d.document as SignedDocument).body.kind === 'notice-recipients') await adminClient().deleteInboxDocument(uuidOf(machine), d.id);
+    }
+  }
 }
 
 /** The machine `laptop` as the daemon sees it: admin key pinned, relay token stored, and it owns its inbox. */
@@ -619,7 +627,8 @@ describe('the inbox loop: transient causes are kept, permanent ones are refused'
       await ok(adminDir, ['admin', 'sign-policy', file, '--out', join(root, `p${version}.json`)], pass);
     }
     for (const d of relay.inbox(uuidOf('laptop'))) {
-      docs.push(d.document as SignedDocument);
+      // The list of notice recipients rides every distribution (request-notices.md): not a policy.
+      if ((d.document as SignedDocument).body.kind !== 'notice-recipients') docs.push(d.document as SignedDocument);
       await createRelayClient({ baseUrl: relay.url, token: relay.token }).deleteInboxDocument(uuidOf('laptop'), d.id);
     }
     return docs;
@@ -789,7 +798,7 @@ describe('the inbox loop: the handled-id set is bounded, and a replay of an evic
     const draft = join(root, 'dv1.json');
     writeFileSync(draft, JSON.stringify({ v: 1, target: uuidOf('laptop'), version: 1, baseVersion: 0, defaults: [{ shell: 'sh', command: 'echo v1' }], peers: {} }));
     await ok(adminDir, ['admin', 'sign-policy', draft, '--out', join(root, 'pv1.json')], pass);
-    const [peerEntry, policyEntry] = relay.inbox(uuidOf('laptop')) as unknown as [{ document: SignedDocument }, { document: SignedDocument }];
+    const [peerEntry, policyEntry] = relay.inbox(uuidOf('laptop')).filter((e) => (e.document as SignedDocument).body.kind !== 'notice-recipients') as unknown as [{ document: SignedDocument }, { document: SignedDocument }];
     const { loop } = loopFor('laptop', { handledCap: 1 });
     await loop.ready;
     expect(machineNames('laptop')).toEqual(['server']);
@@ -806,7 +815,8 @@ describe('the inbox loop: the handled-id set is bounded, and a replay of an evic
     };
     const before = state();
     const remembered = JSON.parse(readFileSync(join(dirOf('laptop'), 'inbox-state.json'), 'utf8')) as { ids: string[] };
-    expect(remembered.ids).toEqual([revocationDoc.body.id]);
+    // Only the last handled id is kept (cap 1): the revocation or the list that rides with it.
+    expect(remembered.ids).toHaveLength(1);
 
     // The three ids but the last are forgotten: the relay replays all three documents.
     for (const doc of [peerEntry.document, policyEntry.document, revocationDoc]) await adminClient().putInboxDocument(uuidOf('laptop'), doc);
@@ -977,5 +987,38 @@ describe('the daemon starts the loop only when the machine joined a relay', () =
   it('a corrupt relay.json stops the start with the file named and the fix', async () => {
     writeFileSync(join(dirOf('laptop'), '_secrets_', 'relay.json'), '{ nope');
     await expect(startMachineDaemon(dirOf('laptop'), { port: 0, peerPort: 0, peerHost: '127.0.0.1', version: 'v' })).rejects.toThrow(/relay\.json.*machine join/s);
+  });
+});
+
+describe('the inbox loop: notice-recipients documents (request-notices.md)', () => {
+  const sealedList = async (serial: number, recipients: string[], signer?: Uint8Array) => {
+    const key = await unlockAdminKey(adminDir, pass);
+    const signed = signNoticeRecipients({ v: 1, adminKeyId: readAdminPin(adminDir).adminKeyId, serial, issuedAt: serial, recipients }, signer ?? key.privateKeyPkcs8);
+    return sealedFor('laptop', { kind: 'notice-recipients', to: uuidOf('laptop'), id: documentId(`list ${serial}`), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 1000, payload: signed as unknown as Json }, key.privateKeyPkcs8);
+  };
+
+  it('installs the list, then ignores an older one as already installed', async () => {
+    await adminClient().putInboxDocument(uuidOf('laptop'), await sealedList(2000, [uuidOf('desktop')]));
+    const { loop } = loopFor('laptop');
+    await loop.ready;
+    expect(readNoticeRecipients(dirOf('laptop'), readAdminPinKey())?.body.recipients).toEqual([uuidOf('desktop')]);
+    expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
+    await adminClient().putInboxDocument(uuidOf('laptop'), await sealedList(1000, [uuidOf('server')]));
+    await loop.runOnce();
+    expect(readNoticeRecipients(dirOf('laptop'), readAdminPinKey())?.body.serial).toBe(2000);
+    expect(auditText('laptop')).toMatch(/already-installed/);
+  });
+
+  it('refuses a list whose inner signature is not the admin key (audited, deleted, nothing stored)', async () => {
+    const stranger = generateSigningKeyPair();
+    const key = await unlockAdminKey(adminDir, pass);
+    const forged = signNoticeRecipients({ v: 1, adminKeyId: readAdminPin(adminDir).adminKeyId, serial: 3000, issuedAt: 3000, recipients: [uuidOf('server')] }, stranger.privateKeyPkcs8);
+    const doc = sealedFor('laptop', { kind: 'notice-recipients', to: uuidOf('laptop'), id: documentId('forged list'), issuedAt: nowSeconds(), expiresAt: nowSeconds() + 1000, payload: forged as unknown as Json }, key.privateKeyPkcs8);
+    await adminClient().putInboxDocument(uuidOf('laptop'), doc);
+    const { loop } = loopFor('laptop');
+    await loop.ready;
+    expect(readNoticeRecipients(dirOf('laptop'), readAdminPinKey())).toBeUndefined();
+    expect(auditText('laptop')).toMatch(/document-rejected/);
+    expect(relay.inbox(uuidOf('laptop'))).toHaveLength(0);
   });
 });

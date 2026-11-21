@@ -219,6 +219,12 @@ Administration (enrollment through the relay, or by files):
                                      here (by uuid). Safe to run again: same ids, nothing duplicated. Admin passphrase
   admin distribute --policy <signed.json>
                                      send a policy signed earlier (admin sign-policy --out) to its target machine
+  admin notify-to <machine>...       choose the machines that receive notices of the requests other peers hold or
+                                     get refused on a machine (the Requests page shows them without a passphrase).
+                                     Signs a list (admin passphrase) and sends it to every peer. Every distribution
+                                     already sends the list [this machine] when none exists, so this is only needed to
+                                     choose other machines. Information only: it grants nothing
+  admin notify-to --list             show the machines that receive notices (no passphrase)
   admin forget-relay-record <machine|uuid>
                                      remove the record, the binding of the uuid to a token and the inbox of a machine on
                                      the relay (y/N, needs the admin relay token, no passphrase): the way to make room when
@@ -537,7 +543,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     return fail('"--" is only used by `machine run`, `machine admin allow` and `machine policy allow` (it introduces the command line)', EXIT.usage);
   }
   const peerConnect = command === 'peer' && rest[0] === 'connect';
-  if ((args.list || args.remove) && !(command === 'admin' && rest[0] === 'allow') && !policyAllow && !(peerConnect && args.remove && !args.list)) {
+  if ((args.list || args.remove) && !(command === 'admin' && (rest[0] === 'allow' || (rest[0] === 'notify-to' && args.list && !args.remove))) && !policyAllow && !(peerConnect && args.remove && !args.list)) {
     return fail('--list and --remove only apply to `machine admin allow` and `machine policy allow` (`machine admin allow <machine> --list`, `machine policy allow --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
   }
   const adminAllow = command === 'admin' && rest[0] === 'allow';
@@ -642,7 +648,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
+    const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'notify-to', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
     if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
   }
 

@@ -5,6 +5,7 @@ import { readAdminPin } from './admin.js';
 import { writeFileAtomic } from './fsutil.js';
 import type { MachineIdentity } from './identity.js';
 import { importPeer, installPolicy, installRevocation, loadNetwork } from './network.js';
+import { installNoticeRecipients } from './noticeRecipientsStore.js';
 import { pollDelayMs } from './noPolicy.js';
 import { RelayError, type InboxEntry, type RelayClient } from './relayClient.js';
 
@@ -158,7 +159,7 @@ function describeKind(document: unknown): string {
 }
 
 /** Failures of the installation validators that are verdicts on the document (permanent), as opposed to trouble of this machine. */
-const REFUSAL = /^(this machine does not trust that registration|the bundle's pair secret is invalid|policy refused \(|revocation refused \()/;
+const REFUSAL = /^(this machine does not trust that registration|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|revocation refused \()/;
 
 type Outcome = 'installed' | 'waiting' | 'other';
 
@@ -273,6 +274,11 @@ export function startInboxLoop(o: InboxLoopOptions): InboxLoop {
       }
       o.onInstalled?.();
       return {};
+    }
+    if (verified.kind === 'notice-recipients') {
+      // Information only (request-notices.md): the list decides who receives notices, never a right. The replace-newer rule keeps an older list out.
+      const installed = installNoticeRecipients(o.configDir, verified.noticeRecipients, readAdminPin(o.configDir).adminPublicKey);
+      return installed.changed ? {} : { reason: 'already-installed' };
     }
     if (verified.revocation.body.entries.some((entry) => entry.uuid === selfUuid)) {
       o.log('inbox: THIS machine is on the revocation list of the admin: its peers no longer trust it');

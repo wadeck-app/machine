@@ -90,7 +90,7 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
   let report: DistributionReport;
   let formatted: FormattedDistribution;
   try {
-    report = await distributeRevocation(configDir, peer.peerId, peer.name, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now });
+    report = await distributeRevocation(configDir, peer.peerId, peer.name, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir });
     formatted = formatDistribution(report, 'the revocation', retryDistribution(peer.peerId));
   } catch (e) {
     report = { delivered: 0, alreadyThere: 0, failures: [{ toUuid: peer.peerId, toName: peer.name, kind: 'machine', id: undefined, message: (e as Error).message }], aborted: false, machines: 0 };

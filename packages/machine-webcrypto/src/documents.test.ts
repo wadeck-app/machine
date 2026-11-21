@@ -12,6 +12,7 @@ import {
   pairSecretDocumentContext as corePairContext,
   signPolicy as coreSignPolicy,
   signRegistration as coreSignRegistration,
+  signNoticeRecipients as coreSignNoticeRecipients,
   signRevocation as coreSignRevocation,
   verifyInboxDocument as coreVerifyDocument,
   verifyRegistration,
@@ -216,7 +217,7 @@ describe('buildDocument (kinds peer, policy, revocation)', () => {
 
   it('documentSealContext and the signature domain equal machine-core', async () => {
     const [x, y] = [uuid(), 'AAAAAAAAAAAAAAAAAAAAAA'];
-    for (const kind of ['peer', 'policy', 'revocation'] as const) expect(documentSealContext(kind, x, y)).toBe(coreSealContext(kind, x, y));
+    for (const kind of ['peer', 'policy', 'revocation', 'notice-recipients'] as const) expect(documentSealContext(kind, x, y)).toBe(coreSealContext(kind, x, y));
     expect(DOCUMENT_DOMAIN_V2).toBe(CORE_DOMAIN_V2);
   });
 
@@ -240,6 +241,9 @@ describe('buildDocument (kinds peer, policy, revocation)', () => {
       payload: { registration, sealedPairSecret: 'AAAA', adminUuid: null } as never,
       recipientIdentityPublicKey: recipient.publicKey,
     });
+    // The list of notice recipients (request-notices.md) is signed by the CLI; the page can only seal and sign the envelope of a stored one.
+    const list = coreSignNoticeRecipients({ v: 1, adminKeyId: s.adminKeyId, serial: NOW, issuedAt: NOW, recipients: [uuid()] }, s.admin.privateKeyPkcs8);
+    inputs.push({ kind: 'notice-recipients', to, id: coreDocumentId('n'), issuedAt: NOW, expiresAt: NOW + 1000, payload: list as never, recipientIdentityPublicKey: recipient.publicKey });
     for (const input of inputs) {
       const web = await buildDocument(input, s.key);
       expect(web.body.v).toBe(2);

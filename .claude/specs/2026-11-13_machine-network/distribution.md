@@ -11,7 +11,7 @@ After `machine admin approve`, only the admin and the new machine know each othe
 Every document is a JSON object signed by the admin key (domain-separated like registrations), addressed to one machine:
 
 ```json
-{ "body": { "v": 2, "kind": "peer" | "policy" | "revocation", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { "sealed": "<base64url>" } },
+{ "body": { "v": 2, "kind": "peer" | "policy" | "revocation" | "notice-recipients", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { "sealed": "<base64url>" } },
   "signature": "<base64url Ed25519 over the canonical body, admin key, domain machine/document/v2>" }
 ```
 

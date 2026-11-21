@@ -18,7 +18,7 @@ export const REVOCATION_DOMAIN = 'machine/revocation/v1';
 // Envelope version 2: the payload of every document is sealed to the identity key of the addressee (decision 78). The version 1 domain
 // (clear payload) is not built any more: machine-core only recognises it to refuse it.
 export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
-export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation'] as const;
+export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients'] as const;
 export const SHELLS = ['cmd', 'ps', 'bash', 'sh'] as const;
 /** What the relay accepts for one document. */
 export const MAX_DOCUMENT_BYTES = 16 * 1024;
@@ -315,7 +315,7 @@ function assertPeerPayload(payload: unknown): void {
   }
 }
 
-function assertSignedPayload(payload: unknown, kind: 'policy' | 'revocation'): Record<string, unknown> {
+function assertSignedPayload(payload: unknown, kind: 'policy' | 'revocation' | 'notice-recipients'): Record<string, unknown> {
   if (!isObject(payload)) throw new Error(`document: the payload of a ${kind} document must be an object`);
   assertKeys(payload, ['body', 'signature'], `document ${kind} payload`);
   if (!isObject(payload.body) || typeof payload.signature !== 'string') throw new Error(`document ${kind} payload: expected a signed ${kind} ({ body, signature })`);
@@ -325,7 +325,7 @@ function assertSignedPayload(payload: unknown, kind: 'policy' | 'revocation'): R
 function assertPayloadShape(kind: string, payload: unknown): void {
   if (kind === 'peer') assertPeerPayload(payload);
   else if (kind === 'policy') assertPolicyBody(assertSignedPayload(payload, 'policy'));
-  else assertSignedPayload(payload, 'revocation');
+  else assertSignedPayload(payload, kind === 'notice-recipients' ? 'notice-recipients' : 'revocation');
 }
 
 /**

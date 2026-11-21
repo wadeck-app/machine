@@ -485,7 +485,7 @@ export async function runApprove(configDir: string, options: ApproveOptions): Pr
       stepsOf?.begin('distribute');
       try {
         const unlocked = await unlockAdminKey(configDir, prompt);
-        report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });
+        report = await distributeAdminRenewal(configDir, self.registration, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir });
         formatted = formatDistribution(report, 'the approval', retryRenewal);
       } catch (e) {
         formatted = {
@@ -506,7 +506,7 @@ export async function runApprove(configDir: string, options: ApproveOptions): Pr
     stepsOf?.begin('distribute');
     try {
       const unlocked = await unlockAdminKey(configDir, prompt);
-      report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now });
+      report = await distributeMachine(configDir, uuid, { client, adminPrivateKeyPkcs8: unlocked.privateKeyPkcs8, adminUuid, now: o.now, configDir });
       formatted = formatDistribution(report, 'the approval', retry);
     } catch (e) {
       formatted = {

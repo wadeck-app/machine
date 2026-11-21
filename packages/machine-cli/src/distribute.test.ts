@@ -32,10 +32,11 @@ async function enroll(name: string, options: { ask?: (l: string) => Promise<stri
   return { id, result: await cli(adminDir, approveArgs(id), pass, { ask: options.ask ?? yes, ...clock }) };
 }
 
-const inboxOf = (name: string) => relay.inbox(uuidOf(name));
+/** The documents of an inbox without the list of notice recipients, which rides every distribution (request-notices.md, tested in noticeRecipientsDistribute.test.ts). */
+const inboxOf = (name: string) => relay.inbox(uuidOf(name)).filter((d) => (d.document as { body: { kind: string } }).body.kind !== 'notice-recipients');
 const verified = (name: string, document: unknown) =>
   verifyInboxDocument(document, { adminPublicKey: admin.adminPublicKey, selfUuid: uuidOf(name), now: nowSeconds(), identityPrivateKeyPkcs8: readMachine(dirOf(name)).identity.privateKeyPkcs8 });
-const inboxPuts = () => relay.requests.filter((q) => q.method === 'PUT' && /\/inbox\//.test(q.path));
+const inboxPuts = () => relay.requests.filter((q) => q.method === 'PUT' && /\/inbox\//.test(q.path) && (q.body as { body?: { kind?: string } } | undefined)?.body?.kind !== 'notice-recipients');
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'machine-distribute-'));
@@ -91,7 +92,7 @@ describe('machine admin approve distributes the new machine to the existing peer
 
     // After the decision, never before; and with the admin token only.
     const decisionIndex = relay.requests.findIndex((q) => q.method === 'PUT' && q.path === `/api/machines/candidacies/${id}/decision`);
-    const firstPut = relay.requests.findIndex((q) => q.method === 'PUT' && q.path.includes('/inbox/'));
+    const firstPut = relay.requests.findIndex((q) => q.method === 'PUT' && q.path.includes('/inbox/') && (q.body as { body?: { kind?: string } }).body?.kind === 'peer');
     expect(firstPut).toBeGreaterThan(decisionIndex);
     for (const put of inboxPuts()) expect(put.authorization).toBe(`Bearer ${relay.adminToken}`);
     expect(result.out).toMatch(/1 machine/);
@@ -505,7 +506,7 @@ describe('what the relay can read (decision 78: every document is sealed to its 
     await networkWithPolicyAndRevocation();
     const kinds = new Set<string>();
     for (const name of ['laptop', 'server']) {
-      for (const d of inboxOf(name)) {
+      for (const d of relay.inbox(uuidOf(name))) {
         const body = (d.document as { body: { v: number; kind: string; to: string; id: string; issuedAt: number; expiresAt: number; payload: Record<string, unknown> } }).body;
         kinds.add(body.kind);
         expect(Object.keys(body).sort()).toEqual(['expiresAt', 'id', 'issuedAt', 'kind', 'payload', 'to', 'v']);
@@ -513,7 +514,7 @@ describe('what the relay can read (decision 78: every document is sealed to its 
         expect(Object.keys(body.payload)).toEqual(['sealed']);
       }
     }
-    expect([...kinds].sort()).toEqual(['peer', 'policy', 'revocation']);
+    expect([...kinds].sort()).toEqual(['notice-recipients', 'peer', 'policy', 'revocation']);
   });
 
   it('the addressee opens its documents, another machine does not', async () => {

@@ -4,6 +4,7 @@ import { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, signBytes, tryKeyId }
 import { POLICY_DOMAIN, assertPolicyBody, type SignedPolicy } from './policy.js';
 import { verifyRegistration, type RegistrationBody, type SignedRegistration } from './registration.js';
 import { verifyRevocation, type SignedRevocation } from './revocation.js';
+import { assertNoticeRecipientsBody, verifyNoticeRecipients, type SignedNoticeRecipients } from './noticeRecipients.js';
 import { openSealed, sealTo } from './seal.js';
 import { signDocument, verifyDocument as verifySigned } from './signed.js';
 
@@ -20,7 +21,7 @@ export const DOCUMENT_DOMAIN = 'machine/document/v1';
 /** Signature domain of the version 2 envelope (sealed payload). */
 export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
 export const DOCUMENT_VERSION = 2;
-export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation'] as const;
+export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients'] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 /** What the relay accepts for one document. */
 export const MAX_DOCUMENT_BYTES = 16 * 1024;
@@ -190,7 +191,7 @@ function parsePeerPayload(payload: unknown): PeerPayload {
   return payload as unknown as PeerPayload;
 }
 
-function parseSignedPayload(payload: unknown, kind: 'policy' | 'revocation'): { body: Record<string, unknown>; signature: string } {
+function parseSignedPayload(payload: unknown, kind: 'policy' | 'revocation' | 'notice-recipients'): { body: Record<string, unknown>; signature: string } {
   if (!isObject(payload)) throw new Error(`document: the payload of a ${kind} document must be an object`);
   assertKeys(payload, ['body', 'signature'], `document ${kind} payload`);
   if (!isObject(payload.body) || typeof payload.signature !== 'string') throw new Error(`document ${kind} payload: expected a signed ${kind} ({ body, signature })`);
@@ -202,6 +203,8 @@ function assertPayloadShape(kind: DocumentKind, payload: unknown): void {
   if (kind === 'peer') parsePeerPayload(payload);
   else if (kind === 'policy') {
     assertPolicyBody(parseSignedPayload(payload, 'policy').body);
+  } else if (kind === 'notice-recipients') {
+    assertNoticeRecipientsBody(parseSignedPayload(payload, 'notice-recipients').body);
   } else parseSignedPayload(payload, 'revocation');
 }
 
@@ -281,7 +284,8 @@ export type EnvelopeContext = Pick<VerifyDocumentContext, 'adminPublicKey' | 'se
 export type VerifiedDocument =
   | { ok: true; kind: 'peer'; body: DocumentBody; registration: RegistrationBody; signedRegistration: SignedRegistration; sealedPairSecret: string; adminUuid: string | null }
   | { ok: true; kind: 'policy'; body: DocumentBody; policy: SignedPolicy }
-  | { ok: true; kind: 'revocation'; body: DocumentBody; revocation: SignedRevocation };
+  | { ok: true; kind: 'revocation'; body: DocumentBody; revocation: SignedRevocation }
+  | { ok: true; kind: 'notice-recipients'; body: DocumentBody; noticeRecipients: SignedNoticeRecipients };
 
 /** `signed` is true when the admin signature was verified before the failure: only then does the failure say something about a document of the admin (and not about junk or a forgery). */
 export type DocumentResult = VerifiedDocument | { ok: false; reason: DocumentFailure; message: string; signed: boolean };
@@ -397,6 +401,14 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
       return fail('invalid-payload', `document ${body.id} carries a policy with an invalid signature`);
     }
     return { ok: true, kind: 'policy', body, policy };
+  }
+  if (body.kind === 'notice-recipients') {
+    const noticeRecipients = plain as unknown as SignedNoticeRecipients;
+    const verifiedList = verifyNoticeRecipients(noticeRecipients, { adminPublicKey: ctx.adminPublicKey });
+    if (!verifiedList.ok) {
+      return fail('invalid-payload', `document ${body.id} carries a notice-recipients list that is not valid (${verifiedList.reason}): ${verifiedList.message}`);
+    }
+    return { ok: true, kind: 'notice-recipients', body, noticeRecipients };
   }
   const revocation = plain as unknown as SignedRevocation;
   const checked = verifyRevocation(revocation, { adminPublicKey: ctx.adminPublicKey });

@@ -123,6 +123,7 @@ export {
   PROGRESS_INTERVAL_SECONDS,
   capWait,
   holdAnswerTimeoutMs,
+  progressPrinter,
   progressText,
   checkDenyReason,
   describeSeconds,
@@ -157,6 +158,19 @@ export {
   type SignedRequestsList,
   type VerifyRequestsListContext,
 } from './requestsList.js';
+export {
+  MAX_NOTICE_RECIPIENTS,
+  NOTICE_RECIPIENTS_DOMAIN,
+  assertNoticeRecipientsBody,
+  canonicalSignedNoticeRecipients,
+  compareNoticeRecipients,
+  signNoticeRecipients,
+  verifyNoticeRecipients,
+  type NoticeRecipientsBody,
+  type NoticeRecipientsFailure,
+  type NoticeRecipientsResult,
+  type SignedNoticeRecipients,
+} from './noticeRecipients.js';
 export { openSealed, sealTo } from './seal.js';
 // `verifyDocument` of document.ts is exported as `verifyInboxDocument`: `verifyDocument` above is the low-level signature check.
 export {

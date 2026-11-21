@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { DEFAULT_WAIT_NOTICE_DELAY_MS, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressText, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
+import { DEFAULT_WAIT_NOTICE_DELAY_MS, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -13,6 +13,7 @@ import { adminLogin, runApprove } from './adminApprove.js';
 import { adminLoginByConsole, AdminLoginInputError, adminLoginName } from './adminDeviceLogin.js';
 import { FULL_ACCESS_WARNING } from './adminAccess.js';
 import { runDistribute } from './adminDistribute.js';
+import { runNotifyTo } from './adminNotifyTo.js';
 import { runForgetRelayRecord } from './adminForget.js';
 import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
@@ -283,6 +284,33 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       } catch (e) {
         if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
         if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
+        throw e;
+      }
+    }
+    if (sub === 'notify-to') {
+      // Which machines receive request notices (request-notices.md): `--list` reads, machines sign and send a new list.
+      const names = rest.slice(1);
+      if ((args.list && names.length > 0) || (!args.list && names.length === 0)) {
+        return fail('usage: machine admin notify-to <machine> [<machine>...] | machine admin notify-to --list', EXIT.usage);
+      }
+      try {
+        const r = await runNotifyTo(configDir, { ...(args.list ? {} : { references: names }), prompt, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        io.stdout(args.json ? `${JSON.stringify({ recipients: r.recipients, ...(r.report ?? {}) }, null, 2)}
+` : r.out);
+        if (r.formatted?.failed) {
+          io.stderr(r.formatted.err);
+          return EXIT.failure;
+        }
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) {
+          const { message } = e;
+          return fail(message, EXIT.reference);
+        }
+        if (e instanceof RelayError || e instanceof NotInitializedError) {
+          const { message } = e;
+          return fail(message);
+        }
         throw e;
       }
     }
@@ -570,6 +598,8 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
 `);
     // The request is dated now, after the connection exists: a slow connection must not age it.
     recorder.sending(); // run-log
+    // One line per minute: the tick is every 30 s but the text changes once a minute (a repeated line is not printed).
+    const nextProgress = progressPrinter(peer.name);
     answer = await runOnPeer(session, {
       identity: self.identity,
       source: self.uuid,
@@ -582,8 +612,12 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
             waitSeconds,
             ...(notice !== undefined ? { notice: { afterMs: io.waitNoticeMs ?? DEFAULT_WAIT_NOTICE_DELAY_MS, onNotice: () => io.stderr(`[info] ${notice}\n`) } } : {}),
             // stderr only: --json keeps stdout one document.
-            progress: { everyMs: io.waitProgressMs ?? PROGRESS_INTERVAL_SECONDS * 1000, onTick: (left: number) => io.stderr(`[info] ${progressText(peer.name, left)}
-`) },
+            progress: { everyMs: io.waitProgressMs ?? PROGRESS_INTERVAL_SECONDS * 1000, onTick: (left: number) => {
+              const line = nextProgress(left);
+              if (line !== undefined) {
+                io.stderr(`[info] ${line}\n`);
+              }
+            } },
           }
         : {}),
     });

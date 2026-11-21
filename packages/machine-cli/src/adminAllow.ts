@@ -232,7 +232,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     out += `[ok] policy version ${body.version} installed on this machine (it is the target): \`machine status\` shows it\n`;
   } else if (access !== undefined) {
     delivery = 'inbox';
-    const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now });
+    const report = await distributePolicy(signed, { client: access.client, adminPrivateKeyPkcs8: pair.privateKeyPkcs8, adminUuid: adminMachineUuid(configDir), now: o.now, configDir });
     const retry = `machine admin distribute --policy ${o.out ?? policyRecordFile(configDir, target.uuid)}`;
     const formatted = formatDistribution(report, 'the signed policy', retry);
     failed = formatted.failed;

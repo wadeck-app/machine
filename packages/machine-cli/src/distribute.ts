@@ -14,6 +14,7 @@ import {
   type DocumentKind,
   type Json,
   type SignedDocument,
+  type SignedNoticeRecipients,
   type SignedPolicy,
   type SignedRegistration,
 } from '@wadeck-app/machine-core';
@@ -21,6 +22,7 @@ import { adminKeyFile, readAdminPin } from './admin.js';
 import { adminRelayError } from './adminRelay.js';
 import { NotInitializedError } from './errors.js';
 import { exportMachineInfo, loadNetwork, revocationState, signAndInstallRevocation, trustedRegistrations } from './network.js';
+import { signNoticeRecipientsFor } from './noticeRecipientsStore.js';
 import { createRelayClient, RelayError, type RelayClient } from './relayClient.js';
 import { readRelayAdminConfig, relayAdminFile } from './relayStore.js';
 
@@ -46,6 +48,8 @@ export interface DistributionReport {
   aborted: boolean;
   /** Machines that were considered (each may have received several documents). */
   machines: number;
+  /** Lists of notice recipients stored or already there: they ride every distribution and are not counted above, so the output stays about what the admin decided. */
+  noticeLists?: number;
 }
 
 export interface Sender {
@@ -100,11 +104,17 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
   }
   try {
     await sender.client.putInboxDocument(to.uuid, document);
-    report.delivered++;
+    if (kind === 'notice-recipients') {
+      report.noticeLists = (report.noticeLists ?? 0) + 1;
+    }
+    else report.delivered++;
     return true;
   } catch (raw) {
     if (raw instanceof RelayError && raw.code === 'id_conflict') {
-      report.alreadyThere++;
+      if (kind === 'notice-recipients') {
+        report.noticeLists = (report.noticeLists ?? 0) + 1;
+      }
+      else report.alreadyThere++;
       return true;
     }
     const message = (adminRelayError(raw) as Error).message;
@@ -162,6 +172,9 @@ export async function distributeMachine(configDir: string, subjectUuid: string, 
     if (!(await put(sender, report, { uuid: other.body.uuid, name: other.body.name }, 'peer', () => peerDocument(sender, other, subject, secret)))) break;
     if (!(await put(sender, report, { uuid: subject.body.uuid, name: subject.body.name }, 'peer', () => peerDocument(sender, subject, other, secret)))) break;
   }
+  if (!report.aborted) {
+    await sendNoticeRecipients(sender, report, registrations.map((r) => ({ uuid: r.body.uuid, name: r.body.name })));
+  }
   return report;
 }
 
@@ -180,6 +193,9 @@ export async function distributeAdminRenewal(configDir: string, renewed: SignedR
     if (!known) continue;
     const secret = known.pairSecret.toString('base64url');
     if (!(await put(sender, report, { uuid: peer.body.uuid, name: peer.body.name }, 'peer', () => peerDocument(sender, peer, renewed, secret)))) break;
+  }
+  if (!report.aborted) {
+    await sendNoticeRecipients(sender, report, peers.map((p) => ({ uuid: p.body.uuid, name: p.body.name })));
   }
   return report;
 }
@@ -224,6 +240,7 @@ export async function distributeRevocation(configDir: string, revokedUuid: strin
     );
     if (!next) return report;
   }
+  await sendNoticeRecipients(sender, report, recipients.map((r) => ({ uuid: r.body.uuid, name: r.body.name })));
   try {
     await sender.client.deleteMachine(revokedUuid);
   } catch (raw) {
@@ -256,7 +273,59 @@ export async function distributePolicy(signed: SignedPolicy, sender: Sender): Pr
       sender.adminPrivateKeyPkcs8,
     );
   });
+  // A policy that could not be sent (too large, expired) sends nothing else: the owner fixes it first.
+  if (!report.aborted && report.failures.length === 0) {
+    await sendNoticeRecipients(sender, report, [to]);
+  }
   return report;
+}
+
+/**
+ * The list of machines that receive request notices (request-notices.md, decision 84), sealed to each machine this distribution reaches. It rides the
+ * unlocked admin key of the command that called: no new passphrase, no new command. The list is `[this machine]` until `machine admin notify-to` or
+ * another admin machine set one; a distribution never replaces a stored list. When the admin machine has no identity (it is not a machine of the
+ * network) or the config directory is unknown (unit tests of this module), there is nothing to send.
+ */
+async function sendNoticeRecipients(sender: Sender, report: DistributionReport, targets: Recipient[]): Promise<void> {
+  const configDir = sender.configDir ?? clientConfigDir.get(sender.client);
+  if (configDir === undefined || sender.adminUuid === null) {
+    return;
+  }
+  let signed: SignedNoticeRecipients;
+  try {
+    signed = signNoticeRecipientsFor(configDir, { adminPrivateKeyPkcs8: sender.adminPrivateKeyPkcs8, adminPublicKey: readAdminPin(configDir).adminPublicKey, selfUuid: sender.adminUuid, now: sender.now() });
+  } catch (e) {
+    report.failures.push({ toUuid: sender.adminUuid, toName: 'this machine', kind: 'notice-recipients', id: undefined, message: `the list of machines that receive request notices could not be signed: ${(e as Error).message}` });
+    return;
+  }
+  await putNoticeRecipients(sender, report, signed, targets);
+}
+
+/** Seal and PUT one signed list to each target (the admin machine itself has no use for it). */
+export async function putNoticeRecipients(sender: Sender, report: DistributionReport, signed: SignedNoticeRecipients, targets: Recipient[]): Promise<void> {
+  for (const to of targets) {
+    if (to.uuid === sender.adminUuid) {
+      continue;
+    }
+    const next = await put(sender, report, to, 'notice-recipients', () => {
+      const now = sender.now();
+      return buildDocument(
+        {
+          kind: 'notice-recipients',
+          to: to.uuid,
+          id: documentId(`v2:notice-recipients:${to.uuid}:${signed.body.serial}:${signed.signature}`),
+          issuedAt: now,
+          expiresAt: now + DOCUMENT_RETENTION_SECONDS,
+          payload: signed as unknown as Json,
+          recipientIdentityPublicKey: recipientKeyOf(sender, to.uuid),
+        },
+        sender.adminPrivateKeyPkcs8,
+      );
+    });
+    if (!next) {
+      return;
+    }
+  }
 }
 
 /**
