@@ -295,6 +295,8 @@ Administration (enrollment through the relay, or by files):
                                      refuse a request a peer holds (\`run --wait\`), at once; its caller reads the reason. Run it on the machine that
                                      holds the request (its daemon must run). No signature, no passphrase: only restricting
   requests --history [--peer <machine>] [--since <30m|2h|3d|date>] [--event run|refused|session|document] [--limit <n>] [--json]
+  requests [--full]                  the same, with the whole command (wrapped under its column) and the exact allow command of every row
+                                     instead of the template; also for <machine>, --all and --history. --json is always complete
                                      what happened here: runs (exit code, duration), refusals with their reason, session and document
                                      events; chronological, the last 50 by default (--limit up to 1000); --since 2026-11-20 or 3h
   requests <machine> [--limit <n>]   ADMIN machine only: ask that peer for its pending list over the authenticated channel (one read-only
@@ -394,6 +396,13 @@ function parse(argv: string[]): Parsed {
     else if (a === '--deny') out.deny = valueOf('--deny');
     else if (a === '--reason') out.reason = valueOf('--reason');
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
+    else if (a === '--sent') out.sent = true; // run-log
+    else if (a === '--received') out.received = true; // run-log
+    else if (a === '--machine') out.machine = valueOf('--machine'); // run-log
+    else if (a === '--outcome') out.outcome = valueOf('--outcome'); // run-log
+    else if (a === '--text') out.text = valueOf('--text'); // run-log
+    else if (a === '--offset') out.offset = valueOf('--offset'); // run-log
+    else if (a === '--full') out.full = true;
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
       // The security code has five groups of five digits: typed without quotes the shell splits it, the groups are one value again.
@@ -540,7 +549,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (args.peer !== undefined && !policyAllow && command !== 'requests') {
     return fail('--peer only applies to `machine policy allow` (`machine policy allow --peer <machine> -- <command>` edits the own list of a peer) and to `machine requests --history`', EXIT.usage);
   }
-  const requestsOptions: Array<[string, unknown]> = [['--history', args.history], ['--all', args.all], ['--since', args.since], ['--event', args.event], ['--limit', args.limit]];
+  const requestsOptions: Array<[string, unknown]> = [['--history', args.history], ['--all', args.all], ['--since', args.since], ['--event', args.event], ['--limit', args.limit], ['--full', args.full]];
   const requestsOption = requestsOptions.find(([, v]) => v !== undefined);
   if (requestsOption !== undefined && command !== 'requests') {
     return fail(`${requestsOption[0] as string} only applies to \`machine requests\` (the requests refused by this machine: pending list, or --history)`, EXIT.usage);

@@ -130,6 +130,7 @@ export function makeRequestsListDeps(configDir: string, now: () => number, log: 
         chain: summary.chain.ok ? { ok: true } : { ok: false, line: summary.chain.line },
         pendingTotal: summary.pendingTotal,
         allowedNow: summary.allowedNow,
+        waiting: summary.waiting,
         pending: summary.pending,
       };
     },

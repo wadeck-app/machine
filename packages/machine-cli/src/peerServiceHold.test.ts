@@ -259,6 +259,31 @@ describe('hold of a refused request', () => {
     expect(w.runs).toHaveLength(0);
   });
 
+  it('answers at once, with the shells that match, when a policy installed during the wait lists the command under ANOTHER shell (the caller used the wrong one: no Allow is coming)', async () => {
+    const OTHER = SHELL === 'cmd' ? 'sh' : 'cmd';
+    const w = await world();
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([{ shell: OTHER as 'cmd', command: 'echo later' }]);
+    const answer = await answerOf(s);
+    expect(answer).toMatchObject({ type: 'refused', reason: 'not-listed', id, allowedShells: [OTHER] });
+    expect((answer as { message: string }).message).toContain(`--shell ${OTHER}`);
+    expect(w.runs).toHaveLength(0);
+    expect(w.table.list()).toHaveLength(0);
+    expect(w.audit.entries.find((e) => e.event === 'hold-ended')).toMatchObject({ outcome: 'refused', reason: 'not-listed' });
+  });
+
+  it('a request whose command is already listed under another shell is not held at all', async () => {
+    const OTHER = SHELL === 'cmd' ? 'sh' : 'cmd';
+    const w = await world();
+    w.setPolicy([{ shell: OTHER as 'cmd', command: 'echo other' }]);
+    const s = await w.connect();
+    w.send(s, 'echo other', 600);
+    expect(await answerOf(s)).toMatchObject({ type: 'refused', reason: 'not-listed', allowedShells: [OTHER] });
+    expect(w.audit.events()).not.toContain('held');
+  });
+
   it('refuses as usual when the entry that matches after the wait is already expired (same authorize as a fresh request)', async () => {
     const w = await world();
     const s = await w.connect();

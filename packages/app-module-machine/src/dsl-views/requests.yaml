@@ -2,18 +2,24 @@ $sources:
   requests:
     url: GET /api/modules/machine/requests
     poll: 10s
+  # The trusted machines (this one and its peers): the machine filter and the machines the admin machine asks for their requests.
+  machines:
+    url: GET /api/modules/machine/machines
 
-# What the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`, decision 73).
+# What the peers asked THIS machine to run, read from its audit log by the daemon (the reader of `machine requests`, decision 73), and, on the admin
+# machine, the same for every OTHER trusted machine, loaded on demand (decision 74): the page signs a read-only requests-list per peer IN THE BROWSER
+# with the admin passphrase (asked each time, never stored); the daemon forwards it and the peer answers like it does to `machine requests <machine>`.
 # Pending = refused because the command is not allowed (a command the policy allows now is not listed). Ages are humanized by the route. No code columns.
-# Each pending row has an Allow button (decision 76) on the admin machine in policy mode admin: it does what `machine admin allow` does, with the admin
-# passphrase and the unlocked key ONLY in the browser (machine:AllowRequestsTable, confirmation modal, signature in the page, only the signed documents
-# posted). Elsewhere (no admin key here, mode local) the row shows the CLI command instead and `allow.note` says why. History stays read-only.
-# The requests of OTHER machines are listed by `machine requests <machine>` on the admin machine; the page cannot ask a peer yet (see remoteNote).
+# Held requests (`machine run --wait`) come first, with a countdown, for every machine loaded. Each row has an Allow button (decision 76) on the admin
+# machine in policy mode admin: it does what `machine admin allow` does for the machine the row belongs to, with the admin passphrase and the unlocked key
+# ONLY in the browser (machine:RequestsOverview, confirmation modal, signature in the page, only the signed documents posted). Elsewhere (no admin key
+# here, mode local) the row shows the CLI command instead and the capability note says why. Deny is a button for this machine's own rows; for a request
+# held on another machine the row says where to run it (a remote Deny is not built). History stays read-only and local (the CLI shows it).
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Requests
-    subtitle: Commands that peers asked this machine to run. On the admin machine, Allow signs the new policy here, in your browser, with the admin passphrase.
+    subtitle: Commands that peers asked to run, on this machine and, from the admin machine, on the others. Allow signs the new policy here, in your browser, with the admin passphrase.
   - $type: Card
     $if: $sources.requests.chainText
     padding: sm
@@ -25,19 +31,16 @@ sections:
     items:
       - $type: Markdown
         text: $sources.requests.remoteNote
-  # Held requests (`machine run --wait`): a caller waits for the answer. Allow signs in the browser like the table below, Deny signs nothing and asks no
-  # passphrase. The component draws its own heading and nothing at all when no request is held. The countdown runs in the page between two polls.
-  - $type: machine:HeldRequests
-    rows: $sources.requests.waiting
+  - $type: machine:RequestsOverview
+    self: $sources.requests.machine
+    machines: $sources.machines.machines
+    held: $sources.requests.waiting
+    pending: $sources.requests.pending
     allow: $sources.requests.allow
-  - $type: Markdown
-    text: "### Waiting for approval"
-  - $type: machine:AllowRequestsTable
-    rows: $sources.requests.pending
-    allow: $sources.requests.allow
+    remote: $sources.requests.remote
     emptyMessage: $sources.requests.emptyMessage
   - $type: Markdown
-    text: "### History"
+    text: "### History of this machine"
   - $type: DataTable
     rows: $sources.requests.history
     emptyMessage: No entry in the audit log

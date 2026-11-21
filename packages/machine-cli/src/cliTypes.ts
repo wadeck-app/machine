@@ -128,6 +128,15 @@ export interface Parsed {
   since?: string;
   event?: string;
   limit?: string;
+  /** `machine log` (run-log.md): one direction, the other machine, an outcome, a text, the page offset. Set only when given. */ // run-log
+  sent?: true; // run-log
+  received?: true; // run-log
+  machine?: string; // run-log
+  outcome?: string; // run-log
+  text?: string; // run-log
+  offset?: string; // run-log
+  /** `machine requests --full`: the whole command (wrapped) and the exact allow command of every row. */
+  full?: true;
   /** `machine run --wait <duration>`: hold the request on the target up to this long when it is not allowed yet (hold-for-approval.md). */
   wait?: string;
   /** `machine run --on-refusal wait|fail` and `machine run-defaults --on-refusal wait|fail`: what to do when the target does not allow the command yet (raw text, validated by machine-core). */

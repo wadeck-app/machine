@@ -71,10 +71,18 @@ export interface AllowCapability {
   note: string;
 }
 
+/** Whether this page may ask the OTHER machines for their requests (admin machine only: the request is signed with the admin key, in the browser). */
+export interface RemoteCapability {
+  available: boolean;
+  /** Why not, and where to do it instead; empty when it is. */
+  note: string;
+}
+
 export interface RequestsPage {
   machine: { uuid: string; name: string };
   policyMode: 'admin' | 'local';
   allow: AllowCapability;
+  remote: RemoteCapability;
   /** The tab indicator reads this. */
   count: number;
   waiting: WaitingRow[];
@@ -111,7 +119,7 @@ function nextWhere(machine: { name: string; policyMode: 'admin' | 'local' }): st
   return machine.policyMode === 'local' ? `Run it on ${machine.name}: it manages its own allow list and asks its local passphrase.` : 'Run it on the admin machine (the one that holds the admin key): it allows the command for every peer.';
 }
 
-function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'admin' | 'local' }, daemonNow: number, now: number): WaitingRow {
+function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'admin' | 'local' }, daemonNow: number, now: number, clockOffset = 0): WaitingRow {
   return {
     id: w.id,
     peerText: w.peerName ?? w.peer.slice(0, 8),
@@ -119,7 +127,8 @@ function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'adm
     shell: w.shell,
     command: w.command,
     secondsLeft: Math.max(0, w.deadline - daemonNow),
-    askedText: ago(w.since, now),
+    // `clockOffset`: the times of a peer are on ITS clock; the age is shown on this machine's clock.
+    askedText: ago(w.since + clockOffset, now),
     countText: 'waiting now',
     nextCommand: allowCommand(w, machine),
     nextWhere: nextWhere(machine),
@@ -150,6 +159,9 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
   if (summary.historyTotal > summary.history.length) notes.push(`Showing the last ${summary.history.length} of ${summary.historyTotal} entries.`);
   if (summary.allowedNow > 0) notes.push(`${summary.allowedNow} earlier request${summary.allowedNow === 1 ? ' is' : 's are'} allowed now and not listed.`);
   if (summary.skipped > 0) notes.push(`${summary.skipped} verified entr${summary.skipped === 1 ? 'y has' : 'ies have'} no usable time or event name and ${summary.skipped === 1 ? 'is' : 'are'} not shown.`);
+  const remote: RemoteCapability = answer.adminKeyHere
+    ? { available: true, note: '' }
+    : { available: false, note: 'Only the admin machine can ask the other machines for their requests: it holds the admin key that signs the request. Run `machine requests <machine>` there.' };
   let allowNote = '';
   if (answer.policyMode === 'local') {
     allowNote = `${answer.self.name} manages its own allow list (policy mode local): an admin signature would be refused. Run the command shown in each row on ${answer.self.name} (\`machine policy allow\`, it asks the local passphrase).`;
@@ -160,6 +172,7 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
     machine: answer.self,
     policyMode: answer.policyMode,
     allow: { available: allowNote === '', machine: answer.self, note: allowNote },
+    remote,
     count: summary.waiting.length + summary.pending.length,
     waiting: summary.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds)),
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
@@ -173,8 +186,8 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
       : `The audit log is broken at line ${chain.line}: ${chain.message}. The ${chain.trustedEntries} entries before it are verified; ${chain.unverifiedEntries} after it are shown as unverified and never listed as pending${chain.unreadableLines > 0 ? `; ${chain.unreadableLines} line(s) cannot be read at all` : ''}. Keep a copy of the file for the investigation, then move it away to start a new log (the daemon refuses to start on a broken log).`,
     emptyMessage: answer.logPresent ? 'No request is waiting for approval' : 'No audit log yet: no request ever reached this machine',
     remoteNote: answer.adminKeyHere
-      ? 'This page shows the requests of THIS machine. To list the pending requests of another machine, run `machine requests <machine>` or `machine requests --all` here (it asks the admin passphrase): the page cannot ask a peer yet.'
-      : 'This page shows the requests of THIS machine. Only the admin machine can list those of another machine (`machine requests <machine>` there).',
+      ? 'The requests of the other trusted machines are loaded below: it asks the admin passphrase each time (it signs a read-only request in your browser, nothing is stored and nothing is run).'
+      : remote.note,
     notes,
   };
 }
@@ -182,6 +195,14 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
 export interface RemoteRequestsPage {
   machine: { uuid: string; name: string };
   policyMode: 'admin' | 'local';
+  /** Allow from THIS (admin) machine: a signed policy goes to the peer through the relay inbox. Not in mode local: the peer signs its own list. */
+  allow: AllowCapability;
+  /** The tab indicator and the counts read this. */
+  count: number;
+  /** Held requests (`run --wait`): the seconds left are the peer's own, at the time of its answer. */
+  waiting: WaitingRow[];
+  /** What to do to Deny one: there is no Deny button for a request held on another machine (it needs a frame the peers do not have yet). */
+  denyNote: string;
   pending: PendingRow[];
   pendingTotal: number;
   chainOk: boolean;
@@ -189,16 +210,22 @@ export interface RemoteRequestsPage {
   notes: string[];
 }
 
-/** The answer of a peer to `requests-list`, as rows. The ages use the clock of THIS machine. */
+/** The answer of a peer to `requests-list`, as rows. The ages use the clock of THIS machine; the seconds left of a held request use the clock of the peer. */
 export function remoteRequestsPage(answer: RequestsListAnswer, nowSeconds: number): RemoteRequestsPage {
   const machine = { name: answer.machine.name, policyMode: answer.policyMode };
   const notes: string[] = [];
   if (answer.truncated || answer.pendingTotal > answer.pending.length) notes.push(`Showing ${answer.pending.length} of ${answer.pendingTotal} pending requests (the newest).`);
   if (answer.allowedNow > 0) notes.push(`${answer.allowedNow} earlier request${answer.allowedNow === 1 ? ' is' : 's are'} allowed now and not listed.`);
-  if (Math.abs(answer.now - nowSeconds) > 120) notes.push(`The clock of ${machine.name} differs from this machine by ${Math.abs(answer.now - nowSeconds)} s: the ages use this machine's clock.`);
+  const skew = answer.now - nowSeconds;
+  if (Math.abs(skew) > 120) notes.push(`The clock of ${machine.name} differs from this machine by ${Math.abs(skew)} s: the ages use this machine's clock.`);
+  const allowNote = answer.policyMode === 'local' ? `${machine.name} manages its own allow list (policy mode local): an admin signature would be refused. Run the command shown in each row on ${machine.name} (\`machine policy allow\`, it asks the local passphrase).` : '';
   return {
     machine: answer.machine,
     policyMode: answer.policyMode,
+    allow: { available: allowNote === '', machine: answer.machine, note: allowNote },
+    count: answer.waiting.length + answer.pending.length,
+    waiting: answer.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds, -skew)),
+    denyNote: `To deny a held request run \`machine requests --deny <id>\` ON ${machine.name} (the machine that holds it): denying from another machine is not available yet.`,
     pending: answer.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: answer.pendingTotal,
     chainOk: answer.chain.ok,

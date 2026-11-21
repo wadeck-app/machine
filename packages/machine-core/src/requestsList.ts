@@ -3,7 +3,7 @@ import { signingInput } from './canonical.js';
 import { decodeBase64urlStrict, verifyBytes } from './keys.js';
 import type { PolicyMode } from './policy.js';
 import { isUuid } from './reference.js';
-import { DEFAULT_PENDING_LIMIT, printable, type PendingGroup } from './requests.js';
+import { DEFAULT_PENDING_LIMIT, printable, type PendingGroup, type WaitingRequest } from './requests.js';
 import { signDocument } from './signed.js';
 
 // The `requests-list` frame pair (decision 74): the ADMIN asks a peer for the requests that peer refused because the command is not
@@ -15,10 +15,13 @@ import { signDocument } from './signed.js';
 // The request is signed with the ADMIN key (domain below), so a registered peer without the admin key cannot read what the other peers
 // tried. It names the target, the machine whose channel carries it (`source`), a nonce and a lifetime of at most 60 seconds: it cannot be
 // replayed, redirected to another target or used from another connection. The answer holds what `machine requests` shows locally and
-// nothing else: the machine, its policy mode, and the pending groups (peer, shell, command, count, first and last time).
+// nothing else: the machine, its policy mode, the requests it HOLDS right now for `run --wait` (id, peer, shell, command, since, deadline: what
+// the owner needs to allow or deny them) and the pending groups (peer, shell, command, count, first and last time).
 
 export const REQUESTS_LIST_DOMAIN = 'machine/requests-list/v1';
 export const REQUESTS_LIST_MAX_GROUPS = DEFAULT_PENDING_LIMIT;
+/** Held requests an answer may carry (a machine holds at most 4 today, MAX_HELD_PER_MACHINE: room for a raised limit). */
+export const REQUESTS_LIST_MAX_WAITING = 16;
 export const REQUESTS_LIST_LIFETIME_SECONDS = 30;
 export const REQUESTS_LIST_MAX_LIFETIME_SECONDS = 60;
 export const REQUESTS_LIST_SKEW_SECONDS = 30;
@@ -122,6 +125,8 @@ export interface RequestsListData {
   chain: { ok: true } | { ok: false; line: number };
   pendingTotal: number;
   allowedNow: number;
+  /** Requests held right now for approval (`run --wait`), soonest deadline first. Always sent whole: a machine holds a handful at most. */
+  waiting: WaitingRequest[];
   /** Newest first. */
   pending: PendingGroup[];
 }
@@ -146,6 +151,7 @@ export function buildRequestsListAnswer(data: RequestsListData, maxBytes: number
 
 export type ParsedAnswer = { ok: true; answer: RequestsListAnswer } | { ok: false; message: string };
 
+const asRecord = (v: unknown): Record<string, unknown> | undefined => (typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v)) : undefined);
 const isInt = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 
 /** What the admin machine reads from a peer: validated strictly, every text reduced to bounded printable ASCII. */
@@ -161,6 +167,30 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
   const chain = a['chain'] as { ok?: unknown; line?: unknown } | null;
   if (typeof chain !== 'object' || chain === null || (chain.ok !== true && !(chain.ok === false && isInt(chain.line)))) return bad('chain');
   if (!Array.isArray(a['pending']) || a['pending'].length > REQUESTS_LIST_MAX_GROUPS) return bad('pending');
+  // An older peer has no held requests to tell: the field is absent, not an error.
+  const rawWaiting: unknown = a['waiting'] === undefined ? [] : a['waiting'];
+  if (!Array.isArray(rawWaiting) || rawWaiting.length > REQUESTS_LIST_MAX_WAITING) {
+    return bad('waiting');
+  }
+  const waiting: WaitingRequest[] = [];
+  for (const entry of rawWaiting) {
+    const w = asRecord(entry);
+    if (w === undefined || typeof w['id'] !== 'string' || !isUuid(w['id']) || typeof w['peer'] !== 'string' || !isUuid(w['peer'])) {
+      return bad('a held request');
+    }
+    if (typeof w['shell'] !== 'string' || typeof w['command'] !== 'string' || !isInt(w['since']) || !isInt(w['deadline'])) {
+      return bad('a held request');
+    }
+    waiting.push({
+      id: w['id'],
+      peer: w['peer'],
+      ...(typeof w['peerName'] === 'string' ? { peerName: printable(w['peerName'], 100) } : {}),
+      shell: printable(w['shell'], 16),
+      command: printable(w['command']),
+      since: w['since'],
+      deadline: w['deadline'],
+    });
+  }
   const pending: PendingGroup[] = [];
   for (const g of a['pending'] as Array<Record<string, unknown>>) {
     if (typeof g !== 'object' || g === null || typeof g['peer'] !== 'string' || typeof g['shell'] !== 'string' || typeof g['command'] !== 'string' || typeof g['reason'] !== 'string') return bad('a group');
@@ -187,6 +217,7 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
       chain: chain.ok === true ? { ok: true } : { ok: false, line: chain.line as number },
       pendingTotal: a['pendingTotal'],
       allowedNow: a['allowedNow'],
+      waiting,
       pending,
       truncated: a['truncated'],
     },

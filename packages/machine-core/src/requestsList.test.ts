@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { generateSigningKeyPair } from './keys.js';
-import { REQUESTS_LIST_DOMAIN, REQUESTS_LIST_MAX_GROUPS, buildRequestsListAnswer, newRequestsList, parseRequestsListAnswer, signRequestsList, verifyRequestsList } from './requestsList.js';
+import { REQUESTS_LIST_DOMAIN, REQUESTS_LIST_MAX_GROUPS, REQUESTS_LIST_MAX_WAITING, buildRequestsListAnswer, newRequestsList, parseRequestsListAnswer, signRequestsList, verifyRequestsList } from './requestsList.js';
 import { signDocument } from './signed.js';
-import type { PendingGroup } from './requests.js';
+import type { PendingGroup, WaitingRequest } from './requests.js';
 
 const ADMIN_MACHINE = '1b4e28ba-2fa1-4d3b-a3f4-0123456789ab';
 const TARGET = '9c5d1e2f-3a4b-4c6d-8e7f-abcdef012345';
@@ -80,12 +80,13 @@ describe('requests-list request (signed by the admin key)', () => {
 });
 
 const group = (i: number, command = `cmd${i}`): PendingGroup => ({ peer: ADMIN_MACHINE, peerName: 'laptop', shell: 'sh', command, count: 1, firstSeen: NOW, lastSeen: NOW + i, reason: 'not-listed' });
-const data = (pending: PendingGroup[], over = {}) => ({ id: 'a1b2c3d4-0000-4000-8000-000000000000', machine: { uuid: TARGET, name: 'target' }, policyMode: 'admin' as const, now: NOW, chain: { ok: true } as const, pendingTotal: pending.length, allowedNow: 0, pending, ...over });
+const held = (n: number, command = `held${n}`): WaitingRequest => ({ id: `0000000${n}-0000-4000-8000-000000000000`, peer: ADMIN_MACHINE, peerName: 'laptop', shell: 'sh', command, since: NOW - 5, deadline: NOW + 595 });
+const data = (pending: PendingGroup[], over = {}) => ({ id: 'a1b2c3d4-0000-4000-8000-000000000000', machine: { uuid: TARGET, name: 'target' }, policyMode: 'admin' as const, now: NOW, chain: { ok: true } as const, pendingTotal: pending.length, allowedNow: 0, waiting: [] as WaitingRequest[], pending, ...over });
 
 describe('requests-list answer', () => {
   it('carries only the pending groups and the machine, read-only data', () => {
     const answer = buildRequestsListAnswer(data([group(1)]), 1_048_576);
-    expect(Object.keys(answer).sort()).toEqual(['allowedNow', 'chain', 'id', 'machine', 'now', 'pending', 'pendingTotal', 'policyMode', 'truncated', 'type']);
+    expect(Object.keys(answer).sort()).toEqual(['allowedNow', 'chain', 'id', 'machine', 'now', 'pending', 'pendingTotal', 'policyMode', 'truncated', 'type', 'waiting']);
     expect(answer).toMatchObject({ type: 'requests-list', truncated: false });
   });
 
@@ -103,6 +104,13 @@ describe('requests-list answer', () => {
     expect(answer.pendingTotal).toBe(100);
     // The groups kept are the first ones: the list is newest first.
     expect(answer.pending[0]?.command.endsWith('0')).toBe(true);
+  });
+
+  it('carries the held requests (id, command, shell, peer, deadline) and keeps them when groups are dropped for size', () => {
+    const big = Array.from({ length: 100 }, (_, i) => group(i, `${'x'.repeat(2000)}${i}`));
+    const answer = buildRequestsListAnswer(data(big, { waiting: [held(1), held(2)] }), 50_000);
+    expect(answer.truncated).toBe(true);
+    expect(answer.waiting.map((w) => w.command)).toEqual(['held1', 'held2']);
   });
 
   it('refuses a cap too small for even the empty answer', () => {
@@ -127,6 +135,31 @@ describe('parseRequestsListAnswer (what the admin machine reads from a peer: unt
     const many = valid();
     many['pending'] = Array.from({ length: REQUESTS_LIST_MAX_GROUPS + 1 }, (_, i) => group(i));
     expect(parseRequestsListAnswer(many, 'a1b2c3d4-0000-4000-8000-000000000000')).toMatchObject({ ok: false });
+  });
+
+  it('reads the held requests, with every text reduced to bounded printable ASCII', () => {
+    const v = valid();
+    v['waiting'] = [{ ...held(1, 'ls[2J'), peerName: 'laptop' }];
+    const r = parseRequestsListAnswer(v, 'a1b2c3d4-0000-4000-8000-000000000000');
+    expect(r.ok && r.answer.waiting).toEqual([{ ...held(1, 'ls?[2J'), peerName: 'la?ptop' }]);
+  });
+
+  it('reads an older peer answer (no waiting field) as no held request', () => {
+    const v = valid();
+    delete v['waiting'];
+    const r = parseRequestsListAnswer(v, 'a1b2c3d4-0000-4000-8000-000000000000');
+    expect(r.ok && r.answer.waiting).toEqual([]);
+  });
+
+  it('refuses a malformed held request and more of them than a machine can hold', () => {
+    const id = 'a1b2c3d4-0000-4000-8000-000000000000';
+    const v = valid();
+    v['waiting'] = [{ ...held(1), deadline: 'soon' }];
+    expect(parseRequestsListAnswer(v, id)).toMatchObject({ ok: false });
+    v['waiting'] = [{ ...held(1), id: 'not-a-uuid' }];
+    expect(parseRequestsListAnswer(v, id)).toMatchObject({ ok: false });
+    v['waiting'] = Array.from({ length: REQUESTS_LIST_MAX_WAITING + 1 }, (_, i) => held(i % 9));
+    expect(parseRequestsListAnswer(v, id)).toMatchObject({ ok: false });
   });
 
   it('turns control characters into ?: a peer cannot send an escape sequence to the terminal', () => {

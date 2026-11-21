@@ -513,6 +513,11 @@ class PeerService {
           finish('refused', { reason: again.reason });
           return refusal(again.reason, again.message, again.allowedShells);
         }
+        // A policy installed during the wait lists the command under ANOTHER shell: the caller used the wrong one, no Allow of this shell is coming. Answered at once, as for a fresh request (the message names the shell).
+        if (again.allowedShells !== undefined && again.allowedShells.length > 0) {
+          finish('refused', { reason: again.reason });
+          return refusal(again.reason, again.message, again.allowedShells);
+        }
         if (verdict.state === 'deadline') {
           finish('deadline');
           return refusal(again.reason, `${first.message} (${waitedText(hold.waitSeconds, hold.capped, hold.requestedSeconds)})`);

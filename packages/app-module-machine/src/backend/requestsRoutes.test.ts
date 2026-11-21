@@ -134,7 +134,7 @@ describe('GET /requests', () => {
 describe('POST /requests/remote (a request signed in the browser with the admin key, forwarded to a peer by the daemon)', () => {
   const signed = { body: { v: 1, id: 'x', nonce: 'n', source: SELF, target: PEER, limit: 100, issuedAt: NOW, expiresAt: NOW + 30 }, signature: 'sig' };
   const header = { 'x-machine-module': '1' };
-  const peerAnswer = { ok: true, answer: { type: 'requests-list', id: 'x', machine: { uuid: PEER, name: 'laptop' }, policyMode: 'admin', now: NOW, chain: { ok: true }, pendingTotal: 1, allowedNow: 0, truncated: false, pending: [{ peer: SELF, peerName: 'desktop', shell: 'sh', command: 'ls', count: 1, firstSeen: NOW - 60, lastSeen: NOW - 60, reason: 'not-listed' }] } };
+  const peerAnswer = { ok: true, answer: { type: 'requests-list', id: 'x', machine: { uuid: PEER, name: 'laptop' }, policyMode: 'admin', now: NOW, chain: { ok: true }, pendingTotal: 1, allowedNow: 0, truncated: false, waiting: [], pending: [{ peer: SELF, peerName: 'desktop', shell: 'sh', command: 'ls', count: 1, firstSeen: NOW - 60, lastSeen: NOW - 60, reason: 'not-listed' }] } };
 
   it('is declared sensitive (the PIN of app-core), because it makes the daemon contact another machine', () => {
     expect(routes().get('POST /requests/remote')?.options).toEqual({ effect: 'sensitive' });

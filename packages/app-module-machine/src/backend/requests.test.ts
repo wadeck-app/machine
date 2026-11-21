@@ -84,9 +84,17 @@ describe('requestsPage (the Requests page, local machine)', () => {
     expect(page.emptyMessage).toMatch(/no request ever reached this machine/i);
   });
 
-  it('states what the page cannot do: other machines are listed by the CLI on the admin machine', () => {
-    expect(requestsPage(daemonAnswer(audit, { adminKeyHere: true }), NOW).remoteNote).toMatch(/machine requests <machine>/);
-    expect(requestsPage(daemonAnswer(audit, { adminKeyHere: false }), NOW).remoteNote).toMatch(/admin machine/);
+  it('says what is true about the other machines: the admin machine loads them from the page, any other one is told where to go', () => {
+    const admin = requestsPage(daemonAnswer(audit, { adminKeyHere: true }), NOW);
+    expect(admin.remote).toEqual({ available: true, note: '' });
+    expect(admin.remoteNote).toMatch(/other trusted machines/);
+    expect(admin.remoteNote).toMatch(/admin passphrase/);
+    expect(admin.remoteNote).not.toMatch(/THIS machine|cannot ask a peer/);
+    const other = requestsPage(daemonAnswer(audit, { adminKeyHere: false }), NOW);
+    expect(other.remote.available).toBe(false);
+    expect(other.remote.note).toMatch(/Only the admin machine/);
+    expect(other.remote.note).toMatch(/machine requests <machine>/);
+    expect(other.remoteNote).toBe(other.remote.note);
   });
 
   describe('the Allow button (decision 76)', () => {
@@ -138,6 +146,7 @@ describe('remoteRequestsPage', () => {
         pendingTotal: 3,
         allowedNow: 1,
         truncated: true,
+        waiting: [],
         pending: [{ peer: PEER, peerName: 'thinkcentre', shell: 'sh', command: 'ls', count: 1, firstSeen: NOW - 600, lastSeen: NOW - 600, reason: 'not-listed' }],
       },
       NOW,
@@ -146,6 +155,41 @@ describe('remoteRequestsPage', () => {
     expect(page.pending[0]).toMatchObject({ countText: '1 time', nextCommand: 'machine admin allow laptop --shell sh -- ls', lastSeenText: '10 min ago' });
     expect(page.notes.join(' ')).toMatch(/Showing 1 of 3/);
     expect(page.notes.join(' ')).toMatch(/1 earlier request/);
+  });
+
+  it('carries the requests the peer HOLDS: seconds left by the clock of the peer, the exact allow command for that peer, an Allow capability, and no Deny button', () => {
+    const page = remoteRequestsPage(
+      {
+        type: 'requests-list',
+        id: 'x',
+        machine: { uuid: SELF, name: 'laptop' },
+        policyMode: 'admin',
+        now: NOW + 3000,
+        chain: { ok: true },
+        pendingTotal: 0,
+        allowedNow: 0,
+        truncated: false,
+        waiting: [{ id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, peerName: 'thinkcentre', shell: 'cmd', command: 'hostname', since: NOW + 2940, deadline: NOW + 3540 }],
+        pending: [],
+      },
+      NOW,
+    );
+    expect(page.waiting).toHaveLength(1);
+    expect(page.waiting[0]).toMatchObject({ id: 'aaaa1111-0000-4000-8000-000000000000', peerText: 'thinkcentre', shell: 'cmd', command: 'hostname', secondsLeft: 540, askedText: '60 s ago', nextCommand: 'machine admin allow laptop --shell cmd -- hostname' });
+    expect(page.allow).toEqual({ available: true, machine: { uuid: SELF, name: 'laptop' }, note: '' });
+    expect(page.count).toBe(1);
+    // The Deny of a request held elsewhere is not built: the page says where to run it, it never shows a button that does nothing.
+    expect(page.denyNote).toMatch(/machine requests --deny <id>.*ON laptop/);
+  });
+
+  it('a peer in mode local cannot be allowed from the admin machine: the capability says why and the command is the local one', () => {
+    const page = remoteRequestsPage(
+      { type: 'requests-list', id: 'x', machine: { uuid: SELF, name: 'laptop' }, policyMode: 'local', now: NOW, chain: { ok: true }, pendingTotal: 0, allowedNow: 0, truncated: false, waiting: [{ id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, shell: 'sh', command: 'ls', since: NOW - 5, deadline: NOW + 100 }], pending: [] },
+      NOW,
+    );
+    expect(page.allow.available).toBe(false);
+    expect(page.allow.note).toMatch(/laptop manages its own allow list/);
+    expect(page.waiting[0]?.nextCommand).toBe('machine policy allow --shell sh -- ls');
   });
 });
 

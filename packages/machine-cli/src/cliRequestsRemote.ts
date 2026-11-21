@@ -106,9 +106,10 @@ export async function runRemoteRequests(ctx: CommandContext, prompt: Prompt): Pr
       continue;
     }
     const a = o.answer;
+    // The times of a held request are the clock of the target: shifted onto this machine's clock like the ages below, so the time left is right on both.
     if (!a.chain.ok) io.stderr(`[warn] the audit log of ${o.name} is broken at line ${a.chain.line}: what follows is not listed. Keep a copy of it on that machine for the investigation, then move it away (\`machine requests\` there says more)\n`);
     if (text.length > 0) text.push('');
-    text.push(...pendingText({ machine: { name: o.name, policyMode: a.policyMode }, adminKeyHere: true, summary: { pending: a.pending, pendingTotal: a.pendingTotal, allowedNow: a.allowedNow }, logPresent: true, now, where: o.name }));
+    text.push(...pendingText({ machine: { name: o.name, policyMode: a.policyMode }, adminKeyHere: true, full: args.full === true, summary: { waiting: a.waiting.map((w) => ({ ...w, since: w.since + (now - a.now), deadline: w.deadline + (now - a.now) })), pending: a.pending, pendingTotal: a.pendingTotal, allowedNow: a.allowedNow }, logPresent: true, now, where: o.name }));
     // The clock of the peer is not the one used for the ages: a large gap is worth a line.
     if (Math.abs(a.now - now) > 120) text.push(`[warn] the clock of ${o.name} differs from this machine by ${Math.abs(a.now - now)} s: the ages above use this machine's clock`);
   }

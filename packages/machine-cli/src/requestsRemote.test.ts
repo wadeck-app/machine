@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { generateSigningKeyPair, newRequestsList, signRequestsList, type Json, type PendingGroup } from '@wadeck-app/machine-core';
+import { generateSigningKeyPair, newRequestsList, signRequestsList, type Json, type PendingGroup, type WaitingRequest } from '@wadeck-app/machine-core';
 import { connectToPeer } from '@wadeck-app/machine-transport';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startPeerListener, type PeerServiceDeps } from './peerService.js';
@@ -16,7 +16,9 @@ afterEach(() => {
 
 const group = (i: number, command = `cmd${i}`): PendingGroup => ({ peer: A, peerName: 'a', shell: 'sh', command, count: 2, firstSeen: NOW - 100, lastSeen: NOW - i, reason: 'not-listed' });
 
-async function world(over: { requests?: boolean; noAdmin?: boolean; groups?: PendingGroup[]; maxFrameBytes?: number; failAudit?: boolean } = {}) {
+const heldReq = (n: number): WaitingRequest => ({ id: `0000000${n}-0000-4000-8000-000000000000`, peer: A, peerName: 'a', shell: 'sh', command: `hostname${n}`, since: NOW - 3, deadline: NOW + 597 });
+
+async function world(over: { waiting?: WaitingRequest[]; requests?: boolean; noAdmin?: boolean; groups?: PendingGroup[]; maxFrameBytes?: number; failAudit?: boolean } = {}) {
   const admin = generateSigningKeyPair();
   const a = generateSigningKeyPair();
   const b = generateSigningKeyPair();
@@ -46,7 +48,7 @@ async function world(over: { requests?: boolean; noAdmin?: boolean; groups?: Pen
             list: (limit: number) => {
               listed.push(limit);
               const pending = over.groups ?? [group(1), group(2)];
-              return { machine: { uuid: B, name: 'target' }, policyMode: 'admin' as const, chain: { ok: true as const }, pendingTotal: pending.length, allowedNow: 0, pending: pending.slice(0, limit) };
+              return { machine: { uuid: B, name: 'target' }, policyMode: 'admin' as const, chain: { ok: true as const }, pendingTotal: pending.length, allowedNow: 0, waiting: over.waiting ?? [], pending: pending.slice(0, limit) };
             },
           },
         }),
@@ -73,6 +75,21 @@ describe('requests-list on the peer service', () => {
     const audit = w.entries.find((e) => e['event'] === 'requests-list');
     expect(audit).toMatchObject({ source: A, limit: 10 });
     expect(JSON.stringify(w.entries)).not.toContain('cmd1');
+  });
+
+  it('answers with the requests the target HOLDS (id, command, shell, peer, deadline), whole even when the groups are cut', async () => {
+    const groups = Array.from({ length: 100 }, (_, i) => group(i, `${'x'.repeat(1500)}${i}`));
+    const w = await world({ waiting: [heldReq(1), heldReq(2)], groups, maxFrameBytes: 60_000 });
+    const r = await listRequestsOnPeer(await w.connect(), input(w));
+    expect(r).toMatchObject({ ok: true, answer: { truncated: true } });
+    if (r.ok) expect(r.answer.waiting).toEqual([heldReq(1), heldReq(2)]);
+  });
+
+  it('does not answer the held requests to a request not signed by the admin key', async () => {
+    const w = await world({ waiting: [heldReq(1)] });
+    const r = await listRequestsOnPeer(await w.connect(), input(w, { adminPrivateKeyPkcs8: generateSigningKeyPair().privateKeyPkcs8 }));
+    expect(r).toMatchObject({ ok: false, reason: 'bad-signature' });
+    expect(JSON.stringify(r)).not.toContain('hostname1');
   });
 
   it('refuses a request not signed by the admin key (a registered peer cannot read the others), audits the refusal, sends no data', async () => {

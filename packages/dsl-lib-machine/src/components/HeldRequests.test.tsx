@@ -249,3 +249,53 @@ describe('Allow', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1 is installed on desktop/i);
   }, 120_000);
 });
+
+describe('a request held on ANOTHER machine (listed by the admin machine)', () => {
+  const LAPTOP = '33333333-3333-4333-8333-333333333333';
+  const remote: HeldRequestRow = {
+    id: 'cccc3333-0000-4000-8000-000000000000',
+    peerText: 'midgard2',
+    peer: PEER,
+    shell: 'cmd',
+    command: 'hostname',
+    secondsLeft: 300,
+    askedText: '10 s ago',
+    countText: 'waiting now',
+    nextCommand: 'machine admin allow laptop --shell cmd -- hostname',
+    nextWhere: '',
+    machine: { uuid: LAPTOP, name: 'laptop' },
+    canAllow: true,
+    denyText: 'Deny: run `machine requests --deny cccc3333` ON laptop',
+  };
+
+  it('names the machine that holds it, offers Allow, and shows where to deny instead of a Deny button that would do nothing', () => {
+    render(<HeldRequests rows={[remote]} allow={ALLOW} />);
+    const item = itemOf('hostname');
+    expect(within(item).getByText('laptop')).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Allow hostname' })).toBeInTheDocument();
+    expect(within(item).queryByRole('button', { name: /^Deny/ })).toBeNull();
+    expect(within(item).getByText(/machine requests --deny cccc3333/)).toBeInTheDocument();
+  });
+
+  it('Allow asks the policy of THAT machine (its uuid), not of this one', async () => {
+    render(<HeldRequests rows={[remote]} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow hostname' }));
+    await screen.findByRole('dialog');
+    await waitFor(() => expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${LAPTOP}`)).toBe(true));
+    expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${SELF}`)).toBe(false);
+  });
+
+  it('with canAllow false (the peer is in mode local) the command is shown, not a button, even when this machine can allow its own', () => {
+    render(<HeldRequests rows={[{ ...remote, canAllow: false }]} allow={ALLOW} />);
+    const item = itemOf('hostname');
+    expect(within(item).queryByRole('button', { name: /^Allow/ })).toBeNull();
+    expect(within(item).getByText('machine admin allow laptop --shell cmd -- hostname')).toBeInTheDocument();
+  });
+
+  it('counts down from the time its own list was read, not from the arrival of the other rows', () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    render(<HeldRequests rows={[{ ...remote, fetchedAtMs: start - 20_000 }]} allow={ALLOW} />);
+    expect(within(itemOf('hostname')).getByText('4 min 40 s left')).toBeInTheDocument();
+  });
+});

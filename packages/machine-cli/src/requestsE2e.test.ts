@@ -42,9 +42,9 @@ describe('machine requests <machine> (the admin machine asks a peer)', () => {
     expect(r.err).toMatch(/^Signing a read-only request to list the pending requests of laptop/);
     expect(r.err).not.toMatch(/\[(warn|fail)\]/);
     expect(r.code).toBe(0);
-    expect(r.out).toContain(`desktop -> ${SHELL} "echo something"  2 times`);
-    expect(r.out).toContain(`machine admin allow laptop --shell ${SHELL} -- "echo something"`);
-    expect(r.out).toMatch(/pending requests of laptop|waiting for approval on laptop/);
+    expect(r.out).toMatch(new RegExp(`desktop +${SHELL} +2 +now +echo something$`, 'm'));
+    expect(r.out).toContain(`  allow: machine admin allow laptop --shell ${SHELL} -- "echo something"`);
+    expect(r.out.split('\n')[0]).toBe('laptop (admin mode): nothing waiting, 1 refused (not allowed)');
   });
 
   it('is audited on the target as one event, without the commands', async () => {
@@ -101,9 +101,37 @@ describe('machine requests <machine> (the admin machine asks a peer)', () => {
     expect(r.err).toMatch(/--address|address/);
   });
 
+  it('shows the requests the peer HOLDS (run waits for its owner), with the time left and the commands to allow or deny, and keeps the answer read-only', async () => {
+    const waiting = cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--wait', '10s', '--', 'echo', 'held-here'], undefined, { allowLoopbackPeers: true, waitProgressMs: 100 });
+    let r = await cli(a, ['requests', 'laptop', '--address', address], prompt);
+    for (let i = 0; i < 100 && !/WAITING NOW/.test(r.out); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      r = await cli(a, ['requests', 'laptop', '--address', address], prompt);
+    }
+    expect(r.code, r.err).toBe(0);
+    expect(r.out.split('\n')[0]).toBe('laptop (admin mode): 1 waiting now, no refused request');
+    expect(r.out).toMatch(new RegExp(`[0-9a-f]{8} +desktop +\\w+ +\\d+ s +\(now|\d+ s ago) +echo held-here$`, 'm'));
+    // Allow is the admin command of THIS machine; the Deny is run on the target (the remote Deny is not built).
+    expect(r.out).toContain(`  allow: machine admin allow laptop --shell ${SHELL} -- "echo held-here"`);
+    expect(r.out).toMatch(/deny: machine requests --deny <id> .*run ON laptop/);
+    expect(r.out).toMatch(/installs it within about a minute/);
+    expect(Math.max(...r.out.split('\n').map((l) => l.length))).toBeLessThanOrEqual(100);
+    // The held request is listed once: it is not a refused group yet.
+    expect(r.out).not.toContain('REFUSED');
+    expect(r.err).not.toMatch(/\[(warn|fail)\]/);
+    const json = JSON.parse((await cli(a, ['requests', 'laptop', '--address', address, '--json'], prompt)).out) as { machines: Array<{ answer: { waiting: Array<{ id: string; command: string; shell: string; deadline: number }> } }> };
+    const held = json.machines[0]?.answer.waiting ?? [];
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ command: 'echo held-here', shell: SHELL });
+    // Free the caller on the target side (what its owner would do), then the caller ends.
+    const denied = await cli(b, ['requests', '--deny', (held[0] as { id: string }).id.slice(0, 8)]);
+    expect(denied.code, denied.err).toBe(0);
+    expect((await waiting).err).toContain('denied');
+  });
+
   it('a peer without any pending request says so', async () => {
     const r = await cli(a, ['requests', 'laptop', '--address', address], prompt);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/no request waiting for approval on laptop/);
+    expect(r.out).toMatch(/^laptop \(admin mode\): nothing waiting, no refused request/);
   });
 });

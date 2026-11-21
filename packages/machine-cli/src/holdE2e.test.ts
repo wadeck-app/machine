@@ -62,7 +62,7 @@ describe('machine run --wait', () => {
     await waitingId();
     // The listing the owner sees: waiting, not refused.
     const listing = await cli(b, ['requests']);
-    expect(listing.out).toMatch(/waiting for your answer on laptop/);
+    expect(listing.out).toMatch(/WAITING NOW/);
     await allow('echo hello-held');
     const r = await pending;
     expect(r.code, r.err).toBe(0);

@@ -105,10 +105,12 @@ import { FilterChips } from '@wadeck-app/dsl-ui/dist/components/table/FilterChip
 import { Pagination } from '@wadeck-app/dsl-ui/dist/components/table/Pagination.js'
 import { SearchBar } from '@wadeck-app/dsl-ui/dist/components/table/SearchBar.js'
 import { SortableColumn } from '@wadeck-app/dsl-ui/dist/components/table/SortableColumn.js'
+import { ActivityLog } from '../components/ActivityLog.js'
 import { AllowRequestsTable } from '../components/AllowRequestsTable.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
 import { HeldRequests } from '../components/HeldRequests.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
+import { RequestsOverview } from '../components/RequestsOverview.js'
 import { VerticalTimeline } from '../components/VerticalTimeline.js'
 import * as nodeSchemas0 from '@wadeck-app/dsl-ui/dist/schemas/generated-node-schemas.js'
 declare const process: { env: { NODE_ENV?: string } }
@@ -1855,6 +1857,15 @@ export const SortableColumnEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const ActivityLogEntry: ComponentRegistryEntry = {
+	name: 'ActivityLog', category: 'composite', tags: ["activity","log","run","audit","sent","received","history"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const pageSize = coerceProp(resolveExpressionValue(node['pageSize'], ctx), 'ActivityLog.pageSize', 'primitive', false) as import('../components/ActivityLog.js').ActivityLogProps['pageSize']
+		return <ActivityLog pageSize={pageSize} />
+	},
+}
+
 export const AllowRequestsTableEntry: ComponentRegistryEntry = {
 	name: 'AllowRequestsTable', category: 'composite', tags: ["requests","allow","policy","admin"],
 	nodeSchema: null as never,
@@ -1900,6 +1911,22 @@ export const PassphraseSignerEntry: ComponentRegistryEntry = {
 		const onSigned = coerceProp(resolveExpressionValue(node['onSigned'], ctx), 'PassphraseSigner.onSigned', 'function', false) as import('../components/PassphraseSigner.js').PassphraseSignerProps['onSigned']
 		const onUnlocked = coerceProp(resolveExpressionValue(node['onUnlocked'], ctx), 'PassphraseSigner.onUnlocked', 'function', false) as import('../components/PassphraseSigner.js').PassphraseSignerProps['onUnlocked']
 		return <PassphraseSigner keyFileUrl={keyFileUrl} registration={registration} unlockSeconds={unlockSeconds} onSigned={onSigned} onUnlocked={onUnlocked} />
+	},
+}
+
+export const RequestsOverviewEntry: ComponentRegistryEntry = {
+	name: 'RequestsOverview', category: 'composite', tags: ["requests","allow","hold","policy","admin","machines"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const self = coerceProp(resolveExpressionValue(node['self'], ctx), 'RequestsOverview.self', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['self']
+		const machines = coerceProp(resolveExpressionValue(node['machines'], ctx), 'RequestsOverview.machines', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['machines']
+		const held = coerceProp(resolveExpressionValue(node['held'], ctx), 'RequestsOverview.held', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['held']
+		const pending = coerceProp(resolveExpressionValue(node['pending'], ctx), 'RequestsOverview.pending', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['pending']
+		const allow = coerceProp(resolveExpressionValue(node['allow'], ctx), 'RequestsOverview.allow', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['allow']
+		const remote = coerceProp(resolveExpressionValue(node['remote'], ctx), 'RequestsOverview.remote', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['remote']
+		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'RequestsOverview.emptyMessage', 'string', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['emptyMessage']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'RequestsOverview.onRefresh', 'function', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['onRefresh']
+		return <RequestsOverview self={self} machines={machines} held={held} pending={pending} allow={allow} remote={remote} emptyMessage={emptyMessage} onRefresh={onRefresh} />
 	},
 }
 
@@ -2010,10 +2037,12 @@ export const allEntries: ComponentRegistryEntry[] = [
 	PaginationEntry,
 	SearchBarEntry,
 	SortableColumnEntry,
+	ActivityLogEntry,
 	AllowRequestsTableEntry,
 	FinalCodeDisplayEntry,
 	HeldRequestsEntry,
 	PassphraseSignerEntry,
+	RequestsOverviewEntry,
 	VerticalTimelineEntry,
 ]
 
@@ -2153,8 +2182,10 @@ FilterChipsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","mo
 PaginationEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["onPageChange","page","size","total","urlParam"] : [];
 SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["debounceMs","focusExpand","onChange","placeholder","resetUrlParams","size","urlParam","value"] : [];
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
+ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","onRefresh","rows"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
+RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","held","machines","onRefresh","pending","remote","self"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

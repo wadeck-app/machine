@@ -1,5 +1,5 @@
 import { createDaemonClient } from '@wadeck-app/singleton-daemon-kit';
-import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, allowCommand, describeHistory, shellQuote, type HistoryEntry, type HistoryKind, type PolicyMode, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, HISTORY_KINDS, MAX_LIMIT, layoutHistory, layoutRequests, shellQuote, type HistoryKind, type PolicyMode, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
 import { clockText, relativeText } from './humanTime.js';
 import { EXIT, type CommandContext } from './cliTypes.js';
 import { requestsAnswer, type RequestsQuery } from './requestsView.js';
@@ -30,8 +30,6 @@ export function parseSince(text: string, nowSeconds: number): number {
   throw new Error(`--since ${JSON.stringify(text)} is not understood: use ${SINCE_FORMS}`);
 }
 
-const who = (g: { peer?: string; peerName?: string }): string => g.peerName ?? (g.peer === undefined ? '-' : g.peer.slice(0, 8));
-
 const ago = (at: number, now: number): string => `${clockText(at, now)} (${relativeText(at, now)})`;
 
 export interface PendingText {
@@ -41,49 +39,33 @@ export interface PendingText {
   summary: Pick<RequestsSummary, 'pending' | 'pendingTotal' | 'allowedNow'> & { waiting?: WaitingRequest[] };
   logPresent: boolean;
   now: number;
-  /** `this machine` for the local view; shown in the header. */
+  /** `this machine` for the local view, else the machine that holds the requests (the admin machine asked it). */
   where: string;
+  /** `--full`: the whole command, wrapped, and the exact allow command of every row. */
+  full?: boolean;
+  /** What this listing does not cover (the local view: this machine only). */
+  extraNote?: string;
 }
 
-const leftText = (seconds: number): string => (seconds >= 60 ? `${Math.ceil(seconds / 60)} min left` : `${Math.max(0, Math.ceil(seconds))} s left`);
-
-/** The requests a peer holds right now: the caller is connected and waits for the answer of the owner. */
-function waitingText(v: PendingText): string[] {
-  const waiting = v.summary.waiting ?? [];
-  if (waiting.length === 0) {
-    return [];
-  }
-  const lines = [`waiting for your answer on ${v.machine.name} (${waiting.length} request${waiting.length === 1 ? '' : 's'}: the caller is connected and waits; allow it to run it at once, deny it to refuse it):`];
-  for (const w of waiting) {
-    lines.push(`  ${who(w)} -> ${w.shell} "${w.command}"  ${leftText(w.deadline - v.now)}, asked ${ago(w.since, v.now)}, id ${w.id.slice(0, 8)}`);
-    lines.push(`      allow: ${allowCommand(w, v.machine)}`);
-    lines.push(`      deny:  machine requests --deny ${w.id.slice(0, 8)} [--reason <text>]`);
-  }
-  return lines;
-}
-
+/** The listing of one machine (machine-core layoutRequests): header, WAITING NOW, REFUSED, Notes. The same for `machine requests`, `<machine>` and `--all`. */
 export function pendingText(v: PendingText): string[] {
-  const { pending, pendingTotal, allowedNow } = v.summary;
-  const lines: string[] = [...waitingText(v)];
-  if (pending.length === 0) {
-    lines.push(`no request waiting for approval on ${v.machine.name}${v.logPresent ? '' : ' (no audit log yet: no request ever reached it)'}`);
-  } else {
-    lines.push(`requests waiting for approval on ${v.machine.name} (${pendingTotal} command${pendingTotal === 1 ? '' : 's'} refused because not allowed, newest first):`);
-    for (const g of pending) {
-      lines.push(`  ${who(g)} -> ${g.shell} "${g.command}"  ${g.count} time${g.count === 1 ? '' : 's'}, first ${ago(g.firstSeen, v.now)}, last ${ago(g.lastSeen, v.now)}`);
-      lines.push(`      ${allowCommand(g, v.machine)}`);
-    }
-    if (pendingTotal > pending.length) lines.push(`[info] showing ${pending.length} of ${pendingTotal} (the newest): \`--limit <n>\` shows more`);
-    if (v.machine.policyMode === 'admin') {
-      lines.push(`allowing adds the command to the default list: every peer may then run it. ${v.adminKeyHere ? '' : 'Run it on the admin machine (the one that holds the admin key). '}\`machine admin allow ${v.machine.name} --list\` shows what is allowed`.trim());
-    } else lines.push(`mode local: ${v.machine.name} manages its own allow list: run the command ON ${v.where === 'this machine' ? 'this machine' : v.machine.name}; it asks the local passphrase. \`--peer <machine>\` limits it to one peer`);
-  }
-  if (allowedNow > 0) lines.push(`${allowedNow} earlier request${allowedNow === 1 ? ' is' : 's are'} allowed now and not listed`);
-  return lines;
-}
-
-function historyText(h: HistoryEntry, now: number): string {
-  return `${ago(h.at, now)}  ${who(h)}  ${h.kind} ${describeHistory(h)}${h.verified ? '' : '  [UNVERIFIED]'}`;
+  const local = v.where === 'this machine';
+  return layoutRequests({
+    machine: v.machine,
+    remote: !local,
+    adminKeyHere: v.adminKeyHere,
+    now: v.now,
+    waiting: v.summary.waiting ?? [],
+    pending: v.summary.pending,
+    pendingTotal: v.summary.pendingTotal,
+    allowedNow: v.summary.allowedNow,
+    logPresent: v.logPresent,
+    full: v.full === true,
+    ...(v.extraNote !== undefined ? { extraNote: v.extraNote } : {}),
+    age: relativeText,
+    // Known for this machine only: a peer does not tell, the note then covers both.
+    ...(local ? { targetPlatform: process.platform === 'win32' ? ('windows' as const) : ('posix' as const) } : {}),
+  });
 }
 
 function parseLimit(text: string | undefined, flag: string): number | undefined {
@@ -136,17 +118,13 @@ export async function runRequests(ctx: CommandContext): Promise<number> {
   for (const p of answer.problems) io.stderr(`[warn] ${p}\n`);
 
   const limitation = answer.adminKeyHere
-    ? "this machine's requests only; `machine requests <machine>` or `--all` asks the peers for their pending list (admin passphrase; history stays on each machine)"
-    : "this machine's requests only; the admin machine can list those of another machine with `machine requests <machine>` (its history: run `machine requests --history` there)";
+    ? 'this machine only: `machine requests <machine>` or `--all` asks the peers (admin passphrase)'
+    : 'this machine only: the admin machine lists the others with `machine requests <machine>`';
   if (args.history !== true) {
-    emit(answer, `${[...pendingText({ machine: { name: answer.self.name, policyMode: answer.policyMode }, adminKeyHere: answer.adminKeyHere, summary, logPresent: answer.logPresent, now: nowSeconds, where: 'this machine' }), `see what happened: \`machine requests --history\`; ${limitation}`].join('\n')}\n`);
+    emit(answer, `${pendingText({ machine: { name: answer.self.name, policyMode: answer.policyMode }, adminKeyHere: answer.adminKeyHere, summary, logPresent: answer.logPresent, now: nowSeconds, where: 'this machine', full: args.full === true, extraNote: limitation }).join('\n')}\n`);
     return EXIT.ok;
   }
-  const lines = summary.history.map((h) => historyText(h, nowSeconds));
-  if (lines.length === 0) lines.push(answer.logPresent ? 'no entry matches' : 'no entry: no audit log yet, no request ever reached this machine');
-  else if (summary.historyTotal > summary.history.length) lines.push(`[info] showing the last ${summary.history.length} of ${summary.historyTotal}: \`--limit <n>\` (up to ${MAX_LIMIT}) or \`--since\` change the window`);
-  lines.push(limitation);
-  emit(answer, `${lines.join('\n')}\n`);
+  emit(answer, `${layoutHistory({ machineName: answer.self.name, now: nowSeconds, history: summary.history, historyTotal: summary.historyTotal, logPresent: answer.logPresent, full: args.full === true, when: ago, limitation }).join('\n')}\n`);
   return EXIT.ok;
 }
 

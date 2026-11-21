@@ -110,6 +110,7 @@ export {
   type SummarizeOptions,
   type WaitingRequest,
 } from './requests.js';
+export { MAX_NOTES, REQUESTS_WIDTH, layoutHistory, layoutRequests, type HistoryLayoutInput, type RequestsLayoutInput } from './requestsLayout.js';
 export {
   DEFAULT_TARGET_WAIT_CAP_SECONDS,
   HOLD_ANSWER_MARGIN_MS,
@@ -140,6 +141,7 @@ export {
   REQUESTS_LIST_LIFETIME_SECONDS,
   REQUESTS_LIST_MAX_GROUPS,
   REQUESTS_LIST_MAX_LIFETIME_SECONDS,
+  REQUESTS_LIST_MAX_WAITING,
   REQUESTS_LIST_SKEW_SECONDS,
   buildRequestsListAnswer,
   newRequestsList,

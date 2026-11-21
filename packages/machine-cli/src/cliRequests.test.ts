@@ -45,17 +45,60 @@ describe('machine requests', () => {
     expect(r.code, r.err).toBe(0);
     const lines = r.out.split('\n');
     const first = lines.findIndex((l) => l.includes('df -h'));
-    const second = lines.findIndex((l) => l.includes('sh "ls"'));
+    const second = lines.findIndex((l) => / ls$/.test(l));
     expect(first).toBeGreaterThan(-1);
     expect(second).toBeGreaterThan(first);
-    expect(r.out).toContain(`${PEER.slice(0, 8)} -> sh "ls"  3 times, first `);
-    expect(r.out).toContain('3 h ago');
+    expect(r.out).toMatch(new RegExp(`${PEER.slice(0, 8)} +sh +3 +5 min ago +ls$`, 'm'));
     expect(r.out).toContain('5 min ago');
-    expect(r.out).toContain('machine admin allow target --shell sh -- ls');
-    expect(r.out).toContain('machine admin allow target --shell sh -- "df -h"');
+    // Two rows: ONE line of actions (the template); the exact commands are in --full and --json.
+    expect(r.out.split('\n').filter((l) => /^ {2}allow:/.test(l))).toHaveLength(1);
+    expect(r.out).toContain('machine admin allow target --shell <shell> -- <command>');
     expect(r.out).toMatch(/admin machine/);
     // The limitation is stated, not implied.
-    expect(r.out).toMatch(/this machine's requests/i);
+    expect(r.out).toMatch(/this machine only/i);
+  });
+
+  it('--full gives the exact allow command of every row', async () => {
+    seed();
+    const r = await run('requests', '--full');
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('  allow: machine admin allow target --shell sh -- ls');
+    expect(r.out).toContain('  allow: machine admin allow target --shell sh -- "df -h"');
+  });
+
+  it('is structured: a header with the counts, sections, one Notes footer of at most 3 lines, no line wider than 100, ASCII only', async () => {
+    seed();
+    new FileAuditLog(join(dir, 'audit.log')).write(refusal(-20, `echo ${'x'.repeat(400)}`));
+    const r = await run('requests');
+    const lines = r.out.split('\n').filter((l, i, all) => i < all.length - 1 || l !== '');
+    expect(lines[0]).toBe('target (admin mode): nothing waiting, 3 refused (not allowed)');
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(100);
+    expect(lines.every((l) => /^[\x20-\x7e]*$/.test(l))).toBe(true);
+    expect(lines.filter((l) => l === 'Notes:')).toHaveLength(1);
+    expect(lines.slice(lines.indexOf('Notes:') + 1).length).toBeLessThanOrEqual(3);
+    // The long command is cut with ..., --full shows it (wrapped), --json keeps it whole.
+    expect(r.out).toContain('...');
+    const full = (await run('requests', '--full')).out;
+    expect(full.replace(/\s/g, '')).toContain('x'.repeat(400));
+    expect(JSON.stringify(JSON.parse((await run('requests', '--json')).out))).toContain('x'.repeat(400));
+  });
+
+  it('a request in shell cmd: on a Linux/macOS machine the note says the caller needs --shell sh, on Windows there is no such note', async () => {
+    initMachine(dir, 'target');
+    new FileAuditLog(join(dir, 'audit.log')).write(refusal(-20, 'hostname', 'cmd'));
+    const r = await run('requests');
+    if (process.platform === 'win32') {
+      expect(r.out).not.toMatch(/Windows shell/);
+    } else {
+      expect(r.out).toMatch(/cmd is a Windows shell: Linux\/macOS needs --shell sh \(peer connect target --shell sh\)/);
+    }
+  });
+
+  it('--full only applies to machine requests', async () => {
+    seed();
+    const r = await run('status', '--full');
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--full only applies to `machine requests`/);
   });
 
   it('says what to run in mode local', async () => {
@@ -63,7 +106,7 @@ describe('machine requests', () => {
     writeFileSync(join(dir, 'policy-mode.json'), 'not used: see below');
     // A damaged mode file is reported by the loader as a problem and the mode is local (fail closed): the local command is shown.
     const r = await run('requests');
-    expect(r.out).toContain('machine policy allow --shell sh -- ls');
+    expect(r.out).toContain('machine policy allow --shell <shell> -- <command>');
     expect(r.out).not.toContain('machine admin allow');
   });
 
@@ -71,7 +114,7 @@ describe('machine requests', () => {
     initMachine(dir, 'target');
     const r = await run('requests');
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/no request waiting for approval/i);
+    expect(r.out).toMatch(/nothing waiting, no refused request/i);
     expect(r.out).toMatch(/no audit log yet/i);
   });
 
@@ -88,7 +131,7 @@ describe('machine requests', () => {
     expect(r.code).toBe(0);
     expect(r.err).toMatch(/\[warn\] audit log is broken at line 8/);
     expect(r.err).toMatch(/Keep a copy/);
-    expect(r.out).toContain('sh "ls"');
+    expect(r.out).toMatch(/ ls$/m);
   });
 
   it('--json is one document with the pending groups and the chain', async () => {
@@ -103,7 +146,7 @@ describe('machine requests', () => {
     seed();
     const r = await run('requests', '--limit', '1');
     expect(r.out).toContain('df -h');
-    expect(r.out).not.toContain('sh "ls"');
+    expect(r.out).not.toMatch(/ ls$/m);
     expect(r.out).toMatch(/showing 1 of 2/);
   });
 });
@@ -114,7 +157,7 @@ describe('machine requests --history', () => {
     const r = await run('requests', '--history');
     expect(r.code, r.err).toBe(0);
     expect(r.out).toMatch(/run .*sh "uptime" -> exit 0 in 1\.5 s/);
-    expect(r.out).toMatch(/refused \(not-listed\) sh "df -h"/);
+    expect(r.out).toMatch(/refused +\(not-listed\) sh "df -h"/);
     expect(r.out).toMatch(/session .*session-closed \(too-many-refusals\)/);
   });
 
@@ -128,7 +171,7 @@ describe('machine requests --history', () => {
     expect(since.out).not.toContain('3 h ago');
     const limited = await run('requests', '--history', '--limit', '1');
     expect(limited.out).toContain('session-closed');
-    expect(limited.out).toMatch(/showing the last 1 of 6/);
+    expect(limited.out).toMatch(/last 1 of 6 entries/);
   });
 
   it('--peer needs a known machine', async () => {
@@ -183,14 +226,12 @@ describe('machine requests: held requests (run --wait)', () => {
     const r = await run('requests');
     expect(r.code, r.err).toBe(0);
     const out = r.out;
-    expect(out).toMatch(/waiting for your answer on target \(1 request/);
-    expect(out).toContain(`${PEER.slice(0, 8)} -> sh "uptime -p"`);
-    expect(out).toMatch(/7 min left/);
-    expect(out).toContain('id abcdef12');
-    expect(out).toContain('machine admin allow target --shell sh -- "uptime -p"');
-    expect(out).toContain('machine requests --deny abcdef12');
+    expect(out.split('\n')[0]).toBe('target (admin mode): 1 waiting now, 2 refused (not allowed)');
+    expect(out).toMatch(new RegExp(`abcdef12 +${PEER.slice(0, 8)} +sh +7 min +60 s ago +uptime -p$`, 'm'));
+    expect(out).toContain('  allow: machine admin allow target --shell sh -- "uptime -p"');
+    expect(out).toContain('deny: machine requests --deny <id> [--reason <text>]');
     // The waiting section comes before the refused ones.
-    expect(out.indexOf('waiting for your answer')).toBeLessThan(out.indexOf('requests waiting for approval on target'));
+    expect(out.indexOf('WAITING NOW')).toBeLessThan(out.indexOf('REFUSED'));
   });
 
   it('does not list a request whose deadline passed', async () => {

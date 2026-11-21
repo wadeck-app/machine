@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
 import { DenyForm } from './DenyForm.js';
 
@@ -19,6 +19,14 @@ export interface HeldRequestRow {
   /** The `machine admin allow ...` command that does the same from a terminal. */
   nextCommand: string;
   nextWhere: string;
+  /** Held on ANOTHER machine (the admin machine listed it): the machine Allow signs for. Absent: this machine (`allow.machine`). */
+  machine?: { uuid: string; name: string };
+  /** Whether Allow is offered for the machine of this row. Default: `allow.available`. */
+  canAllow?: boolean;
+  /** Present: no Deny button for this row (denying from another machine is not available), this text says where to deny it. */
+  denyText?: string;
+  /** Epoch milliseconds at which `secondsLeft` was read: the countdown runs from it. Default: when the list arrived. */
+  fetchedAtMs?: number;
 }
 
 export interface HeldRequestsProps {
@@ -75,7 +83,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
 
   const visible = rows.filter((r) => !answered.has(r.id));
   const canAllow = allow?.available === true;
-  const elapsed = Math.max(0, Math.floor((now - fetchedAt) / 1000));
+  const elapsedSince = (from: number): number => Math.max(0, Math.floor((now - from) / 1000));
 
   const leave = (row: HeldRequestRow) => {
     setAnswered((prev) => new Set(prev).add(row.id));
@@ -107,19 +115,27 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
       {allow !== undefined && !canAllow && allow.note !== '' && visible.length > 0 && <div className={NOTICE_NEUTRAL}>{allow.note}</div>}
       <ul className="flex flex-col gap-3">
         {visible.map((r) => {
-          const left = Math.max(0, r.secondsLeft - elapsed);
+          const left = Math.max(0, r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt));
+          const rowCanAllow = r.canAllow ?? canAllow;
           return (
             <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM}>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className={`text-sm ${TEXT_MUTED_SM}`}>
-                  From <span className="font-medium text-content">{r.peerText}</span> in <span className="font-mono text-content">{r.shell}</span>, asked {r.askedText}
+                  From <span className="font-medium text-content">{r.peerText}</span>
+                  {r.machine !== undefined && (
+                    <>
+                      {' '}
+                      on <span className="font-medium text-content">{r.machine.name}</span>
+                    </>
+                  )}{' '}
+                  in <span className="font-mono text-content">{r.shell}</span>, asked {r.askedText}
                 </span>
                 <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
               </div>
               <div className={HELD_COMMAND}>{r.command}</div>
               {left > 0 && denying !== r.id && (
                 <div className="flex flex-wrap items-center gap-2">
-                  {canAllow ? (
+                  {rowCanAllow ? (
                     // violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Allow <command>" tells the rows apart for a screen reader (same button as the table below)
                     <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
                       Allow
@@ -127,7 +143,9 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
                   ) : (
                     <span className="break-all font-mono text-xs">{r.nextCommand}</span>
                   )}
-                  {(
+                  {r.denyText !== undefined ? (
+                    <span className={`text-xs ${TEXT_MUTED}`}>{r.denyText}</span>
+                  ) : (
                     // violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Deny <command>" tells the rows apart for a screen reader (looks like dsl-ui's danger outline button)
                     <button type="button" aria-label={`Deny ${r.command}`} onClick={() => setDenying(r.id)} className={DENY_BUTTON}>
                       Deny
@@ -140,8 +158,8 @@ export function HeldRequests({ rows = NO_ROWS, allow, onRefresh }: HeldRequestsP
           );
         })}
       </ul>
-      {selected !== null && allow !== undefined && api.current !== null && (
-        <AllowDialog key={selected.id} row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }} machine={allow.machine} api={api.current} onClose={() => setSelected(null)} onDone={(answer) => allowed(selected, answer)} />
+      {selected !== null && (selected.machine !== undefined || allow !== undefined) && api.current !== null && (
+        <AllowDialog key={selected.id} row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }} machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine} api={api.current} onClose={() => setSelected(null)} onDone={(answer) => allowed(selected, answer)} />
       )}
     </div>
   );

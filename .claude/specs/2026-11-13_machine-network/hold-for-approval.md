@@ -1,6 +1,6 @@
 # Hold a refused request for approval (`machine run --wait`)
 
-**Status:** v0.3, 2026-11-21, decisions 80 and 81 (the wait is the default of `machine run`, see "Default and setting"; the web Deny is PIN-protected). Implemented: core (`hold.ts`, waiting list in `requests.ts`), peer service, daemon `deny`, CLI, app-module backend and Requests page (see Deviations). User request: a `run` that the target does not allow yet can wait N minutes so the owner validates in the UI while the agent keeps working, or be explicitly refused.
+**Status:** v0.4, 2026-11-21 (remote view, layout), decisions 80 and 81 (the wait is the default of `machine run`, see "Default and setting"; the web Deny is PIN-protected). Implemented: core (`hold.ts`, waiting list in `requests.ts`), peer service, daemon `deny`, CLI, app-module backend and Requests page (see Deviations). User request: a `run` that the target does not allow yet can wait N minutes so the owner validates in the UI while the agent keeps working, or be explicitly refused.
 **Not a new right:** hold changes WHEN a refusal is answered, never WHAT is allowed. Hard rule 3 and 4 hold: the held command runs only if, after the wait, an entry signed under rule 4 matches it.
 
 ## Behaviour
@@ -56,6 +56,23 @@ Waiting is the default of `machine run`. Scripts that relied on the immediate re
 - CLI: `--wait <duration>` on `run`; `machine requests` shows state (waiting / allowed / denied / expired) and the time left; `machine requests --deny <id> [--reason <text>]` (no PIN, no passphrase).
 - Web: the Requests page lists waiting requests first with a countdown, the hint prominent, buttons Allow and Deny; same data as the CLI. Deny asks the app-core PIN first (401 `elevation-required` / 403 `pin-not-set` answers carry the fix).
 
+## Remote view (the owner is on another machine)
+
+The held request lives on the target; the admin machine reads it with the existing `requests-list` frame, nothing else is new on the wire.
+
+| Piece | Behaviour |
+|---|---|
+| Answer | `waiting` (id, peer, peerName, shell, command, since, deadline) next to `pending`; at most 16, always sent whole (groups are dropped for size first); an answer without it (older peer) reads as none |
+| Authorization | unchanged: signed with the ADMIN key, own target and source, 60 s, replay cache, 6 per minute per peer, audited before the read; same data a peer already gives `machine requests` locally, no new right |
+| CLI | `machine requests <machine>` and `--all` print the same layout as the local view (WAITING NOW with time left on the clock of this machine, exact allow command) |
+| Allow | from the admin machine: `machine admin allow <machine> ...` signs, the relay inbox delivers, the target daemon installs it (about a minute), the 1 s hold poll then runs the command (test: holdRemoteAllowE2e.test.ts) |
+| Page | Requests page: machine filter, held and refused requests of every trusted machine; the admin machine loads the peers on demand (PIN, then admin passphrase each time, request signed in the browser, one per peer); Allow signs for the machine of the row |
+| Deny | NOT built from another machine. Rule when it is: admin signature only (same gate as `requests-list`), never the registered requester (it already cancels by disconnecting) or any other peer. It needs a new frame, so the CLI and the page say to run `machine requests --deny <id>` ON the target |
+
+## Layout of `machine requests`
+
+Header with counts, WAITING NOW, REFUSED, one aligned row per request, at most one action line per section (exact allow command for one row, template for several, `--full` gives every exact command and wraps the command), a `Notes:` footer of at most 3 lines. No line over 100 columns, ASCII only, `--json` unchanged. Note when a row uses `cmd` and the target is not known to be Windows: the caller needs `--shell sh` (`machine peer connect <m> --shell sh`). Pure code: machine-core `requestsLayout.ts`.
+
 ## Test plan (TDD)
 
 1. Core/peerService: hold, Allow arrives, runs once; Deny; deadline; disconnect; revoke during hold; policy changes to a non-matching version; cap on holds per peer and per machine; wait above the cap is capped and said so.
@@ -72,4 +89,5 @@ Waiting is the default of `machine run`. Scripts that relied on the immediate re
 - The target polls every 1 s (policy, Deny, registration, deadline): an Allow runs the command within about 1 s. Reasons held: `not-listed`, `no-policy`; not held when the command is allowed under another shell. Any other result of `authorize` after the wait (`expired`, `exhausted`) is refused as for a fresh request.
 - Held limits answer `hold-limit-peer` / `hold-limit-machine` at once. Stray message while held: `unexpected-message`, hold goes on. Bad `waitSeconds`: `bad-wait`.
 - Deny: daemon command `deny` (id or unique prefix of at least 6 characters, reason printable ASCII up to 200); needs the daemon running (`no-daemon` otherwise).
-- Not built: the remote `requests-list` (admin asks a peer) does not carry waiting requests; no end-to-end test of the 10 s deadline through the CLI (covered in the peer service tests with a fake clock).
+- Not built: a Deny of a request held on ANOTHER machine (see "Remote view"); no end-to-end test of the 10 s deadline through the CLI (covered in the peer service tests with a fake clock).
+- Fix (2026-11-21): a policy installed DURING a hold that lists the command under another shell now answers at once `refused: not-listed` with `allowedShells` and the `--shell` hint (hold-ended outcome `refused`). Before, only the first check did this, so a caller using the wrong shell (`cmd` against a Linux target, entry signed under `sh`) waited until the deadline.
