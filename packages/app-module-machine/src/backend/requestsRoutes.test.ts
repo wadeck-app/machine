@@ -107,7 +107,8 @@ describe('GET /requests', () => {
     expect(out.status).toBe(200);
     expect(out.body.count).toBe(1);
     expect(out.body.pending[0]).toMatchObject({ peerText: 'thinkcentre', countText: '2 times', nextCommand: 'machine admin allow target --shell sh -- ls' });
-    expect(out.body.history.map((h: { kind: string }) => h.kind)).toEqual(['refused', 'refused', 'run']);
+    // Newest first (the run is the latest entry of the audit).
+    expect(out.body.history.map((h: { kind: string }) => h.kind)).toEqual(['run', 'refused', 'refused']);
   });
 
   it('answers 503 with the way to start the daemon when it is not reachable', async () => {
