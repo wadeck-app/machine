@@ -3,6 +3,7 @@ import { ButtonAction } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import { loadContexts, prepareBatch, readAdminKeyHint, signAndSubmitBatch, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
 import { groupSelection, selectionSummary } from '../lib/batchAllow.js';
+import { readOnlyDefaultKind } from '../lib/quickAllow.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
 import { InlineAllowForm } from './InlineAllowForm.js';
@@ -108,6 +109,7 @@ export function BatchAllowBar<R>({ items, api, onEvent, onDone, onClear }: Batch
           <InlineAllowForm
             label={selectionSummary(groups)}
             hint={phase.hint}
+            defaultKind={readOnlyDefaultKind(items.map((i) => i.row))}
             busy={busy}
             error={error}
             cancelLabel="Cancel"

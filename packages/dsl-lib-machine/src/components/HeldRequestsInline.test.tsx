@@ -24,10 +24,10 @@ const hintedKeyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint: 
 let keyFileText: string;
 
 const row = (id: string, command: string, extra: Partial<HeldRequestRow> = {}): HeldRequestRow => ({ id, peerText: 'thinkcentre', peer: PEER, shell: 'sh', command, secondsLeft: 300, askedText: '5 s ago', countText: 'waiting now', nextCommand: `machine admin allow desktop --shell sh -- ${command}`, nextWhere: '', ...extra });
-const LS = row('aaaa1111', 'ls');
-const DF = row('bbbb2222', 'df -h');
-const UP = row('cccc3333', 'uptime');
-const LS_AGAIN = row('dddd4444', 'ls', { peerText: 'midgard2' });
+const LS = row('aaaa1111', 'make ls');
+const DF = row('bbbb2222', 'make df');
+const UP = row('cccc3333', 'make uptime');
+const LS_AGAIN = row('dddd4444', 'make ls', { peerText: 'midgard2' });
 const REMOTE = row('eeee5555-0000-4000-8000-000000000000', 'hostname', { shell: 'cmd', peerText: 'midgard2', machine: { uuid: LAPTOP, name: 'laptop' }, canAllow: true });
 const REMOTE2 = row('ffff6666-0000-4000-8000-000000000000', 'whoami', { shell: 'cmd', peerText: 'midgard2', machine: { uuid: LAPTOP, name: 'laptop' }, canAllow: true });
 const ALLOW = { available: true, machine: { uuid: SELF, name: 'desktop' }, note: '' };
@@ -103,10 +103,10 @@ describe('inline Allow of one request', () => {
   it('LOCKED: Allow expands a compact form INSIDE the card (no dialog): the key hint, Keep unlocked for, the passphrase, Allow and sign, Cancel; the lifetime stays the select of the row', async () => {
     keyFileText = hintedKeyFile;
     render_([LS, DF]);
-    await userEvent.click(allowBtn('df -h'));
+    await userEvent.click(allowBtn('make df'));
     const passphrase = await screen.findByLabelText('Admin passphrase');
     expect(screen.queryByRole('dialog')).toBeNull();
-    const item = itemOf('df -h');
+    const item = itemOf('make df');
     expect(item).toContainElement(passphrase);
     expect(passphrase).toHaveAttribute('type', 'password');
     expect(passphrase).toHaveAttribute('autocomplete', 'current-password');
@@ -119,15 +119,15 @@ describe('inline Allow of one request', () => {
     expect(within(item).getByRole('button', { name: 'Allow and sign' })).toBeEnabled();
     expect(within(item).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     // The other card is untouched.
-    expect(within(itemOf('ls')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(itemOf('make ls')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
     expect(elevate).toHaveBeenCalledTimes(1);
   });
 
   it('the inline form starts from what the CALLER asked (3 calls: custom, 3), nothing is signed or posted by it, and the card says it was the caller', async () => {
     render_([{ ...LS, ask: { times: 3, why: 'rerun' } }, DF]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await screen.findByLabelText('Admin passphrase');
-    const item = itemOf('ls');
+    const item = itemOf('make ls');
     expect(within(item).getByLabelText('Lifetime')).toHaveValue('custom');
     expect(within(item).getByLabelText('Number of calls (1 to 10000)')).toHaveValue('3');
     expect(within(item).getByTestId('held-status')).toHaveTextContent('Caller asked: 3 calls; reason given: rerun');
@@ -136,12 +136,12 @@ describe('inline Allow of one request', () => {
 
   it('Cancel collapses the form and posts nothing; Escape does the same', async () => {
     render_([LS]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await screen.findByLabelText('Admin passphrase');
-    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(within(itemOf('make ls')).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
-    expect(allowBtn('ls')).toBeInTheDocument();
-    await userEvent.click(allowBtn('ls'));
+    expect(allowBtn('make ls')).toBeInTheDocument();
+    await userEvent.click(allowBtn('make ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), '{Escape}');
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(posts()).toHaveLength(0);
@@ -150,23 +150,23 @@ describe('inline Allow of one request', () => {
   it('a malformed key hint stops the form before any passphrase is asked, with the message of the key file reader', async () => {
     keyFileText = JSON.stringify({ ...JSON.parse(hintedKeyFile), hint: 'x'.repeat(81) });
     render_([LS]);
-    await userEvent.click(allowBtn('ls'));
-    expect(await within(itemOf('ls')).findByRole('alert')).toHaveTextContent(/the hint is malformed.*restore the file from another machine/);
+    await userEvent.click(allowBtn('make ls'));
+    expect(await within(itemOf('make ls')).findByRole('alert')).toHaveTextContent(/the hint is malformed.*restore the file from another machine/);
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
   });
 
   it('signs without any dialog, posts the signed policy only, and shows the progress on the card; the passphrase is nowhere afterwards', async () => {
     const onRefresh = vi.fn(async () => undefined);
     render_([LS, DF], onRefresh);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     await posted(1);
     const body = posts()[0] as { policy: SignedPolicy };
     expect(Object.keys(body)).toEqual(['policy']);
-    expect(body.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
-    expect(await within(itemOf('ls')).findByRole('progressbar')).toBeInTheDocument();
+    expect(body.policy.body.defaults).toEqual([{ shell: 'sh', command: 'make ls', limits: { maxCalls: 1 } }]);
+    expect(await within(itemOf('make ls')).findByRole('progressbar')).toBeInTheDocument();
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(onRefresh).toHaveBeenCalledWith('requests');
@@ -175,10 +175,10 @@ describe('inline Allow of one request', () => {
 
   it('a wrong passphrase stays in the form with the cause, nothing is posted, and the form keeps working', async () => {
     render_([LS]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), 'definitely not the passphrase 123');
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
-    const alert = await within(itemOf('ls')).findByRole('alert', undefined, { timeout: 20_000 });
+    const alert = await within(itemOf('make ls')).findByRole('alert', undefined, { timeout: 20_000 });
     expect(alert).toHaveTextContent(/wrong passphrase or damaged key file/);
     expect(alert).not.toHaveTextContent('definitely not');
     expect(posts()).toHaveLength(0);
@@ -195,22 +195,22 @@ describe('inline Allow of one request', () => {
 
   it('an empty passphrase signs nothing and says so', async () => {
     render_([LS]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await screen.findByLabelText('Admin passphrase');
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
-    expect(await within(itemOf('ls')).findByRole('alert')).toHaveTextContent('Enter the admin passphrase to sign. Nothing was signed.');
+    expect(await within(itemOf('make ls')).findByRole('alert')).toHaveTextContent('Enter the admin passphrase to sign. Nothing was signed.');
     expect(keyReads()).toBe(1);
   });
 
   it('a failure after the signature (the daemon refuses) goes to the card with its cause', async () => {
     postFailure[SELF] = new Error('the policy of "desktop" is at version 1: reload the page and allow it again');
     render_([LS]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     await posted(1);
-    expect(await within(itemOf('ls')).findByText(/reload the page and allow it again/, undefined, { timeout: 20_000 })).toBeInTheDocument();
-    expect(within(itemOf('ls')).getByRole('button', { name: 'Allow again' })).toBeInTheDocument();
+    expect(await within(itemOf('make ls')).findByText(/reload the page and allow it again/, undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(within(itemOf('make ls')).getByRole('button', { name: 'Allow again' })).toBeInTheDocument();
   }, 120_000);
 });
 
@@ -219,8 +219,8 @@ describe('selecting several requests (inline)', () => {
     render_([LS, DF, UP]);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     expect(screen.queryByRole('region', { name: 'Allow selected requests' })).toBeNull();
-    await select('ls');
-    await select('uptime');
+    await select('make ls');
+    await select('make uptime');
     const bar = screen.getByRole('region', { name: 'Allow selected requests' });
     expect(within(bar).getByRole('button', { name: 'Allow 2 selected' })).toBeInTheDocument();
     expect(bar.className).toMatch(/\bsticky\b/);
@@ -228,7 +228,7 @@ describe('selecting several requests (inline)', () => {
     expect(elevate).not.toHaveBeenCalled();
     await userEvent.click(within(bar).getByRole('button', { name: 'Clear' }));
     expect(screen.queryByRole('region', { name: 'Allow selected requests' })).toBeNull();
-    expect(screen.getByRole('checkbox', { name: 'Select ls' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select make ls' })).not.toBeChecked();
   });
 
   it('there is no checkbox in dialog style', () => {
@@ -244,9 +244,9 @@ describe('selecting several requests (inline)', () => {
   it('three requests, ONE passphrase: ONE policy holding the three entries, the key file read once more (after the hint), a progress card per request', async () => {
     keyFileText = hintedKeyFile;
     render_([LS, DF, UP]);
-    await select('ls');
-    await select('df -h');
-    await select('uptime');
+    await select('make ls');
+    await select('make df');
+    await select('make uptime');
     await userEvent.click(screen.getByRole('button', { name: 'Allow 3 selected' }));
     const bar = screen.getByRole('region', { name: 'Allow selected requests' });
     const field = await within(bar).findByLabelText('Admin passphrase');
@@ -258,13 +258,13 @@ describe('selecting several requests (inline)', () => {
     await userEvent.click(within(bar).getByRole('button', { name: 'Allow and sign' }));
     await posted(1);
     expect(posts()[0]?.policy.body.defaults).toEqual([
-      { shell: 'sh', command: 'ls', limits: { maxCalls: 1 } },
-      { shell: 'sh', command: 'df -h', limits: { maxCalls: 1 } },
-      { shell: 'sh', command: 'uptime', limits: { maxCalls: 1 } },
+      { shell: 'sh', command: 'make ls', limits: { maxCalls: 1 } },
+      { shell: 'sh', command: 'make df', limits: { maxCalls: 1 } },
+      { shell: 'sh', command: 'make uptime', limits: { maxCalls: 1 } },
     ]);
     // ONE unlock: the hint read at the opening, the key file of the signature once.
     expect(keyReads()).toBe(2);
-    for (const command of ['ls', 'df -h', 'uptime']) {
+    for (const command of ['make ls', 'make df', 'make uptime']) {
       expect(await within(itemOf(command)).findByRole('progressbar')).toBeInTheDocument();
     }
     // The bar is gone and no dialog ever opened.
@@ -275,7 +275,7 @@ describe('selecting several requests (inline)', () => {
 
   it('two machines: two policies (the laptop one with its sealed document) in ONE unlock', async () => {
     render_([LS, DF, REMOTE, REMOTE2]);
-    await select('ls');
+    await select('make ls');
     await select('hostname');
     await select('whoami');
     expect(screen.getByRole('button', { name: 'Allow 3 selected' })).toBeInTheDocument();
@@ -287,36 +287,36 @@ describe('selecting several requests (inline)', () => {
     await userEvent.click(within(bar).getByRole('button', { name: 'Allow and sign' }));
     await posted(2);
     const byTarget = new Map(posts().map((p) => [p.policy.body.target, p]));
-    expect(byTarget.get(SELF)?.policy.body.defaults.map((e) => e.command)).toEqual(['ls']);
+    expect(byTarget.get(SELF)?.policy.body.defaults.map((e) => e.command)).toEqual(['make ls']);
     expect(byTarget.get(LAPTOP)?.policy.body.defaults.map((e) => e.command)).toEqual(['hostname', 'whoami']);
     expect(byTarget.get(LAPTOP)?.document).toBeDefined();
     expect(byTarget.get(SELF)?.document).toBeUndefined();
     expect(keyReads()).toBe(2);
     // The PIN was asked once for both machines.
     expect(elevate).toHaveBeenCalledTimes(1);
-    for (const command of ['ls', 'hostname', 'whoami']) {
+    for (const command of ['make ls', 'hostname', 'whoami']) {
       expect(await within(itemOf(command)).findByRole('progressbar')).toBeInTheDocument();
     }
-    expect(within(itemOf('df -h')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(itemOf('make df')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
     expectNoPassphrase();
   }, 120_000);
 
   it('the same text asked twice is ONE entry, and both requests show their progress', async () => {
     render_([LS, LS_AGAIN, DF]);
-    await select('ls', 0);
-    await select('ls', 1);
+    await select('make ls', 0);
+    await select('make ls', 1);
     await userEvent.click(screen.getByRole('button', { name: 'Allow 2 selected' }));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     await posted(1);
-    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'make ls', limits: { maxCalls: 1 } }]);
     expect(await screen.findAllByRole('progressbar')).toHaveLength(2);
   }, 120_000);
 
   it('an entry the policy cannot hold is refused in the bar with its machine and cause, BEFORE the passphrase is asked: nothing is signed for the others', async () => {
     const bad = row('9999aaaa', `echo caf${String.fromCharCode(233)}`);
     render_([LS, bad]);
-    await select('ls');
+    await select('make ls');
     await select(bad.command);
     await userEvent.click(screen.getByRole('button', { name: 'Allow 2 selected' }));
     const bar = screen.getByRole('region', { name: 'Allow selected requests' });
@@ -325,21 +325,21 @@ describe('selecting several requests (inline)', () => {
     expect(posts()).toHaveLength(0);
     expect(keyReads()).toBe(0);
     // The selection is kept: deselect the bad one and the rest can go on.
-    expect(screen.getByRole('checkbox', { name: 'Select ls' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select make ls' })).toBeChecked();
   });
 
   it('a wrong passphrase keeps the selection and the form, with the cause; nothing is posted', async () => {
     render_([LS, DF]);
-    await select('ls');
-    await select('df -h');
+    await select('make ls');
+    await select('make df');
     await userEvent.click(screen.getByRole('button', { name: 'Allow 2 selected' }));
     const bar = screen.getByRole('region', { name: 'Allow selected requests' });
     await userEvent.type(await within(bar).findByLabelText('Admin passphrase'), 'definitely not the passphrase 123');
     await userEvent.click(within(bar).getByRole('button', { name: 'Allow and sign' }));
     expect(await within(bar).findByRole('alert', undefined, { timeout: 20_000 })).toHaveTextContent(/wrong passphrase or damaged key file/);
     expect(posts()).toHaveLength(0);
-    expect(screen.getByRole('checkbox', { name: 'Select ls' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Select df -h' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select make ls' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select make df' })).toBeChecked();
     const field = within(bar).getByLabelText('Admin passphrase');
     expect(field).toHaveValue('');
     expect(field).toBeEnabled();
@@ -349,25 +349,25 @@ describe('selecting several requests (inline)', () => {
   it('one machine failing leaves the progress of the other: the laptop cards say why, the desktop card goes on', async () => {
     postFailure[LAPTOP] = new Error('the relay refused the inbox document: try again in a minute');
     render_([LS, REMOTE]);
-    await select('ls');
+    await select('make ls');
     await select('hostname');
     await userEvent.click(screen.getByRole('button', { name: 'Allow 2 selected' }));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     await posted(2);
     expect(await within(itemOf('hostname')).findByText(/the relay refused the inbox document/, undefined, { timeout: 20_000 })).toBeInTheDocument();
-    expect(await within(itemOf('ls')).findByRole('progressbar')).toBeInTheDocument();
-    expect(within(itemOf('ls')).queryByText(/relay refused/)).toBeNull();
+    expect(await within(itemOf('make ls')).findByRole('progressbar')).toBeInTheDocument();
+    expect(within(itemOf('make ls')).queryByText(/relay refused/)).toBeNull();
     expect(posts()).toHaveLength(2);
     expectNoPassphrase();
   }, 120_000);
 
   it('changing the selection while the form is open closes the form (the signature is for the selection you read)', async () => {
     render_([LS, DF]);
-    await select('ls');
+    await select('make ls');
     await userEvent.click(screen.getByRole('button', { name: 'Allow 1 selected' }));
     await screen.findByLabelText('Admin passphrase');
-    await select('df -h');
+    await select('make df');
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(screen.getByRole('button', { name: 'Allow 2 selected' })).toBeInTheDocument();
   });
@@ -376,9 +376,9 @@ describe('selecting several requests (inline)', () => {
 describe('dialog style is unchanged', () => {
   it('Allow opens the confirmation dialog, not a form in the card', async () => {
     render(<HeldRequests rows={[LS]} allow={ALLOW} allowStyle="dialog" />);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     const dialog = await screen.findByRole('dialog');
-    expect(within(itemOf('ls')).queryByLabelText('Admin passphrase')).toBeNull();
+    expect(within(itemOf('make ls')).queryByLabelText('Admin passphrase')).toBeNull();
     expect(within(dialog).getByLabelText('Admin passphrase')).toBeInTheDocument();
   });
 });
@@ -399,43 +399,43 @@ describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
     await unlock();
     const onRefresh = vi.fn(async () => undefined);
     render_([LS, DF], onRefresh);
-    expect(lifetimeSelect('ls')).toHaveValue('once');
-    await userEvent.click(allowBtn('ls'));
+    expect(lifetimeSelect('make ls')).toHaveValue('once');
+    await userEvent.click(allowBtn('make ls'));
     await posted(1);
-    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'make ls', limits: { maxCalls: 1 } }]);
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Allow and sign' })).toBeNull();
     expect(keyReads()).toBe(0);
-    expect(await within(itemOf('ls')).findByRole('progressbar')).toBeInTheDocument();
+    expect(await within(itemOf('make ls')).findByRole('progressbar')).toBeInTheDocument();
     // What was signed stays visible: one line in the progress line, the full summary in Details.
-    expect(within(itemOf('ls')).getByText('Signed: allowed once')).toBeInTheDocument();
-    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Details' }));
-    expect(within(itemOf('ls')).getByTestId('signed-summary')).toHaveTextContent('sh "ls" on desktop, allowed once');
+    expect(within(itemOf('make ls')).getByText('Signed: allowed once')).toBeInTheDocument();
+    await userEvent.click(within(itemOf('make ls')).getByRole('button', { name: 'Details' }));
+    expect(within(itemOf('make ls')).getByTestId('signed-summary')).toHaveTextContent('sh "make ls" on desktop, allowed once');
     expect(onRefresh).toHaveBeenCalledWith('requests');
     // The other card is untouched.
-    expect(within(itemOf('df -h')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(itemOf('make df')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
   }, 120_000);
 
   it('the lifetime of the select next to Allow is the one signed (1 hour: an expiry, no call limit), and it becomes the default of the next card, in memory only', async () => {
     await unlock();
     render_([LS, DF]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), '1h');
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.selectOptions(lifetimeSelect('make ls'), '1h');
+    await userEvent.click(allowBtn('make ls'));
     await posted(1);
     const limits = posts()[0]?.policy.body.defaults[0]?.limits as { maxCalls?: number; expiresAt?: number };
     expect(limits.maxCalls).toBeUndefined();
     expect(limits.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
-    expect(lifetimeSelect('df -h')).toHaveValue('1h');
+    expect(lifetimeSelect('make df')).toHaveValue('1h');
     expect(JSON.stringify({ ...window.localStorage, ...window.sessionStorage })).not.toContain('1h');
   }, 120_000);
 
   it('a custom lifetime is typed next to the select (3 calls)', async () => {
     await unlock();
     render_([LS]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), 'custom');
-    await userEvent.selectOptions(within(itemOf('ls')).getByLabelText('Limit by'), 'calls');
-    await userEvent.type(within(itemOf('ls')).getByLabelText('Number of calls (1 to 10000)'), '3');
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.selectOptions(lifetimeSelect('make ls'), 'custom');
+    await userEvent.selectOptions(within(itemOf('make ls')).getByLabelText('Limit by'), 'calls');
+    await userEvent.type(within(itemOf('make ls')).getByLabelText('Number of calls (1 to 10000)'), '3');
+    await userEvent.click(allowBtn('make ls'));
     await posted(1);
     expect(posts()[0]?.policy.body.defaults[0]?.limits).toEqual({ maxCalls: 3 });
   }, 120_000);
@@ -443,9 +443,9 @@ describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
   it('an invalid custom lifetime signs nothing and says what to write', async () => {
     await unlock();
     render_([LS]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), 'custom');
-    await userEvent.click(allowBtn('ls'));
-    expect(await within(itemOf('ls')).findByRole('alert')).toHaveTextContent(/Enter a duration/);
+    await userEvent.selectOptions(lifetimeSelect('make ls'), 'custom');
+    await userEvent.click(allowBtn('make ls'));
+    expect(await within(itemOf('make ls')).findByRole('alert')).toHaveTextContent(/Enter a duration/);
     expect(posts()).toEqual([]);
   });
 
@@ -474,7 +474,7 @@ describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
     await unlock();
     render_([LS]);
     adminKeyHolder.lock();
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     expect(await screen.findByLabelText('Admin passphrase')).toBeInTheDocument();
     expect(posts()).toEqual([]);
   });
@@ -510,9 +510,9 @@ describe('a FLAGGED lifetime signs in ONE click by default (user decision 2026-1
   it('DEFAULT: Permanent picked in the select signs in one click too', async () => {
     await unlock();
     render_([LS]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
-    await userEvent.click(allowBtn('ls'));
-    expect(within(itemOf('ls')).queryByRole('button', { name: 'Confirm allow' })).toBeNull();
+    await userEvent.selectOptions(lifetimeSelect('make ls'), 'permanent');
+    await userEvent.click(allowBtn('make ls'));
+    expect(within(itemOf('make ls')).queryByRole('button', { name: 'Confirm allow' })).toBeNull();
     await posted(1);
     expect(posts()[0]?.policy.body.defaults[0]?.limits).toBeUndefined();
   }, 120_000);
@@ -536,26 +536,26 @@ describe('a FLAGGED lifetime signs in ONE click by default (user decision 2026-1
   it('SAFER MODE: an unflagged lifetime still signs in one click', async () => {
     await unlock();
     render_([LS], undefined, true);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await posted(1);
   }, 120_000);
 
   it('SAFER MODE: Permanent in the select is flagged, and Cancel after the first click goes back with nothing signed', async () => {
     await unlock();
     render_([LS], undefined, true);
-    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
-    await userEvent.click(allowBtn('ls'));
-    expect(await within(itemOf('ls')).findByRole('button', { name: 'Confirm allow' })).toBeInTheDocument();
-    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Cancel' }));
-    expect(allowBtn('ls')).toBeInTheDocument();
+    await userEvent.selectOptions(lifetimeSelect('make ls'), 'permanent');
+    await userEvent.click(allowBtn('make ls'));
+    expect(await within(itemOf('make ls')).findByRole('button', { name: 'Confirm allow' })).toBeInTheDocument();
+    await userEvent.click(within(itemOf('make ls')).getByRole('button', { name: 'Cancel' }));
+    expect(allowBtn('make ls')).toBeInTheDocument();
     expect(posts()).toEqual([]);
   });
 
   it('a flagged lifetime is not remembered for the next card', async () => {
     await unlock();
     render_([LS, DF]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
-    expect(lifetimeSelect('df -h')).toHaveValue('once');
+    await userEvent.selectOptions(lifetimeSelect('make ls'), 'permanent');
+    expect(lifetimeSelect('make df')).toHaveValue('once');
   });
 
   it('LOCKED, safer mode on or off: the expanded passphrase form is itself the explicit step (no Confirm button), and nothing is posted before Enter', async () => {
@@ -571,7 +571,7 @@ describe('the batch bar is unaffected by Safer mode', () => {
   it.each([false, true])('saferMode=%s: a ticked card shows the batch bar with its own button and never a Confirm allow', async (safer) => {
     await unlock();
     render_([asked({ ask: { for: 'permanent' } }), DF], undefined, safer);
-    await select('df -h');
+    await select('make df');
     expect(within(screen.getByRole('region', { name: 'Allow selected requests' })).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm allow' })).toBeNull();
   });
@@ -580,12 +580,12 @@ describe('the batch bar is unaffected by Safer mode', () => {
 describe('LOCKED: Allow expands a compact passphrase field, Enter signs', () => {
   it('Enter in the field signs with the lifetime of the row; the key is then kept and the NEXT Allow is one click', async () => {
     render_([LS, DF]);
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.click(allowBtn('make ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), `${PASSPHRASE}{Enter}`);
     await posted(1);
-    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'make ls', limits: { maxCalls: 1 } }]);
     expect(adminKeyHolder.current()).not.toBeNull();
-    await userEvent.click(allowBtn('df -h'));
+    await userEvent.click(allowBtn('make df'));
     await posted(2);
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(keyReads()).toBe(2);
@@ -599,8 +599,8 @@ describe('ONE-CLICK Allow in dialog style', () => {
   it('unlocked: the select is on the card, ONE click signs straight from it and no dialog opens', async () => {
     await unlock();
     dialogRender([LS]);
-    await userEvent.selectOptions(lifetimeSelect('ls'), '15m');
-    await userEvent.click(allowBtn('ls'));
+    await userEvent.selectOptions(lifetimeSelect('make ls'), '15m');
+    await userEvent.click(allowBtn('make ls'));
     await posted(1);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect((posts()[0]?.policy.body.defaults[0]?.limits as { expiresAt?: number }).expiresAt).toBeGreaterThan(0);
@@ -608,8 +608,8 @@ describe('ONE-CLICK Allow in dialog style', () => {
 
   it('locked: the dialog is kept (no select on the card)', async () => {
     dialogRender([LS]);
-    expect(within(itemOf('ls')).queryByLabelText('Lifetime')).toBeNull();
-    await userEvent.click(allowBtn('ls'));
+    expect(within(itemOf('make ls')).queryByLabelText('Lifetime')).toBeNull();
+    await userEvent.click(allowBtn('make ls'));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 });
@@ -655,7 +655,7 @@ describe('the card is short', () => {
   it('the unlocked-key bar is NOT repeated in a card or in the batch bar', async () => {
     await unlock();
     render_([LS, DF]);
-    await select('ls');
+    await select('make ls');
     expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
     expect(screen.queryByText(/Admin key unlocked/)).toBeNull();
   });

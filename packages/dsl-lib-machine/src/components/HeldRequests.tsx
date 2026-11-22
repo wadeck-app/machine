@@ -3,7 +3,7 @@ import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice } from '../lib/lifetimeChoice.js';
-import { cardFlags, lifetimeMemory, startChoiceOf } from '../lib/quickAllow.js';
+import { cardFlags, lifetimeMemory, readOnlyDefaultKind, startChoiceOf } from '../lib/quickAllow.js';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowStyle } from '../lib/allowStyle.js';
@@ -315,7 +315,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
       {selected !== null && (selected.machine !== undefined || allow !== undefined) && api.current !== null && (
         <AllowDialog
           key={selected.id}
-          defaultLifetime="once"
+          defaultLifetime={readOnlyDefaultKind([selected])}
           row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }}
           machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine}
           api={api.current}

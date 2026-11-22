@@ -328,9 +328,9 @@ describe('Allow', () => {
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
   });
 
-  it('a HELD request defaults to Once: the summary says so before the passphrase and the signed entry has maxCalls 1', async () => {
-    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(allowBtn('ls'));
+  it('a HELD request defaults to Once (a command that is not recognised as read-only): the summary says so before the passphrase and the signed entry has maxCalls 1', async () => {
+    render(<HeldRequests rows={[{ ...(ROWS[0] as HeldRequestRow), command: "make ls" }]} allow={ALLOW} />);
+    await userEvent.click(allowBtn("make ls"));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByLabelText('Admin passphrase');
     expect(within(dialog).getByLabelText('How long is it allowed?')).toHaveValue('once');
@@ -342,7 +342,7 @@ describe('Allow', () => {
     await posted();
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
     const policy = (post?.body as { policy: SignedPolicy }).policy;
-    expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(policy.body.defaults).toEqual([{ shell: 'sh', command: "make ls", limits: { maxCalls: 1 } }]);
   }, 120_000);
 
   it('a preset duration is worded with its end time before the passphrase and signed as expiresAt', async () => {
@@ -752,8 +752,8 @@ describe('what the caller asked for (decision 96)', () => {
 
   it('a request without an ask keeps the default lifetime of the page', async () => {
     const user = userEvent.setup();
-    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await user.click(allowBtn('ls'));
+    render(<HeldRequests rows={[{ ...(ROWS[0] as HeldRequestRow), command: "make ls" }]} allow={ALLOW} />);
+    await user.click(allowBtn("make ls"));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByText('Lifetime')).toBeInTheDocument());
     expect(within(dialog).queryByText('Requested by the caller')).toBeNull();

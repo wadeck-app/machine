@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 // guard, not a proof: the proof is the hostile corpus of typedParams.test.ts. It is reviewed by hand too (see the report of the change).
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const VALIDATOR_SOURCES = ['typedParams.ts', 'template.ts', 'lifetime.ts'];
+export const VALIDATOR_SOURCES = ['typedParams.ts', 'template.ts', 'lifetime.ts', 'readOnly.ts'];
 /** The copies of the browser (machine-webcrypto) are scanned too. */
 const COPIES = VALIDATOR_SOURCES.map((file) => join(here, '..', '..', 'machine-webcrypto', 'src', file));
 

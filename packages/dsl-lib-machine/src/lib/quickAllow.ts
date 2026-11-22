@@ -1,3 +1,4 @@
+import { classifyReadOnly, type ReadOnlyVerdict } from '@wadeck-app/machine-webcrypto';
 import { askRisk, askSummary, choiceFromAsk, type CallerAsk } from './callerAsk.js';
 import { choiceFromLimits, lifetimeInput, type LifetimeChoice } from './lifetimeChoice.js';
 
@@ -41,13 +42,36 @@ export const lifetimeMemory = {
   },
 };
 
-/** The lifetime the select of a card starts from: what the caller asked, else the limits of the entry a renewal replaces, else the last choice, else Once. */
-export function startChoiceOf(row: { ask?: CallerAsk; renewal?: { maxCalls?: number; expiresAt?: number } }): LifetimeChoice {
+/**
+ * Is this request's command RECOGNISED as read-only (machine-core `classifyReadOnly`, copied into machine-webcrypto: a whitelist of commands, forms and
+ * characters, shell by shell)? The verdict only decides what the lifetime select starts from and shows a chip; it never allows anything. A row without a
+ * shell or a command (a caller that has none) is not recognised.
+ */
+export function readOnlyVerdict(row: { shell?: string; command?: string }): ReadOnlyVerdict {
+  return row.shell !== undefined && row.command !== undefined ? classifyReadOnly(row.shell, row.command) : { readOnly: false };
+}
+
+const PERMANENT_CHOICE: LifetimeChoice = { kind: 'permanent', customKind: 'duration', customText: '' };
+
+/**
+ * The lifetime the select of a card starts from: what the caller asked, else the limits of the entry a renewal replaces, else Permanent for a command
+ * recognised as read-only (user rule 2026-11-22), else the last unflagged choice of the session, else Once.
+ */
+export function startChoiceOf(row: { shell?: string; command?: string; ask?: CallerAsk; renewal?: { maxCalls?: number; expiresAt?: number } }): LifetimeChoice {
   return (
     (row.ask !== undefined ? choiceFromAsk(row.ask) : undefined) ??
     (row.renewal !== undefined ? choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) : undefined) ??
+    (readOnlyVerdict(row).readOnly ? PERMANENT_CHOICE : undefined) ??
     remembered ?? { kind: 'once', customKind: 'duration', customText: '' }
   );
+}
+
+/**
+ * The kind the dialog and the batch bar (ONE lifetime for every request they sign) start from: Permanent only when EVERY request is recognised as
+ * read-only, else Once. One request that is not recognised makes the whole default the cautious one.
+ */
+export function readOnlyDefaultKind(rows: ReadonlyArray<{ shell?: string; command?: string }>): 'permanent' | 'once' {
+  return rows.length > 0 && rows.every((r) => readOnlyVerdict(r).readOnly) ? 'permanent' : 'once';
 }
 
 /** The ONE grey line of a card (the long explanations are in its Details): the renewal, the caller's ask, a reported notice, a cut command. */

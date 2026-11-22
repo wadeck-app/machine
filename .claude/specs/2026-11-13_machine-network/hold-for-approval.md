@@ -61,6 +61,19 @@ An entry whose `--times` calls are used, or whose `--for`/`--until` date passed,
 | Flag | permanent, 50 calls or more, or more than 7 days: a warning colour on the page and `[warn]` in the terminal, one line saying it was `asked by the caller, not decided by you`. Information only: with the admin key unlocked Allow still signs in ONE click (decision 98); the optional page switch "Safer mode: confirm risky lifetimes" (default off) adds a second click ("Confirm allow") for a flagged lifetime |
 | Text | Untrusted: text nodes only on the page, `?` for any non printable character in the terminal (T-42); strict parse of every carrier, an invalid ask in an audit line is dropped, in a notice or a `requests-list` answer it is refused loudly |
 
+## Read-only requests (decision 99)
+
+A request whose command is recognised as read-only (`classifyReadOnly(shell, text)`, machine-core, copied into machine-webcrypto) starts from Permanent in the Allow UI; the owner can pick anything and still signs. Precedence of the starting lifetime: caller ask, renewal limits, read-only, last unflagged choice, Once.
+
+| Point | Rule |
+|---|---|
+| Text | Only letters, digits, single spaces and `-_./:=,@+`, at most 512 characters and 16 words; anything else (`; & \| < > $ ( ) { } [ ] * ? ! # ~ \`, quotes, newline, tab, non-ASCII) is not recognised |
+| Table | Per shell, case sensitive, no path to the command. sh/bash: `ls pwd date hostname hostnamectl uname uptime whoami id df free ps pgrep cat head tail wc journalctl systemctl loginctl systemd-inhibit ethtool ip node npm machine orch`. cmd/ps: `hostname whoami systeminfo ipconfig tasklist`, cmd only `ver`, ps only `Get-Date Get-ComputerInfo Get-Process Get-Service`. Exact forms in `readOnly.ts` |
+| Paths | `cat head tail wc`: absolute, under `/sys/` or `/usr/share/` or one of a short list of `/etc` and `/proc` files; no `..`, `.`, `//`; no secret marker (`SECRET_NAME_MARKERS`). `ls df`: any absolute path without a marker |
+| Never | git (repository config can run code), docker, kubectl, find, grep, sed, awk, tee, xargs, curl, wget, dd, tar, rm, mv, cp, chmod, kill, sudo, sh, bash, env, nohup, follow options, every setter |
+| Where | Card select, dialog, batch bar (Permanent only when EVERY selected request is recognised, else Once). The card shows the neutral chip `read-only (recognised): permanent by default` and the matched rule in its tooltip; the chip drops "permanent by default" when a caller ask or a renewal decides the start. The table of refused commands keeps its own default |
+| CLI | The hint printed for the owner is unchanged (not worth a change: it suggests the caller's flags) |
+
 ## Limits (the wait is chosen by the caller, so the target bounds it)
 
 | Input | Limit |
