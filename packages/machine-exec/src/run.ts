@@ -16,6 +16,8 @@ export interface RunOptions {
   cwd?: string;
   /** The OEM code page of the machine, used to decode output that is not UTF-8 (Windows cmd and ps only). Defaults to the registry value, read once. Tests inject it. */
   oemCodePage?: () => Promise<number | undefined>;
+  /** Called once when the shell process exists (the spawn succeeded). It is never called when the launch fails. */
+  onStarted?: () => void;
 }
 
 export interface RunResult {
@@ -65,6 +67,7 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
       // Unix: own process group, so the whole group can be ended.
       detached: process.platform !== 'win32',
     });
+    child.once('spawn', () => options.onStarted?.());
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let outBytes = 0;

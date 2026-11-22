@@ -247,3 +247,20 @@ describe('runCommand on any platform', () => {
     expect(r.decodedFrom).toBeUndefined();
   });
 });
+
+describe('onStarted', () => {
+  it('is called once when the shell process exists, before the command ends', async () => {
+    let calls = 0;
+    const shell = onWindows ? 'cmd' : 'sh';
+    const r = await runCommand({ shell, command: 'echo hi', ...quick, onStarted: () => (calls += 1) });
+    expect(r.exitCode).toBe(0);
+    expect(calls).toBe(1);
+  });
+
+  it('is never called when the launch is refused (a shell that does not exist on this platform)', async () => {
+    let calls = 0;
+    const shell = onWindows ? 'sh' : 'cmd';
+    await expect(runCommand({ shell, command: 'echo hi', ...quick, onStarted: () => (calls += 1) })).rejects.toThrow(/not supported on Windows|only exists on Windows/);
+    expect(calls).toBe(0);
+  });
+});

@@ -51,6 +51,13 @@ describe('daemon command holdProgress', () => {
     expect(commands.holdProgress({ id: REQUEST, machine: OTHER })).toMatchObject({ ok: true, state: 'ended', outcome: 'denied' });
   });
 
+  it('an Allow whose command could not start ends as refused and carries the reason and the message of the daemon', () => {
+    const commands = makeCommands(dir, 'test', () => NOW, new HoldTable());
+    const failure = { reason: 'cannot-run', message: 'shell "sh" is not supported on Windows: use "cmd" or "ps" in the policy entry' };
+    recordNoticeEndOutcome(dir, { machine: readMachine(dir).uuid, id: REQUEST, outcome: 'refused', at: NOW, failure }, NOW);
+    expect(commands.holdProgress({ id: REQUEST })).toMatchObject({ ok: true, state: 'ended', outcome: 'refused', ...failure });
+  });
+
   it('nothing known about the request is unknown, never a success', () => {
     const commands = makeCommands(dir, 'test', () => NOW, new HoldTable());
     expect(commands.holdProgress({ id: REQUEST, machine: OTHER })).toMatchObject({ ok: true, state: 'unknown' });

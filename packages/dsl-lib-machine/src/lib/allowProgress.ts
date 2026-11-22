@@ -24,7 +24,16 @@ export interface ProgressStep {
   detail?: string;
 }
 
-export type HoldPollAnswer = { state: 'held' } | { state: 'unknown' } | { state: 'ended'; outcome: 'allowed' | 'denied' | 'deadline' | 'disconnected' | 'refused' | 'revoked' };
+export type HoldPollAnswer =
+  | { state: 'held' }
+  | { state: 'unknown' }
+  | {
+      state: 'ended';
+      outcome: 'allowed' | 'denied' | 'deadline' | 'disconnected' | 'refused' | 'revoked';
+      /** The target released the request but its daemon refused to run it (`cannot-run`): the refusal and its fix. Known for a hold of this machine only. */
+      reason?: string;
+      message?: string;
+    };
 
 export interface ProgressRecord {
   machineName: string;
@@ -126,7 +135,8 @@ export function stepsOf(record: ProgressRecord, _now: number): ProgressStep[] {
     if (ended?.outcome === 'allowed') {
       steps.push({ id: 'released', short: 'Released', label: 'The held command was released', state: 'done' });
     } else if (ended !== undefined) {
-      steps.push({ id: 'released', short: 'Released', label: 'The held command was not released', state: 'failed', detail: OUTCOME_TEXT[ended.outcome] ?? `the request ended: ${ended.outcome}` });
+      const cause = ended.reason !== undefined && ended.message !== undefined ? `the target allowed it but could not run it, ${ended.reason}: ${ended.message}` : undefined;
+      steps.push({ id: 'released', short: 'Released', label: 'The held command was not released', state: 'failed', detail: cause ?? OUTCOME_TEXT[ended.outcome] ?? `the request ended: ${ended.outcome}` });
     } else if (record.timedOut) {
       steps.push({ id: 'released', short: 'Released', label: 'The held command was not confirmed', state: 'failed', detail: noConfirmationMessage(name) });
     } else if (steps[2]?.state === 'done') {
@@ -218,7 +228,8 @@ function asAnswer(raw: unknown): HoldPollAnswer {
     return { state: 'held' };
   }
   if (o.state === 'ended' && typeof o.outcome === 'string' && OUTCOMES.includes(o.outcome)) {
-    return { state: 'ended', outcome: o.outcome as 'allowed' };
+    const r = raw as { reason?: unknown; message?: unknown };
+    return { state: 'ended', outcome: o.outcome as 'allowed', ...(typeof r.reason === 'string' && typeof r.message === 'string' ? { reason: r.reason, message: r.message } : {}) };
   }
   return { state: 'unknown' };
 }

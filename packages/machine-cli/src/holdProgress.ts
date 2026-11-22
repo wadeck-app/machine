@@ -12,7 +12,7 @@ import { readAliases } from './state.js';
 
 export type HoldProgressAnswer =
   | { ok: true; machine: { uuid: string; name: string }; id: string; state: 'held' }
-  | { ok: true; machine: { uuid: string; name: string }; id: string; state: 'ended'; outcome: NoticeOutcome; at: number }
+  | { ok: true; machine: { uuid: string; name: string }; id: string; state: 'ended'; outcome: NoticeOutcome; at: number; /** An Allow released the request but the command could not start: the refusal of the daemon, with the fix. */ reason?: string; message?: string }
   | { ok: true; machine: { uuid: string; name: string }; id: string; state: 'unknown'; note?: string }
   | { ok: false; reason: 'bad-payload' | 'unknown-peer'; message: string };
 
@@ -61,7 +61,7 @@ export function holdProgressCommand(configDir: string, payload: unknown, now: nu
   }
   const end = findNoticeEnd(configDir, machine.uuid, id);
   if (end !== undefined) {
-    return { ok: true, machine, id, state: 'ended', outcome: end.outcome, at: end.at };
+    return { ok: true, machine, id, state: 'ended', outcome: end.outcome, at: end.at, ...(end.failure !== undefined ? { reason: end.failure.reason, message: end.failure.message } : {}) };
   }
   return { ok: true, machine, id, state: 'unknown' };
 }

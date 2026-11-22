@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startMachineDaemon } from './daemonEntry.js';
 import { readMachine } from './identity.js';
+import { findNoticeEnd } from './noticeEnds.js';
 import type { InboxTimer } from './inboxLoop.js';
 import { cli, ok, provision } from './testing.js';
 
@@ -33,8 +34,8 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const runWaiting = (wait: string, command: string[], extra: string[] = []) =>
-  cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--wait', wait, ...extra, '--', ...command], undefined, { allowLoopbackPeers: true, waitProgressMs: 100 });
+const runWaiting = (wait: string, command: string[], extra: string[] = [], shell: string = SHELL) =>
+  cli(a, ['run', 'laptop', '--address', address, '--shell', shell, '--wait', wait, ...extra, '--', ...command], undefined, { allowLoopbackPeers: true, waitProgressMs: 100 });
 
 /** The id (full) of the request B lists as waiting. */
 async function waitingId(): Promise<string> {
@@ -49,9 +50,9 @@ async function waitingId(): Promise<string> {
   throw new Error('the request was never held');
 }
 
-async function allow(command: string): Promise<void> {
+async function allow(command: string, shell: string = SHELL): Promise<void> {
   const target = readMachine(b).uuid;
-  writeFileSync(join(root, 'draft2.json'), JSON.stringify({ v: 1, target, version: 2, baseVersion: 1, defaults: [{ shell: SHELL, command: 'echo listed' }, { shell: SHELL, command }], peers: {} }));
+  writeFileSync(join(root, 'draft2.json'), JSON.stringify({ v: 1, target, version: 2, baseVersion: 1, defaults: [{ shell: SHELL, command: 'echo listed' }, { shell, command }], peers: {} }));
   await ok(a, ['admin', 'sign-policy', join(root, 'draft2.json'), '--out', join(root, 'policy-b2.json')], async () => passphrase);
   await ok(b, ['policy', 'install', join(root, 'policy-b2.json')]);
 }
@@ -101,5 +102,20 @@ describe('machine run --wait', () => {
     const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--no-wait', '--', 'echo', 'later'], undefined, { allowLoopbackPeers: true });
     expect(r.code).toBe(255);
     expect(r.err).toContain('refused by laptop: not-listed');
+  });
+
+  // A shell that does not exist on the platform of the target: the Allow is valid (signed), the daemon cannot start it.
+  it('an Allow whose command cannot start ends the wait at once with the refusal cannot-run and its fix, and the page of the owner gets the same cause (not "released", not a 3 min wait)', async () => {
+    const BAD = process.platform === 'win32' ? 'sh' : 'cmd';
+    const pending = runWaiting('10s', ['echo', 'never-runs'], [], BAD);
+    const id = await waitingId();
+    await allow('echo never-runs', BAD);
+    const r = await pending;
+    expect(r.code).toBe(255);
+    expect(r.err).toMatch(/refused by laptop: cannot-run: shell "(sh|cmd)" .*use "(cmd|sh)"/);
+    // What the Requests page of B asks every 2 s: ended at once, refused, with the cause.
+    const end = findNoticeEnd(b, readMachine(b).uuid, id);
+    expect(end).toMatchObject({ outcome: 'refused', failure: { reason: 'cannot-run' } });
+    expect(end?.failure?.message).toMatch(/policy entry/);
   });
 });

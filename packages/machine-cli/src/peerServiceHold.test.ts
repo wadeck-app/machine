@@ -49,7 +49,7 @@ async function until(what: string, condition: () => boolean): Promise<void> {
   }
 }
 
-async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: boolean; auditFails?: () => boolean } = {}) {
+async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: boolean; auditFails?: () => boolean; run?: PeerServiceDeps['run'] } = {}) {
   const admin = generateSigningKeyPair();
   const a = generateSigningKeyPair();
   const b = generateSigningKeyPair();
@@ -59,6 +59,9 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
   const runs: RunOptions[] = [];
   const now = { value: 1_800_000_000 };
   const state = { revoked: false };
+  // What the daemon keeps for the Requests page (notice-ends.json) and what it tells the notice recipients, in order.
+  const ends: Array<{ id: string; outcome: string; failure?: { reason: string; message: string } }> = [];
+  const notified: Array<{ id: string; outcome: string }> = [];
   const table = over.holds ?? new HoldTable();
   let policy: PolicyBody | undefined;
   const setPolicy = (entries: PolicyEntry[]) => {
@@ -95,12 +98,15 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
       },
     },
     now: () => now.value,
-    run: async (o) => {
-      runs.push(o);
-      return okResult();
-    },
+    run:
+      over.run ??
+      (async (o) => {
+        runs.push(o);
+        return okResult();
+      }),
+    notifier: { held: () => undefined, refused: () => undefined, ended: (id, outcome) => void notified.push({ id, outcome }), whenIdle: async () => undefined, close: () => undefined },
     onProblem: () => undefined,
-    ...(over.noHolds ? {} : { holds: { table, pollMs: 3, ...(over.capSeconds !== undefined ? { capSeconds: over.capSeconds } : {}) } }),
+    ...(over.noHolds ? {} : { holds: { table, pollMs: 3, onEnded: (id, outcome, failure) => void ends.push({ id, outcome, ...(failure !== undefined ? { failure } : {}) }),...(over.capSeconds !== undefined ? { capSeconds: over.capSeconds } : {}) } }),
   };
   const listener = await startPeerListener(deps, { host: '127.0.0.1', port: 0 });
   closers.push(() => listener.close());
@@ -114,7 +120,7 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
     session.send({ type: 'run', request: signRequest(body, a.privateKeyPkcs8), ...(waitSeconds !== undefined ? { waitSeconds } : {}) });
     return body.id;
   };
-  return { a, audit, runs, now, state, table, setPolicy, connect, send, usage };
+  return { a, audit, runs, now, state, table, setPolicy, connect, send, usage, ends, notified };
 }
 
 const answerOf = async (session: PeerSession): Promise<PeerAnswer> => (await session.next()) as PeerAnswer;
@@ -414,5 +420,63 @@ describe('runOnPeer with a wait', () => {
     await until('the hold', () => w.table.list().length === 1);
     s.close();
     await expect(pending).rejects.toThrow(/waiting for approval/);
+  });
+});
+
+// The page learns how a hold ended from `onEnded` (this machine) and the notice-end frame (another machine). A released hold whose command then
+// cannot start must NOT be announced as released, and the page must get the cause of the refusal.
+describe('a held request that is allowed but cannot run', () => {
+  const cannotRun = async (): Promise<RunResult> => {
+    throw new Error(`shell "sh" is not supported on Windows (bash.exe may be WSL, a different machine state): use "cmd" or "ps" in the policy entry`);
+  };
+
+  it('answers cannot-run with the cause, and tells the page that the request was refused after all, with that cause (never "allowed")', async () => {
+    const w = await world({ run: cannotRun });
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo later' }]);
+    const answer = await answerOf(s);
+    expect(answer).toMatchObject({ type: 'refused', id, reason: 'cannot-run', message: expect.stringMatching(/not supported on Windows.*use "cmd" or "ps"/) });
+    expect(w.ends).toEqual([{ id, outcome: 'refused', failure: { reason: 'cannot-run', message: (answer as { message: string }).message } }]);
+    expect(w.notified).toEqual([{ id, outcome: 'refused' }]);
+    // The audit keeps both facts, in order: the Allow released the hold, then the launch failed.
+    expect(w.audit.events()).toEqual(['daemon-started', 'held', 'hold-ended', 'accepted', 'failed']);
+  });
+
+  it('a command that starts is announced as allowed when it started, not when it ends', async () => {
+    let started: () => void = () => undefined;
+    let finish: () => void = () => undefined;
+    const w = await world({
+      run: async (o) => {
+        started = o.onStarted ?? (() => undefined);
+        await new Promise<void>((resolve) => (finish = resolve));
+        return okResult();
+      },
+    });
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo later' }]);
+    await until('the run', () => typeof started === 'function' && w.audit.events().includes('accepted'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.ends).toEqual([]);
+    started();
+    expect(w.ends).toEqual([{ id, outcome: 'allowed' }]);
+    finish();
+    expect(await answerOf(s)).toMatchObject({ type: 'result' });
+    expect(w.ends).toEqual([{ id, outcome: 'allowed' }]);
+    expect(w.notified).toEqual([{ id, outcome: 'allowed' }]);
+  });
+
+  it('a run that never reports a start (a fake, an older exec) is announced as allowed when it ends', async () => {
+    const w = await world();
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo later' }]);
+    expect(await answerOf(s)).toMatchObject({ type: 'result' });
+    expect(w.ends).toEqual([{ id, outcome: 'allowed' }]);
+    expect(w.notified).toEqual([{ id, outcome: 'allowed' }]);
   });
 });

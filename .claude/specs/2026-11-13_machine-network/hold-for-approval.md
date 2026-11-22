@@ -1,6 +1,6 @@
 # Hold a refused request for approval (`machine run --wait`)
 
-**Status:** v0.4, 2026-11-21 (remote view, layout), decisions 80 and 81 (the wait is the default of `machine run`, see "Default and setting"; the web Deny is PIN-protected). Implemented: core (`hold.ts`, waiting list in `requests.ts`), peer service, daemon `deny`, CLI, app-module backend and Requests page (see Deviations). User request: a `run` that the target does not allow yet can wait N minutes so the owner validates in the UI while the agent keeps working, or be explicitly refused.
+**Status:** v0.5, 2026-11-22 (remote view, layout), decisions 80 and 81 (the wait is the default of `machine run`, see "Default and setting"; the web Deny is PIN-protected). Implemented: core (`hold.ts`, waiting list in `requests.ts`), peer service, daemon `deny`, CLI, app-module backend and Requests page (see Deviations). User request: a `run` that the target does not allow yet can wait N minutes so the owner validates in the UI while the agent keeps working, or be explicitly refused.
 **Not a new right:** hold changes WHEN a refusal is answered, never WHAT is allowed. Hard rule 3 and 4 hold: the held command runs only if, after the wait, an entry signed under rule 4 matches it.
 
 ## Behaviour
@@ -91,3 +91,10 @@ Header with counts, WAITING NOW, REFUSED, one aligned row per request, at most o
 - Deny: daemon command `deny` (id or unique prefix of at least 6 characters, reason printable ASCII up to 200); needs the daemon running (`no-daemon` otherwise).
 - Not built: a Deny of a request held on ANOTHER machine (see "Remote view"); no end-to-end test of the 10 s deadline through the CLI (covered in the peer service tests with a fake clock).
 - Fix (2026-11-21): a policy installed DURING a hold that lists the command under another shell now answers at once `refused: not-listed` with `allowedShells` and the `--shell` hint (hold-ended outcome `refused`). Before, only the first check did this, so a caller using the wrong shell (`cmd` against a Linux target, entry signed under `sh`) waited until the deadline.
+- Fix (2026-11-22): an Allow whose command cannot start on the target (`cannot-run`, for example an entry with shell `sh` on a Windows target) was announced as `hold-ended allowed`, so the page showed "Released" before the refusal, or nothing it could end on. Now:
+  - The audit still writes `hold-ended` `allowed` at once (the Allow did release the hold), then `accepted` and `failed` as before.
+  - The notice (`request-notice-end`) and the daemon's own record (`notice-ends.json`) are sent when the shell process exists (`onStarted` of machine-exec), or when the run ends if the executor never reports a start.
+  - If the command cannot start (or `busy`, `audit-unavailable` after the Allow), the announced outcome is `refused`, never `allowed`.
+  - For a hold of THIS machine `notice-ends.json` and `holdProgress` also carry `reason` and `message` (printable ASCII, 300 characters max); the card ends at once with "the target allowed it but could not run it, cannot-run: <fix>".
+  - Wire unchanged: the frame carries the outcome alone (older receivers reject extra fields). The page of ANOTHER machine therefore shows the generic "the target refused it after all: nothing ran"; the cause is in `machine run` of the caller and `machine log` on the target.
+  - `machine run` already printed `refused by <machine>: cannot-run: <message with the fix>` (test: holdE2e.test.ts).

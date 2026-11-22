@@ -20,7 +20,13 @@ export interface NoticeEnd {
   outcome: NoticeOutcome;
   /** Epoch seconds. */
   at: number;
+  /** An Allow released the request but the command could not start: the refusal the caller got (outcome refused). Only for a hold of THIS machine: the wire frame carries the outcome alone. */
+  failure?: { reason: string; message: string };
 }
+
+const MAX_FAILURE_REASON = 40;
+const MAX_FAILURE_MESSAGE = 300;
+const printable = (text: string, max: number): string => text.replace(/[^ -~]/g, '?').slice(0, max);
 
 const unusable = (file: string, why: string): Error =>
   new Error(`${file} cannot be used (${why}): it only remembers how held requests ended, nothing secret and nothing that grants a right. Delete it; the Requests page then shows no confirmation for the requests it held (\`machine requests <machine>\` still lists what waits)`);
@@ -37,6 +43,14 @@ function validated(raw: unknown, file: string): NoticeEnd[] {
     const e: Record<string, unknown> = typeof entry === 'object' && entry !== null ? Object.fromEntries(Object.entries(entry)) : {};
     if (typeof e['machine'] !== 'string' || !UUID.test(e['machine']) || typeof e['id'] !== 'string' || !REQUEST_ID.test(e['id']) || !(NOTICE_OUTCOMES as readonly string[]).includes(e['outcome'] as string) || !Number.isSafeInteger(e['at'])) {
       throw unusable(file, 'an entry is not a machine, a request id, an outcome and a date');
+    }
+    const failure = e['failure'];
+    if (failure !== undefined) {
+      const f: Record<string, unknown> = typeof failure === 'object' && failure !== null ? Object.fromEntries(Object.entries(failure)) : {};
+      if (typeof f['reason'] !== 'string' || typeof f['message'] !== 'string') {
+        throw unusable(file, 'a failure is not a reason and a message');
+      }
+      return { machine: e['machine'], id: e['id'], outcome: e['outcome'] as NoticeOutcome, at: e['at'] as number, failure: { reason: f['reason'], message: f['message'] } };
     }
     return { machine: e['machine'], id: e['id'], outcome: e['outcome'] as NoticeOutcome, at: e['at'] as number };
   });
@@ -69,7 +83,8 @@ export function recordNoticeEndOutcome(configDir: string, end: NoticeEnd, now: n
   const file = noticeEndsFile(configDir);
   withFileLock(file, () => {
     const kept = readNoticeEnds(configDir).filter((e) => !(e.machine === end.machine && e.id === end.id) && now - e.at <= MAX_AGE_SECONDS);
-    const next = [...kept, { machine: end.machine, id: end.id, outcome: end.outcome, at: end.at }].slice(-MAX_NOTICE_ENDS);
+    const stored: NoticeEnd = { machine: end.machine, id: end.id, outcome: end.outcome, at: end.at, ...(end.failure !== undefined ? { failure: { reason: printable(end.failure.reason, MAX_FAILURE_REASON), message: printable(end.failure.message, MAX_FAILURE_MESSAGE) } } : {}) };
+    const next = [...kept, stored].slice(-MAX_NOTICE_ENDS);
     writeFileAtomic(file, `${JSON.stringify({ v: 1, ends: next })}\n`, 0o600);
   });
 }

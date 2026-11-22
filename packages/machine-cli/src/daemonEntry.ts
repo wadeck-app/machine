@@ -200,7 +200,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         // The read-only `requests-list` exchange (decision 74): signed by the admin, answered from this machine's audit.log.
         requests: makeRequestsListDeps(configDir, now, log),
         // The outcome of every hold is kept, so the Requests page can tell the person that the command was released (or why not) after an Allow.
-        holds: { table: holds, onChange: () => inbox?.holdChanged(), onEnded: (id, outcome) => recordNoticeEndOutcome(configDir, { machine: self.uuid, id, outcome, at: now() }, now()) },
+        holds: { table: holds, onChange: () => inbox?.holdChanged(), onEnded: (id, outcome, failure) => recordNoticeEndOutcome(configDir, { machine: self.uuid, id, outcome, at: now(), ...(failure !== undefined ? { failure } : {}) }, now()) },
         notices: makeNoticeStoreDeps(configDir),
         notifier,
         // A machine of the notice-recipients list may refuse a held request (decision 85).

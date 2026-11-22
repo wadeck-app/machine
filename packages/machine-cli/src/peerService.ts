@@ -121,6 +121,12 @@ export interface NoticeStoreDeps {
   end: (machine: string, id: string, now: number, outcome: NoticeOutcome) => void;
 }
 
+/** Why a released hold did not end in a run: the refusal the caller got (`cannot-run`, with the message that names the fix). */
+export interface HoldFailure {
+  reason: string;
+  message: string;
+}
+
 export interface HoldDeps {
   /** The holds of this daemon; the owner's Deny and the listing read the same table. */
   table: HoldTable;
@@ -131,7 +137,7 @@ export interface HoldDeps {
   /** Called after a hold started and after one ended (the table already changed): the inbox poll cadence follows. Must not throw; if it does it is reported and the request goes on. */
   onChange?: () => void;
   /** Called when a hold ended, with how (allowed, denied, deadline, ...): the Requests page of this machine shows it after an Allow. Must not throw; if it does it is reported and the request goes on. */
-  onEnded?: (id: string, outcome: NoticeOutcome) => void;
+  onEnded?: (id: string, outcome: NoticeOutcome, failure?: HoldFailure) => void;
 }
 
 export interface RequestsListDeps {
@@ -167,7 +173,9 @@ interface Carrier {
 
 type AllowedDecision = Extract<ReturnType<typeof authorize>, { allowed: true }>;
 type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: string; message: string; logged: Record<string, Json>; allowedShells?: string[] };
-type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
+/** `announce`: tells the page and the notice recipients how the hold ended, once it is known whether the released command could start. */
+type Announce = (outcome: NoticeOutcome, failure?: HoldFailure) => void;
+type HoldOutcome = { kind: 'decision'; decision: AllowedDecision; announce: Announce } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
 type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string } | { type: 'deliver-ack'; id: string; outcome: 'installed' | 'already-installed'; peerNow: number };
@@ -492,15 +500,21 @@ class PeerService {
     this.holdChanged(holds);
     // Best effort and never awaited: the recipients are told once the request is safely held.
     this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline }));
-    const finish = (outcome: string, extra: Record<string, Json> = {}): void => {
+    // The page and the recipients are told by `announce`. For an Allow it is the caller of the run that calls it, once the command started (or could not): "released" is only true then.
+    const announce: Announce = (outcome, failure) => {
+      this.notify((n) => n.ended(id, outcome));
+      try {
+        holds.onEnded?.(id, outcome, failure);
+      } catch (e) {
+        this.problem(`cannot record how a hold ended (${(e as Error).message}); the request itself is not affected`);
+      }
+    };
+    const finish = (outcome: string, extra: Record<string, Json> = {}, announced = true): void => {
       table.end(id);
       this.holdChanged(holds);
       this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
-      this.notify((n) => n.ended(id, outcome as NoticeOutcome));
-      try {
-        holds.onEnded?.(id, outcome as NoticeOutcome);
-      } catch (e) {
-        this.problem(`cannot record how a hold ended (${(e as Error).message}); the request itself is not affected`);
+      if (announced) {
+        announce(outcome as NoticeOutcome);
       }
     };
     const refusal = (reason: string, text: string, allowedShells?: string[]): HoldOutcome => ({
@@ -560,8 +574,8 @@ class PeerService {
         }
         const again = check();
         if (again.ok) {
-          finish('allowed');
-          return { kind: 'decision', decision: again.decision };
+          finish('allowed', {}, false);
+          return { kind: 'decision', decision: again.decision, announce };
         }
         if (!HOLDABLE_REASONS.includes(again.reason)) {
           // An expired or exhausted entry, an invalid request: refused as for a fresh request.
@@ -899,6 +913,8 @@ class PeerService {
       return { ok: false, reason: result.reason, message: result.message, logged, ...(result.allowedShells !== undefined ? { allowedShells: result.allowedShells } : {}) };
     };
     let step = check();
+    // Set when the request was held and then allowed: the end of the hold is announced once the command started (or could not).
+    let announce: Announce | undefined;
     // The same command is allowed under another shell: the caller used the wrong one, and no Allow of this one is expected: not held.
     if (!step.ok && waitSeconds !== undefined && deps.holds !== undefined && HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
       const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command }, waitSeconds, deps.holds, check, step);
@@ -909,6 +925,7 @@ class PeerService {
         return outcome.answer;
       }
       step = { ok: true, decision: outcome.decision };
+      announce = outcome.announce;
     }
     if (!step.ok) {
       // A refusal an Allow could still fix, answered without a hold: the owner may want to know (the cases a hold would have kept).
@@ -918,8 +935,22 @@ class PeerService {
       return this.refuse(session, body.id, step.reason, step.message, step.logged, step.allowedShells);
     }
     const decision = step.decision;
+    // A held request that was allowed: the page hears "allowed" when the command started, else the refusal the caller gets (once).
+    let told = announce === undefined;
+    const tell = (outcome: NoticeOutcome, failure?: HoldFailure): void => {
+      if (!told) {
+        told = true;
+        announce?.(outcome, failure);
+      }
+    };
+    const refusedAfterAllow = (answer: PeerAnswer): PeerAnswer => {
+      if (answer.type === 'refused') {
+        tell('refused', { reason: answer.reason, message: answer.message });
+      }
+      return answer;
+    };
     if (this.inFlight >= (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)) {
-      return this.refuse(session, body.id, 'busy', 'this machine is already running its maximum number of commands; retry shortly');
+      return refusedAfterAllow(this.refuse(session, body.id, 'busy', 'this machine is already running its maximum number of commands; retry shortly'));
     }
 
     // No audit, no execution: the acceptance is recorded BEFORE the command can run.
@@ -928,13 +959,14 @@ class PeerService {
       this.recordStrict({ event: 'accepted', source: session.peerId, id: body.id, shell: body.shell, command: body.command, ...(decision.template !== undefined ? { template: decision.template } : {}) });
     } catch (e) {
       this.problem(`cannot write the audit log (${(e as Error).message}): commands are refused until it works again`);
-      return this.refuse(session, body.id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); nothing was run. Fix the disk or permissions of the machine's audit log`);
+      return refusedAfterAllow(this.refuse(session, body.id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); nothing was run. Fix the disk or permissions of the machine's audit log`));
     }
     // A call is counted when it is accepted, before it runs: a crash or a timeout never gives the call back.
     try {
       deps.usage.record(decision.entryKey);
     } catch (e) {
       this.recordQuiet({ event: 'failed', id: body.id, error: `cannot record the call: ${(e as Error).message}` });
+      tell('refused', { reason: 'cannot-record-call', message: `cannot record the call (${(e as Error).message}): nothing was run` });
       throw e;
     }
 
@@ -946,14 +978,19 @@ class PeerService {
         command: body.command,
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: deps.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+        // The shell process exists: the held command was really released.
+        onStarted: () => tell('allowed'),
       });
     } catch (e) {
       const why = (e as Error).message;
       this.recordQuiet({ event: 'failed', id: body.id, error: why });
-      return { type: 'refused', id: body.id, reason: 'cannot-run', message: why };
+      // The page ends at once with this cause (a command that never started was not "released").
+      return refusedAfterAllow({ type: 'refused', id: body.id, reason: 'cannot-run', message: why });
     } finally {
       this.inFlight -= 1;
     }
+    // A run that never reported its start (a fake, an older exec) is released when it ends.
+    tell('allowed');
     // The command ran: a bookkeeping failure now is reported to the admin, never turned into "could not run".
     try {
       this.recordStrict({ event: 'completed', id: body.id, exitCode: result.exitCode, timedOut: result.timedOut, truncated: result.truncated, durationMs: result.durationMs });

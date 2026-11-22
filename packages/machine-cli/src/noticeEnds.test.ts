@@ -46,6 +46,23 @@ describe('notice ends', () => {
     expect(findNoticeEnd(dir, MACHINE, id(1))?.outcome).toBe('allowed');
   });
 
+  it('keeps the cause of a refusal after an Allow (reason and message), and nothing else is added to a plain end', () => {
+    const dir = tmp();
+    recordNoticeEndOutcome(dir, { machine: MACHINE, id: id(1), outcome: 'refused', at: NOW, failure: { reason: 'cannot-run', message: 'shell "sh" is not supported on Windows: use "cmd" or "ps" in the policy entry' } }, NOW);
+    recordNoticeEndOutcome(dir, { machine: MACHINE, id: id(2), outcome: 'allowed', at: NOW }, NOW);
+    expect(findNoticeEnd(dir, MACHINE, id(1))).toEqual({ machine: MACHINE, id: id(1), outcome: 'refused', at: NOW, failure: { reason: 'cannot-run', message: 'shell "sh" is not supported on Windows: use "cmd" or "ps" in the policy entry' } });
+    expect(findNoticeEnd(dir, MACHINE, id(2))).toEqual({ machine: MACHINE, id: id(2), outcome: 'allowed', at: NOW });
+  });
+
+  it('bounds the message of a failure to printable ASCII and 300 characters, and refuses a damaged file loudly', () => {
+    const dir = tmp();
+    recordNoticeEndOutcome(dir, { machine: MACHINE, id: id(1), outcome: 'refused', at: NOW, failure: { reason: 'cannot-run', message: `café ${'x'.repeat(400)}` } }, NOW);
+    const kept = findNoticeEnd(dir, MACHINE, id(1))?.failure?.message ?? '';
+    expect(kept).toMatch(/^[ -~]{1,300}$/);
+    writeFileSync(noticeEndsFile(dir), JSON.stringify({ v: 1, ends: [{ machine: MACHINE, id: id(1), outcome: 'refused', at: NOW, failure: { reason: 3, message: 'x' } }] }));
+    expect(() => readNoticeEnds(dir)).toThrow(/cannot be used/);
+  });
+
   it('is bounded: the newest are kept', () => {
     const dir = tmp();
     for (let i = 0; i < MAX_NOTICE_ENDS + 5; i++) recordNoticeEndOutcome(dir, { machine: MACHINE, id: id(i), outcome: 'allowed', at: NOW + i }, NOW + i);

@@ -189,6 +189,40 @@ describe('the short labels of the stepper', () => {
   });
 });
 
+describe('an Allow whose command could not start', () => {
+  const failure = { reason: 'cannot-run', message: 'shell "sh" is not supported on Windows: use "cmd" or "ps" in the policy entry' };
+  const ended = (): ProgressRecord => {
+    let r = reduceProgress(held(), { type: 'signed' }, T0);
+    r = reduceProgress(r, { type: 'result', result: direct }, T0);
+    return reduceProgress(r, { type: 'hold', answer: { state: 'ended', outcome: 'refused', ...failure } }, T0 + 2000);
+  };
+
+  it('ends at once, not released, and the card names the refusal of the daemon with its fix', () => {
+    const last = stepsOf(ended(), T0 + 2000)[3];
+    expect(last?.state).toBe('failed');
+    expect(last?.detail).toMatch(/cannot-run/);
+    expect(last?.detail).toMatch(/not supported on Windows.*use "cmd" or "ps"/);
+    const s = summaryOf(ended(), T0 + 2000);
+    expect(s).toMatchObject({ tone: 'danger', text: 'Not released', finished: true, succeeded: false });
+    expect(s.cause).toMatch(/cannot-run: shell "sh" is not supported on Windows/);
+  });
+
+  it('is read from the answer of the daemon (the polling passes the cause through)', async () => {
+    const answers: unknown[] = [{ state: 'ended', outcome: 'refused', ...failure }];
+    const events: unknown[] = [];
+    startHoldPolling({ get: async () => answers.shift(), machine: 'self', id: 'aaaa1111', now: () => 0, onEvent: (e) => events.push(e) });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(events).toEqual([{ type: 'hold', answer: { state: 'ended', outcome: 'refused', ...failure } }]);
+  });
+
+  it('a refusal without a cause (an older target, a remote machine) keeps the generic text', () => {
+    let r = reduceProgress(held(), { type: 'signed' }, T0);
+    r = reduceProgress(r, { type: 'result', result: direct }, T0);
+    r = reduceProgress(r, { type: 'hold', answer: { state: 'ended', outcome: 'refused' } }, T0 + 2000);
+    expect(stepsOf(r, T0)[3]?.detail).toBe('the target refused it after all: nothing ran');
+  });
+});
+
 describe('summaryOf: the one line a finished or running request is read from', () => {
   const signed = (r: ProgressRecord) => reduceProgress(r, { type: 'signed' }, T0);
   const withResult = (r: ProgressRecord, result: typeof direct | typeof inbox) => reduceProgress(r, { type: 'result', result }, T0 + 400);
