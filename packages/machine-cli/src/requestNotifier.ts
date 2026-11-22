@@ -1,4 +1,4 @@
-import { buildRequestNotice, buildRequestNoticeEnd, type Json, type NoticeOutcome, type Shell } from '@wadeck-app/machine-core';
+import { buildRequestNotice, buildRequestNoticeEnd, type Json, type NoticeOutcome, type Shell, type WaitingRenewal } from '@wadeck-app/machine-core';
 import type { PeerToReach } from './peerConnect.js';
 
 // The sender side of request notices (request-notices.md, decision 83): when this machine HOLDS a request, refuses one that no Allow can be
@@ -23,6 +23,8 @@ export interface NoticeRequest {
   command: string;
   /** Epoch seconds when the hold ends by itself (held notices only). */
   deadline?: number;
+  /** The request waits for the renewal of an exhausted or expired entry (held notices only). */
+  renewal?: WaitingRenewal;
 }
 
 export interface RequestNotifier {
@@ -299,7 +301,7 @@ export function createRequestNotifier(deps: RequestNotifierDeps): RequestNotifie
             uuid,
             'request-notice',
             request.id,
-            () => buildRequestNotice({ id: request.id, peer: request.peer, peerName: request.peerName, shell: request.shell, command: request.command, state: 'held', deadline: request.deadline, now: deps.now() }),
+            () => buildRequestNotice({ id: request.id, peer: request.peer, peerName: request.peerName, shell: request.shell, command: request.command, state: 'held', deadline: request.deadline, now: deps.now(), ...(request.renewal !== undefined ? { renewal: request.renewal } : {}) }),
             () => !ended.has(request.id),
           );
         }

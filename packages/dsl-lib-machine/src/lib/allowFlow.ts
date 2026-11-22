@@ -1,5 +1,8 @@
 import {
+  POLICY_MAX_ENTRIES_PER_LIST,
   commandTextProblem,
+  describeLimits,
+  entryFromText,
   nextNoticeRecipientsBody,
   nextPolicyBody,
   nextPolicyBodyMany,
@@ -15,6 +18,7 @@ import {
   unlockAdminKey,
   verifyBody,
   type LifetimeInput,
+  type LifetimeLimits,
   type PolicyEdit,
   type UnlockedAdminKey,
 } from '@wadeck-app/machine-webcrypto';
@@ -75,9 +79,34 @@ export interface AllowContext {
   noticeRecipients?: { selfUuid: string; current: SignedNoticeRecipients | null };
 }
 
+/**
+ * The Allow of a request that waits for the RENEWAL of an exhausted or expired entry (hold-for-approval.md, "Renewal"): the entry to replace is named by its
+ * text (the template of a typed entry), not by the command of the request.
+ */
+export interface AllowRenewal {
+  /** The text of the entry as signed: the command, or the template of a typed entry. */
+  entry: string;
+  typed: boolean;
+  /** The entry is in the own list of the request's peer: that list is edited. */
+  own: boolean;
+  /** The peer (uuid) whose own list holds the entry; needed when `own`. */
+  peer?: string;
+}
+
+/** The renewal of a row that waits for one (its `renewal` and its peer), as the Allow flow takes it. Undefined for a plain request. */
+export function allowRenewalOf(row: { peer?: string; renewal?: { entry: string; typed: boolean; own: boolean } }): AllowRenewal | undefined {
+  const { renewal } = row;
+  if (renewal === undefined) {
+    return undefined;
+  }
+  return { entry: renewal.entry, typed: renewal.typed, own: renewal.own, ...(renewal.own && row.peer !== undefined ? { peer: row.peer } : {}) };
+}
+
 export interface AllowChange {
   shell: string;
   command: string;
+  /** Present: the Allow renews the entry named here (same shell and text, new limits, the counter starts again); `command` is only the request it releases. */
+  renewal?: AllowRenewal;
   /**
    * The lifetime as the CLI flags (`--times`, `--for`): parsed by the same pure code at the time of the signature (a duration counts from then). Absent or
    * empty: a permanent entry, no `limits` key. Invalid: the parser's sentence is thrown before anything is read or signed.
@@ -90,6 +119,10 @@ export interface AllowPrepared {
   fromVersion: number;
   toVersion: number;
   added: PolicyEntry[];
+  /** The entries replaced (a renewal, or an allow with other limits). */
+  renewed: Array<{ before: PolicyEntry; after: PolicyEntry }>;
+  /** A renewal only: `renews "<entry>": <old limits> -> <new limits> (the counter starts again)`, what the confirmation shows. */
+  summary?: string;
   /** How many commands every trusted peer may run after this change. */
   defaultCount: number;
   /** Peers with their own list: this change does not apply to them. */
@@ -173,6 +206,19 @@ function assertChange(shell: string, command: string): void {
   }
 }
 
+/** The signing summary of a renewal: what is replaced and with which limits. Never silent about a widening: old and new are both said. */
+export function renewalSummary(entry: string, before: LifetimeLimits | undefined, after: LifetimeLimits | undefined, now: number): string {
+  return `renews ${JSON.stringify(entry)}: ${describeLimits(before, now)} -> ${describeLimits(after, now)} (the counter starts again)`;
+}
+
+/** The entry an Allow writes: a renewal writes the entry that exists (its text), an allow writes the exact command. */
+function entryOf(shell: string, command: string, renewal: AllowRenewal | undefined, limits: LifetimeLimits | undefined): PolicyEntry {
+  if (renewal === undefined) {
+    return { shell: shell as PolicyEntry['shell'], command, ...(limits === undefined ? {} : { limits }) };
+  }
+  return entryFromText(renewal.entry, shell as PolicyEntry['shell'], limits);
+}
+
 /** The signed policy the next one is edited from must be one the pinned admin key signed, for this machine: a base a backend wrote is never used. */
 async function assertBase(context: AllowContext): Promise<void> {
   const { current } = context;
@@ -196,15 +242,28 @@ export async function prepareAllow(context: AllowContext, change: AllowChange, n
   await assertBase(context);
   const { current } = context;
   const limits = change.lifetime === undefined ? undefined : parseLifetime(change.lifetime, now);
-  const edit: PolicyEdit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, { kind: 'allow', entry: { shell: change.shell as PolicyEntry['shell'], command: change.command, ...(limits === undefined ? {} : { limits }) } });
+  const { renewal } = change;
+  if (renewal?.own === true && renewal.peer === undefined) {
+    throw new Error(`the renewal of "${renewal.entry}" is in the own list of a peer but the peer is not named: reload the page (the module and the page are not the same version)`);
+  }
+  const entry = entryOf(change.shell, change.command, renewal, limits);
+  const edit: PolicyEdit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, {
+    kind: 'allow',
+    entry,
+    ...(renewal !== undefined ? { renew: true } : {}),
+    ...(renewal?.own === true ? { peer: renewal.peer as string } : {}),
+  });
   if (!edit.changed) {
     return { changed: false, reason: edit.reason };
   }
+  const replaced = edit.renewed[0];
   return {
     changed: true,
     fromVersion: edit.body.baseVersion,
     toVersion: edit.body.version,
     added: edit.added,
+    renewed: edit.renewed,
+    ...(renewal !== undefined ? { summary: renewalSummary(renewal.entry, replaced?.before.limits, replaced?.after.limits, now) } : {}),
     defaultCount: edit.body.defaults.length,
     peersWithOwnList: edit.peersWithOwnList,
     body: edit.body,
@@ -338,8 +397,8 @@ export async function loadContexts(api: AllowApi, machineUuids: string[]): Promi
 
 export interface BatchGroupInput {
   context: AllowContext;
-  /** What the policy of this machine gets: one entry per distinct shell and text (duplicates are skipped anyway). */
-  entries: Array<{ shell: string; command: string }>;
+  /** What the policy of this machine gets: one entry per distinct shell and text (duplicates are skipped anyway). A renewal replaces the entry its `renewal` names. */
+  entries: Array<{ shell: string; command: string; renewal?: AllowRenewal }>;
 }
 
 export type BatchOutcome =
@@ -356,6 +415,44 @@ interface BatchPlan {
 }
 
 /**
+ * The batch when some entries are renewals: the same rule as `nextPolicyBodyMany` (ONE version, an entry already allowed is skipped, a duplicate counts once,
+ * the list limit is checked), with `renew` for the entries that renew. A copy of that loop because the shared one adds, it does not renew.
+ */
+function nextBodyWithRenewals(current: PolicyBody | undefined, ctx: { target: string; adminKeyId: string; now: number }, entries: Array<{ shell: string; command: string; renewal?: AllowRenewal }>, limits: LifetimeLimits | undefined): { changed: false } | { changed: true; body: PolicyBody } {
+  let working = current;
+  const seen = new Set<string>();
+  for (const e of entries) {
+    // Two requests answered by one entry renew it once (a second renewal would bump its generation again).
+    const key = `${e.shell}\u0000${e.renewal?.entry ?? e.command}\u0000${e.renewal?.own === true ? e.renewal.peer : ''}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (e.renewal?.own === true && e.renewal.peer === undefined) {
+      throw new Error(`the renewal of "${e.renewal.entry}" is in the own list of a peer but the peer is not named: reload the page`);
+    }
+    const edit = nextPolicyBody(working, ctx, {
+      kind: 'allow',
+      entry: entryOf(e.shell, e.command, e.renewal, limits === undefined ? undefined : { ...limits }),
+      ...(e.renewal !== undefined ? { renew: true } : {}),
+      ...(e.renewal?.own === true ? { peer: e.renewal.peer as string } : {}),
+    });
+    if (edit.changed) {
+      working = edit.body;
+    }
+  }
+  if (working === undefined || working === current) {
+    return { changed: false };
+  }
+  const longest = Math.max(working.defaults.length, ...Object.values(working.peers).map((l) => l.length));
+  if (longest > POLICY_MAX_ENTRIES_PER_LIST) {
+    throw new Error(`the list would hold ${longest} entries and a policy list holds at most ${POLICY_MAX_ENTRIES_PER_LIST}: allow fewer requests at once, or remove entries first (machine allowed lists them). Nothing was signed`);
+  }
+  const base = current?.version ?? 0;
+  return { changed: true, body: { ...working, version: base + 1, baseVersion: base } };
+}
+
+/**
  * Everything that can be refused without a key, for EVERY machine of the batch: nothing is signed for any machine when one refuses (a command the
  * grammar refuses, a list over the limit, a base or a list the pinned key did not sign, a missing identity key). The sentences name the machine.
  */
@@ -367,8 +464,10 @@ async function planBatch(groups: BatchGroupInput[], lifetime: LifetimeInput, now
     try {
       for (const e of group.entries) assertChange(e.shell, e.command);
       await assertBase(context);
-      const entries = group.entries.map((e): PolicyEntry => ({ shell: e.shell as PolicyEntry['shell'], command: e.command, ...(limits === undefined ? {} : { limits: { ...limits } }) }));
-      const edit = nextPolicyBodyMany(context.current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, entries);
+      const ctx = { target: context.target.uuid, adminKeyId: context.adminKeyId, now };
+      const edit = group.entries.some((e) => e.renewal !== undefined)
+        ? nextBodyWithRenewals(context.current?.body, ctx, group.entries, limits)
+        : nextPolicyBodyMany(context.current?.body, ctx, group.entries.map((e): PolicyEntry => entryOf(e.shell, e.command, undefined, limits === undefined ? undefined : { ...limits })));
       if (!edit.changed) {
         plans.push({ context });
         continue;

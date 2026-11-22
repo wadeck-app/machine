@@ -1,4 +1,5 @@
 import { verifyAuditChain } from './audit.js';
+import type { Renewal } from './policy.js';
 
 // Reader of the audit log of a machine (T-07, T-21): what the peers asked and what became of it. Pure: it takes the lines of the
 // log and the answers of the current policy, and reads no file. The chain is verified first; what follows a break is shown flagged
@@ -29,6 +30,51 @@ export interface PendingGroup {
   reason: string;
 }
 
+/** The entry a held request waits to have RENEWED (exhausted or expired): the `Renewal` of the refusal, with its words. Local data, shown to the owner only. */
+export interface WaitingRenewal extends Renewal {
+  /** `entry used 1 of 1 call(s)` or `expired at <instant>`: shown after `renew:`. */
+  note: string;
+}
+
+const RENEWAL_KEYS = ['reason', 'entry', 'typed', 'own', 'maxCalls', 'expiresAt', 'used', 'note'];
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+
+/**
+ * A renewal read from an audit line, a frame or a stored file: strict and bounded, undefined when it is not one (never a partial object). The texts are
+ * printable ASCII already or the whole value is refused: nothing a peer or an old log wrote reaches a terminal or a page unchecked.
+ */
+export function parseWaitingRenewal(raw: unknown): WaitingRenewal | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const r = Object.fromEntries(Object.entries(raw));
+  if (Object.keys(r).some((k) => !RENEWAL_KEYS.includes(k))) {
+    return undefined;
+  }
+  if ((r['reason'] !== 'expired' && r['reason'] !== 'exhausted') || typeof r['typed'] !== 'boolean' || typeof r['own'] !== 'boolean') {
+    return undefined;
+  }
+  const printableText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length >= 1 && v.length <= max && /^[ -~]+$/.test(v);
+  if (!printableText(r['entry'], MAX_TEXT) || !printableText(r['note'], 200)) {
+    return undefined;
+  }
+  for (const key of ['maxCalls', 'expiresAt', 'used']) {
+    if (r[key] !== undefined && !isCount(r[key])) {
+      return undefined;
+    }
+  }
+  return {
+    reason: r['reason'],
+    entry: r['entry'],
+    typed: r['typed'],
+    own: r['own'],
+    note: r['note'],
+    ...(r['maxCalls'] !== undefined ? { maxCalls: r['maxCalls'] as number } : {}),
+    ...(r['expiresAt'] !== undefined ? { expiresAt: r['expiresAt'] as number } : {}),
+    ...(r['used'] !== undefined ? { used: r['used'] as number } : {}),
+  };
+}
+
 /** A request the target holds right now, waiting for its owner to allow or deny it (`machine run --wait`). Derived from the audit log. */
 export interface WaitingRequest {
   /** The id of the request, as `machine requests --deny <id>` takes it. */
@@ -40,6 +86,8 @@ export interface WaitingRequest {
   /** Epoch seconds. */
   since: number;
   deadline: number;
+  /** Present when the request waits for the renewal of an exhausted or expired entry (not for a command that is not listed). */
+  renewal?: WaitingRenewal;
 }
 
 export interface HistoryEntry {
@@ -194,7 +242,8 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
     if (verified && event === 'held') {
       const deadline = entry['deadline'];
       if (id !== undefined && peer !== undefined && shell !== undefined && command !== undefined && typeof deadline === 'number' && Number.isFinite(deadline)) {
-        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline });
+        const renewal = parseWaitingRenewal(entry['renewal']);
+        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline, ...(renewal !== undefined ? { renewal } : {}) });
       } else skipped += 1;
     }
     if (verified && event === 'hold-ended' && id !== undefined) {
@@ -308,8 +357,12 @@ export function shellQuote(command: string): string {
  * The command that allows a pending request: `machine admin allow <machine> ...` (mode admin, run on the admin machine) or
  * `machine policy allow ...` (mode local, run ON that machine).
  */
-export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'>, machine: { name: string; policyMode: 'admin' | 'local' }): string {
-  const tail = `--shell ${group.shell} -- ${shellQuote(group.command)}`;
+export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'> & { renewal?: WaitingRenewal }, machine: { name: string; policyMode: 'admin' | 'local' }): string {
+  const { renewal } = group;
+  // A renewal replaces the entry that exists: its text (the template of a typed entry), `--renew` (the counter starts again even with the same limits)
+  // and the limits it had (an expired entry cannot give its duration back: the owner writes it).
+  const limits = renewal === undefined ? '' : renewal.maxCalls !== undefined && renewal.reason === 'exhausted' ? ` --times ${renewal.maxCalls}` : ' --for <duration>';
+  const tail = `${renewal === undefined ? '' : '--renew '}--shell ${group.shell}${limits} -- ${shellQuote(renewal === undefined ? group.command : renewal.entry)}`;
   return machine.policyMode === 'local' ? `machine policy allow ${tail}` : `machine admin allow ${machine.name} ${tail}`;
 }
 

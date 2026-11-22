@@ -38,3 +38,16 @@ describe('selectionSummary: the one-line label of the sticky bar', () => {
     expect(selectionSummary(groupSelection([row('1', A, 'ls'), row('2', B, 'id')]), true)).toBe('Allow 2 selected (2 machines, 2 policies, one passphrase)');
   });
 });
+
+describe('groupSelection: renewals', () => {
+  const renewal = { entry: 'orch stop', typed: false, own: false };
+  it('a renewal row is an entry of the text of the entry it renews; two requests answered by one entry give ONE entry', () => {
+    const groups = groupSelection([{ ...row('1', A, 'orch stop'), renewal }, { ...row('2', A, 'orch stop'), renewal }, row('3', A, 'ls')]);
+    expect(groups[0]?.entries).toEqual([{ shell: 'sh', command: 'orch stop', renewal }, { shell: 'sh', command: 'ls' }]);
+    expect(groups[0]?.rows.map((r) => r.id)).toEqual(['1', '2', '3']);
+  });
+  it('a typed renewal uses the template as the text', () => {
+    const typed = { entry: 'orch logs <j:name>', typed: true, own: false };
+    expect(groupSelection([{ ...row('1', A, 'orch logs abc'), renewal: typed }])[0]?.entries).toEqual([{ shell: 'sh', command: 'orch logs <j:name>', renewal: typed }]);
+  });
+});

@@ -80,3 +80,11 @@ describe('renewalLines and leftOutLines', () => {
     expect(renewalLines([], NOW)).toEqual([]);
   });
 });
+
+describe('renewalLines of a renewal (limits.renewals)', () => {
+  it('says "renews" with the old and the new lifetime and that the counter starts again', () => {
+    const before = entryFromText('ls', 'sh', { maxCalls: 1 });
+    const after = entryFromText('ls', 'sh', { maxCalls: 1, renewals: 1 } as never);
+    expect(renewalLines([{ before, after }], NOW).join('\n')).toBe('  ~ renews "ls": 1 call -> 1 call (the counter starts again)');
+  });
+});

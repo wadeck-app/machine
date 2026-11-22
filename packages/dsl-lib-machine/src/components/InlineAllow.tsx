@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
-import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
+import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
+import type { WaitingRenewal } from '@wadeck-app/machine-core';
+import { choiceFromLimits } from '../lib/lifetimeChoice.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
 import { InlineAllowForm } from './InlineAllowForm.js';
@@ -14,7 +16,7 @@ type Phase =
   | { kind: 'failed'; message: string };
 
 export interface InlineAllowProps {
-  row: { shell: string; command: string };
+  row: { shell: string; command: string; peer?: string; renewal?: WaitingRenewal };
   machine: { uuid: string; name: string };
   api: AllowApi;
   /** The progress of the owner (decision 86): `start` and `signed` when the signature is made, then `result`, or `failed` when the post did not go through. */
@@ -34,13 +36,14 @@ export function InlineAllow({ row, machine, api, onEvent, onClose, onDone }: Inl
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const renewal = allowRenewalOf(row);
 
   useEffect(() => {
     mounted.current = true;
     (async () => {
       try {
         const context = await loadContext(api, machine.uuid);
-        const prepared = await prepareAllow(context, { shell: row.shell, command: row.command }, Math.floor(Date.now() / 1000));
+        const prepared = await prepareAllow(context, { shell: row.shell, command: row.command, ...(renewal !== undefined ? { renewal } : {}) }, Math.floor(Date.now() / 1000));
         if (!mounted.current) {
           return;
         }
@@ -63,7 +66,7 @@ export function InlineAllow({ row, machine, api, onEvent, onClose, onDone }: Inl
     return () => {
       mounted.current = false;
     };
-  }, [api, machine.uuid, machine.name, row.shell, row.command]);
+  }, [api, machine.uuid, machine.name, row.shell, row.command, row.renewal, row.peer]);
 
   if (phase.kind === 'loading') {
     return <div className={TEXT_MUTED_SM}>Checking the current policy...</div>;
@@ -83,11 +86,18 @@ export function InlineAllow({ row, machine, api, onEvent, onClose, onDone }: Inl
       hint={hint}
       busy={busy}
       error={error}
-      warning={(words) => (
-        <>
-          Widens rights: every trusted peer may run this on <MachineName name={machine.name} />, byte for byte, {words}.
-        </>
-      )}
+      {...(row.renewal !== undefined ? { defaultChoice: choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) } : {})}
+      warning={(words) =>
+        renewal === undefined ? (
+          <>
+            Widens rights: every trusted peer may run this on <MachineName name={machine.name} />, byte for byte, {words}.
+          </>
+        ) : (
+          <>
+            Renews {row.shell} {JSON.stringify(renewal.entry)} on <MachineName name={machine.name} /> (the used up or expired entry is replaced, its counter starts again), {words}.
+          </>
+        )
+      }
       onCancel={onClose}
       onSubmit={(lifetime, take) => {
         // The passphrase is a local variable of this call: read and cleared from the field at once, never stored, never passed anywhere but the signature.
@@ -95,7 +105,7 @@ export function InlineAllow({ row, machine, api, onEvent, onClose, onDone }: Inl
         setError(null);
         setBusy(true);
         let signed = false;
-        signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: lifetime.flags }, passphrase, Math.floor(Date.now() / 1000), () => {
+        signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: lifetime.flags, ...(renewal !== undefined ? { renewal } : {}) }, passphrase, Math.floor(Date.now() / 1000), () => {
           signed = true;
           // The policy is signed and the key locked: the card takes over and the form goes.
           onEvent({ type: 'start' });

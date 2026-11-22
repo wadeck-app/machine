@@ -20,6 +20,8 @@ import {
   type RequestsListAnswer,
   type RequestsListData,
   authorize,
+  renewalNote,
+  type WaitingRenewal,
   newRequest,
   signRequest,
   verifyRequest,
@@ -52,8 +54,13 @@ export const DEFAULT_MAX_REFUSALS_PER_SESSION = 20;
 export const DEFAULT_ANSWER_TIMEOUT_MS = DEFAULT_TIMEOUT_MS + 30_000;
 /** How often a held request looks at the policy, the owner's Deny, the peer registration and the deadline. */
 export const DEFAULT_HOLD_POLL_MS = 1000;
-/** The refusals a hold waits out: the command is not on the list yet (an Allow can fix it). Anything else is refused as for a fresh request. */
-const HOLDABLE_REASONS: readonly string[] = ['not-listed', 'no-policy'];
+/**
+ * The refusals a hold waits out: the command is not on the list yet, or its entry is used up or expired (an Allow fixes it: for the second kind it RENEWS the entry,
+ * hold-for-approval.md "Renewal"). Anything else is refused as for a fresh request.
+ */
+const HOLDABLE_REASONS: readonly string[] = ['not-listed', 'no-policy', 'expired', 'exhausted'];
+/** What the owner is told of a refusal that was answered without a hold (`--no-wait`): the command is not on the list. An used-up entry is a known one, not news. */
+const NOTIFIED_REASONS: readonly string[] = ['not-listed', 'no-policy'];
 
 export interface UsageStore {
   count(key: string): number;
@@ -172,7 +179,7 @@ interface Carrier {
 }
 
 type AllowedDecision = Extract<ReturnType<typeof authorize>, { allowed: true }>;
-type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: string; message: string; logged: Record<string, Json>; allowedShells?: string[] };
+type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: string; message: string; logged: Record<string, Json>; allowedShells?: string[]; renewal?: WaitingRenewal };
 /** `announce`: tells the page and the notice recipients how the hold ended, once it is known whether the released command could start. */
 type Announce = (outcome: NoticeOutcome, failure?: HoldFailure) => void;
 type HoldOutcome = { kind: 'decision'; decision: AllowedDecision; announce: Announce } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
@@ -479,7 +486,8 @@ class PeerService {
     const { deps } = this;
     const { table } = holds;
     const { id, shell, command } = request;
-    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS });
+    const { renewal } = first;
+    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS, ...(renewal !== undefined ? { renewal } : {}) });
     if (!admitted.ok) {
       return { kind: 'answer', answer: this.refuse(session, id, admitted.reason, admitted.message, { shell, command }) };
     }
@@ -491,7 +499,7 @@ class PeerService {
     const info: HeldInfo = { waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped };
     // No audit, no hold: `machine requests` lists the waiting requests from this entry.
     try {
-      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped });
+      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped, ...(renewal !== undefined ? { renewal: renewal as unknown as Json } : {}) });
     } catch (e) {
       table.end(id);
       this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
@@ -499,7 +507,7 @@ class PeerService {
     }
     this.holdChanged(holds);
     // Best effort and never awaited: the recipients are told once the request is safely held.
-    this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline }));
+    this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline, ...(renewal !== undefined ? { renewal } : {}) }));
     // The page and the recipients are told by `announce`. For an Allow it is the caller of the run that calls it, once the command started (or could not): "released" is only true then.
     const announce: Announce = (outcome, failure) => {
       this.notify((n) => n.ended(id, outcome));
@@ -578,7 +586,7 @@ class PeerService {
           return { kind: 'decision', decision: again.decision, announce };
         }
         if (!HOLDABLE_REASONS.includes(again.reason)) {
-          // An expired or exhausted entry, an invalid request: refused as for a fresh request.
+          // An invalid request: refused as for a fresh request.
           finish('refused', { reason: again.reason });
           return refusal(again.reason, again.message, again.allowedShells);
         }
@@ -589,7 +597,8 @@ class PeerService {
         }
         if (verdict.state === 'deadline') {
           finish('deadline');
-          return refusal(again.reason, `${first.message} (${waitedText(hold.waitSeconds, hold.capped, hold.requestedSeconds)})`);
+          // The cause at the deadline is the one the caller would get now: a command that was not listed and whose entry was since signed used up says so.
+          return refusal(again.reason, `${again.reason === first.reason ? first.message : again.message} (${waitedText(hold.waitSeconds, hold.capped, hold.requestedSeconds)})`);
         }
       }
     } finally {
@@ -910,7 +919,14 @@ class PeerService {
       if (result.detail !== undefined) {
         logged.detail = result.detail;
       }
-      return { ok: false, reason: result.reason, message: result.message, logged, ...(result.allowedShells !== undefined ? { allowedShells: result.allowedShells } : {}) };
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.message,
+        logged,
+        ...(result.allowedShells !== undefined ? { allowedShells: result.allowedShells } : {}),
+        ...(result.renewal !== undefined ? { renewal: { ...result.renewal, note: renewalNote(result.renewal) } } : {}),
+      };
     };
     let step = check();
     // Set when the request was held and then allowed: the end of the hold is announced once the command started (or could not).
@@ -929,7 +945,7 @@ class PeerService {
     }
     if (!step.ok) {
       // A refusal an Allow could still fix, answered without a hold: the owner may want to know (the cases a hold would have kept).
-      if (HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
+      if (NOTIFIED_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
         this.notify((n) => n.refused({ id: body.id, peer: session.peerId, peerName: this.nameOf(session), shell: body.shell, command: body.command }));
       }
       return this.refuse(session, body.id, step.reason, step.message, step.logged, step.allowedShells);

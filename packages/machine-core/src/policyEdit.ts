@@ -11,7 +11,11 @@ export const DEFAULT_APPLY_WINDOW_SECONDS = 7 * 24 * 3600;
 
 /** `peer` (a machine UUID) edits the OWN list of that peer instead of the default list. */
 export type PolicyChange =
-  | { kind: 'allow'; entry: PolicyEntry; peer?: string }
+  /**
+   * `renew`: the Allow of an exhausted or expired entry (hold-for-approval.md, "Renewal"). The entry of the same shell and text is replaced even when its
+   * limits are the same, and the generation `limits.renewals` goes up by one, so the counter of the replaced entry starts again.
+   */
+  | { kind: 'allow'; entry: PolicyEntry; peer?: string; renew?: boolean }
   /**
    * `command`: the text of the entry as shown by `machine allowed` (the command, or the template as signed), narrowed by `shell`.
    * `index`: the 1-based position in the edited list, as shown by `machine allowed`; it wins over `command`.
@@ -47,6 +51,14 @@ export type PolicyEdit =
 
 const parsed = (entry: PolicyEntry): EntryText => (isTyped(entry) ? { kind: 'typed', template: parseTemplate(entry.template, entry.shell) } : { kind: 'exact', command: entry.command });
 const canonicalOf = (entry: PolicyEntry): string => canonicalEntry(entry.shell, parsed(entry));
+const withGeneration = (entry: PolicyEntry, renewals: number): PolicyEntry => {
+  const { limits, ...rest } = entry;
+  if (limits === undefined || (limits.maxCalls === undefined && limits.expiresAt === undefined)) {
+    return rest as PolicyEntry;
+  }
+  return { ...rest, limits: { ...(limits.maxCalls !== undefined ? { maxCalls: limits.maxCalls } : {}), ...(limits.expiresAt !== undefined ? { expiresAt: limits.expiresAt } : {}), renewals } } as PolicyEntry;
+};
+const hasRenewals = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some((e) => e.limits?.renewals !== undefined));
 const hasLimits = (entry: PolicyEntry): boolean => entry.limits !== undefined && (entry.limits.maxCalls !== undefined || entry.limits.expiresAt !== undefined);
 
 /**
@@ -100,15 +112,19 @@ export function nextPolicyBody(current: PolicyBody | undefined, ctx: EditContext
     const at = base.findIndex((e) => canonicalOf(e) === wanted);
     if (at >= 0) {
       const existing = base[at] as PolicyEntry;
-      if (limitsEqual(existing.limits, change.entry.limits) && entryText(existing) === entryText(change.entry)) {
+      if (change.renew === true) {
+        const after = withGeneration(change.entry, (existing.limits?.renewals ?? 0) + 1);
+        renewed = [{ before: existing, after }];
+        next = base.map((e, i) => (i === at ? after : e));
+      } else if (limitsEqual(existing.limits, change.entry.limits) && entryText(existing) === entryText(change.entry)) {
         return { changed: false, reason: 'already-allowed' };
-      }
-      if (limitsEqual(existing.limits, change.entry.limits)) {
+      } else if (limitsEqual(existing.limits, change.entry.limits)) {
         // Same entry, other labels only: nothing to sign.
         return { changed: false, reason: 'already-allowed' };
+      } else {
+        renewed = [{ before: existing, after: change.entry }];
+        next = base.map((e, i) => (i === at ? change.entry : e));
       }
-      renewed = [{ before: existing, after: change.entry }];
-      next = base.map((e, i) => (i === at ? change.entry : e));
     } else {
       added = [change.entry];
       next = [...base, change.entry];
@@ -139,8 +155,8 @@ export function nextPolicyBody(current: PolicyBody | undefined, ctx: EditContext
   const base = current?.version ?? 0;
   const newDefaults = change.peer === undefined ? copy : (JSON.parse(JSON.stringify(defaults)) as PolicyEntry[]);
   const body: PolicyBody = {
-    // Version 2 only when a typed entry exists: an exact-only policy stays readable by an older target.
-    v: hasTypedEntry([newDefaults, ...Object.values(peers)]) ? 2 : 1,
+    // Version 2 only when a typed entry or a renewal generation exists: an exact-only policy stays readable by an older target.
+    v: hasTypedEntry([newDefaults, ...Object.values(peers)]) || hasRenewals([newDefaults, ...Object.values(peers)]) ? 2 : 1,
     target: ctx.target,
     version: base + 1,
     baseVersion: base,

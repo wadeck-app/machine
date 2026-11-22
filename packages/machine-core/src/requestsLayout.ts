@@ -116,6 +116,11 @@ function noticeBlock(kind: 'held' | 'refused', rows: StoredNotice[], input: Requ
           { title: 'Command', cells: rows.map((n) => n.command + (n.commandTruncated ? ' [...]' : '')) },
         ];
   const lines = ['  reported by the other machines:', ...table(columns, full)];
+  for (const n of rows) {
+    if (n.renewal !== undefined) {
+      lines.push(fit(`  renew: ${n.renewal.note} (${n.id.slice(0, 8)} on ${n.machineName}); the Allow replaces ${n.shell} "${n.renewal.entry}" and its counter starts again`));
+    }
+  }
   // The exact command of a row is for the machine of the row. A command cut at 2048 characters is never offered: allowing the cut text would allow another command.
   const exact = (n: StoredNotice): string => `allow: ${allowCommand(n, { name: n.machineName, policyMode: 'admin' })}`;
   const exactRows = rows.filter((n) => !n.commandTruncated);
@@ -236,6 +241,12 @@ export function layoutRequests(raw: RequestsLayoutInput): string[] {
           input.full,
         ),
       );
+      // A held request that waits for the renewal of an entry says so, names the entry, and tells how the Allow replaces it.
+      for (const w of waiting) {
+        if (w.renewal !== undefined) {
+          lines.push(fit(`  renew: ${w.renewal.note} (${w.id.slice(0, 8)}); the Allow replaces ${ascii(w.shell)} "${ascii(w.renewal.entry)}" and its counter starts again`));
+        }
+      }
       lines.push(...allowLines(waiting, input));
     }
     if (heldNotices.length > 0) {

@@ -1,6 +1,6 @@
 import { parseLifetime as coreParseLifetime } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
-import { LIFETIME_PRESETS, lifetimeInput, lifetimeWords, type LifetimeChoice } from './lifetimeChoice.js';
+import { LIFETIME_PRESETS, choiceFromLimits, lifetimeInput, lifetimeWords, type LifetimeChoice } from './lifetimeChoice.js';
 
 // The lifetime choices of the Allow dialog: the same pure parser as the CLI flags --times, --for, --until (machine-core lifetime.ts, copied byte for
 // byte into machine-webcrypto), so the entry the page signs is the entry the CLI would produce.
@@ -93,5 +93,24 @@ describe('lifetimeWords: the sentence of the signing summary', () => {
   });
   it('seconds are said as seconds', () => {
     expect(lifetimeWords({ expiresAt: NOW + 30 }, NOW)).toBe(`until ${clock(NOW + 30)} (in 30 s)`);
+  });
+});
+
+describe('choiceFromLimits: the default of a renewal is the limits the entry had', () => {
+  it('one call -> once; n calls -> custom calls n', () => {
+    expect(choiceFromLimits({ maxCalls: 1 })).toEqual({ kind: 'once', customKind: 'calls', customText: '' });
+    expect(choiceFromLimits({ maxCalls: 7 })).toEqual({ kind: 'custom', customKind: 'calls', customText: '7' });
+  });
+  it('expired only (the original duration is not stored) -> 1 hour; no limits -> permanent', () => {
+    expect(choiceFromLimits({ expiresAt: NOW - 5 })).toEqual({ kind: '1h', customKind: 'duration', customText: '' });
+    expect(choiceFromLimits(undefined)).toEqual({ kind: 'permanent', customKind: 'duration', customText: '' });
+  });
+  it('calls win over a date when both are set (the entry was used up)', () => {
+    expect(choiceFromLimits({ maxCalls: 2, expiresAt: NOW + 5 })).toMatchObject({ kind: 'custom', customText: '2' });
+  });
+  it('the choice it gives resolves to flags the CLI parser accepts', () => {
+    for (const limits of [{ maxCalls: 1 }, { maxCalls: 7 }, { expiresAt: NOW - 5 }, undefined]) {
+      expect(lifetimeInput(choiceFromLimits(limits)).ok).toBe(true);
+    }
   });
 });

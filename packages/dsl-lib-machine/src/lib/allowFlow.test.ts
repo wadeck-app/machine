@@ -599,3 +599,76 @@ describe('the held key (decision 92): one unlock serves the next signatures, the
     adminKeyHolder.reset();
   }, 120_000);
 });
+
+describe('the Allow of a renewal (an exhausted or expired entry): one signed policy replaces the entry', () => {
+  const used: PolicyBody['defaults'] = [{ shell: SHELL, command: 'orch stop', limits: { maxCalls: 1 } }, { shell: SHELL, command: 'uptime' }];
+  const renewal = { entry: 'orch stop', typed: false, own: false };
+
+  it('prepareAllow equals machine-core nextPolicyBody with renew, replaces the entry (same limits) and never reads "already allowed"', async () => {
+    const current = signedBase(4, used);
+    const prepared = await prepareAllow(context({ current }), { shell: SHELL, command: 'orch stop', renewal, lifetime: { times: '1' } }, NOW);
+    const core = coreNext(current.body, { target: SELF, adminKeyId: ADMIN_KEY_ID, now: NOW }, { kind: 'allow', renew: true, entry: { shell: SHELL, command: 'orch stop', limits: { maxCalls: 1 } } });
+    expect(prepared.changed && core.changed ? prepared.body : null).toEqual(core.changed ? core.body : undefined);
+    if (!prepared.changed) {
+      throw new Error('expected a change');
+    }
+    expect(prepared.body.defaults).toEqual([{ shell: SHELL, command: 'orch stop', limits: { maxCalls: 1, renewals: 1 } }, { shell: SHELL, command: 'uptime' }]);
+    expect(prepared.body.v).toBe(2);
+    expect(prepared.added).toEqual([]);
+    expect(prepared.renewed).toHaveLength(1);
+    expect(prepared.summary).toBe('renews "orch stop": 1 call -> 1 call (the counter starts again)');
+  });
+
+  it('a typed entry is renewed by its template, not by the command of the request', async () => {
+    const current = coreSignPolicy({ v: 2, target: SELF, version: 4, baseVersion: 3, adminKeyId: ADMIN_KEY_ID, issuedAt: NOW - 60, notBefore: NOW - 60, notAfter: NOW + 86400, defaults: [{ shell: SHELL, template: 'orch logs <j:name>', limits: { expiresAt: NOW - 5 } }], peers: {} }, admin.privateKeyPkcs8);
+    const prepared = await prepareAllow(context({ current }), { shell: SHELL, command: 'orch logs abc', renewal: { entry: 'orch logs <j:name>', typed: true, own: false }, lifetime: { for: '1h' } }, NOW);
+    if (!prepared.changed) {
+      throw new Error('expected a change');
+    }
+    expect(prepared.body.defaults).toEqual([{ shell: SHELL, template: 'orch logs <j:name>', limits: { expiresAt: NOW + 3600, renewals: 1 } }]);
+    expect(prepared.summary).toMatch(/^renews "orch logs <j:name>": expired \(was until .*\) -> until /);
+  });
+
+  it('own list: the list of that peer is edited, the default list is untouched', async () => {
+    const current = signedBase(4, [{ shell: SHELL, command: 'uptime' }], { [PEER]: [{ shell: SHELL, command: 'orch stop', limits: { maxCalls: 1 } }] });
+    const prepared = await prepareAllow(context({ current }), { shell: SHELL, command: 'orch stop', renewal: { entry: 'orch stop', typed: false, own: true, peer: PEER }, lifetime: { times: '3' } }, NOW);
+    if (!prepared.changed) {
+      throw new Error('expected a change');
+    }
+    expect(prepared.body.defaults).toEqual([{ shell: SHELL, command: 'uptime' }]);
+    expect(prepared.body.peers[PEER]).toEqual([{ shell: SHELL, command: 'orch stop', limits: { maxCalls: 3, renewals: 1 } }]);
+  });
+
+  it('a plain allow has no summary and no renewed entry', async () => {
+    const prepared = await prepareAllow(context(), { shell: SHELL, command: 'uptime' }, NOW);
+    expect(prepared.changed && prepared.summary).toBeUndefined();
+    expect(prepared.changed && prepared.renewed).toEqual([]);
+  });
+
+  it('signs and posts the renewed policy: machine-core accepts it (version 2 body) and the entry exists once', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api, context({ current: signedBase(4, used) }), { shell: SHELL, command: 'orch stop', renewal, lifetime: { times: '1' } }, PASSPHRASE, NOW);
+    const policy = (api.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy }).policy;
+    expect(policy.body.defaults.filter((e) => 'command' in e && e.command === 'orch stop')).toEqual([{ shell: SHELL, command: 'orch stop', limits: { maxCalls: 1, renewals: 1 } }]);
+    expect(applyPolicy({ version: 4, highestSeen: 4 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW, targetUuid: SELF }).ok).toBe(true);
+  }, 120_000);
+
+  it('a batch holds the renewals and the new entries in ONE version; two requests of one entry renew it ONCE', async () => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    api.post = async (path: string, body: unknown) => {
+      api.sent.push({ method: 'POST', path, body });
+      return { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 5, delivery: 'installed' };
+    };
+    const groups = [{ context: context({ current: signedBase(4, used) }), entries: [{ shell: SHELL, command: 'orch stop', renewal }, { shell: SHELL, command: 'orch stop', renewal }, { shell: SHELL, command: 'df -h' }] }];
+    await signAndSubmitBatch(api, groups, { times: '1' }, PASSPHRASE, NOW);
+    const policy = (api.sent.find((s) => s.method === 'POST')?.body as { policy: SignedPolicy }).policy;
+    expect(policy.body.version).toBe(5);
+    expect(policy.body.baseVersion).toBe(4);
+    expect(policy.body.defaults).toEqual([
+      { shell: SHELL, command: 'orch stop', limits: { maxCalls: 1, renewals: 1 } },
+      { shell: SHELL, command: 'uptime' },
+      { shell: SHELL, command: 'df -h', limits: { maxCalls: 1 } },
+    ]);
+    expect(applyPolicy({ version: 4, highestSeen: 4 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW, targetUuid: SELF }).ok).toBe(true);
+  }, 120_000);
+});

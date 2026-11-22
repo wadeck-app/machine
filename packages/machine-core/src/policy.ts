@@ -30,6 +30,11 @@ export interface Limits {
   maxCalls?: number;
   /** Epoch seconds; a call after this instant is refused. */
   expiresAt?: number;
+  /**
+   * How many times the owner renewed this entry (hold-for-approval.md, "Renewal"): written by the Allow of a renewal, never by a first allow. It is part of the
+   * key of the call counter, so a renewal with the SAME limits still starts the counter again. Needs a version 2 body (an older reader refuses it by name).
+   */
+  renewals?: number;
 }
 
 /** One exact command: the shell and the full command line, compared byte for byte (decision 13). */
@@ -163,11 +168,21 @@ function assertEntries(list: unknown, where: string, version: number): asserts l
       const limits = entry.limits as Record<string, unknown>;
       if (typeof limits !== 'object' || limits === null) throw new Error(`policy: limits of an entry of ${where} must be an object`);
       for (const key of Object.keys(limits)) {
-        if (key !== 'maxCalls' && key !== 'expiresAt') throw new Error(`policy: unknown limit "${key}"`);
+        if (key !== 'maxCalls' && key !== 'expiresAt' && key !== 'renewals') {
+          throw new Error(`policy: unknown limit "${key}"`);
+        }
         if (limits[key] === undefined) throw new Error(`policy: limits.${key} must be omitted, not undefined`);
       }
       if (limits.maxCalls !== undefined && !posInt(limits.maxCalls)) throw new Error('policy: limits.maxCalls must be a positive integer');
       if (limits.expiresAt !== undefined && !posInt(limits.expiresAt)) throw new Error('policy: limits.expiresAt must be epoch seconds (a positive integer)');
+      if (limits.renewals !== undefined) {
+        if (!posInt(limits.renewals)) {
+          throw new Error('policy: limits.renewals must be a positive integer');
+        }
+        if (version < 2) {
+          throw new Error(`policy: limits.renewals need version 2 (an entry of ${where} was renewed but the body is version ${version}): ${UPDATE_HINT}`);
+        }
+      }
     }
     if (seen.has(canonical)) {
       throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${shown}" (labels and the order of enum members do not make an entry different)`);
@@ -321,10 +336,33 @@ export interface CommandRequest {
  * while they stay the same the counter survives new policy versions.
  */
 export function entryKey(scope: string, entry: { shell: Shell; command?: string; template?: string; limits?: Limits }): string {
-  const limits = `${entry.limits?.maxCalls ?? ''}\u0000${entry.limits?.expiresAt ?? ''}`;
+  // The generation of a renewal joins the key only when there is one: the key of an entry that was never renewed is what it always was.
+  const limits = `${entry.limits?.maxCalls ?? ''}\u0000${entry.limits?.expiresAt ?? ''}${entry.limits?.renewals === undefined ? '' : `\u0000${entry.limits.renewals}`}`;
   // An exact entry hashes as it always did (its counter survives the upgrade); a typed one hashes its template as signed.
   const text = entry.template !== undefined ? entry.template : entry.command;
   return `${scope}:${createHash('sha256').update(`${entry.shell}\u0000${text}\u0000${limits}`).digest('hex').slice(0, 32)}`;
+}
+
+/**
+ * The entry an exhausted or expired refusal is about (hold-for-approval.md, "Renewal"): what the owner renews. LOCAL ONLY: it is written in the audit log and
+ * shown to the owner, never sent to the caller (the caller learns nothing it did not already write, T-03).
+ */
+export interface Renewal {
+  reason: 'expired' | 'exhausted';
+  /** The text of the entry as signed: the command, or the template of a typed entry. The shell is the one of the request. */
+  entry: string;
+  typed: boolean;
+  /** The entry is in the own list of the peer (the renewal edits that list), else in the default list. */
+  own: boolean;
+  maxCalls?: number;
+  expiresAt?: number;
+  /** Exhausted: the calls counted for the entry. */
+  used?: number;
+}
+
+/** `entry used 1 of 1 call(s)` or `expired at 2026-11-22T10:00:00.000Z`: the words after `renew:` on every surface. */
+export function renewalNote(renewal: Renewal): string {
+  return renewal.reason === 'exhausted' ? `entry used ${renewal.used ?? renewal.maxCalls ?? 0} of ${renewal.maxCalls ?? 0} call(s)` : `expired at ${new Date((renewal.expiresAt ?? 0) * 1000).toISOString()}`;
 }
 
 export type Decision =
@@ -346,6 +384,8 @@ export type Decision =
        * and the rule that failed. It never holds the value.
        */
       detail?: string;
+      /** `expired` and `exhausted` only, LOCAL ONLY: the entry whose renewal would allow the request. */
+      renewal?: Renewal;
     };
 
 /** A command as written in a command line the user can paste: quoted when it holds spaces or quotes (the same rule as `machine run`). */
@@ -461,11 +501,22 @@ export function authorize(
   for (const entry of matching) {
     const key = entryKey(scope, entry);
     if (entry.limits?.expiresAt !== undefined && now > entry.limits.expiresAt) {
-      firstRefusal ??= { allowed: false, reason: 'expired', message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask ${who} to renew it` };
+      firstRefusal ??= {
+        allowed: false,
+        reason: 'expired',
+        message: `"${request.command}" was allowed until ${new Date(entry.limits.expiresAt * 1000).toISOString()}; ask ${who} to renew it`,
+        renewal: { reason: 'expired', entry: entryText(entry), typed: isTyped(entry), own, expiresAt: entry.limits.expiresAt, ...(entry.limits.maxCalls !== undefined ? { maxCalls: entry.limits.maxCalls } : {}) },
+      };
       continue;
     }
-    if (entry.limits?.maxCalls !== undefined && usage(key) >= entry.limits.maxCalls) {
-      firstRefusal ??= { allowed: false, reason: 'exhausted', message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask ${who} to renew it` };
+    const used = entry.limits?.maxCalls === undefined ? 0 : usage(key);
+    if (entry.limits?.maxCalls !== undefined && used >= entry.limits.maxCalls) {
+      firstRefusal ??= {
+        allowed: false,
+        reason: 'exhausted',
+        message: `"${request.command}" reached its limit of ${entry.limits.maxCalls} call(s); ask ${who} to renew it`,
+        renewal: { reason: 'exhausted', entry: entryText(entry), typed: isTyped(entry), own, maxCalls: entry.limits.maxCalls, used, ...(entry.limits.expiresAt !== undefined ? { expiresAt: entry.limits.expiresAt } : {}) },
+      };
       continue;
     }
     return { allowed: true, entryKey: key, entry, ...(isTyped(entry) ? { template: entry.template } : {}) };

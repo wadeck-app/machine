@@ -167,6 +167,8 @@ export interface Parsed {
   /** `machine admin allow <machine> --list` / `--remove`. */
   list: boolean;
   remove: boolean;
+  /** `machine admin allow --renew` / `machine policy allow --renew`: replace an entry that is used up or expired even when its limits are the same (the counter starts again). */
+  renew: boolean;
   /** `machine install <id>`: skip the y/N question, print the plan only, report the state only. */
   yes: boolean;
   dryRun: boolean;

@@ -278,6 +278,8 @@ export interface LocalAllowOptions extends LocalIo {
   command?: string;
   /** `allow`: --times, --for or --until (permanent when none). */
   lifetime?: LifetimeInput;
+  /** `allow --renew`: replace the entry even with the same limits; its counter starts again. */
+  renew?: boolean;
   /** `remove`: the 1-based place in the list shown by `machine allowed` (or `--list`), instead of the command. */
   index?: number;
   shell?: Shell;
@@ -350,7 +352,7 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
     current,
     { target: self.uuid, adminKeyId: mode.localKeyId, now: o.now(), windowSeconds: DEFAULT_APPLY_WINDOW_SECONDS },
     entry !== undefined
-      ? { kind: 'allow', entry, ...(peerUuid !== undefined ? { peer: peerUuid } : {}) }
+      ? { kind: 'allow', entry, ...(peerUuid !== undefined ? { peer: peerUuid } : {}), ...(o.renew === true ? { renew: true } : {}) }
       : { kind: 'remove', ...(o.index !== undefined ? { index: o.index } : { command }), ...(o.shell !== undefined ? { shell: o.shell } : {}), ...(peerUuid !== undefined ? { peer: peerUuid } : {}) },
   );
   const scope = peerUuid === undefined ? 'every trusted peer' : `"${nameOf(peerUuid)}" only`;

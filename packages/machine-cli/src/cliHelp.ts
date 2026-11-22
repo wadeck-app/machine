@@ -60,7 +60,7 @@ const GROUPS: GroupHelp[] = [
       },
       {
         name: 'allow',
-        usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--out <file>] [--list | --remove [--index <n>]] -- <command...>',
+        usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] [--list | --remove [--index <n>]] -- <command...>',
         text: 'allow ONE command on a machine (signed policy): exact, or a typed template with <label:type> placeholders; list or withdraw what is allowed',
         options: [
           '--shell   the shell of the command, part of the entry (default: this machine platform, said; a Linux target needs --shell sh from Windows)',
@@ -68,6 +68,7 @@ const GROUPS: GroupHelp[] = [
           '--times <n>   at most n calls (1 to 10000); the counter is per entry, not per value',
           '--for <duration>   valid for 30m, 2h, 7d ... from now (at most 365d)',
           '--until <date>   valid until 2027-02-01 (end of that day, UTC) or 2027-02-01T18:00Z (at most 365 days away); permanent without --times, --for and --until',
+          '--renew   replace an entry that is used up or expired even with the SAME limits, and start its counter again (the held request waiting for it then runs); other limits replace the old ones without it',
           '--out <file>   write the signed policy to a file instead of sending it',
           '--list   show what is allowed on the machine, numbered (no command)',
           '--remove   withdraw the command (by its text, --shell narrows it) or --index <n>, the number shown by --list or `machine allowed`',
@@ -211,12 +212,13 @@ const GROUPS: GroupHelp[] = [
       { name: 'install', usage: 'install <signed.json>', text: 'install a policy for this machine (file mode): signed by the admin in mode admin, by the local policy key in mode local', options: ['<signed.json>   written by `machine admin sign-policy --out` or `machine admin allow --out`'], examples: ['machine policy install signed.json'] },
       {
         name: 'allow',
-        usage: 'allow [--shell <s>] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] -- <command> | allow --remove (-- <command> | --index <n>) | allow --list',
+        usage: 'allow [--shell <s>] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] [--renew] -- <command> | allow --remove (-- <command> | --index <n>) | allow --list',
         text: 'mode local: allow ONE command (exact, or a typed template with <label:type> placeholders, see `machine admin allow --help`) on THIS machine (signed with the local policy key, asks the local passphrase), withdraw it, or list what is allowed (read-only, any mode)',
         options: [
           '--shell   the shell of the command (default: this machine platform, said)',
           '--peer <machine>   edit the own list of that registered peer (it then replaces the default list for that peer; a new list copies only the PERMANENT default entries and names the ones left out)',
           '--times <n> | --for <duration> | --until <date>   limit the entry (permanent by default); allowing it again with other limits replaces them',
+          '--renew   replace an entry that is used up or expired even with the SAME limits, and start its counter again',
           '--remove   withdraw the command, or --index <n> (the number shown by --list)',
           '--list   show what is allowed here, numbered, with the calls left (no passphrase)',
         ],

@@ -255,7 +255,7 @@ Administration (enrollment through the relay, or by files):
                                      stolen machine could allow offline guessing, an encrypted copy of the key is on every
                                      machine). --generate, or an empty answer, makes a random one (100 bits, shown once). An optional hint
                                      (Enter = none, or --hint) is shown above every passphrase prompt on every machine
-  admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--out <file>] -- <command...>
+  admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] -- <command...>
                                      allow ONE command on a machine (for every trusted peer): builds the next policy
                                      version from the last one signed here, shows the difference, asks y/N and the admin
                                      passphrase, signs, and sends it through the relay inbox (or installs it here when the
@@ -270,7 +270,8 @@ Administration (enrollment through the relay, or by files):
                                      Lifetime: permanent by default, --times N (1 to 10000 calls), --for <duration> (30m, 2h,
                                      7d, at most 365d) or --until <date> (2027-02-01 = end of that day UTC, or
                                      2027-02-01T18:00Z; at most 365 days away). Allowing an entry again with other limits
-                                     replaces them ("limits updated"). A typed entry on a program that cannot be made safe
+                                     replaces them ("limits updated"); --renew replaces an entry that is used up or expired even with the SAME limits and
+                                     starts its counter again (the generation is signed: a version 2 policy). A typed entry on a program that cannot be made safe
                                      (sudo, git -c, orch add, ...) is signed with a loud [warn], never refused. A policy with
                                      a typed entry is version 2: a target that is not up to date refuses it (machine cli
                                      update there). --remove withdraws an entry by its text (--shell narrows it) or by
@@ -349,7 +350,7 @@ Administration (enrollment through the relay, or by files):
                                      its own list with its own policy key and a LOCAL passphrase (typed twice, asked every time you
                                      change the list, nothing is cached); admin-signed policies are then refused and the list starts
                                      EMPTY. It never enrols a machine and never lifts a revocation: those stay with the admin
-  policy allow [--shell <s>] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] -- <command>
+  policy allow [--shell <s>] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] [--renew] -- <command>
                                      mode local: allow ONE command (exact, or a typed template, see admin allow) on THIS machine
                                      (difference, y/N, local passphrase, signed with the local key, installed here, no relay);
                                      --remove withdraws it (by text, or --index <n>); --peer edits the own list of one registered
@@ -393,7 +394,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, yes: false, dryRun: false, check: false, refresh: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, yes: false, dryRun: false, check: false, refresh: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, renew: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -424,6 +425,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--generate') out.generate = true;
     else if (a === '--list') out.list = true;
     else if (a === '--remove') out.remove = true;
+    else if (a === '--renew') {
+      out.renew = true;
+    }
     else if (a === '--follow' || a === '-f') out.follow = true;
     else if (a === '--force-register') out.forceRegister = true;
     else if (a === '--history') out.history = true;
@@ -590,6 +594,12 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (lifetimeFlag !== undefined && (args.list || args.remove)) {
     return fail(`${lifetimeFlag[0]} sets the lifetime of an entry you allow: it cannot be combined with --list or --remove`, EXIT.usage);
+  }
+  if (args.renew && !adminAllow && !policyAllow) {
+    return fail('--renew only applies to `machine admin allow` and `machine policy allow` (it replaces an entry that is used up or expired, even with the same limits, and starts its counter again)', EXIT.usage);
+  }
+  if (args.renew && (args.list || args.remove)) {
+    return fail('--renew replaces an entry you allow (its counter starts again): it cannot be combined with --list or --remove', EXIT.usage);
   }
   if (args.index !== undefined && !((adminAllow || policyAllow) && args.remove)) {
     return fail('--index only applies to `machine admin allow <machine> --remove --index <n>` and `machine policy allow --remove --index <n>` (<n> is the number `machine allowed` shows before the entry)', EXIT.usage);

@@ -158,6 +158,10 @@ describe('registration, policy, revocation signing: verified by machine-core, by
       { ...goodPolicy, defaults: Array.from({ length: 201 }, (_, i) => ({ shell: 'sh', command: `c${i}` })) },
       { ...goodPolicy, peers: Object.fromEntries(Array.from({ length: 65 }, () => [uuid(), []])) },
       { ...goodPolicy, target: 'x' },
+      // The generation of a renewal: a positive integer, version 2 only (the same refusals, the same messages).
+      { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', command: 'a', limits: { maxCalls: 1, renewals: 0 } }] },
+      { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', command: 'a', limits: { maxCalls: 1, renewals: 1.5 } }] },
+      { ...goodPolicy, v: 1, defaults: [{ shell: 'sh', command: 'a', limits: { maxCalls: 1, renewals: 1 } }] },
       // Typed entries (policy version 2): the same refusals, the same messages.
       { ...goodPolicy, v: 3 },
       { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', template: 'ls <n:int(5,1)>' }] },

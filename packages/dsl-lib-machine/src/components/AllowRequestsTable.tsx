@@ -4,6 +4,7 @@ import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEA
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
+import type { WaitingRenewal } from '@wadeck-app/machine-core';
 
 export interface PendingRequestRow {
   peerText: string;
@@ -22,6 +23,8 @@ export interface PendingRequestRow {
   note?: string;
   /** The notice carries only the first part of the command. */
   commandTruncated?: boolean;
+  /** The request waits for the renewal of an exhausted or expired entry: the Allow replaces that entry. */
+  renewal?: WaitingRenewal;
 }
 
 export interface AllowRequestsTableProps {

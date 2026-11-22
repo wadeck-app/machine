@@ -3,6 +3,8 @@
 // (hard rules 3 and 4); the peer service runs the same `authorize` as for a fresh request when the policy changes. No I/O, no clock: time is an
 // argument (epoch seconds).
 
+import type { WaitingRenewal } from './requests.js';
+
 /** Shortest and longest wait a caller may ask for (CLI limits). */
 export const MIN_WAIT_SECONDS = 10;
 export const MAX_WAIT_SECONDS = 3600;
@@ -105,6 +107,8 @@ export interface Hold {
   waitSeconds: number;
   requestedSeconds: number;
   capped: boolean;
+  /** The request waits for the renewal of an exhausted or expired entry: the same hold, the same limits, only the words differ. */
+  renewal?: WaitingRenewal;
 }
 
 export interface HoldLimits {
@@ -134,7 +138,7 @@ export class HoldTable {
     this.limits = typeof limits === 'function' ? limits : () => limits;
   }
 
-  admit(input: { id: string; peer: string; shell: string; command: string; now: number; requestedSeconds: number; capSeconds: number }): AdmitResult {
+  admit(input: { id: string; peer: string; shell: string; command: string; now: number; requestedSeconds: number; capSeconds: number; renewal?: WaitingRenewal }): AdmitResult {
     const limits = this.limits();
     const perPeer = limits.perPeer ?? DEFAULT_HELD_PER_PEER;
     const perMachine = limits.perMachine ?? DEFAULT_HELD_PER_MACHINE;
@@ -162,6 +166,7 @@ export class HoldTable {
       waitSeconds: wait.seconds,
       requestedSeconds: input.requestedSeconds,
       capped: wait.capped,
+      ...(input.renewal !== undefined ? { renewal: input.renewal } : {}),
     };
     this.holds.set(hold.id, hold);
     return { ok: true, hold };

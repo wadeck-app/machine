@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
+import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, renewalSummary, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
 import type { ProgressEvent } from '../lib/allowProgress.js';
-import { lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
+import { choiceFromLimits, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { LifetimePicker } from './LifetimePicker.js';
 import { MachineName } from './MachineName.js';
@@ -43,11 +43,22 @@ function warningText(machineName: string, peerText: string, words: string): Reac
   );
 }
 
+/** The sentence under the lifetime summary of a RENEWAL: nothing new is added, the entry that exists is replaced. */
+function renewalWarningText(machineName: string, entry: string, words: string): React.ReactNode {
+  return (
+    <>
+      This RENEWS the entry {JSON.stringify(entry)} on <MachineName name={machineName} />: it replaces the used up or expired one (its counter starts again), for EVERY trusted peer, {words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call' : words}. Only the admin passphrase can sign it.
+    </>
+  );
+}
+
 /** The confirmation of ONE row: loads the context (after the PIN), shows the exact change and its lifetime, asks the passphrase, signs in the page and posts. */
 export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone, onEvent }: AllowDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
-  const [choice, setChoice] = useState<LifetimeChoice>({ kind: defaultLifetime, customKind: 'duration', customText: '' });
+  const renewal = allowRenewalOf(row);
+  // A renewal starts from the limits the entry had (the owner can change them before signing); any other request from the default of its list.
+  const [choice, setChoice] = useState<LifetimeChoice>(row.renewal !== undefined ? choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) : { kind: defaultLifetime, customKind: 'duration', customText: '' });
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -55,7 +66,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
     (async () => {
       try {
         const context = await loadContext(api, machine.uuid);
-        const prepared = await prepareAllow(context, { shell: row.shell, command: row.command }, Math.floor(Date.now() / 1000));
+        const prepared = await prepareAllow(context, { shell: row.shell, command: row.command, ...(renewal !== undefined ? { renewal } : {}) }, Math.floor(Date.now() / 1000));
         if (!mounted.current) {
           return;
         }
@@ -79,7 +90,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
     return () => {
       mounted.current = false;
     };
-  }, [api, machine.uuid, machine.name, row.shell, row.command]);
+  }, [api, machine.uuid, machine.name, row.shell, row.command, row.renewal, row.peer]);
 
   const resolution = useMemo(() => lifetimeInput(choice), [choice]);
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -104,7 +115,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
     if (onEvent !== undefined) {
       onClose();
     }
-    signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: resolution.flags }, passphrase, Math.floor(Date.now() / 1000), () => onEvent?.({ type: 'signed' })).then(
+    signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: resolution.flags, ...(renewal !== undefined ? { renewal } : {}) }, passphrase, Math.floor(Date.now() / 1000), () => onEvent?.({ type: 'signed' })).then(
       result => {
         passphrase = '';
         // The owner learns the result even when the dialog was closed meanwhile: the progress goes on in its card.
@@ -136,7 +147,11 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
   }
   const { prepared, context, hint } = phase;
   const names = [machine.name];
+  // What a renewal replaces and with which limits: both are said before the passphrase (the old ones are those of the policy this page verified, else those the daemon reported).
+  const before = prepared.renewed[0]?.before.limits ?? (row.renewal === undefined ? undefined : { ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) });
+  const renewalLine = renewal !== undefined && resolution.ok ? renewalSummary(renewal.entry, before, resolution.limits(nowSeconds), nowSeconds) : undefined;
   const notes: React.ReactNode[] = [
+    ...(renewalLine !== undefined ? [<MachineText key="renews" text={renewalLine} names={names} />] : []),
     <MachineText key="version" text={`Policy version ${prepared.fromVersion} -> ${prepared.toVersion}. Every trusted peer may then run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`} names={names} />,
     ...(prepared.peersWithOwnList.length > 0 ? [<MachineText key="own" text={`Not affected (their own list): ${prepared.peersWithOwnList.join(', ')}.`} names={prepared.peersWithOwnList} />] : []),
     <MachineText
@@ -156,11 +171,12 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
         { label: 'Machine', value: <MachineName name={machine.name} /> },
         { label: 'Shell', value: row.shell },
         { label: 'Command', value: row.command },
+        ...(renewal !== undefined ? [{ label: 'Renews', value: <>{row.shell} {JSON.stringify(renewal.entry)}</> }] : []),
         { label: 'Asked by', value: <><MachineName name={row.peerText} /> ({row.countText})</> },
         { label: 'Lifetime', value: words ?? 'not valid yet: see the field below' },
       ]}
       notes={notes}
-      warning={warningText(machine.name, row.peerText, words ?? 'for the lifetime you enter')}
+      warning={renewal !== undefined ? renewalWarningText(machine.name, renewal.entry, words ?? 'for the lifetime you enter') : warningText(machine.name, row.peerText, words ?? 'for the lifetime you enter')}
       confirmLabel="Allow and sign"
       busy={phase.kind === 'signing'}
       error={error}

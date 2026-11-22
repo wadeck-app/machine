@@ -607,3 +607,43 @@ describe('the reachability badge of a request held on another machine', () => {
     expect(within(itemOf('hostname')).queryByTestId('reachable-badge')).toBeNull();
   });
 });
+
+describe('a held request that waits for the RENEWAL of an exhausted or expired entry', () => {
+  const RENEW_ROW: HeldRequestRow = {
+    id: 'cccc3333',
+    peerText: 'thinkcentre',
+    peer: PEER,
+    shell: 'sh',
+    command: 'orch stop',
+    secondsLeft: 300,
+    askedText: '5 s ago',
+    countText: 'waiting now',
+    nextCommand: 'machine admin allow desktop --renew --shell sh --times 3 -- "orch stop"',
+    nextWhere: '',
+    renewal: { reason: 'exhausted', entry: 'orch stop', typed: false, own: false, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' },
+  };
+
+  it('the card says it is a renewal, why, and which entry the Allow replaces', () => {
+    render(<HeldRequests rows={[RENEW_ROW]} allow={ALLOW} />);
+    const note = within(itemOf('orch stop')).getByTestId('renewal-note');
+    expect(note).toHaveTextContent('Renewal: entry used 3 of 3 call(s)');
+    expect(note).toHaveTextContent('replaces sh "orch stop"');
+  });
+
+  it('a plain held request has no renewal line', () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    expect(screen.queryByTestId('renewal-note')).toBeNull();
+  });
+
+  it('the Allow dialog names the entry it renews, says "renews" with the old and the new limits (default: the previous limits), and does not talk about widening by a new command', async () => {
+    const user = userEvent.setup();
+    render(<HeldRequests rows={[RENEW_ROW]} allow={ALLOW} />);
+    await user.click(allowBtn('orch stop'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByText('Renews')).toBeInTheDocument());
+    expect(dialog).toHaveTextContent('sh "orch stop"');
+    expect(dialog).toHaveTextContent('renews "orch stop": 3 calls -> 3 calls (the counter starts again)');
+    expect(dialog).toHaveTextContent('allowed 3 times');
+    expect(dialog).not.toHaveTextContent('This widens what peers may run');
+  });
+});

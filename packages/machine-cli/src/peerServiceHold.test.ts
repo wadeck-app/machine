@@ -62,11 +62,13 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
   // What the daemon keeps for the Requests page (notice-ends.json) and what it tells the notice recipients, in order.
   const ends: Array<{ id: string; outcome: string; failure?: { reason: string; message: string } }> = [];
   const notified: Array<{ id: string; outcome: string }> = [];
+  const helds: unknown[] = [];
   const table = over.holds ?? new HoldTable();
   let policy: PolicyBody | undefined;
   const setPolicy = (entries: PolicyEntry[]) => {
     const body: PolicyBody = {
-      v: 1,
+      // A renewal generation needs a version 2 body, as the real edit writes it.
+      v: entries.some((e) => e.limits?.renewals !== undefined) ? 2 : 1,
       target: B,
       version: (policy?.version ?? 0) + 1,
       baseVersion: policy?.version ?? 0,
@@ -104,7 +106,7 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
         runs.push(o);
         return okResult();
       }),
-    notifier: { held: () => undefined, refused: () => undefined, ended: (id, outcome) => void notified.push({ id, outcome }), whenIdle: async () => undefined, close: () => undefined },
+    notifier: { held: (n) => void helds.push(n), refused: () => undefined, ended: (id, outcome) => void notified.push({ id, outcome }), whenIdle: async () => undefined, close: () => undefined },
     onProblem: () => undefined,
     ...(over.noHolds ? {} : { holds: { table, pollMs: 3, onEnded: (id, outcome, failure) => void ends.push({ id, outcome, ...(failure !== undefined ? { failure } : {}) }),...(over.capSeconds !== undefined ? { capSeconds: over.capSeconds } : {}) } }),
   };
@@ -120,7 +122,7 @@ async function world(over: { holds?: HoldTable; capSeconds?: number; noHolds?: b
     session.send({ type: 'run', request: signRequest(body, a.privateKeyPkcs8), ...(waitSeconds !== undefined ? { waitSeconds } : {}) });
     return body.id;
   };
-  return { a, audit, runs, now, state, table, setPolicy, connect, send, usage, ends, notified };
+  return { a, audit, runs, now, state, table, setPolicy, connect, send, usage, ends, notified, helds };
 }
 
 const answerOf = async (session: PeerSession): Promise<PeerAnswer> => (await session.next()) as PeerAnswer;
@@ -290,15 +292,18 @@ describe('hold of a refused request', () => {
     expect(w.audit.events()).not.toContain('held');
   });
 
-  it('refuses as usual when the entry that matches after the wait is already expired (same authorize as a fresh request)', async () => {
+  it('keeps holding when a policy installed during the wait lists the command with an entry that is already expired (an Allow that is a renewal is still expected)', async () => {
     const w = await world();
     const s = await w.connect();
     w.send(s, 'echo later', 600);
     await until('the hold', () => w.table.list().length === 1);
     w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo later', limits: { expiresAt: w.now.value - 5 } }]);
-    expect(await answerOf(s)).toMatchObject({ type: 'refused', reason: 'expired' });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(w.table.list()).toHaveLength(1);
     expect(w.runs).toHaveLength(0);
-    expect(w.audit.entries.find((e) => e.event === 'hold-ended')).toMatchObject({ outcome: 'refused' });
+    w.setPolicy([{ shell: SHELL as 'cmd', command: 'echo later', limits: { expiresAt: w.now.value + 3600, renewals: 1 } }]);
+    expect(await answerOf(s)).toMatchObject({ type: 'result' });
+    expect(w.runs).toHaveLength(1);
   });
 
   it('refuses a held request beyond the limit of the peer at once, naming the limit and the requests that fill it', async () => {
@@ -479,5 +484,127 @@ describe('a held request that is allowed but cannot run', () => {
     expect(await answerOf(s)).toMatchObject({ type: 'result' });
     expect(w.ends).toEqual([{ id, outcome: 'allowed' }]);
     expect(w.notified).toEqual([{ id, outcome: 'allowed' }]);
+  });
+});
+
+// An entry that used up its calls, or expired, behaves like a command that is not allowed: the request is HELD and the Allow of the owner renews the entry.
+describe('hold of a request whose entry is exhausted or expired (renewal)', () => {
+  const entry = (limits: NonNullable<PolicyEntry['limits']>): PolicyEntry => ({ shell: SHELL as 'cmd', command: 'echo later', limits });
+
+  /** One call used up on a `--times 1` entry. */
+  async function exhaustedWorld() {
+    const w = await world();
+    w.setPolicy([entry({ maxCalls: 1 })]);
+    const first = await w.connect();
+    w.send(first, 'echo later');
+    expect(await answerOf(first)).toMatchObject({ type: 'result' });
+    return w;
+  }
+
+  it('holds an exhausted request (default wait on): same table, held audit line and notice, each saying it is a renewal of the entry', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    const renewal = { reason: 'exhausted', entry: 'echo later', typed: false, own: false, maxCalls: 1, used: 1, note: 'entry used 1 of 1 call(s)' };
+    expect(w.table.list()[0]).toMatchObject({ id, command: 'echo later', renewal });
+    expect(w.audit.entries.find((e) => e.event === 'held')).toMatchObject({ id, shell: SHELL, command: 'echo later', renewal });
+    expect(w.helds[0]).toMatchObject({ id, command: 'echo later', renewal });
+    expect(w.runs).toHaveLength(1);
+  });
+
+  it('the Allow that renews it (same limits, generation 1) releases the held run once, and its counter starts at 0', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([entry({ maxCalls: 1, renewals: 1 })]);
+    expect(await answerOf(s)).toMatchObject({ type: 'result' });
+    expect(w.runs).toHaveLength(2);
+    expect(w.audit.entries.filter((e) => e.event === 'hold-ended').pop()).toMatchObject({ outcome: 'allowed' });
+    // Two counters: the old entry (1 used) and the renewed one (1 used by the held run), never a shared one.
+    expect([...w.usage.counts.values()].sort()).toEqual([1, 1]);
+    // And it is a one-call entry again: the next fresh request without a wait is exhausted once more.
+    const t = await w.connect();
+    w.send(t, 'echo later');
+    expect(await answerOf(t)).toMatchObject({ type: 'refused', reason: 'exhausted' });
+  });
+
+  it('an unchanged policy (same entry, nothing renewed) leaves the request held: a new version of the list does not restart a counter', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([entry({ maxCalls: 1 }), { shell: SHELL as 'cmd', command: 'echo other' }]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(w.table.list()).toHaveLength(1);
+    expect(w.runs).toHaveLength(1);
+  });
+
+  it('holds an expired request, and a renewal with a later date releases it', async () => {
+    const w = await world();
+    w.setPolicy([entry({ expiresAt: w.now.value - 5 })]);
+    const s = await w.connect();
+    w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    expect(w.table.list()[0]?.renewal).toMatchObject({ reason: 'expired', entry: 'echo later', expiresAt: w.now.value - 5 });
+    expect(w.table.list()[0]?.renewal?.note).toMatch(/^expired at 20\d\d-/);
+    w.setPolicy([entry({ expiresAt: w.now.value + 3600, renewals: 1 })]);
+    expect(await answerOf(s)).toMatchObject({ type: 'result' });
+    expect(w.runs).toHaveLength(1);
+  });
+
+  it('--no-wait (no waitSeconds) still refuses at once and keeps saying exhausted, with the fix; nothing is held', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    w.send(s, 'echo later');
+    const answer = await answerOf(s);
+    expect(answer).toMatchObject({ type: 'refused', reason: 'exhausted' });
+    expect((answer as { message: string }).message).toMatch(/reached its limit of 1 call\(s\); ask the admin to renew it/);
+    expect(w.audit.events()).not.toContain('held');
+    expect((answer as { renewal?: unknown }).renewal).toBeUndefined();
+  });
+
+  it('the deadline refuses with the exhausted cause and the wait that was spent', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.now.value += 601;
+    const answer = await answerOf(s);
+    expect(answer).toMatchObject({ type: 'refused', reason: 'exhausted' });
+    expect((answer as { message: string }).message).toMatch(/renew it.*waited 10m, nobody answered/);
+    expect(w.audit.entries.filter((e) => e.event === 'hold-ended').pop()).toMatchObject({ outcome: 'deadline' });
+  });
+
+  it('a Deny answers denied at once, as for any held request', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    const id = w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.table.deny(id, 'not today');
+    expect(await answerOf(s)).toMatchObject({ type: 'refused', reason: 'denied' });
+    expect(w.runs).toHaveLength(1);
+  });
+
+  it('counts against the same hold limits as a command that is not listed', async () => {
+    const w = await world({ holds: new HoldTable({ perPeer: 1 }) });
+    w.setPolicy([entry({ expiresAt: w.now.value - 5 })]);
+    const s1 = await w.connect();
+    const s2 = await w.connect();
+    w.send(s1, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.send(s2, 'echo not-listed', 600);
+    expect(await answerOf(s2)).toMatchObject({ type: 'refused', reason: 'hold-limit-peer' });
+  });
+
+  it('a renewal is never a right by itself: without a signed entry that matches, nothing runs', async () => {
+    const w = await exhaustedWorld();
+    const s = await w.connect();
+    w.send(s, 'echo later', 600);
+    await until('the hold', () => w.table.list().length === 1);
+    w.setPolicy([entry({ maxCalls: 1 })]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(w.runs).toHaveLength(1);
   });
 });

@@ -55,6 +55,8 @@ export interface AllowOptions {
   command?: string;
   /** `allow`: --times, --for or --until (permanent when none). */
   lifetime?: LifetimeInput;
+  /** `allow --renew`: replace the entry even with the same limits; its counter starts again (hold-for-approval.md, "Renewal"). */
+  renew?: boolean;
   /** `remove`: the 1-based place in the list shown by `machine allowed`, instead of the command. */
   index?: number;
   /** Absent: the platform of this machine (said), for `allow`; every shell, for `remove`. */
@@ -100,7 +102,7 @@ export function runHint(configDir: string, name: string, uuid: string, shell: Sh
 export function unchangedMessage(edit: Extract<PolicyEdit, { changed: false }>, what: string, command: string | undefined, index: number | undefined, now: number, removeCommand: string): string {
   switch (edit.reason) {
     case 'already-allowed':
-      return `already allowed on ${what}: ${command === undefined ? '' : JSON.stringify(command)}. Nothing was signed\n`;
+      return `already allowed on ${what}: ${command === undefined ? '' : JSON.stringify(command)}, with these limits. Nothing was signed. An entry that is used up or expired is renewed with --renew (the counter starts again), or with other limits\n`;
     case 'not-allowed':
       return `${command === undefined ? 'this entry' : JSON.stringify(command)} is not allowed on ${what}: nothing to remove, nothing was signed. \`machine allowed\` lists the entries with their number\n`;
     case 'bad-index':
@@ -164,7 +166,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
   const edit = nextPolicyBody(
     current,
     { target: target.uuid, adminKeyId: pin.adminKeyId, now: o.now() },
-    entry !== undefined ? { kind: 'allow', entry } : { kind: 'remove', ...(o.index !== undefined ? { index: o.index } : { command }), ...(o.shell !== undefined ? { shell: o.shell } : {}) },
+    entry !== undefined ? { kind: 'allow', entry, ...(o.renew === true ? { renew: true } : {}) } : { kind: 'remove', ...(o.index !== undefined ? { index: o.index } : { command }), ...(o.shell !== undefined ? { shell: o.shell } : {}) },
   );
   if (!edit.changed) {
     o.say(unchangedMessage(edit, `"${target.name}"`, o.index !== undefined ? undefined : command, o.index, o.now(), `machine admin allow ${o.reference} --remove`));
@@ -197,7 +199,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     for (const warning of unsafeTypedWarnings(entry)) o.say(warning);
   }
   if (body.v === 2) {
-    o.say(`[info] this policy is version 2 (it holds typed entries): "${target.name}" must run a build that knows typed entries, otherwise it refuses it with "unsupported version 2": run \`machine cli update\` there first\n`);
+    o.say(`[info] this policy is version 2 (it holds typed entries or a renewed entry): "${target.name}" must run a build that knows them, otherwise it refuses it with "unsupported version 2": run \`machine cli update\` there first\n`);
   }
   if (!toSelf && current === undefined) {
     o.say(`[info] no policy signed here for "${target.name}" on record: this assumes it has none (the new policy is version 1, edited from 0). If it already has a policy signed from another machine, it refuses this one with "policy changed, reload": see its version with \`machine status\` there\n`);

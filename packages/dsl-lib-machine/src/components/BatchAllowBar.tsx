@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
+import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import { loadContexts, prepareBatch, readAdminKeyHint, signAndSubmitBatch, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
 import { groupSelection, selectionSummary } from '../lib/batchAllow.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
@@ -9,7 +10,7 @@ import { MachineName } from './MachineName.js';
 
 /** One selected request, with the machine it is signed for and how the progress hook names that machine. */
 export interface BatchItem<R> {
-  row: R & { id: string; shell: string; command: string };
+  row: R & { id: string; shell: string; command: string; peer?: string; renewal?: WaitingRenewal };
   machine: { uuid: string; name: string };
   /** `self` for this machine, else the uuid: what the hold polling asks the daemon about. */
   machineRef: string;
@@ -56,7 +57,7 @@ export function BatchAllowBar<R>({ items, api, onEvent, onDone, onClear }: Batch
     };
   }, []);
 
-  const groups = groupSelection(items.map((i) => ({ id: i.row.id, machine: i.machine, shell: i.row.shell, command: i.row.command })));
+  const groups = groupSelection(items.map((i) => ({ id: i.row.id, machine: i.machine, shell: i.row.shell, command: i.row.command, ...(i.row.renewal !== undefined ? { renewal: { entry: i.row.renewal.entry, typed: i.row.renewal.typed, own: i.row.renewal.own, ...(i.row.renewal.own && i.row.peer !== undefined ? { peer: i.row.peer } : {}) } } : {}) })));
   const entriesOf = (contexts: AllowContext[]) => groups.map((g, i) => ({ context: contexts[i] as AllowContext, entries: g.entries }));
 
   const open = async () => {

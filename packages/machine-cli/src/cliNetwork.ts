@@ -177,7 +177,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       return EXIT.ok;
     }
     if (sub === 'allow') {
-      const usage = 'usage: machine admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--out <file>] -- <command...> | machine admin allow <machine> --remove [--shell <shell>] (-- <command...> | --index <n>) | machine admin allow <machine> --list';
+      const usage = 'usage: machine admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] -- <command...> | machine admin allow <machine> --remove [--shell <shell>] (-- <command...> | --index <n>) | machine admin allow <machine> --list';
       if (first === undefined) return fail(usage, EXIT.usage);
       if (args.list && args.remove) return fail(`--list and --remove cannot be combined. ${usage}`, EXIT.usage);
       if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
@@ -208,6 +208,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           ...(mode !== 'list' && index === undefined ? { command: words.join(' ') } : {}),
           ...(index !== undefined ? { index } : {}),
           ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
+          ...(mode === 'allow' && args.renew ? { renew: true } : {}),
           ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
           ...(args.out !== undefined ? { out: args.out } : {}),
           prompt,

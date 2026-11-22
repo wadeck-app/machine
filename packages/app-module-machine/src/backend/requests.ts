@@ -1,4 +1,4 @@
-import { allowCommand, clockSkewProblem, describeHistory, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
+import { allowCommand, clockSkewProblem, describeHistory, parseWaitingRenewal, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRenewal, type WaitingRequest } from '@wadeck-app/machine-core';
 import { ageText } from './candidacies.js';
 
 // The Requests page (decision 73): what the peers asked THIS machine to run and what became of it. The data is the answer of the daemon
@@ -48,6 +48,8 @@ export interface NoticeRow {
   secondsLeft: number | null;
   /** Epoch seconds, this machine's clock. */
   receivedAt: number;
+  /** The request waits for the renewal of an exhausted or expired entry (the Allow replaces that entry). */
+  renewal?: WaitingRenewal;
 }
 
 export interface PendingRow {
@@ -77,6 +79,8 @@ export interface WaitingRow {
   countText: string;
   nextCommand: string;
   nextWhere: string;
+  /** Present when the request waits for the renewal of an exhausted or expired entry: the Allow replaces that entry (hold-for-approval.md, "Renewal"). */
+  renewal?: WaitingRenewal;
 }
 
 export interface HistoryRow {
@@ -161,6 +165,7 @@ function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'adm
     countText: 'waiting now',
     nextCommand: allowCommand(w, machine),
     nextWhere: nextWhere(machine),
+    ...(w.renewal !== undefined ? { renewal: w.renewal } : {}),
   };
 }
 
@@ -190,9 +195,14 @@ function noticeRow(n: unknown, now: number): NoticeRow | undefined {
   if (state === 'held' && typeof deadline !== 'number') {
     return undefined;
   }
+  // A renewal that is there must be a valid one: another shape means another version, said by the count of notices not shown (never shown as a plain request).
+  const renewal = n['renewal' as never] === undefined ? undefined : parseWaitingRenewal(n['renewal' as never]);
+  if (n['renewal' as never] !== undefined && renewal === undefined) {
+    return undefined;
+  }
   // The hold length is deadline - ts (both the target's clock); the time since it arrived is on this clock: no clock of the target is compared with this one.
   const secondsLeft = state === 'held' ? Math.max(0, (deadline as number) - ts - Math.max(0, now - receivedAt)) : null;
-  return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt };
+  return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt, ...(renewal !== undefined ? { renewal } : {}) };
 }
 
 function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRow[]; noticesError: string } {

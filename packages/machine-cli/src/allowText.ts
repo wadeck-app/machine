@@ -67,9 +67,13 @@ export function typedSummary(entry: PolicyEntry, now: number): string[] {
   ];
 }
 
-/** "limits updated" for an entry that existed with other limits. */
+/** "limits updated" for an entry that existed with other limits; "renews" for the Allow of a renewal (`--renew`, the generation went up: the counter starts again). */
 export function renewalLines(renewed: Array<{ before: PolicyEntry; after: PolicyEntry }>, now: number): string[] {
-  return renewed.map(({ before, after }) => `  ~ limits updated: ${JSON.stringify(entryText(after))} (${describeLimits(before.limits, now)} -> ${describeLimits(after.limits, now)})`);
+  return renewed.map(({ before, after }) =>
+    after.limits?.renewals !== undefined
+      ? `  ~ renews ${JSON.stringify(entryText(after))}: ${describeLimits(before.limits, now)} -> ${describeLimits(after.limits, now)} (the counter starts again)`
+      : `  ~ limits updated: ${JSON.stringify(entryText(after))} (${describeLimits(before.limits, now)} -> ${describeLimits(after.limits, now)})`,
+  );
 }
 
 /** The default entries with limits that a new per-peer list did not copy: the peer loses them. */

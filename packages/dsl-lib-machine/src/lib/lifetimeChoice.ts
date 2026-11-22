@@ -116,3 +116,17 @@ export function lifetimeWords(limits: LifetimeLimits | undefined, now: number): 
   const seconds = at - now;
   return `until ${seconds >= 86400 ? `${day(at)} ` : ''}${clock(at)} (in ${inText(seconds)})`;
 }
+
+/**
+ * The choice a renewal starts from: the limits the entry had (hold-for-approval.md, "Renewal"). One call: once; n calls: n custom calls; a date only: 1 hour
+ * (the original duration is not stored, only its end); no limits: permanent. The owner can change it before signing.
+ */
+export function choiceFromLimits(limits: { maxCalls?: number; expiresAt?: number } | undefined): LifetimeChoice {
+  if (limits?.maxCalls !== undefined) {
+    return limits.maxCalls === 1 ? { kind: 'once', customKind: 'calls', customText: '' } : { kind: 'custom', customKind: 'calls', customText: String(limits.maxCalls) };
+  }
+  if (limits?.expiresAt !== undefined) {
+    return { kind: '1h', customKind: 'duration', customText: '' };
+  }
+  return { kind: 'permanent', customKind: 'duration', customText: '' };
+}

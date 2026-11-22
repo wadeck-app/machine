@@ -48,6 +48,7 @@ export {
   entryText,
   hasTypedEntry,
   isTyped,
+  renewalNote,
   POLICY_MAX_VERSION,
   signPolicy,
   UPDATE_HINT,
@@ -62,6 +63,7 @@ export {
   type PolicyReadOptions,
   type PolicyResult,
   type PolicyState,
+  type Renewal,
   type Shell,
   type SignedPolicy,
   type TypedEntry,
@@ -98,6 +100,7 @@ export {
   MAX_LIMIT,
   allowCommand,
   describeHistory,
+  parseWaitingRenewal,
   printable,
   shellQuote,
   summarizeRequests,
@@ -108,6 +111,7 @@ export {
   type RequestsChain,
   type RequestsSummary,
   type SummarizeOptions,
+  type WaitingRenewal,
   type WaitingRequest,
 } from './requests.js';
 export { MAX_NOTES, REQUESTS_WIDTH, layoutHistory, layoutRequests, type HistoryLayoutInput, type RequestsLayoutInput } from './requestsLayout.js';

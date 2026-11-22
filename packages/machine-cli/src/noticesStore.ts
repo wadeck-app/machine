@@ -31,6 +31,7 @@ function canonical(n: StoredNotice): StoredNotice {
     state: n.state,
     deadline: n.deadline,
     ts: n.ts,
+    ...(n.renewal !== undefined ? { renewal: n.renewal } : {}),
   };
 }
 

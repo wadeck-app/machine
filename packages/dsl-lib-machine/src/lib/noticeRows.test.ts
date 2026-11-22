@@ -115,3 +115,23 @@ describe('mergeNotices', () => {
     ]);
   });
 });
+
+describe('mergeNotices: a notice that waits for a renewal', () => {
+  const renewal = { reason: 'exhausted' as const, entry: 'orch stop', typed: false, own: false, maxCalls: 1, used: 1, note: 'entry used 1 of 1 call(s)' };
+
+  it('the held row carries the renewal and its exact command replaces the entry (--renew, the entry text, the old limit)', () => {
+    const { held } = merge([notice({ command: 'orch stop', renewal })]);
+    expect(held[0]?.renewal).toEqual(renewal);
+    expect(held[0]?.nextCommand).toBe('machine admin allow laptop --renew --shell sh --times 1 -- "orch stop"');
+  });
+
+  it('a typed entry is renewed by its template', () => {
+    const typed = { ...renewal, entry: 'orch logs <j:name>', typed: true, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' };
+    const { held } = merge([notice({ command: 'orch logs abc', renewal: typed })]);
+    expect(held[0]?.nextCommand).toBe('machine admin allow laptop --renew --shell sh --times 3 -- "orch logs <j:name>"');
+  });
+
+  it('a notice without a renewal has none', () => {
+    expect(merge([notice()]).held[0]).not.toHaveProperty('renewal');
+  });
+});

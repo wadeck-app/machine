@@ -65,7 +65,7 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
     }
 
     // sub === 'allow'
-    const usage = 'usage: machine policy allow [--shell cmd|ps|bash|sh] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] -- <command> | machine policy allow --remove [--shell <shell>] [--peer <machine>] (-- <command> | --index <n>) | machine policy allow --list';
+    const usage = 'usage: machine policy allow [--shell cmd|ps|bash|sh] [--peer <machine>] [--times <n> | --for <duration> | --until <date>] [--renew] -- <command> | machine policy allow --remove [--shell <shell>] [--peer <machine>] (-- <command> | --index <n>) | machine policy allow --list';
     if (args.list && args.remove) return fail(`--list and --remove cannot be combined. ${usage}`, EXIT.usage);
     if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.usage);
     const words = args.passthrough.length > 0 ? args.passthrough : rest.slice(1);
@@ -92,6 +92,7 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
       ...(mode !== 'list' && index === undefined ? { command: words.join(' ') } : {}),
       ...(index !== undefined ? { index } : {}),
       ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
+      ...(mode === 'allow' && args.renew ? { renew: true } : {}),
       ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
       ...(args.peer !== undefined ? { peer: args.peer } : {}),
       defaultShell: process.platform === 'win32' ? 'cmd' : 'sh',

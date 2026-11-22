@@ -268,3 +268,35 @@ describe('machine allowed', () => {
     expect(view.out).toMatch(/#1 "orch logs <job:name> --tail <n:int\(1,500\)>" {2}\[typed\] {2}\(5 calls\)/);
   });
 });
+
+describe('--renew: the Allow of an entry that is used up or expired (hold-for-approval.md, "Renewal")', () => {
+  it('without --renew the same limits sign nothing, and the message names --renew for an entry that is used up', async () => {
+    await twoMachines();
+    expect((await allow(['--times', '1'], 'uptime', 'p1.json')).code).toBe(0);
+    const again = await allow(['--times', '1'], 'uptime', 'p2.json', forbidden('a question'));
+    expect(again.out).toMatch(/already allowed/);
+    expect(again.out).toMatch(/--renew/);
+  });
+
+  it('--renew with the same limits REPLACES the entry (one entry only), says "renews", and signs a version 2 policy whose generation restarts the counter', async () => {
+    await twoMachines();
+    expect((await allow(['--times', '1'], 'uptime', 'p1.json')).code).toBe(0);
+    const renewed = await allow(['--renew', '--times', '1'], 'uptime', 'p2.json');
+    expect(renewed.code, renewed.err).toBe(0);
+    expect(renewed.out).toMatch(/renews "uptime": 1 call -> 1 call \(the counter starts again\)/);
+    const { body } = read(join(root, 'p2.json'));
+    expect(body.v).toBe(2);
+    expect(body.defaults).toEqual([{ shell: 'sh', command: 'uptime', limits: { maxCalls: 1, renewals: 1 } }]);
+    // The generation goes up at each renewal.
+    const third = await allow(['--renew', '--times', '1'], 'uptime', 'p3.json');
+    expect(third.code, third.err).toBe(0);
+    expect(read(join(root, 'p3.json')).body.defaults).toEqual([{ shell: 'sh', command: 'uptime', limits: { maxCalls: 1, renewals: 2 } }]);
+  });
+
+  it('--renew only goes with an allow: it is refused with --list and --remove', async () => {
+    await twoMachines();
+    expect((await cli(a, ['admin', 'allow', 'laptop', '--list', '--renew'])).err).toMatch(/--renew .*cannot be combined with --list or --remove/);
+    expect((await cli(a, ['admin', 'allow', 'laptop', '--remove', '--renew', '--', 'x'])).err).toMatch(/--renew .*cannot be combined with --list or --remove/);
+    expect((await cli(a, ['status', '--renew'])).err).toMatch(/--renew only applies to `machine admin allow` and `machine policy allow`/);
+  });
+});

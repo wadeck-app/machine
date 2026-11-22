@@ -1,5 +1,6 @@
 import { SHELLS, commandTextProblem, type Shell } from './policy.js';
 import { isUuid } from './reference.js';
+import { parseWaitingRenewal, type WaitingRenewal } from './requests.js';
 
 // Request notices (request-notices.md, decisions 83 and 84): a target tells a notice recipient that it HOLDS a request, or refused one, so the
 // admin page can show it without a passphrase. Information only: a notice grants nothing and runs nothing. Everything here is untrusted input
@@ -31,6 +32,8 @@ export interface RequestNotice {
   deadline: number | null;
   /** Epoch seconds of the target clock. */
   ts: number;
+  /** Only when the request waits for the renewal of an exhausted or expired entry: which entry, and why. Absent otherwise (older receivers keep reading plain notices). */
+  renewal?: WaitingRenewal;
 }
 
 export interface RequestNoticeEnd {
@@ -51,9 +54,10 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 const isEpoch = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const FIELDS = ['type', 'id', 'peer', 'peerName', 'shell', 'command', 'commandTruncated', 'state', 'deadline', 'ts'];
+const OPTIONAL_FIELDS = ['renewal'];
 const END_FIELDS = ['type', 'id', 'outcome', 'ts'];
 
-export function buildRequestNotice(input: { id: string; peer: string; peerName: string; shell: Shell; command: string; state: NoticeState; deadline: number | null; now: number }): RequestNotice {
+export function buildRequestNotice(input: { id: string; peer: string; peerName: string; shell: Shell; command: string; state: NoticeState; deadline: number | null; now: number; renewal?: WaitingRenewal }): RequestNotice {
   const truncated = input.command.length > MAX_NOTICE_COMMAND;
   return {
     type: 'request-notice',
@@ -66,6 +70,7 @@ export function buildRequestNotice(input: { id: string; peer: string; peerName: 
     state: input.state,
     deadline: input.deadline,
     ts: input.now,
+    ...(input.renewal !== undefined ? { renewal: input.renewal } : {}),
   };
 }
 
@@ -73,9 +78,9 @@ export function buildRequestNoticeEnd(input: { id: string; outcome: NoticeOutcom
   return { type: 'request-notice-end', id: input.id, outcome: input.outcome, ts: input.now };
 }
 
-function keysProblem(o: Record<string, unknown>, allowed: string[], what: string): string | undefined {
+function keysProblem(o: Record<string, unknown>, allowed: string[], what: string, optional: string[] = []): string | undefined {
   for (const key of Object.keys(o)) {
-    if (!allowed.includes(key)) {
+    if (!allowed.includes(key) && !optional.includes(key)) {
       return `${what}: unknown field "${key}"`;
     }
   }
@@ -103,7 +108,7 @@ export function parseRequestNotice(message: unknown): { ok: true; notice: Reques
   if (size > MAX_NOTICE_FRAME_BYTES) {
     return fail(`request-notice: ${size} bytes, the limit is ${MAX_NOTICE_FRAME_BYTES}`);
   }
-  const problem = keysProblem(message, FIELDS, 'request-notice');
+  const problem = keysProblem(message, FIELDS, 'request-notice', OPTIONAL_FIELDS);
   if (problem !== undefined) {
     return fail(problem);
   }
@@ -140,6 +145,9 @@ export function parseRequestNotice(message: unknown): { ok: true; notice: Reques
   }
   if (!isEpoch(message.ts)) {
     return fail('request-notice: ts must be epoch seconds');
+  }
+  if ('renewal' in message && parseWaitingRenewal(message.renewal) === undefined) {
+    return fail('request-notice: renewal is not a valid renewal (reason expired or exhausted, the entry text, typed, own, optional maxCalls, expiresAt and used, a note)');
   }
   return { ok: true, notice: message as unknown as RequestNotice };
 }

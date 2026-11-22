@@ -291,3 +291,37 @@ describe('requestsPage (held requests, `machine run --wait`)', () => {
     expect(() => requestsPage(answer, NOW)).toThrow(/machine cli update/);
   });
 });
+
+describe('requestsPage: the renewal of a held request (exhausted or expired entry)', () => {
+  const renewal = { reason: 'exhausted', entry: 'orch stop', typed: false, own: false, maxCalls: 1, used: 1, note: 'entry used 1 of 1 call(s)' };
+  const heldRenew = (extra: Record<string, Json> = {}): Record<string, Json> => ({ ts: iso(-20), event: 'held', source: PEER, id: 'h1', shell: 'sh', command: 'orch stop', deadline: NOW + 100, renewal, ...extra });
+
+  it('a waiting row carries the renewal and its allow command replaces the entry (--renew)', () => {
+    const page = requestsPage(daemonAnswer(lines([heldRenew()])), NOW);
+    expect(page.waiting[0]?.renewal).toEqual(renewal);
+    expect(page.waiting[0]?.nextCommand).toBe('machine admin allow target --renew --shell sh --times 1 -- "orch stop"');
+  });
+
+  it('a plain held request has no renewal key', () => {
+    const page = requestsPage(daemonAnswer(lines([{ ts: iso(-20), event: 'held', source: PEER, id: 'h2', shell: 'sh', command: 'ls', deadline: NOW + 100 }])), NOW);
+    expect(page.waiting[0]).not.toHaveProperty('renewal');
+  });
+
+  const REPORTER = '33333333-3333-4333-8333-333333333333';
+  const stored = (over: Record<string, unknown> = {}) => ({ machine: REPORTER, machineName: 'laptop', receivedAt: NOW - 20, id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, peerName: 'thinkcentre', shell: 'sh', command: 'orch stop', commandTruncated: false, state: 'held', deadline: NOW + 580, ts: NOW - 30, ...over });
+
+  it('a notice row carries a valid renewal', () => {
+    expect(requestsPage(daemonAnswer([], { notices: [stored({ renewal })] }), NOW).notices[0]?.renewal).toEqual(renewal);
+  });
+
+  it('a notice with a malformed renewal is not shown and is counted (loud, not silently plain)', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [stored({ renewal: { reason: 'weird' } })] }), NOW);
+    expect(page.notices).toEqual([]);
+    expect(page.noticesError).toMatch(/1 request notice.*not shown/);
+  });
+
+  it('a remote waiting row (requests-list answer) carries the renewal too', () => {
+    const answer = { type: 'requests-list' as const, id: 'x', machine: { uuid: SELF, name: 'laptop' }, policyMode: 'admin' as const, now: NOW, chain: { ok: true as const }, pendingTotal: 0, allowedNow: 0, truncated: false, waiting: [{ id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, shell: 'sh', command: 'orch stop', since: NOW - 5, deadline: NOW + 100, renewal }], pending: [] };
+    expect(remoteRequestsPage(answer as never, NOW).waiting[0]?.renewal).toEqual(renewal);
+  });
+});

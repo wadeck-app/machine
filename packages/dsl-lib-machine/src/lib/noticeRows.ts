@@ -1,3 +1,4 @@
+import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { PendingRequestRow } from '../components/AllowRequestsTable.js';
 import type { HeldRequestRow } from '../components/HeldRequests.js';
 
@@ -20,6 +21,8 @@ export interface NoticeData {
   secondsLeft: number | null;
   /** Epoch seconds, this machine's clock. */
   receivedAt: number;
+  /** The request waits for the renewal of an exhausted or expired entry on that machine. */
+  renewal?: WaitingRenewal;
 }
 
 export interface RefusedSection {
@@ -41,7 +44,16 @@ export function noticeNote(machineName: string, receivedAtSeconds: number): stri
 
 const TRUNCATED_NEXT = 'The command is truncated: Allow is not offered for it. Use Load the other machines to see the whole command.';
 const quote = (command: string): string => (/^[A-Za-z0-9_./:=@%+,-]+$/.test(command) ? command : `"${command.replace(/(["\\$`])/g, '\\$1')}"`);
-const nextFor = (n: NoticeData): string => (n.commandTruncated ? TRUNCATED_NEXT : `machine admin allow ${n.machineName} --shell ${n.shell} -- ${quote(n.command)}`);
+// A renewal replaces the entry (its text, --renew) with the limits it had; an expired entry cannot give its duration back, the owner writes it.
+const limitsFlag = (r: WaitingRenewal): string => (r.reason === 'exhausted' && r.maxCalls !== undefined ? ` --times ${r.maxCalls}` : ' --for <duration>');
+const nextFor = (n: NoticeData): string => {
+  if (n.commandTruncated) {
+    return TRUNCATED_NEXT;
+  }
+  return n.renewal === undefined
+    ? `machine admin allow ${n.machineName} --shell ${n.shell} -- ${quote(n.command)}`
+    : `machine admin allow ${n.machineName} --renew --shell ${n.shell}${limitsFlag(n.renewal)} -- ${quote(n.renewal.entry)}`;
+};
 
 /**
  * The notices to show. Dropped: those about this machine (its own rows are live), those of a machine the page has loaded live (the live view wins:
@@ -80,6 +92,7 @@ export function mergeNotices(input: { notices: NoticeData[]; selfUuid: string | 
         canAllow,
         note,
         commandTruncated: n.commandTruncated,
+        ...(n.renewal !== undefined ? { renewal: n.renewal } : {}),
       });
       continue;
     }

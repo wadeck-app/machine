@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
+import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowStyle } from '../lib/allowStyle.js';
@@ -36,6 +37,8 @@ export interface HeldRequestRow {
   note?: string;
   /** The notice carries only the first part of the command. */
   commandTruncated?: boolean;
+  /** The request waits for the renewal of an exhausted or expired entry (hold-for-approval.md, "Renewal"): the Allow replaces that entry. */
+  renewal?: WaitingRenewal;
 }
 
 export interface HeldRequestsProps {
@@ -237,6 +240,11 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
               {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
               <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
               {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED}`}>Truncated: only the first part of the command was reported.</div>}
+              {r.renewal !== undefined && (
+                <div data-testid="renewal-note" className={`text-xs ${TEXT_MUTED}`}>
+                  Renewal: {r.renewal.note}. Allowing it replaces {r.shell} {JSON.stringify(r.renewal.entry)} (its counter starts again), it does not add a command.
+                </div>
+              )}
               {r.note !== undefined && (
                 <div data-testid="notice-note" className={`text-xs ${TEXT_MUTED}`}>
                   {r.note}

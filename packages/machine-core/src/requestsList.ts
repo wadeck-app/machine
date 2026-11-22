@@ -3,7 +3,7 @@ import { signingInput } from './canonical.js';
 import { decodeBase64urlStrict, verifyBytes } from './keys.js';
 import type { PolicyMode } from './policy.js';
 import { isUuid } from './reference.js';
-import { DEFAULT_PENDING_LIMIT, printable, type PendingGroup, type WaitingRequest } from './requests.js';
+import { DEFAULT_PENDING_LIMIT, parseWaitingRenewal, printable, type PendingGroup, type WaitingRequest } from './requests.js';
 import { signDocument } from './signed.js';
 
 // The `requests-list` frame pair (decision 74): the ADMIN asks a peer for the requests that peer refused because the command is not
@@ -183,6 +183,11 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
     if (typeof w['shell'] !== 'string' || typeof w['command'] !== 'string' || !isInt(w['since']) || !isInt(w['deadline'])) {
       return bad('a held request');
     }
+    // A renewal that is there must be a valid one: a peer that sends another shape runs an incompatible version, said loudly (never dropped).
+    const renewal = w['renewal'] === undefined ? undefined : parseWaitingRenewal(w['renewal']);
+    if (w['renewal'] !== undefined && renewal === undefined) {
+      return bad('the renewal of a held request');
+    }
     waiting.push({
       id: w['id'],
       peer: w['peer'],
@@ -191,6 +196,7 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
       command: printable(w['command']),
       since: w['since'],
       deadline: w['deadline'],
+      ...(renewal !== undefined ? { renewal } : {}),
     });
   }
   const serial = a['noticeRecipientsSerial'];

@@ -174,11 +174,21 @@ function assertEntries(list: unknown, where: string, version: number): void {
       const limits = entry.limits as Record<string, unknown>;
       if (typeof limits !== 'object' || limits === null) throw new Error(`policy: limits of an entry of ${where} must be an object`);
       for (const key of Object.keys(limits)) {
-        if (key !== 'maxCalls' && key !== 'expiresAt') throw new Error(`policy: unknown limit "${key}"`);
+        if (key !== 'maxCalls' && key !== 'expiresAt' && key !== 'renewals') {
+          throw new Error(`policy: unknown limit "${key}"`);
+        }
         if (limits[key] === undefined) throw new Error(`policy: limits.${key} must be omitted, not undefined`);
       }
       if (limits.maxCalls !== undefined && !posInt(limits.maxCalls)) throw new Error('policy: limits.maxCalls must be a positive integer');
       if (limits.expiresAt !== undefined && !posInt(limits.expiresAt)) throw new Error('policy: limits.expiresAt must be epoch seconds (a positive integer)');
+      if (limits.renewals !== undefined) {
+        if (!posInt(limits.renewals)) {
+          throw new Error('policy: limits.renewals must be a positive integer');
+        }
+        if (version < 2) {
+          throw new Error(`policy: limits.renewals need version 2 (an entry of ${where} was renewed but the body is version ${version}): ${UPDATE_HINT}`);
+        }
+      }
     }
     if (seen.has(canonical)) {
       throw new Error(`policy: duplicate entry in ${where}: ${entry.shell as string} "${shown}" (labels and the order of enum members do not make an entry different)`);

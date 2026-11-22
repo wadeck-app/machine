@@ -117,7 +117,7 @@ Facts and decisions:
 - The counter file `usage.json` is persisted at each call and survives restarts; a corrupt file stops the daemon; deleting it resets every counter.
 - The counter key is the entry text and limits, scope `default` or the peer uuid. The `default` scope is shared by ALL peers; a typed entry counts per entry, not per value.
 - Seeding a per-peer list from the defaults (`policyEdit.ts:51`) copies ONLY the permanent entries (no `limits`). Entries with `maxCalls` or `expiresAt` are not copied, and the command says which ones were left out and that the peer loses them (user decision 2026-11-21). No counter is ever carried to another scope.
-- Renewal: signing an entry that already exists with other limits replaces its limits (`policyEdit.ts:49` returns `already-allowed` today) and says "limits updated". `--remove` takes the index or key shown by `machine allowed`; when several entries share a text it refuses and lists them.
+- Renewal: signing an entry that already exists with other limits replaces its limits and says "limits updated"; with the same limits it is `already-allowed`, unless `--renew` (or the Allow of a held renewal, hold-for-approval.md "Renewal") replaces it and bumps `limits.renewals`, which is part of the counter key, so the counter starts again. `--remove` takes the index or key shown by `machine allowed`; when several entries share a text it refuses and lists them.
 - `expiresAt` uses the admin clock at signing and the target clock at check (`now > expiresAt`, no skew allowance); a running command is not stopped at expiry; a policy applied late still counts from signing.
 
 ## Front-ends

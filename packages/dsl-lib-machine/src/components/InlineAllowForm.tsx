@@ -24,6 +24,8 @@ export interface InlineAllowFormProps {
   hint?: string | null | undefined;
   /** The lifetime preselected (a held request runs once). */
   defaultKind?: LifetimeChoice['kind'];
+  /** The whole choice preselected (a renewal starts from the limits the entry had); wins over `defaultKind`. */
+  defaultChoice?: LifetimeChoice;
   /** True while the signature is made: the controls are disabled. */
   busy?: boolean;
   /** The last failure with the way to proceed; the form keeps working. */
@@ -35,8 +37,8 @@ export interface InlineAllowFormProps {
   cancelLabel?: string;
 }
 
-export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', busy = false, error = null, onSubmit, onCancel, cancelLabel = 'Cancel' }: InlineAllowFormProps) {
-  const [choice, setChoice] = useState<LifetimeChoice>({ kind: defaultKind, customKind: 'duration', customText: '' });
+export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', defaultChoice, busy = false, error = null, onSubmit, onCancel, cancelLabel = 'Cancel' }: InlineAllowFormProps) {
+  const [choice, setChoice] = useState<LifetimeChoice>(defaultChoice ?? { kind: defaultKind, customKind: 'duration', customText: '' });
   const [localError, setLocalError] = useState<string | null>(null);
   const passphrase = useRef<HTMLInputElement>(null);
   const { unlocked } = useAdminKey();
