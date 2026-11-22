@@ -326,6 +326,27 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   });
 });
 
+describe('Safer mode (confirm risky lifetimes), kept in this browser', () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('is OFF by default, sits next to the Allow style switch, and writes nothing until chosen', () => {
+    render(<RequestsOverview {...props()} />);
+    expect(screen.getByRole('switch', { name: 'Safer mode: confirm risky lifetimes' })).toHaveAttribute('aria-checked', 'false');
+    expect(window.localStorage.getItem('machine:requests:saferMode')).toBeNull();
+  });
+
+  it('turning it on is stored and remembered by the next page', async () => {
+    const { unmount } = render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('switch', { name: 'Safer mode: confirm risky lifetimes' }));
+    expect(window.localStorage.getItem('machine:requests:saferMode')).toBe('on');
+    unmount();
+    render(<RequestsOverview {...props()} />);
+    expect(screen.getByRole('switch', { name: 'Safer mode: confirm risky lifetimes' })).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
 describe('the Allow style (Dialog | Inline), kept in this browser', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -385,6 +406,10 @@ describe('the Allow style (Dialog | Inline), kept in this browser', () => {
       throw new Error('denied');
     });
     render(<RequestsOverview {...props()} />);
-    expect(screen.getByRole('alert')).toHaveTextContent(/cannot be read \(denied\)/);
+    // The Safer mode switch reports the same unreadable storage on its own line.
+    const alerts = screen.getAllByRole('alert').map((a) => a.textContent ?? '');
+    expect(alerts).toHaveLength(2);
+    expect(alerts.some((t) => /Allow style is inline/.test(t))).toBe(true);
+    expect(alerts.every((t) => /cannot be read \(denied\)/.test(t))).toBe(true);
   });
 });

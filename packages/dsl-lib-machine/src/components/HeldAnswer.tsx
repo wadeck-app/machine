@@ -12,7 +12,7 @@ import { InlineAllow } from './InlineAllow.js';
 import { useAdminKey } from './useAdminKey.js';
 
 // The answer of a held card: ONE row (lifetime select, Allow, Deny). With the admin key unlocked in the page Allow signs at once with the lifetime of the
-// select; a FLAGGED lifetime (permanent, 50 calls or more, more than 7 days, or a caller ask of that size) needs a second click; with the key locked Allow
+// select, flagged lifetime or not (the badges only inform); in Safer mode (off by default) a FLAGGED lifetime (permanent, 50 calls or more, more than 7 days, or a caller ask of that size) needs a second click; with the key locked Allow
 // expands the compact passphrase form of the card (Enter signs), or opens the dialog in dialog style.
 
 export interface HeldAnswerProps {
@@ -21,6 +21,8 @@ export interface HeldAnswerProps {
   canAllow: boolean;
   /** `inline`: the form of a locked key opens in the card. Else the confirmation dialog (`onOpenDialog`) opens, and the select shows only while the key is unlocked. */
   inline: boolean;
+  /** Safer mode (default off): a flagged lifetime needs a second click ("Confirm allow") when the key is unlocked. */
+  saferMode?: boolean;
   api: AllowApi;
   choice: LifetimeChoice;
   onChoice: (choice: LifetimeChoice) => void;
@@ -32,7 +34,7 @@ export interface HeldAnswerProps {
 
 type Phase = 'idle' | 'confirm' | 'sign';
 
-export function HeldAnswer({ row, machine, canAllow, inline, api, choice, onChoice, onEvent, onDone, onOpenDialog, onDeny }: HeldAnswerProps) {
+export function HeldAnswer({ row, machine, canAllow, inline, saferMode = false, api, choice, onChoice, onEvent, onDone, onOpenDialog, onDeny }: HeldAnswerProps) {
   const { unlocked } = useAdminKey();
   const [phase, setPhase] = useState<Phase>('idle');
   // `auto`: the click found the key unlocked, so the policy is signed as soon as it is checked.
@@ -52,8 +54,8 @@ export function HeldAnswer({ row, machine, canAllow, inline, api, choice, onChoi
       onOpenDialog();
       return;
     }
-    // The safety exception: a flagged lifetime is never signed by one click of an unlocked key. A locked key asks for the passphrase, which is the explicit step.
-    if (unlocked && flags.length > 0 && phase !== 'confirm') {
+    // Safer mode only (off by default, user decision 2026-11-22): a flagged lifetime is not signed by one click of an unlocked key. A locked key asks for the passphrase, which is the explicit step.
+    if (saferMode && unlocked && flags.length > 0 && phase !== 'confirm') {
       setPhase('confirm');
       return;
     }
@@ -87,7 +89,7 @@ export function HeldAnswer({ row, machine, canAllow, inline, api, choice, onChoi
               <ButtonAction label="Cancel" variant="secondary" size="sm" onClick={() => setPhase('idle')} />
             </>
           ) : (
-            <span title={flags.length > 0 ? `Flagged: ${flags.join('; ')}. With the admin key unlocked, Allow asks for a second click before it signs.` : undefined}>
+            <span title={saferMode && flags.length > 0 ? `Flagged: ${flags.join('; ')}. With the admin key unlocked, Allow asks for a second click before it signs.` : undefined}>
               <ButtonAction label="Allow" variant="primary" size="sm" onClick={go} />
             </span>
           )

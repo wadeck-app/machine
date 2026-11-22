@@ -87,7 +87,7 @@ const posts = () => calls.filter((c) => c.url === 'POST /api/modules/machine/all
 const keyReads = () => calls.filter((c) => c.url === 'GET /api/modules/machine/admin-key').length;
 const posted = async (count: number) => waitFor(() => expect(posts()).toHaveLength(count), { timeout: 20_000 });
 const select = async (command: string, index = 0) => userEvent.click(screen.getAllByRole('checkbox', { name: `Select ${command}` })[index] as HTMLElement);
-const render_ = (rows: HeldRequestRow[], onRefresh?: (s?: string) => Promise<void>) => render(<HeldRequests rows={rows} allow={ALLOW} allowStyle="inline" {...(onRefresh !== undefined ? { onRefresh } : {})} />);
+const render_ = (rows: HeldRequestRow[], onRefresh?: (s?: string) => Promise<void>, saferMode = false) => render(<HeldRequests rows={rows} allow={ALLOW} allowStyle="inline" saferMode={saferMode} {...(onRefresh !== undefined ? { onRefresh } : {})} />);
 /** The passphrase never rests anywhere the page keeps data: not in the storage, not in an attribute or text of the DOM, not in anything that was sent. */
 const expectNoPassphrase = () => {
   expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
@@ -385,7 +385,7 @@ describe('dialog style is unchanged', () => {
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------
 // ONE-CLICK Allow (user feedback 2026-11-22): with the admin key unlocked in the page, Allow on a card signs at once with the lifetime of the select next to
-// it; a flagged lifetime needs a second click; locked, Allow expands a compact passphrase field and Enter signs.
+// it; a flagged lifetime signs in one click too unless Safer mode is on; locked, Allow expands a compact passphrase field and Enter signs.
 
 const unlock = async () => {
   adminKeyHolder.hold(await unlockAdminKey(keyFile, PASSPHRASE, { extractable: false }));
@@ -480,14 +480,46 @@ describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
   });
 });
 
-describe('a FLAGGED lifetime never signs in one click (the safety exception)', () => {
-  it.each([
+describe('a FLAGGED lifetime signs in ONE click by default (user decision 2026-11-22); Safer mode restores the second click', () => {
+  const FLAGGED = [
     ['a permanent ask', { for: 'permanent' } as const, /permanent \(no limit\)/, undefined],
     ['a large ask (50 calls)', { times: 50 } as const, /a large number of calls \(50\)/, { maxCalls: 50 }],
     ['a long ask (8d)', { for: '8d' } as const, /a long duration \(8d\)/, 'expires'],
-  ])('%s: the badge is there BEFORE the click, the first click signs nothing and asks to confirm, the second signs', async (_name, askOf, badge, limits) => {
+  ] as const;
+  const expectSigned = (limits: unknown) => {
+    const signed = posts()[0]?.policy.body.defaults[0]?.limits;
+    if (limits === 'expires') {
+      expect((signed as { expiresAt?: number }).expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000) + 7 * 86400);
+    } else {
+      expect(signed).toEqual(limits);
+    }
+  };
+
+  it.each(FLAGGED)('DEFAULT, %s: the badge is shown as information and ONE click on Allow signs, no Confirm allow', async (_name, askOf, badge, limits) => {
     await unlock();
     render_([asked({ ask: askOf })]);
+    const item = itemOf('orch deploy');
+    expect(within(item).getByTestId('caller-ask-warning')).toHaveTextContent(badge);
+    expect(within(item).getByRole('button', { name: 'Allow' }).closest('[title]')).toBeNull();
+    await userEvent.click(allowBtn('orch deploy'));
+    expect(within(item).queryByRole('button', { name: 'Confirm allow' })).toBeNull();
+    await posted(1);
+    expectSigned(limits);
+  }, 120_000);
+
+  it('DEFAULT: Permanent picked in the select signs in one click too', async () => {
+    await unlock();
+    render_([LS]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
+    await userEvent.click(allowBtn('ls'));
+    expect(within(itemOf('ls')).queryByRole('button', { name: 'Confirm allow' })).toBeNull();
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults[0]?.limits).toBeUndefined();
+  }, 120_000);
+
+  it.each(FLAGGED)('SAFER MODE, %s: the first click signs nothing and asks to confirm, the second signs', async (_name, askOf, badge, limits) => {
+    await unlock();
+    render_([asked({ ask: askOf })], undefined, true);
     const item = itemOf('orch deploy');
     expect(within(item).getByTestId('caller-ask-warning')).toHaveTextContent(badge);
     // The design-system button has no title: the tooltip is on the wrapper of the button.
@@ -498,17 +530,19 @@ describe('a FLAGGED lifetime never signs in one click (the safety exception)', (
     expect(within(item).getByTestId('flagged-line')).toHaveTextContent(/second click/);
     await userEvent.click(confirm);
     await posted(1);
-    const signed = posts()[0]?.policy.body.defaults[0]?.limits;
-    if (limits === 'expires') {
-      expect((signed as { expiresAt?: number }).expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000) + 7 * 86400);
-    } else {
-      expect(signed).toEqual(limits);
-    }
+    expectSigned(limits);
   }, 120_000);
 
-  it('picking Permanent in the select flags it too, and Cancel after the first click goes back with nothing signed', async () => {
+  it('SAFER MODE: an unflagged lifetime still signs in one click', async () => {
     await unlock();
-    render_([LS]);
+    render_([LS], undefined, true);
+    await userEvent.click(allowBtn('ls'));
+    await posted(1);
+  }, 120_000);
+
+  it('SAFER MODE: Permanent in the select is flagged, and Cancel after the first click goes back with nothing signed', async () => {
+    await unlock();
+    render_([LS], undefined, true);
     await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
     await userEvent.click(allowBtn('ls'));
     expect(await within(itemOf('ls')).findByRole('button', { name: 'Confirm allow' })).toBeInTheDocument();
@@ -524,12 +558,22 @@ describe('a FLAGGED lifetime never signs in one click (the safety exception)', (
     expect(lifetimeSelect('df -h')).toHaveValue('once');
   });
 
-  it('LOCKED: the expanded passphrase form is itself the explicit step (no Confirm button), and nothing is posted before Enter', async () => {
-    render_([asked({ ask: { for: 'permanent' } })]);
+  it('LOCKED, safer mode on or off: the expanded passphrase form is itself the explicit step (no Confirm button), and nothing is posted before Enter', async () => {
+    render_([asked({ ask: { for: 'permanent' } })], undefined, true);
     await userEvent.click(allowBtn('orch deploy'));
     expect(await screen.findByLabelText('Admin passphrase')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirm allow' })).toBeNull();
     expect(posts()).toEqual([]);
+  });
+});
+
+describe('the batch bar is unaffected by Safer mode', () => {
+  it.each([false, true])('saferMode=%s: a ticked card shows the batch bar with its own button and never a Confirm allow', async (safer) => {
+    await unlock();
+    render_([asked({ ask: { for: 'permanent' } }), DF], undefined, safer);
+    await select('df -h');
+    expect(within(screen.getByRole('region', { name: 'Allow selected requests' })).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm allow' })).toBeNull();
   });
 });
 

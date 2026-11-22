@@ -10,7 +10,9 @@ import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
+import { SaferModeSwitch } from './SaferModeSwitch.js';
 import { useAllowStyle } from './useAllowStyle.js';
+import { useSaferMode } from './useSaferMode.js';
 
 type Capability = { available: boolean; machine: { uuid: string; name: string }; note: string };
 
@@ -58,6 +60,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  */
 export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
   const allowStyle = useAllowStyle();
+  const saferMode = useSaferMode();
   const [filter, setFilter] = useState(ALL);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -153,7 +156,8 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
           <ButtonAction label={loaded === null ? 'Load the other machines' : 'Reload the other machines'} variant="secondary" onClick={() => void start()} />
         )}
         {allow?.available === true && (
-          <div className="ml-auto">
+          <div className="ml-auto flex flex-wrap items-end gap-x-6 gap-y-2">
+            <SaferModeSwitch value={saferMode.on} onChange={saferMode.choose} problem={saferMode.problem} />
             <AllowStyleSwitch value={allowStyle.style} onChange={allowStyle.choose} problem={allowStyle.problem} />
           </div>
         )}
@@ -177,7 +181,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
         </div>
       ))}
 
-      <HeldRequests rows={rows} allow={allow} reachability={reachability} allowStyle={allowStyle.style} {...(onRefresh !== undefined ? { onRefresh } : {})} />
+      <HeldRequests rows={rows} allow={allow} reachability={reachability} allowStyle={allowStyle.style} saferMode={saferMode.on} {...(onRefresh !== undefined ? { onRefresh } : {})} />
       {rows.length === 0 && <div className={TEXT_MUTED_SM}>No held request{filter === ALL ? '' : ' for this machine'} ({counts}).</div>}
 
       {showSelf && (

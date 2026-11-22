@@ -68,6 +68,8 @@ export interface HeldRequestsProps {
    * with one passphrase (one policy per machine). The Requests page passes the person's choice (AllowStyleSwitch).
    */
   allowStyle?: AllowStyle;
+  /** Safer mode (default off): with the admin key unlocked, a flagged lifetime (permanent, 50 calls or more, over 7 days) needs a second click. The Requests page passes the person's choice. */
+  saferMode?: boolean;
 }
 
 const NO_ROWS: HeldRequestRow[] = [];
@@ -90,7 +92,7 @@ function leftText(seconds: number): string {
  * @registryCategory composite
  * @registryTags requests allow deny hold policy admin
  */
-export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, allowStyle = 'dialog' }: HeldRequestsProps) {
+export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, allowStyle = 'dialog', saferMode = false }: HeldRequestsProps) {
   const inline = allowStyle === 'inline';
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
   // Inline style: the cards ticked for one batch.
@@ -285,6 +287,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                   machine={machineOf(r)}
                   canAllow={rowCanAllow}
                   inline={inline}
+                  saferMode={saferMode}
                   api={api.current}
                   choice={choiceOf(r)}
                   onChoice={(c) => choose(r, c)}

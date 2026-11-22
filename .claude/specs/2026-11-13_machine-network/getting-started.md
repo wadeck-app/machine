@@ -188,7 +188,7 @@ machine status                                shows "policy mode"; machine list 
 
 ## Not retyping the passphrase in the browser (decision 92)
 
-On the Requests page the admin passphrase is typed once: the unlocked key is then kept in the memory of the page and the next Allow signs with ONE click (the dialog still shows machine, shell, exact command and lifetime; there is no passphrase field).
+On the Requests page the admin passphrase is typed once: the unlocked key is then kept in the memory of the page and the next Allow signs with ONE click, whatever the lifetime; the optional switch "Safer mode: confirm risky lifetimes" (off by default) asks a second click ("Confirm allow") for a permanent, 50-calls-or-more or over-7-days lifetime. In dialog style the dialog still shows machine, shell, exact command and lifetime; there is no passphrase field.
 
 - A green bar shows `Admin key unlocked, locks in 4:32` and `Lock now`. Every signature restarts the countdown.
 - `Keep unlocked for` sits next to the passphrase field: 1, 5 (default), 15, 30 min, or `Ask every time` (keeps nothing, the passphrase is asked for each signature).
