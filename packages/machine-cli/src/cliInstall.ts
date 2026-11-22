@@ -1,4 +1,4 @@
-import { IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, INSTALLABLES, InstallError, findInstallable, parseIdleMinutes, type Installable } from '@wadeck-app/machine-core';
+import { IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, INSTALLABLES, InstallError, findInstallable, parseIdleMinutes, parseIdleRdpMinutes, type Installable } from '@wadeck-app/machine-core';
 import { EXIT, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
@@ -10,7 +10,7 @@ import { promptLine } from './prompt.js';
 // `machine install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes]`: thin front-end over installFlow.ts, installStatus.ts and the registry of machine-core.
 // LOCAL ONLY: no daemon command, peer frame or app-module route exists for it (hard rule 7: the daemon is never elevated).
 
-const USAGE = 'machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--json]';
+const USAGE = 'machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--rdp-minutes <n>] [--json]';
 
 /** The flags of `install` used where they do not belong, or in a combination that means nothing. Undefined when the command line is fine. */
 export function installFlagProblem(command: string, rest: string[], args: Parsed): string | undefined {
@@ -23,6 +23,22 @@ export function installFlagProblem(command: string, rest: string[], args: Parsed
     }
     try {
       parseIdleMinutes(args.minutes);
+    } catch (e) {
+      if (!(e instanceof InstallError)) {
+        throw e;
+      }
+      return (e as Error).message;
+    }
+  }
+  if (args.rdpMinutes !== undefined) {
+    if (command !== 'install' || rest[0] !== 'idle-suspend') {
+      return `--rdp-minutes only applies to \`machine install idle-suspend\` (the input idle time from which an open RDP connection no longer keeps the box awake, ${IDLE_MIN_MINUTES} to ${IDLE_MAX_MINUTES}): \`machine install idle-suspend --rdp-minutes 20\``;
+    }
+    if (args.check || args.remove) {
+      return `--rdp-minutes sets what is installed: it goes with the install, --refresh or --dry-run of \`machine install idle-suspend\`, not with ${args.check ? '--check' : '--remove'}`;
+    }
+    try {
+      parseIdleRdpMinutes(args.rdpMinutes);
     } catch (e) {
       if (!(e instanceof InstallError)) {
         throw e;
@@ -77,7 +93,7 @@ export async function runInstallCommand(ctx: CommandContext): Promise<number> {
   const { args, rest, io, emit, fail, configDir } = ctx;
   // What the plans take from the command line: the configuration folder (idle-suspend reads its audit log) and --minutes (checked by installFlagProblem).
   // A test double may name another configuration folder; --minutes always comes from the command line.
-  const context = { configDir: io.install?.context?.configDir ?? configDir, ...(args.minutes === undefined ? {} : { minutes: parseIdleMinutes(args.minutes) }) };
+  const context = { configDir: io.install?.context?.configDir ?? configDir, ...(args.minutes === undefined ? {} : { minutes: parseIdleMinutes(args.minutes) }), ...(args.rdpMinutes === undefined ? {} : { rdpMinutes: parseIdleRdpMinutes(args.rdpMinutes) }) };
   const env: InstallEnv = { ...realInstallEnv(), ...io.install, context };
   // `machine install` and `machine install status` are the same read-only list, with the state of every item on this machine.
   if (rest.length === 0 || rest[0] === 'status') {

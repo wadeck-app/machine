@@ -5,6 +5,7 @@ import {
   classifyInstalled,
   deriveInstallState,
   idleSuspendInstalledMinutes,
+  idleSuspendInstalledRdpMinutes,
   findInstallable,
   stateLabel,
   stateNextSteps,
@@ -73,14 +74,18 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
   // xprintidle, runuser and stat only serve the RDP input check: absent, the plan keeps the default path and says so (read-only, never installed here).
   const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }), ...(xprintidle === undefined ? {} : { xprintidle }), ...(runuser === undefined ? {} : { runuser }), ...(stat === undefined ? {} : { stat }) };
   // Without --minutes the script keeps the minutes it was installed with (so that a status does not call it outdated).
+  // The same for --rdp-minutes (decision 103); a script of an older version has none (the default applies).
   let installedMinutes: number | undefined;
-  if (env.context?.minutes === undefined) {
+  let installedRdpMinutes: number | undefined;
+  if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined) {
     try {
       const text = env.fs.readText(IDLE_SUSPEND_SCRIPT_PATH);
       installedMinutes = text === undefined ? undefined : idleSuspendInstalledMinutes(text);
+      installedRdpMinutes = text === undefined ? undefined : idleSuspendInstalledRdpMinutes(text);
     } catch {
       // Unreadable: the status of the item reports it, with its cause.
       installedMinutes = undefined;
+      installedRdpMinutes = undefined;
     }
   }
   return {
@@ -89,6 +94,8 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
     ...(env.context === undefined ? {} : { configDir: env.context.configDir }),
     ...(env.context?.minutes === undefined ? {} : { minutes: env.context.minutes }),
     ...(installedMinutes === undefined ? {} : { installedMinutes }),
+    ...(env.context?.rdpMinutes === undefined ? {} : { rdpMinutes: env.context.rdpMinutes }),
+    ...(installedRdpMinutes === undefined ? {} : { installedRdpMinutes }),
   };
 }
 

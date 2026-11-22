@@ -39,6 +39,8 @@ const M = 60;
 interface World {
   now?: number;
   minutes?: number;
+  /** Decision 103: the input idle time from which an established RDP connection no longer counts (default 20). */
+  rdpMinutes?: number;
   keepRun?: string | 'unreadable';
   keepUser?: string | 'unreadable';
   ss?: string[] | 'fail';
@@ -57,6 +59,7 @@ interface World {
 const DEFAULT_WORLD: Required<World> = {
   now: NOW,
   minutes: 30,
+  rdpMinutes: 20,
   keepRun: 'absent',
   keepUser: 'absent',
   ss: [],
@@ -68,8 +71,8 @@ const DEFAULT_WORLD: Required<World> = {
     'xfce4-power-manager 1000 alice 55 xfce4-power-manager handle-power-key:handle-suspend-key:handle-lid-switch Xfce handles these events block',
   ],
   state: `${NOW - 12 * M} ${NOW - 120}`,
-  // The xrdp display :10 of alice, 10 minutes since the last input (600000 ms).
-  displays: [{ n: '10', owner: 'alice', out: '600000' }],
+  // The xrdp display :10 of alice, 2 hours since the last input (7200000 ms): a quiet box.
+  displays: [{ n: '10', owner: 'alice', out: '7200000' }],
   passwd: 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000:Alice:/home/alice:/bin/bash\nbob:x:1001:1001:Bob:/home/bob:/bin/sh\n',
   xprintidle: 'present',
   runuser: 'present',
@@ -82,8 +85,8 @@ const DEFAULT_FACTS: IdleFacts = {
   load5Hundredths: 8,
   inhibitors: 0,
   state: { since: NOW - 12 * M, last: NOW - 120 },
-  // What the default world's display says (600000 ms); only read by the rows with an established RDP connection.
-  rdpInputIdleSeconds: 600,
+  // What the default world's display says (7200000 ms).
+  inputIdleSeconds: 7200,
 };
 
 interface Row {
@@ -93,6 +96,11 @@ interface Row {
 }
 
 const rdp = '0      0      192.168.1.10:3389   192.168.1.99:52311';
+const onRdp = { rdp: 1, ssh: 0, peer: 0 };
+/** A display of the fake box: the milliseconds xprintidle prints ('FAIL': it exits 1), its number and its owner. */
+const disp = (out: { toString: () => string }, n = '10', owner = 'alice'): { n: string; owner: string; out: string } => ({ n, owner, out: String(out) });
+/** The xrdp display :10 with an input 10 minutes ago. */
+const RECENT = [disp(600000)];
 const ssh6 = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.9]:40000';
 const peer = '0      0      192.168.1.10:4242   192.168.1.50:50001';
 const audit = (...e: Entry[]): string => auditLines([started(6 * H), ...e]);
@@ -114,7 +122,7 @@ const ROWS: Row[] = [
   { name: 'state file: since after last', world: { state: `${NOW - 10} ${NOW - 3600}` }, facts: { state: null } },
   { name: 'minutes 5: suspends at 5', world: { minutes: 5, state: `${NOW - 5 * M} ${NOW - 120}` }, facts: { state: { since: NOW - 5 * M, last: NOW - 120 } } },
   { name: 'minutes 5: 4 of 5', world: { minutes: 5, state: `${NOW - 4 * M} ${NOW - 120}` }, facts: { state: { since: NOW - 4 * M, last: NOW - 120 } } },
-  { name: 'minutes 1440: 1439 of 1440 with a quiet log', world: { minutes: 1440, state: `${NOW - 1439 * M} ${NOW - 120}`, audit: audit(accepted(3 * 86400)) }, facts: { state: { since: NOW - 1439 * M, last: NOW - 120 }, audit: { lastActivityEpoch: NOW - 3 * 86400, openHolds: 0 } } },
+  { name: 'minutes 1440: 1439 of 1440 with a quiet log', world: { minutes: 1440, displays: [disp(90000000)], state: `${NOW - 1439 * M} ${NOW - 120}`, audit: audit(accepted(3 * 86400)) }, facts: { inputIdleSeconds: 90000, state: { since: NOW - 1439 * M, last: NOW - 120 }, audit: { lastActivityEpoch: NOW - 3 * 86400, openHolds: 0 } } },
 
   // ---- keep-awake files
   { name: 'keep-awake run file, empty', world: { keepRun: '' }, facts: { keepAwake: [{ present: true, untilEpoch: null }, { present: false }] } },
@@ -129,48 +137,76 @@ const ROWS: Row[] = [
   { name: 'keep-awake path is unreadable', world: { keepUser: 'unreadable' }, facts: { keepAwake: null } },
 
   // ---- connections
-  { name: 'established RDP', world: { ss: [rdp] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 } } },
+  { name: 'established RDP, recent input', world: { ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
   { name: 'established ssh over IPv6-mapped address', world: { ss: [ssh6] }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 } } },
   { name: 'established machine peer connection', world: { ss: [peer] }, facts: { connections: { rdp: 0, ssh: 0, peer: 1 } } },
   { name: 'peer port file absent: a connection to that port is not counted', world: { ss: [peer], portFile: 'absent' }, facts: { connections: { rdp: 0, ssh: 0, peer: 0 } } },
   { name: 'peer port file with garbage', world: { portFile: '{not json' }, facts: { connections: null } },
   { name: 'peer port file unreadable', world: { portFile: 'unreadable' }, facts: { connections: null } },
   { name: 'ss fails', world: { ss: 'fail' }, facts: { connections: null } },
-  { name: 'ss prints the state column', world: { ss: ['ESTAB  0      0      192.168.1.10:3389   192.168.1.99:52311'] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 } } },
+  { name: 'ss prints the state column', world: { ss: ['ESTAB  0      0      192.168.1.10:3389   192.168.1.99:52311'], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
   { name: 'outgoing ssh and RDP from this box are not counted', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22', '0      0      192.168.1.10:51001   192.168.1.78:3389', '0      0      192.168.1.10:2222   192.168.1.78:40000'] } },
-  { name: 'RDP and ssh together: rdp named first', world: { ss: [ssh6, rdp, peer] }, facts: { connections: { rdp: 1, ssh: 1, peer: 1 } } },
+  { name: 'RDP and ssh together: rdp named first', world: { ss: [ssh6, rdp, peer], displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 1 }, inputIdleSeconds: 600 } },
   { name: 'two ssh connections', world: { ss: [ssh6, ssh6] }, facts: { connections: { rdp: 0, ssh: 2, peer: 0 } } },
 
-  // ---- decision 102: an RDP connection is activity only while the X input of the session is recent
-  { name: 'rdp, input 10 min ago (default display): activity, the minutes are shown', world: { ss: [rdp] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 600 } },
-  { name: 'rdp, input 0 s ago', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '999' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 0 } },
-  { name: 'rdp, input 29 min 59 s ago (N*60-1): still activity', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '1799999' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 1799 } },
-  { name: 'rdp, input exactly 30 min ago (N*60): no longer activity, the timer runs and says why', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '1800000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 1800 } },
-  { name: 'rdp, input 6 h ago, timer at 47 min: suspends and says the input idle time', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '21600000' }], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 21600, state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'rdp, input idle, no state file: restart line with the note', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '3600000' }], state: 'absent' }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 3600, state: 'absent' } },
-  { name: 'rdp, input idle, the box slept (gap): restart line with the note', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '3600000' }], state: `${NOW - 3 * H} ${NOW - 301}` }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 301 } } },
-  { name: 'minutes 5: input 4 min 59 s ago is activity', world: { minutes: 5, ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '299999' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 299 } },
-  { name: 'minutes 5: input 5 min ago is not, and the timer (12 min) suspends', world: { minutes: 5, ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '300000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 300 } },
-  { name: 'two displays: the MINIMUM counts (the recent one is second)', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '7200000' }, { n: '11', owner: 'bob', out: '120000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 120 } },
-  { name: 'two displays: the MINIMUM counts (the recent one is first)', world: { ss: [rdp], displays: [{ n: '0', owner: 'alice', out: '60000' }, { n: '10', owner: 'bob', out: '7200000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 60 } },
-  { name: 'two displays, both idle for hours: the RDP connection does not count', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '7200000' }, { n: '11', owner: 'bob', out: '3600000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 3600 } },
-  { name: 'rdp, xprintidle is not installed', world: { ss: [rdp], xprintidle: 'absent' }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 'missing' } },
-  { name: 'rdp, runuser is not installed', world: { ss: [rdp], runuser: 'absent' }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'runuser is not installed (/usr/sbin/runuser)' } } },
-  { name: 'rdp, no X display at all', world: { ss: [rdp], displays: [] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'no X display in /tmp/.X11-unix' } } },
-  { name: 'rdp, xprintidle fails on the display', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: 'FAIL' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'xprintidle failed on :10 as alice' } } },
-  { name: 'rdp, xprintidle prints text', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: 'Cannot open display' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
-  { name: 'rdp, xprintidle prints nothing', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
-  { name: 'rdp, xprintidle prints a negative number', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '-5' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
-  { name: 'rdp, one display reads and the other fails: fail closed', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '7200000' }, { n: '11', owner: 'bob', out: 'FAIL' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'xprintidle failed on :11 as bob' } } },
-  { name: 'rdp, the owner of the display cannot be read', world: { ss: [rdp], displays: [{ n: '10', owner: 'fail', out: '7200000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'cannot read the owner of :10' } } },
-  { name: 'rdp, the owner is not a plain user name (UNKNOWN, spaces, quote)', world: { ss: [rdp], displays: [{ n: '10', owner: "Bad User'x", out: '7200000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'the owner of :10 is not a plain user name' } } },
-  { name: 'rdp, the owner has no home folder in /etc/passwd', world: { ss: [rdp], displays: [{ n: '10', owner: 'carol', out: '7200000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'no usable home folder for carol in /etc/passwd' } } },
-  { name: 'rdp, the home folder of the owner is not a safe path', world: { ss: [rdp], passwd: 'alice:x:1000:1000::/home/al ice:/bin/sh\n' }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: { unreadable: 'no usable home folder for alice in /etc/passwd' } } },
-  { name: 'rdp with a recent input AND ssh: rdp is named first', world: { ss: [ssh6, rdp] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, rdpInputIdleSeconds: 600 } },
-  { name: 'rdp idle for hours AND ssh: ssh still counts unconditionally', world: { ss: [rdp, ssh6], displays: [{ n: '10', owner: 'alice', out: '21600000' }] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, rdpInputIdleSeconds: 21600 } },
-  { name: 'rdp idle for hours AND a peer connection: the peer still counts', world: { ss: [rdp, peer], displays: [{ n: '10', owner: 'alice', out: '21600000' }] }, facts: { connections: { rdp: 1, ssh: 0, peer: 1 }, rdpInputIdleSeconds: 21600 } },
-  { name: 'rdp idle for hours but a high load: the load is the reason, no note', world: { ss: [rdp], displays: [{ n: '10', owner: 'alice', out: '21600000' }], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, rdpInputIdleSeconds: 21600, load5Hundredths: 500 } },
-  { name: 'no RDP connection: xprintidle is not even looked for', world: { xprintidle: 'absent', runuser: 'absent', displays: [] } },
+  // ---- decision 103, RDP connected: the input idle time is the clock (R = 20 min), no timer on top
+  { name: 'rdp, input 10 min ago: activity, the minutes and the threshold are shown', world: { ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
+  { name: 'rdp, input 0 s ago', world: { ss: [rdp], displays: [disp(999)] }, facts: { connections: onRdp, inputIdleSeconds: 0 } },
+  { name: 'rdp, input 19 min 59 s ago (R*60-1): still activity', world: { ss: [rdp], displays: [disp(1199999)] }, facts: { connections: onRdp, inputIdleSeconds: 1199 } },
+  { name: 'rdp, input exactly 20 min ago (R*60): suspends at the next check, the state is fresh, no 30-minute timer', world: { ss: [rdp], displays: [disp(1200000)], state: `${NOW - 120} ${NOW - 120}` }, facts: { connections: onRdp, inputIdleSeconds: 1200, state: { since: NOW - 120, last: NOW - 120 } } },
+  { name: 'rdp, input 25 min ago (more than R, less than N = 30): suspends', world: { ss: [rdp], displays: [disp(1500000)] }, facts: { connections: onRdp, inputIdleSeconds: 1500 } },
+  { name: 'rdp, input 6 h ago, a 12-minute-old state: suspends (the timer minutes do not matter)', world: { ss: [rdp], displays: [disp(21600000)] }, facts: { connections: onRdp, inputIdleSeconds: 21600 } },
+  { name: 'rdp, input idle, no state file (first pass or a wake): confirms at the next check, does not suspend', world: { ss: [rdp], displays: [disp(3600000)], state: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: 'absent' } },
+  { name: 'rdp, input idle, the box slept (gap 301 s): confirms again', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 301}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 301 } } },
+  { name: 'rdp, input idle, last check exactly 300 s ago: same run, suspends', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 300}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 300 } } },
+  { name: 'rdp, input idle, state file with garbage: confirms again, says why', world: { ss: [rdp], displays: [disp(3600000)], state: 'abc def\n' }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: null } },
+  { name: 'rdp, input idle, clock went back: confirms again, says why', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW + 10} ${NOW + 10}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW + 10, last: NOW + 10 } } },
+  { name: 'rdp-minutes 5: input 4 min 59 s ago is activity', world: { rdpMinutes: 5, ss: [rdp], displays: [disp(299999)] }, facts: { connections: onRdp, inputIdleSeconds: 299 } },
+  { name: 'rdp-minutes 5: input exactly 5 min ago suspends', world: { rdpMinutes: 5, ss: [rdp], displays: [disp(300000)] }, facts: { connections: onRdp, inputIdleSeconds: 300 } },
+  { name: 'minutes 5 does not shorten the RDP wait (R = 20): input 10 min ago is activity', world: { minutes: 5, ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
+  { name: 'two displays: the MINIMUM counts (the recent one is second)', world: { ss: [rdp], displays: [disp(7200000), disp(120000, '11', 'bob')] }, facts: { connections: onRdp, inputIdleSeconds: 120 } },
+  { name: 'two displays: the MINIMUM counts (the recent one is first)', world: { ss: [rdp], displays: [disp(60000, '0'), disp(7200000, '10', 'bob')] }, facts: { connections: onRdp, inputIdleSeconds: 60 } },
+  { name: 'two displays, both idle for hours: the RDP connection does not count', world: { ss: [rdp], displays: [disp(7200000), disp(3600000, '11', 'bob')] }, facts: { connections: onRdp, inputIdleSeconds: 3600 } },
+  { name: 'rdp, xprintidle is not installed: activity', world: { ss: [rdp], xprintidle: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: 'missing' } },
+  { name: 'rdp, runuser is not installed: activity', world: { ss: [rdp], runuser: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'runuser is not installed (/usr/sbin/runuser)' } } },
+  { name: 'rdp, no X display at all: activity', world: { ss: [rdp], displays: [] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'no X display in /tmp/.X11-unix' } } },
+  { name: 'rdp, xprintidle fails on the display: activity', world: { ss: [rdp], displays: [disp('FAIL')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'xprintidle failed on :10 as alice' } } },
+  { name: 'rdp, xprintidle prints text: activity', world: { ss: [rdp], displays: [disp('Cannot open display')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
+  { name: 'rdp, xprintidle prints nothing: activity', world: { ss: [rdp], displays: [disp('')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
+  { name: 'rdp, xprintidle prints a negative number: activity', world: { ss: [rdp], displays: [disp(-5)] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
+  { name: 'rdp, one display reads and the other fails: fail closed', world: { ss: [rdp], displays: [disp(7200000), disp('FAIL', '11', 'bob')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'xprintidle failed on :11 as bob' } } },
+  { name: 'rdp, the owner of the display cannot be read: activity', world: { ss: [rdp], displays: [disp(7200000, '10', 'fail')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'cannot read the owner of :10' } } },
+  { name: 'rdp, the owner is not a plain user name: activity', world: { ss: [rdp], displays: [disp(7200000, '10', "Bad User'x")] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'the owner of :10 is not a plain user name' } } },
+  { name: 'rdp, the owner has no home folder in /etc/passwd: activity', world: { ss: [rdp], displays: [disp(7200000, '10', 'carol')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'no usable home folder for carol in /etc/passwd' } } },
+  { name: 'rdp, the home folder of the owner is not a safe path: activity', world: { ss: [rdp], displays: RECENT, passwd: 'alice:x:1000:1000::/home/al ice:/bin/sh\n' }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'no usable home folder for alice in /etc/passwd' } } },
+  { name: 'rdp idle for hours AND ssh: ssh still counts unconditionally', world: { ss: [rdp, ssh6], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600 } },
+  { name: 'rdp idle for hours AND a peer connection: the peer still counts', world: { ss: [rdp, peer], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 0, peer: 1 }, inputIdleSeconds: 21600 } },
+  { name: 'rdp idle for hours but a high load: the load is the reason', world: { ss: [rdp], displays: [disp(21600000)], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: onRdp, inputIdleSeconds: 21600, load5Hundredths: 500 } },
+  { name: 'rdp idle for hours but a request 10 min ago: the request is the reason', world: { ss: [rdp], displays: [disp(21600000)], audit: audit(accepted(10 * M)) }, facts: { connections: onRdp, inputIdleSeconds: 21600, audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
+  { name: 'rdp idle for hours but a sleep inhibitor in block mode', world: { ss: [rdp], displays: [disp(21600000)], inhibit: ['Steam 1000 alice 9 steam sleep Playing block'] }, facts: { connections: onRdp, inputIdleSeconds: 21600, inhibitors: 1 } },
+  { name: 'rdp idle for hours but keep-awake: the keep-awake file wins', world: { ss: [rdp], displays: [disp(21600000)], keepRun: '' }, facts: { connections: onRdp, inputIdleSeconds: 21600, keepAwake: [{ present: true, untilEpoch: null }, { present: false }] } },
+
+  // ---- decision 103, NO RDP connection: the input must be idle for N min when it can be read, then the N-minute timer
+  { name: 'no rdp, input 29 min 59 s ago (N*60-1): not idle', world: { displays: [disp(1799999)] }, facts: { inputIdleSeconds: 1799 } },
+  { name: 'no rdp, input 0 s ago: not idle', world: { displays: [disp(500)] }, facts: { inputIdleSeconds: 0 } },
+  { name: 'no rdp, input exactly 30 min ago (N*60): the check passes, the timer runs', world: { displays: [disp(1800000)] }, facts: { inputIdleSeconds: 1800 } },
+  { name: 'no rdp, input 30 min ago and the timer at 47 min: suspends', world: { displays: [disp(1800000)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { inputIdleSeconds: 1800, state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'minutes 5, no rdp: input 4 min 59 s ago is not idle', world: { minutes: 5, displays: [disp(299999)] }, facts: { inputIdleSeconds: 299 } },
+  { name: 'minutes 5, no rdp: input exactly 5 min ago, the timer at 5 min: suspends', world: { minutes: 5, displays: [disp(300000)], state: `${NOW - 5 * M} ${NOW - 120}` }, facts: { inputIdleSeconds: 300, state: { since: NOW - 5 * M, last: NOW - 120 } } },
+  { name: 'no rdp, the minimum over two displays is the recent one: not idle', world: { displays: [disp(7200000), disp(60000, '11', 'bob')] }, facts: { inputIdleSeconds: 60 } },
+  { name: 'no rdp, xprintidle is not installed: the timer only, said in the line', world: { xprintidle: 'absent' }, facts: { inputIdleSeconds: 'missing' } },
+  { name: 'no rdp, xprintidle is not installed, the timer at 47 min: suspends and says so', world: { xprintidle: 'absent', state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { inputIdleSeconds: 'missing', state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'no rdp, xprintidle is not installed, no state: restart line says so too', world: { xprintidle: 'absent', state: 'absent' }, facts: { inputIdleSeconds: 'missing', state: 'absent' } },
+  { name: 'no rdp, runuser is not installed: the timer only, with the cause', world: { runuser: 'absent' }, facts: { inputIdleSeconds: { unreadable: 'runuser is not installed (/usr/sbin/runuser)' } } },
+  { name: 'no rdp, no X display: the timer only, with the cause', world: { displays: [] }, facts: { inputIdleSeconds: { unreadable: 'no X display in /tmp/.X11-unix' } } },
+  { name: 'no rdp, xprintidle fails: the timer only, with the cause', world: { displays: [disp('FAIL')] }, facts: { inputIdleSeconds: { unreadable: 'xprintidle failed on :10 as alice' } } },
+  { name: 'no rdp, xprintidle prints text: the timer only, with the cause', world: { displays: [disp('oops')] }, facts: { inputIdleSeconds: { unreadable: 'xprintidle printed no number on :10' } } },
+  { name: 'no rdp, one display fails and the other is recent: the input is unreadable, the timer only', world: { displays: [disp(60000), disp('FAIL', '11', 'bob')] }, facts: { inputIdleSeconds: { unreadable: 'xprintidle failed on :11 as bob' } } },
+  { name: 'no rdp, a recent input AND a high load: the input is named first', world: { displays: RECENT, load: '0.01 5.00 0.01 1/2 3\n' }, facts: { inputIdleSeconds: 600, load5Hundredths: 500 } },
+  { name: 'no rdp, a recent input AND an unreadable audit log: the input is named first', world: { displays: RECENT, audit: 'missing' }, facts: { inputIdleSeconds: 600, audit: null } },
+  { name: 'no rdp, an idle input AND an unreadable audit log: the audit log is the reason', world: { audit: 'missing' }, facts: { audit: null } },
+  { name: 'ssh connected AND a recent input: ssh is named first', world: { ss: [ssh6], displays: RECENT }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 }, inputIdleSeconds: 600 } },
+  { name: 'no rdp, a recent input AND a high load, xprintidle missing: the load only (no note on a not-idle line)', world: { xprintidle: 'absent', load: '0.01 5.00 0.01 1/2 3\n' }, facts: { inputIdleSeconds: 'missing', load5Hundredths: 500 } },
 
   // ---- the machine audit log
   { name: 'request accepted 10 min ago', world: { audit: audit(accepted(10 * M)) }, facts: { audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
@@ -212,7 +248,7 @@ const ROWS: Row[] = [
   { name: 'systemd-inhibit fails', world: { inhibit: 'fail' }, facts: { inhibitors: null } },
 
   // ---- precedence: the first failing check names the reason
-  { name: 'RDP connected AND load high AND a request: rdp first', world: { ss: [rdp], load: '0.01 5.00 0.01 1/2 3\n', audit: audit(accepted(1 * M)) }, facts: { connections: { rdp: 1, ssh: 0, peer: 0 }, load5Hundredths: 500, audit: { lastActivityEpoch: NOW - M, openHolds: 0 } } },
+  { name: 'RDP connected AND load high AND a request: rdp first', world: { ss: [rdp], displays: RECENT, load: '0.01 5.00 0.01 1/2 3\n', audit: audit(accepted(1 * M)) }, facts: { connections: onRdp, inputIdleSeconds: 600, load5Hundredths: 500, audit: { lastActivityEpoch: NOW - M, openHolds: 0 } } },
   { name: 'keep-awake wins over everything', world: { keepUser: 'x', ss: 'fail', audit: 'missing', load: 'missing', inhibit: 'fail' }, facts: { keepAwake: [{ present: false }, { present: true, untilEpoch: null }], connections: null, audit: null, load5Hundredths: null, inhibitors: null } },
   { name: 'unreadable connections win over an unreadable audit log', world: { ss: 'fail', audit: 'missing' }, facts: { connections: null, audit: null } },
   { name: 'request in the window wins over a high load', world: { audit: audit(accepted(1 * M)), load: '0.01 5.00 0.01 1/2 3\n' }, facts: { audit: { lastActivityEpoch: NOW - M, openHolds: 0 }, load5Hundredths: 500 } },
@@ -295,14 +331,14 @@ function build(dir: string, w: Required<World>): void {
   }
   // The config folder exists even when a file is missing (a missing audit log is a missing FILE).
   folder(`${root}${CONFIG}`);
-  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
+  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, rdpMinutes: w.rdpMinutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
 }
 
 describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides like idleDecision', () => {
   it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
     const world: Required<World> = { ...DEFAULT_WORLD, ...row.world };
     const facts: IdleFacts = { ...DEFAULT_FACTS, ...row.facts };
-    const expected = idleDecision(facts, world.now, world.minutes);
+    const expected = idleDecision(facts, world.now, world.minutes, world.rdpMinutes);
     const dir = mkdtempSync(join(base, 'run-'));
     cleanup.push(dir);
     build(dir, world);
@@ -349,7 +385,7 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
     expect(existsSync(join(dir, 'suspended'))).toBe(false);
   });
 
-  it('decision 102: each display is read as its owner with its own DISPLAY and XAUTHORITY; with no RDP connection nothing is run as a user', () => {
+  it('decision 103: each display is read as its owner with its own DISPLAY and XAUTHORITY, with or without an RDP connection; xprintidle missing: nothing is run', () => {
     const run = (w: Required<World>): string => {
       const dir = mkdtempSync(join(base, 'run-'));
       cleanup.push(dir);
@@ -360,15 +396,17 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
     };
     const displays = [{ n: '10', owner: 'alice', out: '7200000' }, { n: '11', owner: 'bob', out: '3600000' }];
     expect(run({ ...DEFAULT_WORLD, ss: [rdp], displays })).toBe('alice :10 /home/alice/.Xauthority\nbob :11 /home/bob/.Xauthority\n');
-    expect(run({ ...DEFAULT_WORLD, ss: [ssh6], displays })).toBe('');
-    expect(run({ ...DEFAULT_WORLD, ss: [], displays })).toBe('');
+    const both = 'alice :10 /home/alice/.Xauthority\nbob :11 /home/bob/.Xauthority\n';
+    expect(run({ ...DEFAULT_WORLD, ss: [ssh6], displays })).toBe(both);
+    expect(run({ ...DEFAULT_WORLD, ss: [], displays })).toBe(both);
+    expect(run({ ...DEFAULT_WORLD, ss: [], displays, xprintidle: 'absent' })).toBe('');
   });
 
   it('the table covers every decision kind of idleDecision (suspend, wait, each not-idle reason, each restart)', () => {
     const reasons = new Set(
-      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30).reason.replace(/\d+(\.\d+)?/g, '#')),
+      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20).reason.replace(/\d+(\.\d+)?/g, '#')),
     );
-    for (const needle of ['suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: no X display', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)', 'rdp connected but no input for # min','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
+    for (const needle of ['suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no X display', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: no X display', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
       expect([...reasons].some((x) => x.includes(needle)), needle).toBe(true);
     }
   });

@@ -1,6 +1,6 @@
 # `machine install idle-suspend`
 
-Decisions 101 and 102 (user concerns 2026-11-22). Item of `machine install` (see `install.md` for the lifecycle). Linux only. Suspends the box when it is REALLY idle, independent of session state.
+Decisions 101, 102 and 103 (user concerns 2026-11-22). Item of `machine install` (see `install.md` for the lifecycle). Linux only. Suspends the box when it is REALLY idle, independent of session state.
 
 Why: on `thinkcentre` (xrdp) logind's `IdleAction=suspend` never fires: the xrdp session keeps `IdleHint=no` and survives the RDP disconnect. Disconnected sessions must stay (they hold open windows), so the decision is made outside logind.
 
@@ -13,7 +13,7 @@ Why: on `thinkcentre` (xrdp) logind's `IdleAction=suspend` never fires: the xrdp
 | `/etc/systemd/system/machine-idle-suspend.timer` | 0644 | `OnBootSec=2min`, `OnUnitActiveSec=2min`, `WantedBy=timers.target` |
 
 - Install steps: stage, `sudo install` x3, `daemon-reload`, `enable`, `restart` the timer; verified with `systemctl is-active` (no sudo). Remove: `disable --now`, `rm` timer, service, script, `daemon-reload`; post-check as in `install.md`.
-- `--minutes <5..1440>` (default 30, 5 allowed to test) lives in the script (`MINUTES=<n>`), the units do not depend on it. Without `--minutes` an installed script keeps its minutes (a status never calls it outdated for that); with it, the script is replaced after the usual display.
+- `--rdp-minutes <5..1440>` (default 20, decision 103) lives in the script (`RDP_MINUTES=<n>`) and is kept like `--minutes`. `--minutes <5..1440>` (default 30, 5 allowed to test) lives in the script (`MINUTES=<n>`), the units do not depend on it. Without `--minutes` an installed script keeps its minutes (a status never calls it outdated for that); with it, the script is replaced after the usual display.
 - Needs `ss`, `systemd-inhibit`, `logger`, `date` (absolute paths measured with `command -v`); a missing one is `unsupported here` with the package named. `journalctl` is optional (status only).
 - No sudoers rule, no peer command: the script runs as root from systemd. It is independent of the `suspend` item.
 
@@ -24,7 +24,8 @@ Checks in this order; the first that fails is the reason and clears the state fi
 | # | Check | Reason (journal) |
 |---|---|---|
 | 1 | Keep-awake files `/run/machine-keep-awake` and `<config dir>/keep-awake`: any content keeps awake; first line `until <epoch>` or `keep awake until <epoch>` (1 to 12 digits) only while `epoch > now`, a past epoch is ignored | `keep-awake requested`; unreadable: `cannot read the keep-awake files` |
-| 2 | `ss -Htn state established`, LOCAL port 3389 (rdp), 22 (ssh), or the `peerPort` of `<config dir>/daemon.port.json` (absent file: no peer port; garbage: unreadable). ssh and peer always count. rdp counts only while the X input idle time (see below, decision 102) is under N min | `ssh connected`, `machine peer connected`, `rdp connected (input 3 min ago)`; unreadable: `cannot read the connections (ss or the daemon port file)`; rdp fail closed: `rdp connected (xprintidle is not installed: sudo apt install xprintidle)`, `rdp connected (input idle unreadable: <cause>)` |
+| 2 | `ss -Htn state established`, LOCAL port 3389 (rdp), 22 (ssh), or the `peerPort` of `<config dir>/daemon.port.json` (absent file: no peer port; garbage: unreadable). ssh and peer always count. rdp counts only while the X input idle time (see below, decisions 102 and 103) is under R min (`--rdp-minutes`, default 20) | `ssh connected`, `machine peer connected`, `rdp connected (input 3 min ago, needs 20)`; unreadable: `cannot read the connections (ss or the daemon port file)`; rdp fail closed: `rdp connected (xprintidle is not installed: sudo apt install xprintidle)`, `rdp connected (input idle unreadable: <cause>)` |
+| 2b | No RDP connection (decision 103): the X input idle time must be at least N min when it can be read (not readable: the timer rule alone, said in the journal line, see below) | `input 2 min ago (needs 5)` |
 | 3 | Last 2000 lines of `<config dir>/audit.log`: an `accepted`, `completed` or `held` entry newer than N min, or a `held` (under 2 h old) without a `hold-ended` of the same id | `machine request in the last N min`, `machine request on hold`; unreadable or missing log, damaged timestamp: `cannot read the machine audit log` |
 | 4 | 5-min load average (`/proc/loadavg`, hundredths) under 0.30 | `load 0.45 (limit 0.30)`; unreadable: `cannot read the load average` |
 | 5 | No `systemd-inhibit --list` line that covers `sleep` and ends in `block` (a delay inhibitor, or a block on `idle` or `handle-*-key` only, does not count) | `sleep inhibitor held (block)`; failure: `cannot list the sleep inhibitors` |
@@ -41,21 +42,32 @@ All 5 pass: the timer runs on `/run/machine-idle-suspend/since` (`<since> <last 
 | elapsed >= N | `suspending: idle 31 min`, state file removed, `systemctl --no-block suspend` |
 
 - Resume protection is the 300 s gap rule (no extra systemd-sleep hook file): a wake for a short run restarts the count from zero.
-- A disconnected xrdp session is NOT activity. An ESTABLISHED RDP connection is activity only while the session has had input in the last N min (decision 102; before it, any RDP connection counted, so an open window kept the box awake for ever).
-- RDP input idle time (read only when an RDP connection exists): for every `/tmp/.X11-unix/X<n>` (1 to 4 digits), owner = `stat -c %U`, checked against `^[a-z_][a-z0-9_-]{0,31}$`; home = field 6 of the owner in `/etc/passwd` (safe absolute path); `DISPLAY=:<n> XAUTHORITY=<home>/.Xauthority runuser -u <owner> -- xprintidle` prints milliseconds; session idle = minimum over displays, in whole seconds. Tools `stat`, `runuser`, `xprintidle` are absolute paths from `command -v` at install time, else `/usr/bin/stat`, `/usr/sbin/runuser`, `/usr/bin/xprintidle`, checked with `-x` at each run (so installing xprintidle later works without a refresh).
+- A disconnected xrdp session is NOT activity. An ESTABLISHED RDP connection is activity only while the session has had input in the last R min (decisions 102 and 103; before it, any RDP connection counted, so an open window kept the box awake for ever).
+- X input idle time (read at every check, decision 103): for every `/tmp/.X11-unix/X<n>` (1 to 4 digits), owner = `stat -c %U`, checked against `^[a-z_][a-z0-9_-]{0,31}$`; home = field 6 of the owner in `/etc/passwd` (safe absolute path); `DISPLAY=:<n> XAUTHORITY=<home>/.Xauthority runuser -u <owner> -- xprintidle` prints milliseconds; session idle = minimum over displays, in whole seconds. Tools `stat`, `runuser`, `xprintidle` are absolute paths from `command -v` at install time, else `/usr/bin/stat`, `/usr/sbin/runuser`, `/usr/bin/xprintidle`, checked with `-x` at each run (so installing xprintidle later works without a refresh).
 
   | RDP situation | Journal reason |
   |---|---|
-  | input idle < N min | `not idle: rdp connected (input 3 min ago)` (whole minutes) |
-  | input idle >= N min | not activity; the timer line gets a suffix: `idle 12/30 min (rdp connected but no input for 35 min)`, `suspending: idle 31 min (rdp connected but no input for 35 min)` |
+  | input idle < R min | `not idle: rdp connected (input 3 min ago, needs 20)` (whole minutes) |
+  | input idle >= R min | not activity, and NO N-minute timer: if the other checks passed on the previous check too, `suspending: rdp connected but no input for 25 min (needs 20)`; otherwise (first pass, after a wake, state unusable) `idle: rdp connected but no input for 25 min (needs 20), confirming at the next check` plus the restart cause |
   | xprintidle missing | `not idle: rdp connected (xprintidle is not installed: sudo apt install xprintidle)` |
   | runuser or stat missing | `... (input idle unreadable: runuser is not installed (/usr/sbin/runuser))` |
   | no X socket | `... (input idle unreadable: no X display in /tmp/.X11-unix)` |
   | owner unreadable, not plain, no home | `... unreadable: cannot read the owner of :10`, `the owner of :10 is not a plain user name`, `no usable home folder for alice in /etc/passwd` |
   | display errors, prints text | `... unreadable: xprintidle failed on :10 as alice`, `xprintidle printed no number on :10` |
 
-  Any failing display fails the whole read (a stale socket of another display, e.g. the console `:0`, keeps RDP counting: the cause names it). The N minutes of input idleness come before the timer: after input stops, the box suspends after about 2N min (N of input idleness, then N on the timer).
-- Script version 2 (decision 102): a version 1 script is `outdated` until `machine install idle-suspend --refresh`. The plan never installs xprintidle; `--dry-run`, `--check`, `status` and `--json` say `note: xprintidle found at <path>: ...` or `note: rdp counts as activity until xprintidle is installed: sudo apt install xprintidle`.
+  Any failing display fails the whole read (a stale socket of another display, e.g. the console `:0`, makes the input unreadable: the cause names it).
+- Two thresholds (decision 103), the input is read at every check, with or without an RDP connection:
+
+  | Situation | Rule |
+  |---|---|
+  | RDP connected | activity while input idle < R (`--rdp-minutes`, default 20, 5..1440); from R on it is not activity and the box suspends at the next check once ssh/peer, machine requests (last N min, holds), load, inhibitors and keep-awake pass. The input idle time is the clock: no N-minute timer on top (the 2N latency of decision 102 is gone) |
+  | No RDP, input readable | the input idle must be >= N (`--minutes`): `not idle: input 2 min ago (needs 5)`; then the unchanged N-minute timer |
+  | No RDP, xprintidle missing or unreadable | the unchanged timer alone, never silent: every timer line ends with ` (input idleness not checked: xprintidle is not installed)` or ` (input idleness not checked: <cause>)` (`idle 12/5 min (...)`, `suspending: idle 6 min (...)`); status says `note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle` |
+
+  - Resume protection in RDP mode: the state file (`since last`) is kept as "the other checks passed on the previous check". Absent, unusable, clock back or a gap over 300 s restart it and the line says `confirming at the next check`; so a wake with an input idle time already >= R (xprintidle counts the sleep) never suspends before the other checks have passed once, about 2 min later. `since` is not used as a clock in this mode.
+  - Without an RDP connection the box still waits for BOTH the input (N) and the timer (N, which starts once every check passes, input included): after the keyboard stops the suspend comes about 2N min later (5 min test: about 10). Not changed by decision 103.
+  - `--minutes` and `--rdp-minutes` are independent; each is kept when the other is changed (`RDP_MINUTES=<n>` and `MINUTES=<n>` in the script).
+- Script version 3 (decision 103; version 2 was decision 102): an older script is `outdated` until `machine install idle-suspend --refresh`. The plan never installs xprintidle; `--dry-run`, `--check`, `status` and `--json` say `note: xprintidle found at <path>: ...` or the missing note above; the summary reads `suspends after 5 min idle (RDP: 20 min)`.
 - The audit lines are matched ANCHORED on `{"seq":..,"prev":..,"entry":{"ts":"..","event":"<e>"`: `ts` and `event` are the first keys the daemon writes, so a command text containing `"event":"accepted"` (escaped in the JSON line) never matches.
 - Peer connections are short-lived (probes close at once); a long-lived peer socket would keep the box awake (check on the box: `ss -Htn state established`).
 - Every decision goes to the journal: `logger -t machine-idle-suspend -- <reason>`. `machine install` list, `--check` and `machine status` show `suspends after N min idle` and the last line of `journalctl -t machine-idle-suspend -n 1` when the user can read it, parsed (`last: 18:13:56 not idle: rdp connected (3 min ago)`: no host, tag or pid, local time, age; cut to 80 characters when it does not parse; layout in `install.md`), else `not readable by your user` with the `sudo ...` command; never an error. `--json` keeps the raw line.

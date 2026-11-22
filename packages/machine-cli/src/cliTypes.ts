@@ -185,6 +185,8 @@ export interface Parsed {
   timeout?: string;
   /** `machine install idle-suspend --minutes <5..1440>`: the idle time before the box suspends (validated by the install command). */
   minutes?: string;
+  /** `machine install idle-suspend --rdp-minutes <5..1440>`: the input idle time from which an established RDP connection no longer keeps the box awake (decision 103). */
+  rdpMinutes?: string;
   promptTimeout?: string;
   policy?: string;
   yesFinalCode?: string;

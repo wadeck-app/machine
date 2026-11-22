@@ -57,13 +57,13 @@ describe('idle-suspend: the plan', () => {
     expect(script(a)).toContain("AUDIT_LOG='/home/alice/.config/machine/audit.log'");
     expect(script(a)).toContain("SS='/usr/bin/ss'");
     expect(a.files.slice(1).map((f) => f.sha256)).toEqual(b.files.slice(1).map((f) => f.sha256));
-    expect(a.summary).toBe('suspends after 30 min idle');
-    expect(b.summary).toBe('suspends after 45 min idle');
+    expect(a.summary).toBe('suspends after 30 min idle (RDP: 20 min)');
+    expect(b.summary).toBe('suspends after 45 min idle (RDP: 20 min)');
   });
 
   it('without --minutes the minutes of the installed script are kept; --minutes wins', () => {
-    expect(def().plan({ ...FACTS, installedMinutes: 90 }).summary).toBe('suspends after 90 min idle');
-    expect(def().plan({ ...FACTS, installedMinutes: 90, minutes: 10 }).summary).toBe('suspends after 10 min idle');
+    expect(def().plan({ ...FACTS, installedMinutes: 90 }).summary).toBe('suspends after 90 min idle (RDP: 20 min)');
+    expect(def().plan({ ...FACTS, installedMinutes: 90, minutes: 10 }).summary).toBe('suspends after 10 min idle (RDP: 20 min)');
   });
 
   it('install order: stage, install the script, the units, reload, enable, restart; each step names its file', () => {
@@ -113,7 +113,7 @@ describe('idle-suspend: the plan', () => {
     expect(text).toContain('/home/alice/.config/machine/keep-awake');
     expect(text).toContain('keep awake until');
     expect(text).toMatch(/disconnected desktop session \(xrdp\) is NOT counted/);
-    expect(text).toMatch(/established RDP connection counts only while the X input of the session is more recent than the idle time/);
+    expect(text).toMatch(/established RDP connection counts only while the X input of the session is more recent than --rdp-minutes/);
     expect(def().afterRemove(def().plan(FACTS), 'desktop').join('\n')).toMatch(/nothing to withdraw/);
   });
 
@@ -123,22 +123,35 @@ describe('idle-suspend: the plan', () => {
     expect(script).toMatch(/^XPRINTIDLE='\/opt\/bin\/xprintidle'$/m);
     expect(script).toMatch(/^RUNUSER='\/sbin\/runuser'$/m);
     expect(script).toMatch(/^STAT='\/bin\/stat'$/m);
-    expect(plan.notes).toEqual(['xprintidle found at /opt/bin/xprintidle: an RDP connection counts as activity only while the X input of the session is recent']);
+    expect(plan.notes).toEqual(['xprintidle found at /opt/bin/xprintidle: the input idle time is checked (30 min, 20 min with an RDP connection)']);
   });
 
   it('decision 102: xprintidle absent: the plan still builds (it never installs it), the note says what to do, the script keeps the default path', () => {
     const plan = def().plan(FACTS);
-    expect(plan.notes).toEqual(['rdp counts as activity until xprintidle is installed: sudo apt install xprintidle']);
+    expect(plan.notes).toEqual(['xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle']);
     expect(plan.files[0]?.content).toMatch(/^XPRINTIDLE='\/usr\/bin\/xprintidle'$/m);
     expect(plan.steps.map((s) => (s.kind === 'run' ? argvText(s.argv) : '')).join('\n')).not.toMatch(/apt|xprintidle/);
   });
 
-  it('decision 102: a script installed by the previous build (marker version 1, no input check) is outdated, not current', () => {
+  it('decision 102: a script installed by the previous build (marker version 2, no RDP minutes) is outdated, not current', () => {
     const plan = def().plan(FACTS);
     const file = plan.files[0] as NonNullable<(typeof plan.files)[0]>;
-    const old = file.content.replace('version 2', 'version 1').replace(/^XPRINTIDLE=.*\n/m, '');
-    expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 1 });
+    const old = file.content.replace('version 3', 'version 2').replace(/^RDP_MINUTES=.*\n/m, '');
+    expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 2 });
     expect(classifyInstalled(file, file.content).state).toBe('current');
+  });
+
+  it('decision 103: --rdp-minutes (default 20) goes into the script and the summary; without the flag the installed value is kept', () => {
+    expect(def().plan(FACTS).files[0]?.content).toMatch(/^RDP_MINUTES=20$/m);
+    expect(def().plan(FACTS).summary).toBe('suspends after 30 min idle (RDP: 20 min)');
+    expect(def().plan({ ...FACTS, minutes: 5, rdpMinutes: 45 }).files[0]?.content).toMatch(/^RDP_MINUTES=45$/m);
+    expect(def().plan({ ...FACTS, minutes: 5, rdpMinutes: 45 }).summary).toBe('suspends after 5 min idle (RDP: 45 min)');
+    expect(def().plan({ ...FACTS, installedRdpMinutes: 60 }).files[0]?.content).toMatch(/^RDP_MINUTES=60$/m);
+    expect(def().plan({ ...FACTS, installedRdpMinutes: 60, rdpMinutes: 7 }).files[0]?.content).toMatch(/^RDP_MINUTES=7$/m);
+  });
+
+  it('decision 103: refuses --rdp-minutes out of range (a plan never carries it)', () => {
+    for (const rdpMinutes of [4, 1441, 0, 2.5]) expect(() => def().plan({ ...FACTS, rdpMinutes }), String(rdpMinutes)).toThrow(/minutes/);
   });
 
   it('refuses another platform with the supported ones', () => {

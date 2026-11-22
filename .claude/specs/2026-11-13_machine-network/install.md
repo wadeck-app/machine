@@ -26,19 +26,20 @@ State first, no generic text repeated, lines cut to the terminal width (the `mac
 ```
 suspend  installed, up to date
   lets `machine run` suspend this box (one sudoers rule); wake: `machine wake`
-idle-suspend  installed, up to date  (suspends after 5 min idle)
+idle-suspend  installed, up to date  (suspends after 5 min idle (RDP: 20 min))
   suspends this box by itself when really idle (root timer, every 2 min)
-  note: rdp counts as activity until xprintidle is installed: sudo apt install xprintidle
-  last: 18:13:56 not idle: rdp connected (input 3 min ago) (3 min ago)
+  note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity:
+    sudo apt install xprintidle
+  last: 18:13:56 not idle: rdp connected (input 3 min ago, needs 20) (3 min ago)
 ```
 
-- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decision 102); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
+- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decisions 102 and 103); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
 
 - `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown cut to 80 characters; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
 - `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.
 - The one-line summary is `Installable.summaryLine` (machine-core, at most 80 characters, tested).
 
-`--minutes <n>` (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 5..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
+`--minutes <n>` and `--rdp-minutes <n>` (decision 103, default 20) (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 5..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 
 Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit 1, nothing run. Unknown id: exit 2.
 
