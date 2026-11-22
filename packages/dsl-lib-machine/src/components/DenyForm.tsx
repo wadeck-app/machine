@@ -6,7 +6,10 @@ import { TEXT_ERROR } from '../lib/styleTokens.js';
 /** The limits of machine-core's checkDenyReason: the agent reads the reason and the audit log keeps it. */
 export const REASON_MAX = 200;
 
-/** Why a reason cannot be sent (the same words as the daemon), undefined when it can. */
+/** What the caller is told when no reason is given (machine-core NO_DENY_REASON_MESSAGE; denyReasonParity.test.ts keeps both equal). */
+export const NO_REASON_TEXT = 'denied by the owner, no reason given';
+
+/** Why a reason cannot be sent (the same words as the daemon), undefined when it can. A browser copy of machine-core checkDenyReason: denyReasonParity.test.ts keeps them one rule. */
 export function reasonProblem(text: string): string | undefined {
   const trimmed = text.trim();
   if (trimmed.length > REASON_MAX) {
@@ -41,7 +44,8 @@ export interface DenyFormProps {
   machine?: string;
   api: AllowApi;
   onCancel: () => void;
-  onDenied: () => void;
+  /** The reason the caller was given (trimmed), undefined when none was typed. */
+  onDenied: (reason: string | undefined) => void;
 }
 
 /** The inline Deny form of a held request: an optional reason for the caller. A restricting action: no signature and no passphrase, but the route is sensitive, so the app-core PIN is asked first (as for Allow). */
@@ -62,7 +66,7 @@ export function DenyForm({ id, machine, api, onCancel, onDenied }: DenyFormProps
     const trimmed = reason.trim();
     // The PIN first, like the Allow dialog (loadContext): a cancelled dialog stops here and nothing is posted.
     api.elevate().then(() => api.post('/deny', { id, ...(machine !== undefined ? { machine } : {}), ...(trimmed === '' ? {} : { reason: trimmed }) })).then(
-      () => onDenied(),
+      () => onDenied(trimmed === '' ? undefined : trimmed),
       (err: unknown) => {
         setBusy(false);
         setError(denyFailureMessage(err));

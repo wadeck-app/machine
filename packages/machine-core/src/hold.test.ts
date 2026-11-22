@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_HELD_PER_MACHINE, DEFAULT_HELD_PER_PEER, DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressPrinter, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, describeSeconds, parseWait, waitedText } from './hold.js';
+import { DEFAULT_HELD_PER_MACHINE, DEFAULT_HELD_PER_PEER, DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressPrinter, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, deniedMessage, NO_DENY_REASON_MESSAGE, describeSeconds, parseWait, waitedText } from './hold.js';
 
 const PEER_A = '11111111-1111-4111-8111-111111111111';
 const PEER_B = '22222222-2222-4222-8222-222222222222';
@@ -78,6 +78,14 @@ describe('checkDenyReason', () => {
     const long = checkDenyReason('x'.repeat(201));
     expect(long).toMatchObject({ ok: false });
     expect((long as { message: string }).message).toMatch(/200/);
+  });
+});
+
+describe('deniedMessage', () => {
+  it('is the owner text itself when there is one, a fixed sentence when there is none (the caller prints "refused by <machine>: denied: <message>")', () => {
+    expect(deniedMessage('not today')).toBe('not today');
+    expect(deniedMessage(undefined)).toBe(NO_DENY_REASON_MESSAGE);
+    expect(NO_DENY_REASON_MESSAGE).toBe('denied by the owner, no reason given');
   });
 });
 

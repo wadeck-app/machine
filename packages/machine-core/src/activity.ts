@@ -305,7 +305,8 @@ export function receivedRowEvent(entry: Record<string, unknown>, kind: 'accepted
   }
   const exitCode = done?.['exitCode'];
   const durationMs = done?.['durationMs'];
-  const error = done?.['event'] === 'failed' ? str(done['error'], 300) : undefined;
+  // A denied request keeps the owner's text of the Deny (the `note` of the refused line, written by the target): printable and bounded like any shown text.
+  const error = done?.['event'] === 'failed' ? str(done['error'], 300) : outcome === 'denied' ? str(entry['note'], 300) : undefined;
   return {
     ts: new Date(atMs).toISOString(),
     atMs,

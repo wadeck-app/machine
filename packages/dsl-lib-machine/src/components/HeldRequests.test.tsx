@@ -202,11 +202,28 @@ describe('Deny', () => {
     expect(calls).toEqual([{ url: 'POST /api/modules/machine/deny', body: { id: 'aaaa1111', reason: 'not now, ask again later' }, headers: { 'x-machine-module': '1' } }]);
     expect(elevate).toHaveBeenCalledTimes(1);
     expect(onRefresh).toHaveBeenCalledWith('requests');
-    // The one short line of a Deny (nothing else shows it): one sentence, no wall of text.
+    // The one short line of a Deny (nothing else shows it): the sentence, then what the caller was told, no wall of text.
     const status = await screen.findByRole('status');
-    expect(status).toHaveTextContent('Denied ls from thinkcentre: nothing was signed');
-    expect(status.textContent?.length).toBeLessThan(80);
+    expect(status).toHaveTextContent('Denied ls from thinkcentre: nothing was signed. The caller was told: not now, ask again later');
+    expect(status.textContent?.length).toBeLessThan(120);
     expect(itemOf('df -h')).toBeInTheDocument();
+  });
+
+  it('the line of the finished Deny repeats the reason the caller was given, as plain text (never as markup); without a reason it says none was sent', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(denyBtn('ls'));
+    await userEvent.type(screen.getByLabelText(/reason/i), 'not now <b>bold</b>');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Denied ls from thinkcentre: nothing was signed. The caller was told: not now <b>bold</b>');
+    expect(status.querySelector('b')).toBeNull();
+  });
+
+  it('the line of a Deny without a reason says the caller was told none', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(denyBtn('ls'));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Denied ls from thinkcentre: nothing was signed. The caller was told: denied by the owner, no reason given');
   });
 
   it('posts no reason key when the field is empty', async () => {

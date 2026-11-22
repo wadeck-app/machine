@@ -1,3 +1,4 @@
+import { NO_DENY_REASON_MESSAGE } from './hold.js';
 import type { RunWait } from './runDefaults.js';
 
 // The OUTGOING run log (run-log.md): what THIS machine asked its peers to run, one JSON line per `machine run`. Pure: it builds and reads the
@@ -162,12 +163,14 @@ export function waitModeOf(wait: RunWait): RunLogWaitMode {
 const UNANSWERED_HOLD_REASONS: readonly string[] = ['not-listed', 'no-policy'];
 
 /** What the peer answered, as an outcome. `held` is present when the target held the request. */
-export function outcomeOfAnswer(answer: { type: 'result'; exitCode: number | null; timedOut: boolean } | { type: 'refused'; reason: string; held?: unknown }): RunLogOutcome {
+export function outcomeOfAnswer(answer: { type: 'result'; exitCode: number | null; timedOut: boolean } | { type: 'refused'; reason: string; message?: string; held?: unknown }): RunLogOutcome {
   if (answer.type === 'result') {
     return { outcome: 'ran', exitCode: answer.exitCode, ...(answer.timedOut ? { timedOut: true } : {}) };
   }
   if (answer.reason === 'denied') {
-    return { outcome: 'denied', reason: 'denied' };
+    // The owner's text is the cause of a Deny; the fixed no-reason sentence says nothing more than the outcome.
+    const owner = answer.message !== undefined && answer.message !== NO_DENY_REASON_MESSAGE && answer.message !== '' ? answer.message : undefined;
+    return { outcome: 'denied', reason: 'denied', ...(owner !== undefined ? { cause: owner } : {}) };
   }
   if (answer.held !== undefined && UNANSWERED_HOLD_REASONS.includes(answer.reason)) {
     return { outcome: 'deadline', reason: answer.reason };

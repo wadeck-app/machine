@@ -6,7 +6,7 @@ import { runHealth } from './health.js';
 import { checkModuleHeader } from './guard.js';
 import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './requests.js';
 import { registerActivityRoute } from './activityRoute.js'; // run-log
-import type { RequestsListAnswer } from '@wadeck-app/machine-core';
+import { checkDenyReason, type RequestsListAnswer } from '@wadeck-app/machine-core';
 
 // Backend of the machine module. Read routes, plus the routes of the Allow button (decision 76: `sensitive`, they carry only the ENCRYPTED admin key
 // and signed documents). No route here signs: signing happens in the browser (decision D25). Local-API limit, stated honestly: app-core checks only Host and
@@ -81,9 +81,6 @@ const DENY_STATUS: Record<string, number> = {
   'bad-payload': 400,
 };
 
-/** The reason of a Deny is read by the agent and kept in the audit log (machine-core MAX_DENY_REASON_LENGTH, printable ASCII). */
-const DENY_REASON_MAX = 200;
-
 /** Connecting to the target (3 s per address, plus the address lookup) and its answer (10 s). */
 const REMOTE_DENY_TIMEOUT_MS = 30_000;
 
@@ -139,13 +136,12 @@ function parseDenyBody(body: unknown): DenyBody {
   if (typeof reason !== 'string') {
     return { ok: false, problem: `"reason" must be text; ${expected}` };
   }
-  if (reason.length > DENY_REASON_MAX) {
-    return { ok: false, problem: `"reason" has ${reason.length} characters: at most ${DENY_REASON_MAX} (the agent reads it); shorten it` };
+  // The ONE whitelist of the CLI, the daemon and this route (machine-core checkDenyReason): a blank text is no reason.
+  const checked = checkDenyReason(reason);
+  if (!checked.ok) {
+    return { ok: false, problem: checked.message };
   }
-  if (!/^[\x20-\x7e]*$/.test(reason)) {
-    return { ok: false, problem: '"reason" must be printable ASCII (no accent, no line break): the agent reads it and the audit log keeps it; rewrite it' };
-  }
-  return { ok: true, id, reason, machine };
+  return { ok: true, id, reason: checked.reason, machine };
 }
 
 interface Failure {

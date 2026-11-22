@@ -32,6 +32,10 @@ export function resultText(e: ActivityEvent): string {
   if (e.outcome === 'error' && e.cause !== undefined) {
     return `error (${e.cause})`;
   }
+  // A Deny: the owner's text (printable and bounded by the reader of the logs).
+  if (e.outcome === 'denied' && e.cause !== undefined) {
+    return `denied (${e.cause})`;
+  }
   // Follow mode: an audit entry with no row of its own, qualified by one word.
   if (e.detail !== undefined) {
     return `${e.outcome} (${e.detail})`;

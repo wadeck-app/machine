@@ -81,13 +81,37 @@ describe('machine run --wait', () => {
     expect(denied.out).toMatch(/denied/);
     const r = await pending;
     expect(r.code).toBe(255);
-    expect(r.err).toContain('refused by laptop: denied');
-    expect(r.err).toContain('not today');
+    // The same line for a Deny of the CLI and of the page: the owner text follows "denied:".
+    expect(r.err).toContain('refused by laptop: denied: not today');
     // The owner already answered: there is nothing to allow in this message.
     expect(r.err).not.toContain('To allow it');
     // The request is no longer waiting.
     const after = await cli(b, ['requests', '--json']);
     expect((JSON.parse(after.out) as { summary: { waiting: unknown[] } }).summary.waiting).toEqual([]);
+  });
+
+  it('a Deny without a reason says so: "denied by the owner, no reason given", and the log rows carry the owner text of a Deny with one', async () => {
+    const pending = runWaiting('10s', ['echo', 'nope2']);
+    const id = await waitingId();
+    expect((await cli(b, ['requests', '--deny', id.slice(0, 8)])).code).toBe(0);
+    const r = await pending;
+    expect(r.code).toBe(255);
+    expect(r.err).toContain('refused by laptop: denied by the owner, no reason given');
+    expect(r.err).not.toContain('denied: denied');
+    const sent = await cli(a, ['log', '--sent', '--outcome', 'denied']);
+    expect(sent.out).toMatch(/denied/);
+    expect(sent.out).not.toContain('no reason given');
+  });
+
+  it('the Deny reason is shown in machine log on both machines (caller: sent row, target: received row)', async () => {
+    const pending = runWaiting('10s', ['echo', 'nope3']);
+    const id = await waitingId();
+    expect((await cli(b, ['requests', '--deny', id.slice(0, 8), '--reason', 'not today'])).code).toBe(0);
+    await pending;
+    const sent = await cli(a, ['log', '--sent', '--outcome', 'denied']);
+    expect(sent.out).toContain('denied (not today)');
+    const received = await cli(b, ['log', '--received', '--outcome', 'denied']);
+    expect(received.out).toContain('denied (not today)');
   });
 
   it('refuses a wait outside 10 s to 60 min before any connection, naming the limits', async () => {

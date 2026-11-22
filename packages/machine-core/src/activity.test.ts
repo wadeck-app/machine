@@ -69,6 +69,20 @@ describe('the merged timeline', () => {
     expect(page.items.find((e) => e.outcome === 'refused')).toMatchObject({ reason: 'not-listed', command: 'rm x' });
   });
 
+  it('a denied received request carries the owner text of the Deny as its cause (printable, bounded); a control character of an edited log line is replaced, never shown', () => {
+    const page = run({
+      audit: [
+        { ...refusedEntry(8, DESK.uuid, 'denied'), note: 'not today' },
+        { ...refusedEntry(9, DESK.uuid, 'denied', 'ls'), note: 'bad\u001b[31mtext' },
+        refusedEntry(10, DESK.uuid, 'denied', 'pwd'),
+      ],
+    });
+    const byCommand = (c: string) => page.items.find((e) => e.command === c);
+    expect(byCommand('rm x')).toMatchObject({ outcome: 'denied', cause: 'not today' });
+    expect(byCommand('ls')?.cause).toBe('bad?[31mtext');
+    expect(byCommand('pwd')?.cause).toBeUndefined();
+  });
+
   it('leaves out what is not a command: sessions, documents, holds', () => {
     const page = run({ audit: [{ ts: iso(1), event: 'daemon-started' }, { ts: iso(2), event: 'session-closed', source: DESK.uuid, reason: 'peer-revoked' }, { ts: iso(3), event: 'held', source: DESK.uuid, id: 'h', shell: 'sh', command: 'x', deadline: 99999999999 }] });
     expect(page.items).toEqual([]);

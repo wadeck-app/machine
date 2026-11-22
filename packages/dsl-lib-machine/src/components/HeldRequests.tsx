@@ -6,7 +6,7 @@ import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_ST
 import type { AllowStyle } from '../lib/allowStyle.js';
 import { AllowDialog } from './AllowDialog.js';
 import { BatchAllowBar, type BatchItem } from './BatchAllowBar.js';
-import { DenyForm } from './DenyForm.js';
+import { DenyForm, NO_REASON_TEXT } from './DenyForm.js';
 import { InlineAllow } from './InlineAllow.js';
 import { MachineName } from './MachineName.js';
 import { RequestProgressCard } from './RequestProgressCard.js';
@@ -136,7 +136,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
     void onRefresh?.('requests');
   };
 
-  const denied = (row: HeldRequestRow) => {
+  const denied = (row: HeldRequestRow, reason: string | undefined) => {
     setResult(
       <>
         Denied {row.command}
@@ -151,7 +151,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
             from <MachineName name={row.peerText} />
           </>
         )}
-        : nothing was signed.
+        : nothing was signed. The caller was told: {reason ?? NO_REASON_TEXT}
       </>,
     );
     leave(row);
@@ -265,7 +265,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
               {left > 0 && inline && inlineOpen === r.id && rowCanAllow && api.current !== null && (
                 <InlineAllow key={r.id} row={r} machine={machineOf(r)} api={api.current} onEvent={progressFor(r)} onClose={() => setInlineOpen(null)} onDone={(answer) => allowed(r, answer)} />
               )}
-              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
+              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={(reason) => denied(r, reason)} />}
             </li>
           );
         })}

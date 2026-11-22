@@ -86,6 +86,9 @@ describe('outcomes', () => {
   it('a refusal keeps its reason; an owner Deny is `denied`; a hold that ended unanswered is `deadline`', () => {
     expect(outcomeOfAnswer({ type: 'refused', reason: 'not-listed' })).toEqual({ outcome: 'refused', reason: 'not-listed' });
     expect(outcomeOfAnswer({ type: 'refused', reason: 'denied', held: { waitSeconds: 60 } })).toEqual({ outcome: 'denied', reason: 'denied' });
+    // The owner text rides along as the cause; the fixed no-reason sentence is not a cause.
+    expect(outcomeOfAnswer({ type: 'refused', reason: 'denied', message: 'not today' })).toEqual({ outcome: 'denied', reason: 'denied', cause: 'not today' });
+    expect(outcomeOfAnswer({ type: 'refused', reason: 'denied', message: 'denied by the owner, no reason given' })).toEqual({ outcome: 'denied', reason: 'denied' });
     expect(outcomeOfAnswer({ type: 'refused', reason: 'not-listed', held: { waitSeconds: 60 } })).toEqual({ outcome: 'deadline', reason: 'not-listed' });
     expect(outcomeOfAnswer({ type: 'refused', reason: 'no-policy', held: { waitSeconds: 60 } })).toEqual({ outcome: 'deadline', reason: 'no-policy' });
   });

@@ -3,6 +3,7 @@ import {
   HoldTable,
   ReplayCache,
   holdAnswerTimeoutMs,
+  deniedMessage,
   waitedText,
   MAX_REQUESTS_LISTS_PER_MINUTE,
   MAX_NOTICES_PER_MINUTE,
@@ -525,9 +526,9 @@ class PeerService {
         announce(outcome as NoticeOutcome);
       }
     };
-    const refusal = (reason: string, text: string, allowedShells?: string[]): HoldOutcome => ({
+    const refusal = (reason: string, text: string, allowedShells?: string[], detail: Record<string, Json> = {}): HoldOutcome => ({
       kind: 'answer',
-      answer: { ...this.refuse(session, id, reason, text, { shell, command }, allowedShells), held: info } as PeerAnswer,
+      answer: { ...this.refuse(session, id, reason, text, { shell, command, ...detail }, allowedShells), held: info } as PeerAnswer,
     });
 
     let watch: Promise<Watched> = Promise.resolve({ kind: 'closed', error: new Error('unused') });
@@ -578,7 +579,8 @@ class PeerService {
         const verdict = table.check(id, deps.now());
         if (verdict.state === 'denied') {
           finish('denied', verdict.reason !== undefined ? { note: verdict.reason } : {});
-          return refusal('denied', `the owner of ${deps.self.name} denied this request${verdict.reason !== undefined ? `: ${verdict.reason}` : ''}; nothing was run`);
+          // The caller prints `refused by <machine>: denied: <message>`; the owner's text is also kept in the refused audit line (`note`) for `machine log`.
+          return refusal('denied', deniedMessage(verdict.reason), undefined, verdict.reason !== undefined ? { note: verdict.reason } : {});
         }
         const again = check();
         if (again.ok) {

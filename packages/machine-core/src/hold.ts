@@ -75,6 +75,14 @@ export function waitedText(waitSeconds: number, capped: boolean, requestedSecond
   return `${base} (the wait was capped by this machine to ${describeSeconds(waitSeconds)}${requestedSeconds !== undefined ? `, you asked for ${describeSeconds(requestedSeconds)}` : ''}: its maximum)`;
 }
 
+/** What the caller is told when the owner denied without a reason; `machine run` prints it as `refused by <machine>: <this>`. */
+export const NO_DENY_REASON_MESSAGE = 'denied by the owner, no reason given';
+
+/** The message of the `denied` refusal: the owner's text as typed (already checked by checkDenyReason), or the fixed sentence. */
+export function deniedMessage(reason: string | undefined): string {
+  return reason !== undefined ? reason : NO_DENY_REASON_MESSAGE;
+}
+
 export type DenyReasonCheck = { ok: true; reason: string | undefined } | { ok: false; message: string };
 
 /** The owner's text of a Deny reaches the agent and the audit log: printable ASCII, bounded, no secret by contract (it is typed by the owner). */

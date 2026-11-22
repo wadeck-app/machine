@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { DEFAULT_WAIT_NOTICE_DELAY_MS, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
+import { DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -644,7 +644,9 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
     const heldNote = notHeldText !== undefined ? `\n[warn] ${notHeldText}` : '';
     // The hold limits of the target now apply to every default run: say what to do.
     const limitAdvice = waitSeconds !== undefined ? holdLimitAdvice(answer.reason, peer.name) : undefined;
-    return fail(`refused by ${peer.name}: ${answer.reason}: ${answer.message}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
+    // A Deny: the text is the owner's (a peer's text reaches this terminal: control characters become `?`, T-42), and the fixed no-reason sentence already says "denied".
+    const why = answer.reason === 'denied' ? (answer.message === NO_DENY_REASON_MESSAGE ? answer.message : `denied: ${printable(answer.message, MAX_DENY_REASON_LENGTH + 3)}`) : `${answer.reason}: ${answer.message}`;
+    return fail(`refused by ${peer.name}: ${why}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);

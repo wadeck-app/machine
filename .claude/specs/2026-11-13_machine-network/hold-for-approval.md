@@ -63,7 +63,7 @@ An entry whose `--times` calls are used, or whose `--for`/`--until` date passed,
 - The re-check after an Allow uses the same `authorize` as a fresh request: a changed policy version, an expired entry or a revoked peer is refused as usual.
 - The Allow button and `machine admin allow` already sign the exact refused string; no change to what they sign. Deny is a restricting action: no signature and no passphrase (hard rule 4, "only restricting actions need no signature"), logged. The web route `POST /deny` is still `sensitive` (app-core PIN, like Allow): without it any local process that reaches the app-core port could answer the owner's held requests `denied`. The CLI `machine requests --deny` needs no PIN (local user at the terminal).
 - The answer timeout of the caller becomes wait + run timeout + 30 s.
-- Deny with a reason is shown to the agent: it must not contain anything secret (the owner types it; the audit log carries it).
+- Deny with a reason is shown to the agent: it must not contain anything secret (the owner types it; the audit log carries it). Printable ASCII, 200 characters at most, one whitelist (`checkDenyReason`) for the CLI, the daemon, the route and the page. The caller prints `refused by <machine>: denied: <reason>`, or `refused by <machine>: denied by the owner, no reason given`; the same for a Deny from the CLI, the page or another machine. The text is also the `note` of the `refused` and `hold-ended` audit lines and the cause of the `denied` rows of `machine log` (control characters of an edited log are shown as `?`).
 
 ## Front-ends
 
