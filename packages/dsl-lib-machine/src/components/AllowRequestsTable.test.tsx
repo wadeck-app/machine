@@ -85,7 +85,8 @@ describe('the confirmation', () => {
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByLabelText('Admin passphrase')).toHaveAttribute('type', 'password');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(within(dialog).getByText('desktop')).toBeInTheDocument();
+    // The machine row (the name is also in the title and the warning, in the machine font).
+    expect(within(dialog).getByText('Machine').nextElementSibling).toHaveTextContent('desktop');
     expect(within(dialog).getByText('sh')).toBeInTheDocument();
     expect(within(dialog).getByText('df -h')).toBeInTheDocument();
     expect(dialog).toHaveTextContent(/widens what peers may run/i);

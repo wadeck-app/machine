@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, DENY_BUTTON, HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
+import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowDialog } from './AllowDialog.js';
-import { AllowProgress } from './AllowProgress.js';
 import { DenyForm } from './DenyForm.js';
+import { MachineName } from './MachineName.js';
+import { RequestProgressCard } from './RequestProgressCard.js';
 import { useAllowProgress } from './useAllowProgress.js';
 
 export interface HeldRequestRow {
@@ -64,7 +66,8 @@ function leftText(seconds: number): string {
 /**
  * The held requests of the Requests page: a caller ran `machine run <peer> --wait ... -- <command>` and waits for the owner to answer. Each shows the
  * exact command in large type, a live countdown (counted down here from the seconds left of the fetch), and two buttons. Allow is the same flow as the
- * table below (confirmation, admin passphrase, signature in the page); Deny is a restricting action: an optional reason, no signature, no passphrase (the app-core PIN only).
+ * table below (confirmation dialog, admin passphrase, signature in the page); the dialog closes as soon as the signing is submitted and the progress lives
+ * on the card (one line and a thin stepper, RequestProgressCard). Deny is a restricting action: an optional reason, no signature, no passphrase (the app-core PIN only).
  *
  * @registryCategory composite
  * @registryTags requests allow deny hold policy admin
@@ -73,7 +76,10 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
-  const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
+  // The one short line of a Deny (nothing else shows it). An Allow has none: its card says everything.
+  const [result, setResult] = useState<React.ReactNode | null>(null);
+  // A line the owner has to read next to the progress of a request (the list of notice recipients was not sent ...).
+  const [warnings, setWarnings] = useState<Readonly<Record<string, string>>>({});
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
   const progress = useAllowProgress<HeldRequestRow>(api.current);
@@ -106,16 +112,32 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
   };
 
   const allowed = (row: HeldRequestRow, answer: AllowResult) => {
-    // Which path the policy took, in the words of the CLI (success colour: installed directly or here; warning colour: the relay inbox, with the cause).
-    const path = deliveryNotice(answer);
-    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. The progress is shown on the request. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
+    // Only what the card cannot say by itself: a warning about the list of notice recipients (without its "[warn]" tag, the line is a warning already).
+    const warning = noticeRecipientsText(answer).replace(/^ \[warn\] /, '');
+    setWarnings((prev) => ({ ...Object.fromEntries(Object.entries(prev).filter(([id]) => id !== row.id)), ...(warning === '' ? {} : { [row.id]: warning }) }));
     setDenying(null);
     // The page's own data catches up; the card stays (with its progress) until the person dismisses it after the end.
     void onRefresh?.('requests');
   };
 
   const denied = (row: HeldRequestRow) => {
-    setResult({ tone: 'success', text: `Denied ${row.shell} ${JSON.stringify(row.command)} from ${row.peerText}${row.machine !== undefined ? ` on ${row.machine.name} (${row.machine.name} was told over the authenticated channel)` : ''}: the caller was answered "refused: denied". Nothing was signed.` });
+    setResult(
+      <>
+        Denied {row.command}
+        {row.machine !== undefined ? (
+          <>
+            {' '}
+            on <MachineName name={row.machine.name} /> (<MachineName name={row.machine.name} /> was told)
+          </>
+        ) : (
+          <>
+            {' '}
+            from <MachineName name={row.peerText} />
+          </>
+        )}
+        : nothing was signed.
+      </>,
+    );
     leave(row);
   };
 
@@ -124,77 +146,74 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       <h3 className="text-base font-semibold text-content">Held requests: a caller is waiting for your answer</h3>
-      {result !== null && <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}>{result.text}</div>}
+      {result !== null && <div role="status" className={NOTICE_SUCCESS}>{result}</div>}
       {allow !== undefined && !canAllow && allow.note !== '' && visible.length > 0 && <div className={NOTICE_NEUTRAL}>{allow.note}</div>}
-      <ul className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-2">
         {visible.map((r) => {
           const left = Math.max(0, r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt));
           const rowCanAllow = r.canAllow ?? canAllow;
           const progressOf = progress.entries[r.id]?.record;
           const reach = r.machine !== undefined ? reachability?.[r.machine.uuid] : undefined;
+          if (progressOf !== undefined) {
+            const warning = warnings[r.id];
+            return (
+              <RequestProgressCard
+                key={r.id}
+                row={r}
+                record={progressOf}
+                now={progress.now}
+                canRetry={rowCanAllow}
+                {...(warning !== undefined ? { warning } : {})}
+                onRetry={() => setSelected(r)}
+                onDismiss={() => {
+                  progress.dismiss(r.id);
+                  // A request that ended left the daemon's list (the rows of the page may not have caught up yet); one whose signature or delivery failed is still held: its card comes back.
+                  if (progressOf.failed === undefined) {
+                    setAnswered((prev) => new Set(prev).add(r.id));
+                  }
+                }}
+              />
+            );
+          }
           return (
             <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2">
                 <span className={`text-sm ${TEXT_MUTED_SM}`}>
-                  From <span className="font-medium text-content">{r.peerText}</span>
+                  From <MachineName name={r.peerText} />
                   {r.machine !== undefined && (
                     <>
                       {' '}
-                      on <span className="font-medium text-content">{r.machine.name}</span>
+                      on <MachineName name={r.machine.name} />
                     </>
                   )}{' '}
-                  in <span className="font-mono text-content">{r.shell}</span>
+                  in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
                   {r.note === undefined && <>, asked {r.askedText}</>}
                 </span>
-                {progressOf === undefined && <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>}
+                <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
               </div>
               {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
-              <div className={HELD_COMMAND}>{r.command}</div>
+              <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
               {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED}`}>Truncated: only the first part of the command was reported.</div>}
               {r.note !== undefined && (
                 <div data-testid="notice-note" className={`text-xs ${TEXT_MUTED}`}>
                   {r.note}
                 </div>
               )}
-              {reach !== undefined && progressOf === undefined && (
+              {reach !== undefined && (
                 <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>
                   Reachability: {reach.text}
                 </span>
               )}
-              {progressOf !== undefined && (
-                <>
-                  <AllowProgress record={progressOf} now={progress.now} />
-                  {progressOf.finishedAt !== undefined && (
-                    // violations-suppress: react/no-raw-button same plain button as Allow and Deny of this card
-                    <button type="button" aria-label={`Dismiss ${r.command}`} onClick={() => {
-                        progress.dismiss(r.id);
-                        // The request left the daemon's list when it ended; the rows of the page may not have caught up yet.
-                        setAnswered((prev) => new Set(prev).add(r.id));
-                      }} className={DENY_BUTTON}>
-                      Dismiss
-                    </button>
-                  )}
-                </>
-              )}
-              {progressOf === undefined && left > 0 && denying !== r.id && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {rowCanAllow ? (
-                    // violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Allow <command>" tells the rows apart for a screen reader (same button as the table below)
-                    <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
-                      Allow
-                    </button>
-                  ) : (
-                    <span className="break-all font-mono text-xs">{r.nextCommand}</span>
-                  )}
-                  {/* violations-suppress: react/no-raw-button ButtonAction has no aria-label: the name "Deny <command>" tells the rows apart for a screen reader (looks like dsl-ui's danger outline button) */}
-                  <button type="button" aria-label={`Deny ${r.command}`} onClick={() => setDenying(r.id)} className={DENY_BUTTON}>
-                    Deny
-                  </button>
+              {left > 0 && denying !== r.id && (
+                // The buttons say "Allow" and "Deny": the group tells which request they answer (the design-system button has no aria-label).
+                <div role="group" aria-label={`Answer ${r.command}`} className="flex flex-wrap items-center gap-2">
+                  {rowCanAllow ? <ButtonAction label="Allow" variant="primary" size="sm" onClick={() => setSelected(r)} /> : <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>}
+                  <ButtonAction label="Deny" variant="danger-outline" size="sm" onClick={() => setDenying(r.id)} />
                 </div>
               )}
-              {progressOf === undefined && left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
+              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
             </li>
           );
         })}
@@ -206,8 +225,6 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
           row={{ ...selected, firstSeenText: selected.askedText, lastSeenText: selected.askedText }}
           machine={selected.machine ?? (allow as NonNullable<typeof allow>).machine}
           api={api.current}
-          progress={progress.entries[selected.id]?.record}
-          now={progress.now}
           onEvent={(event) => progress.handle(selected, selected.machine ?? (allow as NonNullable<typeof allow>).machine, selected.machine?.uuid ?? 'self', event)}
           onClose={() => setSelected(null)}
           onDone={(answer) => allowed(selected, answer)}

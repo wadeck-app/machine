@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FieldSelect, FieldText } from '@wadeck-app/dsl-ui';
-import { deliveryNotice, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
-import type { ProgressEvent, ProgressRecord } from '../lib/allowProgress.js';
+import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
+import type { ProgressEvent } from '../lib/allowProgress.js';
 import { LIFETIME_PRESETS, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
-import { AllowProgress } from './AllowProgress.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { MachineName } from './MachineName.js';
+import { MachineText } from './MachineText.js';
 import type { PendingRequestRow } from './AllowRequestsTable.js';
 
 type Phase =
@@ -13,11 +14,10 @@ type Phase =
   | { kind: 'ready'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined }
   | { kind: 'info'; message: string }
   | { kind: 'failed'; message: string }
-  | { kind: 'signing'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined }
-  | { kind: 'done'; result: AllowResult };
+  | { kind: 'signing'; context: AllowContext; prepared: AllowPrepared; hint: string | undefined };
 
-/** What the dialog tells the owner of the progress (decision 86). */
-export type AllowDialogEvent = ProgressEvent | { type: 'start' } | { type: 'abort' };
+/** What the dialog tells the owner of the progress (decision 86): `start` when the passphrase is taken, then the events of the signature and of the answer, `failed` when it did not go through. */
+export type AllowDialogEvent = ProgressEvent | { type: 'start' };
 
 export interface AllowDialogProps {
   row: PendingRequestRow;
@@ -28,13 +28,11 @@ export interface AllowDialogProps {
   onClose: () => void;
   onDone: (result: AllowResult) => void;
   /**
-   * The progress after "Allow and sign" (decision 86). When given, the steps are shown in this dialog from the click and the dialog stays open after the
-   * result (with Close); the owner keeps showing the progress on the card when the dialog is closed.
+   * The owner shows the progress on its own card (decision 86). When given, this dialog is only the CONFIRMATION: it closes itself (`onClose`) as soon as
+   * the signing is submitted, and a failure of the signature or of the post is reported with the event `failed` (the card shows it and offers Allow
+   * again). Absent (the table of refused commands): the dialog stays open and busy until the result, and shows a failure itself.
    */
   onEvent?: (event: AllowDialogEvent) => void;
-  progress?: ProgressRecord | undefined;
-  /** Epoch milliseconds, ticking in the owner of the progress. */
-  now?: number;
 }
 
 const OPTIONS = LIFETIME_PRESETS.map((p) => ({ value: p.kind, label: p.label }));
@@ -44,12 +42,16 @@ const CUSTOM_KINDS = [
 ];
 
 /** The sentence under the lifetime summary: what the entry lets EVERY trusted peer do, and until when. */
-function warningText(machineName: string, peerText: string, words: string): string {
-  return `This widens what peers may run on ${machineName}: the command is allowed to EVERY trusted peer, not only ${peerText}, byte for byte, ${words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call (the next matching call, from any peer, uses it up)' : words}. Only the admin passphrase can sign it.`;
+function warningText(machineName: string, peerText: string, words: string): React.ReactNode {
+  return (
+    <>
+      This widens what peers may run on <MachineName name={machineName} />: the command is allowed to EVERY trusted peer, not only <MachineName name={peerText} />, byte for byte, {words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call (the next matching call, from any peer, uses it up)' : words}. Only the admin passphrase can sign it.
+    </>
+  );
 }
 
 /** The confirmation of ONE row: loads the context (after the PIN), shows the exact change and its lifetime, asks the passphrase, signs in the page and posts. */
-export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone, onEvent, progress, now = Date.now() }: AllowDialogProps) {
+export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone, onEvent }: AllowDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
   const [choice, setChoice] = useState<LifetimeChoice>({ kind: defaultLifetime, customKind: 'duration', customText: '' });
@@ -106,75 +108,63 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
     setError(null);
     setPhase({ kind: 'signing', context, prepared, hint });
     onEvent?.({ type: 'start' });
+    // The passphrase is taken: with an owner that shows the progress on its card, this confirmation has done its job and goes away.
+    if (onEvent !== undefined) {
+      onClose();
+    }
     signAndSubmitAllow(api, context, { shell: row.shell, command: row.command, lifetime: resolution.flags }, passphrase, Math.floor(Date.now() / 1000), () => onEvent?.({ type: 'signed' })).then(
       result => {
         passphrase = '';
         // The owner learns the result even when the dialog was closed meanwhile: the progress goes on in its card.
         onEvent?.({ type: 'result', result });
-        if (mounted.current) {
-          if (onEvent !== undefined) {
-            setPhase({ kind: 'done', result });
-          }
-          onDone(result);
-        }
+        onDone(result);
       },
       (e: unknown) => {
         passphrase = '';
-        onEvent?.({ type: 'abort' });
+        const message = (e as Error).message;
+        if (onEvent !== undefined) {
+          // The dialog is gone: the card shows the failure (and Allow again).
+          onEvent({ type: 'failed', message });
+          return;
+        }
         if (!mounted.current) {
           return;
         }
-        setError((e as Error).message);
+        setError(message);
         setPhase({ kind: 'ready', context, prepared, hint });
       },
     );
   };
 
   if (phase.kind === 'loading') {
-    return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
-  }
-  if (phase.kind === 'done') {
-    const path = deliveryNotice(phase.result);
-    return (
-      <ConfirmSignModal
-        title={`Allowed on ${machine.name}`}
-        details={[
-          { label: 'Machine', value: machine.name },
-          { label: 'Shell', value: row.shell },
-          { label: 'Command', value: row.command },
-        ]}
-        warning=""
-        needsPassphrase={false}
-        confirmLabel=""
-        notes={[`Policy version ${phase.result.version}. ${path.text}.`, 'You can close this window: the progress stays on the request.']}
-        onConfirm={() => undefined}
-        onCancel={onClose}
-      >
-        {progress !== undefined && <AllowProgress record={progress} now={now} />}
-      </ConfirmSignModal>
-    );
+    return <ConfirmSignModal title={<>Allow on <MachineName name={machine.name} /></>} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
   }
   if (phase.kind === 'info' || phase.kind === 'failed') {
-    return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" error={phase.kind === 'failed' ? phase.message : null} notes={phase.kind === 'info' ? [phase.message] : []} onConfirm={() => undefined} onCancel={onClose} />;
+    return <ConfirmSignModal title={<>Allow on <MachineName name={machine.name} /></>} details={[]} warning="" needsPassphrase={false} confirmLabel="" error={phase.kind === 'failed' ? phase.message : null} notes={phase.kind === 'info' ? [<MachineText key="info" text={phase.message} names={[machine.name]} />] : []} onConfirm={() => undefined} onCancel={onClose} />;
   }
   const { prepared, context, hint } = phase;
-  const notes = [
-    `Policy version ${prepared.fromVersion} -> ${prepared.toVersion}, edited from the one ${context.source}. After this change every trusted peer may run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`,
-    ...(prepared.peersWithOwnList.length > 0 ? [`Not affected (they have their own list): ${prepared.peersWithOwnList.join(', ')}.`] : []),
-    context.delivery === 'install' ? `It is signed here, in this page, and installed on ${machine.name} (this machine).` : `It is signed here, in this page, and stored in the relay inbox of ${machine.name}.`,
+  const names = [machine.name];
+  const notes: React.ReactNode[] = [
+    <MachineText key="version" text={`Policy version ${prepared.fromVersion} -> ${prepared.toVersion}. Every trusted peer may then run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`} names={names} />,
+    ...(prepared.peersWithOwnList.length > 0 ? [<MachineText key="own" text={`Not affected (their own list): ${prepared.peersWithOwnList.join(', ')}.`} names={prepared.peersWithOwnList} />] : []),
+    <MachineText
+      key="where"
+      text={context.delivery === 'install' ? `Signed here, then installed on ${machine.name} (this machine).` : `Signed here, then sent to ${machine.name} directly, or stored in its relay inbox when it is not reachable.`}
+      names={names}
+    />,
     ...(context.delivery === 'inbox' && context.noticeRecipients !== undefined
-      ? [`The list of machines that receive request notices (information only, no right) is signed with it and sent to ${machine.name}${context.noticeRecipients.current === null ? ': none exists yet, a new one naming this machine is signed' : ' (the one already signed on this machine)'}.`]
+      ? [<MachineText key="recipients" text={`The list of machines that receive request notices (information only, no right) goes with it${context.noticeRecipients.current === null ? ': none exists yet, a new one naming this machine is signed' : ' (the one already signed on this machine)'}.`} names={names} />]
       : []),
     ...(choice.kind !== 'permanent' && choice.kind !== 'once' && choice.kind !== 'custom' ? ['A duration counts from the moment you sign.'] : []),
   ];
   return (
     <ConfirmSignModal
-      title={`Allow this command on ${machine.name}?`}
+      title={<>Allow this command on <MachineName name={machine.name} />?</>}
       details={[
-        { label: 'Machine', value: machine.name },
+        { label: 'Machine', value: <MachineName name={machine.name} /> },
         { label: 'Shell', value: row.shell },
         { label: 'Command', value: row.command },
-        { label: 'Asked by', value: `${row.peerText} (${row.countText})` },
+        { label: 'Asked by', value: <><MachineName name={row.peerText} /> ({row.countText})</> },
         { label: 'Lifetime', value: words ?? 'not valid yet: see the field below' },
       ]}
       notes={notes}
@@ -202,7 +192,6 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
           </div>
         )}
         {problem !== null && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
-        {progress !== undefined && phase.kind === 'signing' && <AllowProgress record={progress} now={now} />}
         {choice.kind === 'once' && <div className={TEXT_MUTED_SM}>The command runs once, then the next identical request is refused (or held) again.</div>}
       </div>
     </ConfirmSignModal>

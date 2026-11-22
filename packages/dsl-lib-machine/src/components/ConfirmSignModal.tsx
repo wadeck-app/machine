@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { PassphraseHint } from './PassphraseHint.js';
-import { INPUT, MODAL_BACKDROP, MODAL_PANEL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { INPUT, MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
 // approve and revoke later). It is NOT a registry component on purpose (no @registryCategory): it can never be wired from a view, so the passphrase
@@ -11,13 +11,14 @@ import { INPUT, MODAL_BACKDROP, MODAL_PANEL, NOTICE_WARNING, TEXT_ERROR, TEXT_MU
 // string exists only in the caller's local variable for the duration of one signature. It is never kept in state or a ref, and never shown.
 
 export interface ConfirmSignModalProps {
-  title: string;
+  /** Text, or text with machine names (MachineName). */
+  title: React.ReactNode;
   /** What is about to happen, as rows (machine, shell, exact command ...). Values are shown as given, in a monospace font. */
-  details: Array<{ label: string; value: string }>;
+  details: Array<{ label: string; value: React.ReactNode }>;
   /** Why this needs care (what it widens). Shown above the passphrase field. */
-  warning: string;
+  warning: React.ReactNode;
   /** Free text under the details (version change, who is not affected ...). */
-  notes?: string[];
+  notes?: React.ReactNode[];
   confirmLabel: string;
   /** True while the signature is made: the buttons are disabled. */
   busy?: boolean;
@@ -98,12 +99,12 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
           {details.map(d => (
             <React.Fragment key={d.label}>
               <dt className={TEXT_MUTED}>{d.label}</dt>
-              <dd className="break-all font-mono">{d.value}</dd>
+              <dd className="break-all" style={MONO_STYLE}>{d.value}</dd>
             </React.Fragment>
           ))}
         </dl>
-        {notes.map(n => (
-          <p key={n} className={TEXT_MUTED_SM}>{n}</p>
+        {notes.map((n, i) => (
+          <p key={i} className={TEXT_MUTED_SM}>{n}</p>
         ))}
         {children}
         {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}

@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { MachineName } from './MachineName.js';
+import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
 
 export interface PendingRequestRow {
@@ -48,7 +50,7 @@ const rowKey = (r: PendingRequestRow): string => `${r.peer}\u0000${r.shell}\u000
 export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No request is waiting for approval', onRefresh }: AllowRequestsTableProps) {
   const [selected, setSelected] = useState<PendingRequestRow | null>(null);
   const [allowed, setAllowed] = useState<ReadonlySet<string>>(new Set());
-  const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
+  const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string; machine: string } | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
 
@@ -61,7 +63,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
     setSelected(null);
     // Which path the policy took, in the words of the CLI: delivered directly or installed here (success colour), or the relay inbox with the cause (warning colour).
     const path = deliveryNotice(answer);
-    setResult({ tone: path.tone, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
+    setResult({ tone: path.tone, machine: answer.target.name, text: `Allowed ${row.shell} ${JSON.stringify(row.command)}: policy version ${answer.version}. ${path.text}. \`machine allowed ${answer.target.name}\` lists it.${noticeRecipientsText(answer)}` });
     // The page's own data catches up (the allowed command leaves the pending list); a failure is reported by the page's notifier.
     void onRefresh?.('requests');
   };
@@ -69,7 +71,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
   return (
     <div className="flex flex-col gap-3">
       {result !== null && (
-        <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}>{result.text}</div>
+        <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}><MachineText text={result.text} names={[result.machine]} /></div>
       )}
       {allow !== undefined && !canAllow && allow.note !== '' && (
         <div className={NOTICE_NEUTRAL}>{allow.note}</div>
@@ -93,11 +95,11 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
             <tbody>
               {visible.map(r => (
                 <tr key={rowKey(r)} className={TABLE_BODY_ROW} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-                  <td className="whitespace-nowrap px-2 py-1">{r.peerText}</td>
+                  <td className="whitespace-nowrap px-2 py-1"><MachineName name={r.peerText} /></td>
                   <td className="whitespace-nowrap px-2 py-1">{r.shell}</td>
                   <td className="break-all px-2 py-1">
                     {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
-                    <span className="font-mono">{r.command}</span>
+                    <span style={MONO_STYLE}>{r.command}</span>
                     {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED_SM}`}>Truncated: only the first part of the command was reported.</div>}
                     {r.note !== undefined && (
                       <div data-testid="notice-note" className="text-xs text-muted">
@@ -115,7 +117,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
                         Allow
                       </button>
                     ) : (
-                      <span className="break-all font-mono text-xs">{r.nextCommand}</span>
+                      <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>
                     )}
                   </td>
                 </tr>

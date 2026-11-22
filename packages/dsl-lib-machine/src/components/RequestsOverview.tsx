@@ -6,6 +6,7 @@ import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../li
 import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
 
 type Capability = { available: boolean; machine: { uuid: string; name: string }; note: string };
@@ -161,7 +162,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       )}
       {failures.map((f) => (
         <div key={f.peer.uuid} role="alert" className={NOTICE_WARNING}>
-          {f.peer.name}: {f.message}
+          <MachineName name={f.peer.name} />: {f.message}
         </div>
       ))}
 
@@ -170,13 +171,13 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
       {showSelf && (
         <div className="flex flex-col gap-2">
-          <h3 className="text-base font-semibold text-content">Waiting for approval{self !== undefined ? ` on ${self.name}` : ''}</h3>
+          <h3 className="text-base font-semibold text-content">Waiting for approval{self !== undefined && <> on <MachineName name={self.name} /></>}</h3>
           <AllowRequestsTable rows={pending} allow={allow} emptyMessage={emptyMessage} {...(onRefresh !== undefined ? { onRefresh } : {})} />
         </div>
       )}
       {pages.map((page) => (
         <div key={page.machine.uuid} className="flex flex-col gap-2">
-          <h3 className="text-base font-semibold text-content">Waiting for approval on {page.machine.name}</h3>
+          <h3 className="text-base font-semibold text-content">Waiting for approval on <MachineName name={page.machine.name} /></h3>
           {!page.chainOk && <div className={NOTICE_WARNING}>{page.chainText}</div>}
           <AllowRequestsTable rows={page.pending} allow={page.allow} emptyMessage={`No refused request on ${page.machine.name}`} />
           {page.notes.map((n) => (
@@ -187,7 +188,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
       {noticeRows.refused.map((section) => (
         <div key={section.machine.uuid} className="flex flex-col gap-2">
-          <h3 className="text-base font-semibold text-content">Waiting for approval on {section.machine.name}</h3>
+          <h3 className="text-base font-semibold text-content">Waiting for approval on <MachineName name={section.machine.name} /></h3>
           <AllowRequestsTable rows={section.rows} allow={{ available: allow?.available === true, machine: section.machine, note: '' }} emptyMessage={`No refused request on ${section.machine.name}`} {...(onRefresh !== undefined ? { onRefresh } : {})} />
         </div>
       ))}
@@ -195,7 +196,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       {asking && (
         <ConfirmSignModal
           title="Load the requests of the other machines?"
-          details={[{ label: 'Machines', value: peers.map((p) => p.name).join(', ') }]}
+          details={[{ label: 'Machines', value: peers.map((p, i) => <React.Fragment key={p.uuid}>{i > 0 && ', '}<MachineName name={p.name} /></React.Fragment>) }]}
           notes={['Each machine is asked for its held requests and its refused ones, over the authenticated channel, with a read-only request signed here. Nothing is run and nothing is changed on any machine; each machine records the exchange.']}
           warning="The admin passphrase unlocks the admin key in this page for the signatures only. It is not stored and not sent: only the signed requests leave the page."
           confirmLabel="Sign and load"

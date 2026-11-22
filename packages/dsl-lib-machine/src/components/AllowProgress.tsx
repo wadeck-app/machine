@@ -1,10 +1,9 @@
 import React from 'react';
-import { StepMarker } from './StepMarker.js';
-import { elapsedText, percentOf, stepsOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
-import { PROGRESS_FILL, PROGRESS_FILL_FAILED, PROGRESS_TRACK, STEP_ACTIVE, STEP_DONE, STEP_FAILED, STEP_PENDING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { percentOf, stepsOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
+import { SEGMENT_ACTIVE, SEGMENT_DONE, SEGMENT_FAILED, SEGMENT_PENDING, STEPPER_SEGMENT, STEP_ACTIVE, STEP_DONE, STEP_FAILED, STEP_PENDING } from '../lib/styleTokens.js';
 
-// The steps after "Allow and sign" (decision 86), with a determinate bar and the elapsed time. Every step comes from a real event (allowProgress.ts).
-// The state of a step is said in words for a screen reader; the list is a polite live region, so a change is announced.
+// The thin stepper under a request (decision 86): one segment and ONE word per step, merged with the determinate bar. Every step comes from a real
+// event (allowProgress.ts). The sentences (cause, explanation) are NOT here: the row above says the outcome, the Details disclosure the rest.
 
 export interface AllowProgressProps {
   record: ProgressRecord;
@@ -12,35 +11,30 @@ export interface AllowProgressProps {
   now: number;
 }
 
-const WORDS: Record<StepState, string> = { done: 'done', active: 'in progress', pending: 'pending', failed: 'failed', skipped: 'not needed' };
-const COLOUR: Record<StepState, string> = { done: STEP_DONE, active: STEP_ACTIVE, pending: STEP_PENDING, failed: STEP_FAILED, skipped: STEP_PENDING };
+/** The state of a step in words, for a screen reader (the value text of the bar). */
+export const STATE_WORDS: Record<StepState, string> = { done: 'done', active: 'in progress', pending: 'pending', failed: 'failed', skipped: 'not needed' };
+const SEGMENT: Record<StepState, string> = { done: SEGMENT_DONE, active: SEGMENT_ACTIVE, pending: SEGMENT_PENDING, failed: SEGMENT_FAILED, skipped: SEGMENT_PENDING };
+const WORD_COLOUR: Record<StepState, string> = { done: STEP_DONE, active: STEP_ACTIVE, pending: STEP_PENDING, failed: STEP_FAILED, skipped: STEP_PENDING };
 
 export function AllowProgress({ record, now }: AllowProgressProps) {
   const steps = stepsOf(record, now);
-  const percent = percentOf(record);
-  const failed = steps.some((s) => s.state === 'failed');
   return (
-    <div className="flex flex-col gap-2" data-testid="allow-progress">
-      <div role="progressbar" aria-label="Progress of the allow" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className={PROGRESS_TRACK}>
-        <div className={failed ? PROGRESS_FILL_FAILED : PROGRESS_FILL} style={{ width: `${percent}%` }} />
-      </div>
-      <div className={TEXT_MUTED_SM}>{elapsedText(record, now)}</div>
-      {/* A polite live region without role=status: the page already has its own status message for the result, and a change of step is announced here. */}
-      <div aria-live="polite" data-testid="allow-progress-steps">
-        <ol className="flex flex-col gap-1 text-sm">
-          {steps.map((s) => (
-            <li key={s.id} className={`flex flex-col ${COLOUR[s.state]}`}>
-              <span className="flex items-center gap-2">
-                <StepMarker state={s.state} />
-                <span className="sr-only">{WORDS[s.state]}: </span>
-                <span>{s.label}</span>
-              </span>
-              {s.detail !== undefined && <span className="pl-6 text-xs text-muted">{s.detail}</span>}
-            </li>
-          ))}
-        </ol>
-        {record.pollError !== undefined && !record.timedOut && record.finishedAt === undefined && <p className="text-xs text-muted">The page could not ask {record.machineName} just now ({record.pollError}); it asks again.</p>}
-      </div>
+    <div
+      role="progressbar"
+      aria-label="Progress of the allow"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percentOf(record)}
+      aria-valuetext={steps.map((s) => `${s.short}: ${STATE_WORDS[s.state]}`).join(', ')}
+      data-testid="allow-progress"
+      className="flex gap-1"
+    >
+      {steps.map((s) => (
+        <div key={s.id} className="flex flex-1 flex-col gap-0.5">
+          <div className={`${STEPPER_SEGMENT} ${SEGMENT[s.state]}`} />
+          <span className={`text-xs ${WORD_COLOUR[s.state]}`}>{s.short}</span>
+        </div>
+      ))}
     </div>
   );
 }

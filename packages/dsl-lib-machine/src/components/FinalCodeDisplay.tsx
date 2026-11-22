@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { finalCode } from '@wadeck-app/machine-webcrypto';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
 export interface FinalCodeDisplayProps {
   /** Candidate identity public key, unpadded base64url. */
@@ -56,7 +57,7 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm">Compare this security code with the one shown on the candidate machine: it must read exactly the same.</p>
-      <div aria-label="Security code" role="group" className="font-mono text-2xl tracking-widest">
+      <div aria-label="Security code" role="group" style={MONO_STYLE} className="text-2xl tracking-widest">
         {computed.code}
       </div>
       <label className="flex items-center gap-2 text-sm">

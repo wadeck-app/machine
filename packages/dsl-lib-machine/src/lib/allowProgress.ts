@@ -1,4 +1,5 @@
 import type { AllowResult } from './allowFlow.js';
+import { deliverySummary, type DeliverySummary } from './deliverySummary.js';
 
 // The progress after "Allow and sign" (decision 86), without React. Every step is driven by a REAL event, never by the clock:
 //   1. Signed                 the signature is made in this page.
@@ -16,6 +17,8 @@ export type StepState = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
 export interface ProgressStep {
   id: 'signed' | 'delivered' | 'installs' | 'released';
   label: string;
+  /** One word for the thin stepper under the card: Signed, Delivered (Stored in the relay), Installed, Released. */
+  short: string;
   state: StepState;
   /** What the person needs to read next to the step (the path and its cause, the wait, the failure). */
   detail?: string;
@@ -74,11 +77,11 @@ export function reduceProgress(record: ProgressRecord, event: ProgressEvent, now
 }
 
 const OUTCOME_TEXT: Record<string, string> = {
-  denied: 'the request was denied (nothing ran)',
-  deadline: 'the wait ended before the command was released: the deadline of the caller passed (nothing ran)',
-  disconnected: 'the caller disconnected before the command was released (nothing ran)',
-  refused: 'the target refused the request after all (nothing ran)',
-  revoked: 'the caller was revoked on the target (nothing ran)',
+  denied: 'denied: nothing ran',
+  deadline: 'the deadline of the caller passed: nothing ran',
+  disconnected: 'the caller disconnected: nothing ran',
+  refused: 'the target refused it after all: nothing ran',
+  revoked: 'the caller was revoked on the target: nothing ran',
 };
 
 /** The steps as they stand now. */
@@ -88,47 +91,48 @@ export function stepsOf(record: ProgressRecord, _now: number): ProgressStep[] {
   const ended = record.hold?.state === 'ended' ? record.hold : undefined;
   const steps: ProgressStep[] = [];
 
-  steps.push({ id: 'signed', label: record.signed ? 'Signed' : 'Signing', state: record.signed ? 'done' : failed !== undefined ? 'failed' : 'active' });
+  steps.push({ id: 'signed', short: 'Signed', label: record.signed ? 'Signed' : 'Signing', state: record.signed ? 'done' : failed !== undefined ? 'failed' : 'active', ...(!record.signed && failed !== undefined ? { detail: failed } : {}) });
 
   // Step 2: the delivery.
   if (result !== undefined) {
     const label = result.delivery === 'direct' ? `Delivered directly to ${name}` : result.delivery === 'inbox' ? 'Stored on the relay' : (result.deliveryText?.text ?? `Installed on ${name}`);
-    steps.push({ id: 'delivered', label, state: 'done', ...(result.deliveryText !== undefined ? { detail: result.deliveryText.text } : {}) });
+    // The cause of a fallback is NOT copied here: the card says it once (deliverySummary), the long sentence is in the details.
+    steps.push({ id: 'delivered', short: result.delivery === 'inbox' ? 'Stored' : 'Delivered', label, state: 'done' });
   } else if (failed !== undefined && record.signed) {
-    steps.push({ id: 'delivered', label: 'Delivering', state: 'failed', detail: failed });
+    steps.push({ id: 'delivered', short: 'Delivered', label: 'Delivering', state: 'failed', detail: failed });
   } else {
-    steps.push({ id: 'delivered', label: 'Delivering', state: record.signed ? 'active' : 'pending' });
+    steps.push({ id: 'delivered', short: 'Delivered', label: 'Delivering', state: record.signed ? 'active' : 'pending' });
   }
 
   // Step 3: the target installs the policy.
   const acknowledged = result !== undefined && (result.delivery === 'direct' || result.delivery === 'installed');
   const impliedByEnd = ended?.outcome === 'allowed';
   if (acknowledged || impliedByEnd) {
-    steps.push({ id: 'installs', label: `${name} installed the policy`, state: 'done' });
+    steps.push({ id: 'installs', short: 'Installed', label: `${name} installed the policy`, state: 'done' });
   } else if (result !== undefined && result.delivery === 'inbox') {
     if (ended !== undefined) {
-      steps.push({ id: 'installs', label: `${name} installs the policy`, state: 'skipped', detail: 'not confirmed: the request ended first' });
+      steps.push({ id: 'installs', short: 'Installed', label: `${name} installs the policy`, state: 'skipped', detail: 'not confirmed: the request ended first' });
     } else if (record.timedOut) {
-      steps.push({ id: 'installs', label: `${name} installs the policy`, state: 'failed', detail: 'not confirmed' });
+      steps.push({ id: 'installs', short: 'Installed', label: `${name} installs the policy`, state: 'failed', detail: 'not confirmed' });
     } else {
-      steps.push({ id: 'installs', label: `${name} installs the policy`, state: 'active', detail: 'it installs it at its next inbox poll (within 60 s, or 5 s while it holds a request)' });
+      steps.push({ id: 'installs', short: 'Installed', label: `${name} installs the policy`, state: 'active', detail: 'at its next inbox poll (within 60 s, or 5 s while it holds a request)' });
     }
   } else {
-    steps.push({ id: 'installs', label: `${name} installs the policy`, state: 'pending' });
+    steps.push({ id: 'installs', short: 'Installed', label: `${name} installs the policy`, state: 'pending' });
   }
 
   // Step 4: the end of the hold, only for a request somebody waits for.
   if (record.held) {
     if (ended?.outcome === 'allowed') {
-      steps.push({ id: 'released', label: 'The held command was released', state: 'done' });
+      steps.push({ id: 'released', short: 'Released', label: 'The held command was released', state: 'done' });
     } else if (ended !== undefined) {
-      steps.push({ id: 'released', label: 'The held command was not released', state: 'failed', detail: OUTCOME_TEXT[ended.outcome] ?? `the request ended: ${ended.outcome}` });
+      steps.push({ id: 'released', short: 'Released', label: 'The held command was not released', state: 'failed', detail: OUTCOME_TEXT[ended.outcome] ?? `the request ended: ${ended.outcome}` });
     } else if (record.timedOut) {
-      steps.push({ id: 'released', label: 'The held command was not confirmed', state: 'failed', detail: noConfirmationMessage(name) });
+      steps.push({ id: 'released', short: 'Released', label: 'The held command was not confirmed', state: 'failed', detail: noConfirmationMessage(name) });
     } else if (steps[2]?.state === 'done') {
-      steps.push({ id: 'released', label: 'Waiting for the held command to be released', state: 'active' });
+      steps.push({ id: 'released', short: 'Released', label: 'Waiting for the held command to be released', state: 'active' });
     } else {
-      steps.push({ id: 'released', label: 'The held command is released', state: 'pending' });
+      steps.push({ id: 'released', short: 'Released', label: 'The held command is released', state: 'pending' });
     }
   }
   return steps;
@@ -138,6 +142,54 @@ export function stepsOf(record: ProgressRecord, _now: number): ProgressStep[] {
 export function percentOf(record: ProgressRecord): number {
   const steps = stepsOf(record, 0);
   return Math.round((steps.filter((s) => s.state === 'done').length / steps.length) * 100);
+}
+
+export interface ProgressSummary {
+  /** active: it goes on; success: released (or installed when nobody waits); danger: it ended without the result the person wanted. */
+  tone: 'active' | 'success' | 'danger';
+  /** The outcome in one short line: it goes next to the command and the machine. */
+  text: string;
+  /** Why, in a smaller line (the failure message, the actionable message of a timeout). Never repeated in the details. */
+  cause?: string;
+  /** How the delivery went, once the daemon answered. */
+  delivery?: DeliverySummary;
+  finished: boolean;
+  succeeded: boolean;
+  /** The signature or the post failed: nothing was installed and the request is still held, so Allow can be tried again. */
+  retryable: boolean;
+}
+
+const ACTIVE_TEXT: Record<ProgressStep['id'], string> = {
+  signed: 'Signing',
+  delivered: 'Delivering',
+  installs: 'Waiting for the install',
+  released: 'Waiting for the release',
+};
+
+/** What the one-line row of a request says, from the same steps as the stepper. */
+export function summaryOf(record: ProgressRecord, now: number): ProgressSummary {
+  const steps = stepsOf(record, now);
+  const delivery = record.result !== undefined ? deliverySummary(record.result) : undefined;
+  const base = { ...(delivery !== undefined ? { delivery } : {}), finished: record.finishedAt !== undefined };
+  if (record.timedOut) {
+    return { ...base, tone: 'danger', text: 'Not confirmed', cause: noConfirmationMessage(record.machineName), succeeded: false, retryable: false };
+  }
+  const failed = steps.find((s) => s.state === 'failed');
+  if (failed !== undefined) {
+    if (failed.id === 'signed' || failed.id === 'delivered') {
+      return { ...base, tone: 'danger', text: failed.id === 'signed' ? 'Signing failed' : 'Delivery failed', ...(failed.detail !== undefined ? { cause: failed.detail } : {}), succeeded: false, retryable: record.failed !== undefined };
+    }
+    return { ...base, tone: 'danger', text: 'Not released', ...(failed.detail !== undefined ? { cause: failed.detail } : {}), succeeded: false, retryable: false };
+  }
+  const active = steps.find((s) => s.state === 'active');
+  if (active !== undefined) {
+    return { ...base, tone: 'active', text: ACTIVE_TEXT[active.id], succeeded: false, retryable: false };
+  }
+  // Nothing active and nothing failed: a step still pending only before the first event, else everything is done.
+  if (steps.every((s) => s.state === 'done' || s.state === 'skipped')) {
+    return { ...base, tone: 'success', text: record.held ? 'Released' : 'Installed', succeeded: true, retryable: false };
+  }
+  return { ...base, tone: 'active', text: 'Signing', succeeded: false, retryable: false };
 }
 
 /** `9 s`, `2 min 5 s`: from the click, frozen when nothing more can happen. */

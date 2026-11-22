@@ -2,7 +2,17 @@
 // preset): never a Tailwind palette class (a hue name and a shade number) and never a hex value. The tokens follow the theme (light, dark) and the
 // palette the person picked in the shell, so these components look like the rest of the app. Tailwind scans this file (src/**/*.ts).
 
+import type { CSSProperties } from 'react';
+
 // @formatter:off
+
+/**
+ * The monospace stack of the module, for machine names, commands and shells. The theme of the app defines NO monospace family (dsl-ui's preset only defines
+ * `sans: Inter`, so Tailwind's `font-mono` is a generic stack that differs from one shell stylesheet to the other): this is the ONE token, applied with
+ * `style={MONO_STYLE}` (never with the class `font-mono`). A real family first, the generic ones as the fallback.
+ */
+export const MONO_FONT_STACK = "'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, 'Liberation Mono', ui-monospace, monospace";
+export const MONO_STYLE: CSSProperties = { fontFamily: MONO_FONT_STACK };
 
 /** Floating panel (tooltip, popover): the same surface as dsl-ui's Popover. */
 export const POPOVER_SURFACE = 'rounded-lg border border-border bg-surface text-content shadow-lg';
@@ -30,17 +40,15 @@ export const TABLE_BODY_ROW = 'border-b border-border align-top';
 export const ALLOW_BUTTON = 'inline-flex items-center rounded bg-primary px-3 py-1 text-xs font-medium text-on-solid transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1';
 
 /** A held request (a caller waits for the answer): a card that stands out from the table below it. */
-export const HELD_ITEM = 'flex flex-col gap-2 rounded-lg border border-warning bg-warning-bg p-3 text-warning-text';
+export const HELD_ITEM = 'flex flex-col gap-1.5 rounded-lg border border-warning bg-warning-bg px-3 py-2 text-warning-text';
 
 /** The command of a held request: it is what the owner reads before answering, so it is the largest text of the card. */
-export const HELD_COMMAND = 'break-all font-mono text-lg font-semibold text-content';
+export const HELD_COMMAND = 'break-all text-lg font-semibold text-content';
 
 /** The countdown of a held request, and the same in red when it is nearly over. */
 export const HELD_COUNTDOWN = 'whitespace-nowrap text-sm font-medium tabular-nums';
 export const HELD_COUNTDOWN_URGENT = 'whitespace-nowrap text-sm font-semibold tabular-nums text-danger-text';
 
-/** The Deny button of a held request: dsl-ui's danger outline (same pair as its Badge) with a visible keyboard focus ring. */
-export const DENY_BUTTON = 'inline-flex items-center rounded border border-danger bg-surface px-3 py-1 text-xs font-medium text-danger-text transition-colors hover:bg-danger-bg focus:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-1';
 
 /** The passphrase hint above the passphrase field: larger than the surrounding text, on its own line (it is what the person needs to read first). */
 export const PASSPHRASE_HINT = 'rounded border border-border bg-surface p-2 text-base text-content';
@@ -55,17 +63,32 @@ export const OUTCOME_WARNING = 'inline-block whitespace-nowrap rounded border bo
 export const OUTCOME_DANGER = 'inline-block whitespace-nowrap rounded border border-danger bg-danger-bg px-2 py-0.5 text-xs text-danger-text';
 export const OUTCOME_NEUTRAL = 'inline-block whitespace-nowrap rounded border border-border px-2 py-0.5 text-xs text-muted';
 
+/** Activity page (activity-paging): the exit code cell, green for 0, red for any other code, a timeout or a kill, muted when no command ran. */
+export const EXIT_OK = 'whitespace-nowrap font-medium tabular-nums text-success-text';
+export const EXIT_FAIL = 'whitespace-nowrap font-medium tabular-nums text-danger-text';
+export const EXIT_NONE = 'whitespace-nowrap text-muted';
+
 /** Activity page: the command column and the pager buttons. */
-export const COMMAND_TEXT = 'break-all font-mono text-sm text-content';
+export const COMMAND_TEXT = 'break-all text-sm text-content';
 export const PAGE_BUTTON = 'inline-flex items-center rounded border border-border bg-surface px-3 py-1 text-xs font-medium text-content transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 disabled:opacity-40';
 
 // @formatter:on
 
-/** Progress after an Allow (decision 86): the track and the fill of the bar, and one text colour per state of a step. Theme tokens only. */
-export const PROGRESS_TRACK = 'h-2 w-full overflow-hidden rounded bg-border';
-export const PROGRESS_FILL = 'h-2 rounded bg-primary transition-all';
-export const PROGRESS_FILL_FAILED = 'h-2 rounded bg-danger transition-all';
+/** Progress after an Allow (decision 86): one text colour per state of a step. Theme tokens only. */
 export const STEP_DONE = 'text-success-text';
 export const STEP_ACTIVE = 'font-medium text-content';
 export const STEP_PENDING = 'text-muted';
 export const STEP_FAILED = 'text-danger-text';
+
+/** The thin stepper of a request (4 segments, one word each): a segment per state, and the row it sits in (compact, slim once finished). */
+export const STEPPER_SEGMENT = 'h-1 w-full rounded';
+export const SEGMENT_DONE = 'bg-primary';
+export const SEGMENT_ACTIVE = 'bg-primary opacity-50';
+export const SEGMENT_PENDING = 'bg-border';
+export const SEGMENT_FAILED = 'bg-danger';
+/** The card of a request that is only a progress display: one line and the stepper (px-3 py-2: the `sm` padding of the dsl-ui Card, tighter vertically). */
+export const PROGRESS_CARD_ACTIVE = 'flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2 text-content';
+export const PROGRESS_CARD_SUCCESS = 'flex flex-col gap-1 rounded-lg border border-success bg-success-bg px-3 py-2 text-content';
+export const PROGRESS_CARD_DANGER = 'flex flex-col gap-1 rounded-lg border border-danger bg-danger-bg px-3 py-2 text-content';
+/** The same, finished and collapsed: one line of about 34 px. */
+export const PROGRESS_SLIM_SUCCESS = 'flex flex-col gap-1 rounded-lg border border-success bg-success-bg px-3 py-0.5 text-content';

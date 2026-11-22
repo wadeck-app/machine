@@ -147,11 +147,11 @@ describe('loading the other machines', () => {
     await load();
     const item = screen.getByRole('listitem', { name: 'Held request hostname' });
     expect(within(item).getByText('thinkcentre')).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Allow hostname' })).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Deny hostname' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
     // This machine's own row keeps its Deny button.
-    expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
+    expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Waiting for approval on thinkcentre' })).toBeInTheDocument();
     expect(screen.getByText('ver')).toBeInTheDocument();
   }, 120_000);
@@ -211,17 +211,17 @@ describe('request notices (reported by other machines, no passphrase)', () => {
     expect(item).toHaveAttribute('data-testid', 'notice-row');
     expect(within(item).getByText('laptop')).toBeInTheDocument();
     expect(within(item).getByTestId('notice-note')).toHaveTextContent(NOTE);
-    expect(within(item).getByRole('button', { name: 'Allow uptime' })).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Deny uptime' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
     expect(within(item).getByText(/5 min 0 s left|4 min 5\d s left/)).toBeInTheDocument();
     // The own row is untouched.
-    expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
+    expect(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
   });
 
   it('Allow of a notice row goes through the existing allow flow for the machine of the row', async () => {
     render(<RequestsOverview {...props({ notices: [notice()] })} />);
-    await userEvent.click(within(screen.getByRole('listitem', { name: 'Held request uptime' })).getByRole('button', { name: 'Allow uptime' }));
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Held request uptime' })).getByRole('button', { name: 'Allow' }));
     await waitFor(() => expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${LAPTOP}`)).toBe(true));
   });
 
@@ -236,7 +236,7 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   it('a truncated command is flagged and has no Allow button', () => {
     render(<RequestsOverview {...props({ notices: [notice({ commandTruncated: true })] })} />);
     const item = screen.getByRole('listitem', { name: 'Held request uptime' });
-    expect(within(item).queryByRole('button', { name: 'Allow uptime' })).toBeNull();
+    expect(within(item).queryByRole('button', { name: 'Allow' })).toBeNull();
     expect(within(item).getByText(/command is truncated/i)).toBeInTheDocument();
   });
 
@@ -247,6 +247,12 @@ describe('request notices (reported by other machines, no passphrase)', () => {
     expect(row).toHaveTextContent('whoami');
     expect(within(row).getByTestId('notice-note')).toHaveTextContent(NOTE);
     expect(within(row).getByRole('button', { name: 'Allow whoami' })).toBeInTheDocument();
+  });
+
+  it('shows the machine name of a section heading in the machine font', () => {
+    render(<RequestsOverview {...props({ notices: [notice({ state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
+    const heading = screen.getByRole('heading', { name: 'Waiting for approval on laptop' });
+    expect(within(heading).getByText('laptop').style.fontFamily).toContain('JetBrains Mono');
   });
 
   it('a damaged store is a visible warning with the message', () => {

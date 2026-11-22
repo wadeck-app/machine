@@ -31,11 +31,16 @@ let calls: Call[];
 let elevate: ReturnType<typeof vi.fn>;
 let denyAnswer: unknown;
 let holdAnswer: unknown;
+let allowAnswer: unknown;
+/** When set, the post of the policy waits for it: the page can be looked at while the daemon has not answered. */
+let postGate: Promise<void> | null;
 
 beforeEach(() => {
   calls = [];
   keyFileText = keyFile;
   holdAnswer = { state: 'held' };
+  allowAnswer = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
+  postGate = null;
   denyAnswer = { ok: true, id: 'aaaa1111', peer: PEER, shell: 'sh', command: 'ls' };
   elevate = vi.fn(async () => undefined);
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
@@ -47,7 +52,11 @@ beforeEach(() => {
       return { file: keyFileText };
     }
     if (url === 'POST /api/modules/machine/allow') {
-      return { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
+      await postGate;
+      if (allowAnswer instanceof Error) {
+        throw allowAnswer;
+      }
+      return allowAnswer;
     }
     if (url.startsWith('GET /api/modules/machine/hold-progress/')) {
       return holdAnswer;
@@ -69,12 +78,19 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
-// After a successful Allow the dialog stays open with the progress (decision 86): wait for it, then close it.
+// The dialog is only the confirmation: it closes itself as soon as the signing is submitted, the progress is on the card.
 const closeDone = async () => {
-  await userEvent.click(await screen.findByRole('button', { name: 'Close' }, { timeout: 20_000 }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+};
+// The dialog is gone at once; the post of the signed policy follows.
+const posted = async () => {
+  await closeDone();
+  await waitFor(() => expect(calls.some((c) => c.url === 'POST /api/modules/machine/allow')).toBe(true), { timeout: 20_000 });
 };
 const itemOf = (command: string) => screen.getByRole('listitem', { name: `Held request ${command}` });
+// Allow and Deny are the buttons of the design system, whose name is the visible label: the card (a labelled list item) tells which request they answer.
+const allowBtn = (command: string) => within(itemOf(command)).getByRole('button', { name: 'Allow' });
+const denyBtn = (command: string) => within(itemOf(command)).getByRole('button', { name: 'Deny' });
 
 describe('the list', () => {
   it('renders nothing when no request is held (no empty heading)', () => {
@@ -88,12 +104,28 @@ describe('the list', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
     const item = itemOf('df -h');
     const command = within(item).getByText('df -h');
-    expect(command.className).toMatch(/font-mono/);
+    expect(command.style.fontFamily).toContain('JetBrains Mono');
     expect(command.className).toMatch(/text-lg/);
-    expect(within(item).getByText('thinkcentre')).toBeInTheDocument();
-    expect(within(item).getByText('sh')).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Allow df -h' })).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Deny df -h' })).toBeInTheDocument();
+    // Machine names are in the machine font, and so is the shell.
+    expect(within(item).getByText('thinkcentre').style.fontFamily).toContain('JetBrains Mono');
+    expect(within(item).getByText('sh').style.fontFamily).toContain('JetBrains Mono');
+    expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+  });
+
+  it('Allow and Deny are the design-system buttons (size sm), grouped under a name that tells which request they answer', () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    const group = within(itemOf('df -h')).getByRole('group', { name: 'Answer df -h' });
+    const allow = within(group).getByRole('button', { name: 'Allow' });
+    const deny = within(group).getByRole('button', { name: 'Deny' });
+    // ButtonAction size sm: the same geometry for both (one height), never the raw classes of the old buttons.
+    expect(allow.className).toContain('px-3 py-1 text-xs');
+    expect(deny.className).toContain('px-3 py-1 text-xs');
+  });
+
+  it('keeps the vertical rhythm of two slim cards: no page-level padding stack, the list gap is gap-2', () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    expect(screen.getAllByRole('listitem')[0]?.parentElement?.className).toMatch(/\bgap-2\b/);
   });
 
   it('where Allow is not available: no Allow button, the note and the CLI command are shown, Deny stays', () => {
@@ -101,7 +133,7 @@ describe('the list', () => {
     expect(screen.queryByRole('button', { name: /^Allow/ })).toBeNull();
     expect(screen.getByText(/Only the admin machine can allow/)).toBeInTheDocument();
     expect(screen.getByText('machine admin allow desktop --shell sh -- ls')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Deny ls' })).toBeInTheDocument();
+    expect(denyBtn('ls')).toBeInTheDocument();
   });
 });
 
@@ -140,7 +172,7 @@ describe('the countdown', () => {
 describe('Deny', () => {
   it('opens a small form with an optional reason, Confirm deny and Cancel, and asks no passphrase and no PIN yet', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny df -h' }));
+    await userEvent.click(denyBtn('df -h'));
     const item = itemOf('df -h');
     const reason = within(item).getByLabelText(/reason/i);
     expect(reason).toHaveAttribute('maxlength', '200');
@@ -154,7 +186,7 @@ describe('Deny', () => {
 
   it('Cancel closes the form and posts nothing', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('button', { name: 'Confirm deny' })).toBeNull();
     expect(calls).toEqual([]);
@@ -163,20 +195,23 @@ describe('Deny', () => {
   it('asks the PIN first (the route is sensitive), then posts only {id, reason} with the module header, no passphrase; the row leaves and the page refreshes', async () => {
     const onRefresh = vi.fn(async () => undefined);
     render(<HeldRequests rows={ROWS} allow={ALLOW} onRefresh={onRefresh} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.type(screen.getByLabelText(/reason/i), 'not now, ask again later');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull());
     expect(calls).toEqual([{ url: 'POST /api/modules/machine/deny', body: { id: 'aaaa1111', reason: 'not now, ask again later' }, headers: { 'x-machine-module': '1' } }]);
     expect(elevate).toHaveBeenCalledTimes(1);
     expect(onRefresh).toHaveBeenCalledWith('requests');
-    expect(await screen.findByRole('status')).toHaveTextContent(/denied/i);
+    // The one short line of a Deny (nothing else shows it): one sentence, no wall of text.
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Denied ls from thinkcentre: nothing was signed');
+    expect(status.textContent?.length).toBeLessThan(80);
     expect(itemOf('df -h')).toBeInTheDocument();
   });
 
   it('posts no reason key when the field is empty', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.body).toEqual({ id: 'aaaa1111' });
@@ -187,7 +222,7 @@ describe('Deny', () => {
     ['a reason over 200 characters', 'x'.repeat(201), /at most 200/],
   ])('%s is refused in the form with the fix, and nothing is posted', async (_name, text, message) => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     const field = screen.getByLabelText(/reason/i);
     field.removeAttribute('maxlength');
     await userEvent.click(field);
@@ -200,7 +235,7 @@ describe('Deny', () => {
   it('a cancelled PIN is reported with the fix, nothing is posted, the form stays', async () => {
     elevate.mockRejectedValueOnce(new Error('Sensitive action cancelled: PIN not entered'));
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/PIN not entered/);
@@ -216,7 +251,7 @@ describe('Deny', () => {
   ])('%s on the post is answered with an actionable sentence', async (_name, raw, fix) => {
     denyAnswer = new Error(raw);
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(raw);
@@ -227,7 +262,7 @@ describe('Deny', () => {
   it('shows the message of the daemon when the Deny fails, and the row and the form stay for another try', async () => {
     denyAnswer = new Error('"aaaa1111" does not name a waiting request: it may have been answered or may have expired; reload the page');
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny ls' }));
+    await userEvent.click(denyBtn('ls'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/does not name a waiting request/);
     expect(itemOf('ls')).toBeInTheDocument();
@@ -238,7 +273,7 @@ describe('Deny', () => {
 describe('Allow', () => {
   it('opens the existing confirmation with the exact command and the admin passphrase field (same attributes as the table)', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow df -h' }));
+    await userEvent.click(allowBtn('df -h'));
     const dialog = await screen.findByRole('dialog');
     const input = await within(dialog).findByLabelText('Admin passphrase');
     expect(input).toHaveAttribute('type', 'password');
@@ -251,14 +286,14 @@ describe('Allow', () => {
   it('shows the passphrase hint above the field BEFORE anything is typed, and no element when the key has none', async () => {
     keyFileText = hintedKeyFile;
     const { unmount } = render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     const hint = await screen.findByTestId('passphrase-hint');
     expect(hint).toHaveTextContent('Hint: the street of my first school');
     expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
     unmount();
     keyFileText = keyFile;
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     await screen.findByLabelText('Admin passphrase');
     expect(screen.queryByTestId('passphrase-hint')).toBeNull();
   });
@@ -266,14 +301,14 @@ describe('Allow', () => {
   it('a malformed hint stops the dialog before any passphrase is asked, with the message of the key file reader', async () => {
     keyFileText = JSON.stringify({ ...JSON.parse(hintedKeyFile), hint: 'x'.repeat(81) });
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     expect(await screen.findByRole('alert')).toHaveTextContent(/the hint is malformed.*restore the file from another machine/);
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
   });
 
   it('a HELD request defaults to Once: the summary says so before the passphrase and the signed entry has maxCalls 1', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByLabelText('Admin passphrase');
     expect(within(dialog).getByLabelText('How long is it allowed?')).toHaveValue('once');
@@ -282,7 +317,7 @@ describe('Allow', () => {
     expect(dialog).toHaveTextContent(/for ONE call/);
     await userEvent.type(within(dialog).getByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
-    await closeDone();
+    await posted();
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
     const policy = (post?.body as { policy: SignedPolicy }).policy;
     expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
@@ -290,7 +325,7 @@ describe('Allow', () => {
 
   it('a preset duration is worded with its end time before the passphrase and signed as expiresAt', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByLabelText('Admin passphrase');
     await userEvent.selectOptions(within(dialog).getByLabelText('How long is it allowed?'), '15m');
@@ -302,7 +337,7 @@ describe('Allow', () => {
 
   it('Custom: an invalid value shows what to write, signs nothing and keeps the typed passphrase; a valid one is signed', async () => {
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByLabelText('Admin passphrase');
     await userEvent.selectOptions(within(dialog).getByLabelText('How long is it allowed?'), 'custom');
@@ -318,7 +353,7 @@ describe('Allow', () => {
     await userEvent.type(within(dialog).getByLabelText(/Number of calls/), '3');
     expect(within(dialog).getByText('allowed 3 times')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
-    await closeDone();
+    await posted();
     const policy = (calls.find((c) => c.url === 'POST /api/modules/machine/allow')?.body as { policy: SignedPolicy }).policy;
     expect(policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 3 } }]);
   }, 120_000);
@@ -326,18 +361,21 @@ describe('Allow', () => {
   it('signs in the page, posts only the signed policy, the row leaves and the page refreshes', async () => {
     const onRefresh = vi.fn(async () => undefined);
     render(<HeldRequests rows={ROWS} allow={ALLOW} onRefresh={onRefresh} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
-    await closeDone();
+    await posted();
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/allow');
     expect(Object.keys(post?.body as object)).toEqual(['policy']);
     expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
     // The card stays, with its progress, until the end of the hold is known (decision 86).
     expect(within(itemOf('ls')).getByRole('progressbar')).toBeInTheDocument();
-    expect(within(itemOf('ls')).queryByRole('button', { name: 'Allow ls' })).toBeNull();
+    expect(within(itemOf('ls')).queryByRole('button', { name: 'Allow' })).toBeNull();
     expect(onRefresh).toHaveBeenCalledWith('requests');
-    expect(await screen.findByRole('status')).toHaveTextContent(/policy version 1. Installed on desktop/i);
+    // No page banner for an Allow: the card says it (and Details has the policy version).
+    expect(screen.queryByRole('status')).toBeNull();
+    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Details' }));
+    expect(within(itemOf('ls')).getByText(/Policy version 1/)).toHaveTextContent('`machine allowed desktop` lists it');
   }, 120_000);
 });
 
@@ -362,27 +400,29 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
     const item = itemOf('hostname');
     expect(within(item).getByText('laptop')).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Allow hostname' })).toBeInTheDocument();
-    expect(within(item).getByRole('button', { name: 'Deny hostname' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     expect(within(item).queryByText(/machine requests --deny/)).toBeNull();
   });
 
   it('Deny of a request held elsewhere posts the id, the machine and the reason after the PIN, and says which machine was told (decision 85)', async () => {
     denyAnswer = { ok: true, id: remote.id, peer: { uuid: LAPTOP, name: 'laptop' } };
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.click(denyBtn('hostname'));
     await userEvent.type(screen.getByLabelText(/reason/i), 'not now');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Held request hostname' })).toBeNull());
     expect(calls).toEqual([{ url: 'POST /api/modules/machine/deny', body: { id: remote.id, machine: LAPTOP, reason: 'not now' }, headers: { 'x-machine-module': '1' } }]);
     expect(elevate).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole('status')).toHaveTextContent(/laptop/);
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Denied hostname on laptop (laptop was told): nothing was signed');
+    expect(status.querySelector('span')?.style.fontFamily).toContain('JetBrains Mono');
   });
 
   it('when the target refuses because this machine is not a notice recipient, the form shows its cause and the fix, and the row stays', async () => {
     denyAnswer = new Error('laptop does not list you as a recipient of its request notices: add this machine with `machine admin notify-to <machines>` on the admin machine, or run `machine requests --deny <id>` ON laptop');
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.click(denyBtn('hostname'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/does not list you/);
@@ -394,14 +434,14 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
   it('an older target (peer-too-old) is told to update: the message of the backend is shown as it is', async () => {
     denyAnswer = new Error('laptop is too old to accept a remote deny: run `machine cli update` on laptop');
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Deny hostname' }));
+    await userEvent.click(denyBtn('hostname'));
     await userEvent.click(screen.getByRole('button', { name: 'Confirm deny' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/machine cli update/);
   });
 
   it('Allow asks the policy of THAT machine (its uuid), not of this one', async () => {
     render(<HeldRequests rows={[remote]} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow hostname' }));
+    await userEvent.click(allowBtn('hostname'));
     await screen.findByRole('dialog');
     await waitFor(() => expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${LAPTOP}`)).toBe(true));
     expect(calls.some((c) => c.url === `GET /api/modules/machine/allow/${SELF}`)).toBe(false);
@@ -425,21 +465,88 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
 describe('the progress after Allow (decision 86)', () => {
   async function allowLs(rows: HeldRequestRow[] = ROWS, extra: Partial<React.ComponentProps<typeof HeldRequests>> = {}) {
     render(<HeldRequests rows={rows} allow={ALLOW} {...extra} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
   }
 
-  it('the dialog stays open after the result with the steps, the path wording and a Close button; the held command is not claimed released yet', async () => {
+  it('the dialog closes itself as soon as the signing is submitted and never shows the progress; the card does, from the first second', async () => {
+    let release!: () => void;
+    postGate = new Promise<void>((resolve) => { release = resolve; });
     await allowLs();
-    const dialog = await screen.findByRole('dialog', undefined, { timeout: 20_000 });
-    await within(dialog).findByRole('button', { name: 'Close' }, { timeout: 20_000 });
-    expect(dialog).toHaveTextContent('Allowed on desktop');
-    expect(within(dialog).getByRole('progressbar')).toBeInTheDocument();
-    expect(dialog).toHaveTextContent(/Signed/);
-    expect(dialog).toHaveTextContent(/Installed on desktop/);
-    expect(dialog).toHaveTextContent(/progress stays on the request/);
-    expect(dialog).not.toHaveTextContent('The held command was released');
+    // The daemon has not answered yet: the confirmation is gone, the card shows the stepper.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    const card = itemOf('ls');
+    expect(within(card).getByRole('progressbar')).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Allow' })).toBeNull();
+    expect(screen.queryByText(/progress stays on the request/)).toBeNull();
+    release();
+    expect(await within(card).findByText('Waiting for the release', undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  }, 120_000);
+
+  it('no big banner and no sentence twice: the card says the outcome once, the page has no status for an Allow', async () => {
+    await allowLs();
+    await closeDone();
+    const card = itemOf('ls');
+    await within(card).findByText('Waiting for the release', undefined, { timeout: 20_000 });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(/The progress is shown on the request/)).toBeNull();
+    const leaves = Array.from(card.querySelectorAll('*')).filter((e) => e.children.length === 0).map((e) => e.textContent ?? '').filter((t) => t.length > 12);
+    expect(leaves.filter((t, i) => leaves.indexOf(t) !== i)).toEqual([]);
+  }, 120_000);
+
+  it('a refusal for the clock is ONE short line on the card (clock 3 min behind); the long explanation with the fix is only behind Details, once', async () => {
+    const cause = "desktop's clock is 3 min behind this machine (its time 10:00:00, this machine 10:03:00): fix its time sync (Linux: timedatectl status, Windows: w32tm /query /status)";
+    allowAnswer = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'inbox', fallback: { code: 'refused', cause }, deliveryText: { tone: 'warning', text: 'desktop did not take the document directly: stored in the relay inbox, it installs it when it comes back (next poll within 60 s). Cause: ' + cause } };
+    await allowLs();
+    await closeDone();
+    const card = itemOf('ls');
+    expect(await within(card).findByText('Stored on the relay (direct delivery refused: clock 3 min behind)', undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(card).not.toHaveTextContent(/fix its time sync/);
+    await userEvent.click(within(card).getByRole('button', { name: 'Details' }));
+    expect(within(card).getAllByText(/fix its time sync/)).toHaveLength(1);
+    expect(within(card).getAllByText(/direct delivery refused/)).toHaveLength(1);
+  }, 120_000);
+
+  it('a wrong passphrase after the dialog closed shows the failure ON THE CARD (danger token, the cause) with Allow again; Allow again opens the confirmation again and a good passphrase goes through', async () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(allowBtn('ls'));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), 'not the passphrase');
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await closeDone();
+    const card = itemOf('ls');
+    expect(await within(card).findByText('Signing failed', undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(card.querySelector('.text-danger-text')).not.toBeNull();
+    expect(calls.some((c) => c.url === 'POST /api/modules/machine/allow')).toBe(false);
+    await userEvent.click(within(card).getByRole('button', { name: 'Allow again' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await closeDone();
+    expect(await within(itemOf('ls')).findByText('Waiting for the release', undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(within(itemOf('ls')).queryByText('Signing failed')).toBeNull();
+  }, 120_000);
+
+  it('a refusal of the daemon after the signature is a failed delivery on the card with its message and Allow again; Dismiss gives the normal Allow and Deny card back (the request is still held)', async () => {
+    allowAnswer = new Error('the policy of "desktop" is at version 1, and this one was edited from version 0: reload the page and allow it again');
+    await allowLs();
+    await closeDone();
+    const card = itemOf('ls');
+    expect(await within(card).findByText('Delivery failed', undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(within(card).getByText(/reload the page and allow it again/)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Allow again' })).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole('button', { name: 'Dismiss' }));
+    expect(within(itemOf('ls')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(within(itemOf('ls')).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+    expect(within(itemOf('ls')).queryByRole('progressbar')).toBeNull();
+  }, 120_000);
+
+  it('a warning about the notice recipients is one line on the card, not a banner', async () => {
+    allowAnswer = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed', noticeRecipients: 'failed', noticeRecipientsMessage: 'the list of notice recipients was NOT sent: run machine admin notify-to' };
+    await allowLs();
+    await closeDone();
+    expect(await within(itemOf('ls')).findByText(/the list of notice recipients was NOT sent/, undefined, { timeout: 20_000 })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
   }, 120_000);
 
   it('the card keeps the progress when the dialog is closed, polls the daemon, and shows the release only when the end is reported', async () => {
@@ -447,12 +554,13 @@ describe('the progress after Allow (decision 86)', () => {
     await closeDone();
     const card = itemOf('ls');
     expect(within(card).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow', '100');
-    expect(within(card).queryByText('The held command was released')).toBeNull();
+    expect(await within(card).findByText('Waiting for the release', undefined, { timeout: 20_000 })).toBeInTheDocument();
     // The daemon is asked for this machine ("self") and this request.
     await waitFor(() => expect(calls.some((c) => c.url === 'GET /api/modules/machine/hold-progress/self/aaaa1111')).toBe(true));
     holdAnswer = { state: 'ended', outcome: 'allowed' };
-    expect(await within(card).findByText('The held command was released', undefined, { timeout: 8000 })).toBeInTheDocument();
-    expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    await waitFor(() => expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100'), { timeout: 8000 });
+    // The outcome of the line, and the last word of the stepper.
+    expect(within(card).getAllByText('Released')).toHaveLength(2);
     await userEvent.click(within(card).getByRole('button', { name: /Dismiss/ }));
     expect(screen.queryByRole('listitem', { name: 'Held request ls' })).toBeNull();
   }, 120_000);
@@ -462,14 +570,15 @@ describe('the progress after Allow (decision 86)', () => {
     await allowLs();
     await closeDone();
     const card = itemOf('ls');
-    await waitFor(() => expect(card).toHaveTextContent(/wait ended|deadline/), { timeout: 8000 });
-    expect(within(card).queryByText('The held command was released')).toBeNull();
+    await waitFor(() => expect(card).toHaveTextContent(/deadline of the caller passed/), { timeout: 8000 });
+    expect(within(card).getByText('Not released')).toBeInTheDocument();
+    expect(within(card).getAllByText('Released')).toHaveLength(1);
     expect(within(card).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow', '100');
   }, 120_000);
 
   it('the card stays from its snapshot when the request leaves the list (the page refreshed)', async () => {
     const view = render(<HeldRequests rows={ROWS} allow={ALLOW} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await userEvent.click(allowBtn('ls'));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     await closeDone();

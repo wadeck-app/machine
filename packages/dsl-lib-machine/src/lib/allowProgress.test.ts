@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HOLD_POLL_MS, HOLD_TIMEOUT_MS, elapsedText, initialProgress, noConfirmationMessage, percentOf, reduceProgress, startHoldPolling, stepsOf, type HoldPollAnswer, type ProgressRecord } from './allowProgress.js';
+import { HOLD_POLL_MS, HOLD_TIMEOUT_MS, elapsedText, initialProgress, noConfirmationMessage, percentOf, reduceProgress, startHoldPolling, stepsOf, summaryOf, type HoldPollAnswer, type ProgressRecord } from './allowProgress.js';
 
 // The progress after "Allow and sign" (decision 86): every step is driven by a REAL event (the signature, the answer of the daemon about the delivery, the
 // end of the hold that the target reported). A success is never shown without the end of the hold.
@@ -169,5 +169,72 @@ describe('polling the daemon', () => {
     w.stop();
     await vi.advanceTimersByTimeAsync(10 * HOLD_POLL_MS);
     expect(w.asked).toHaveLength(1);
+  });
+});
+
+describe('the short labels of the stepper', () => {
+  it('Signed - Delivered - Installed - Released, and Stored when the relay holds the document', () => {
+    expect(stepsOf(held(), T0).map((s) => s.short)).toEqual(['Signed', 'Delivered', 'Installed', 'Released']);
+    const r = reduceProgress(reduceProgress(held(), { type: 'signed' }, T0), { type: 'result', result: inbox }, T0);
+    expect(stepsOf(r, T0).map((s) => s.short)).toEqual(['Signed', 'Stored', 'Installed', 'Released']);
+  });
+
+  it('the details of the steps stay one short sentence: the delivery cause is not copied into the step', () => {
+    const r = reduceProgress(reduceProgress(held(), { type: 'signed' }, T0), { type: 'result', result: inbox }, T0);
+    expect(stepsOf(r, T0)[1]?.detail).toBeUndefined();
+    let ended = reduceProgress(r, { type: 'hold', answer: { state: 'ended', outcome: 'deadline' } }, T0 + 1000);
+    expect(stepsOf(ended, T0)[3]?.detail?.length).toBeLessThan(60);
+    ended = reduceProgress(r, { type: 'hold', answer: { state: 'ended', outcome: 'denied' } }, T0 + 1000);
+    expect(stepsOf(ended, T0)[3]?.detail).toBe('denied: nothing ran');
+  });
+});
+
+describe('summaryOf: the one line a finished or running request is read from', () => {
+  const signed = (r: ProgressRecord) => reduceProgress(r, { type: 'signed' }, T0);
+  const withResult = (r: ProgressRecord, result: typeof direct | typeof inbox) => reduceProgress(r, { type: 'result', result }, T0 + 400);
+
+  it.each([
+    ['signing', () => held(), 'Signing'],
+    ['delivering', () => signed(held()), 'Delivering'],
+    ['waiting for the install', () => withResult(signed(held()), inbox), 'Waiting for the install'],
+    ['waiting for the release', () => withResult(signed(held()), direct), 'Waiting for the release'],
+  ])('while running (%s) the tone is active and nothing is finished', (_name, make, text) => {
+    const s = summaryOf(make(), T0);
+    expect(s).toMatchObject({ tone: 'active', text, finished: false, succeeded: false, retryable: false });
+  });
+
+  it('released: the only success', () => {
+    const r = reduceProgress(withResult(signed(held()), direct), { type: 'hold', answer: { state: 'ended', outcome: 'allowed' } }, T0 + 2000);
+    expect(summaryOf(r, T0)).toMatchObject({ tone: 'success', text: 'Released', finished: true, succeeded: true, retryable: false });
+  });
+
+  it('a request nobody waits for ends with Installed', () => {
+    let r = reduceProgress(initialProgress({ machineName: 'thinkcentre', held: false, now: T0 }), { type: 'signed' }, T0);
+    r = withResult(r, direct);
+    expect(summaryOf(r, T0)).toMatchObject({ tone: 'success', text: 'Installed', succeeded: true });
+  });
+
+  it('the delivery fact rides along once the daemon answered (short line, cause on its own line)', () => {
+    const skewed = { ...inbox, fallback: { code: 'refused', cause: "thinkcentre's clock is 3 min behind this machine (its time 10:00:00, this machine 10:03:00): fix its time sync (x)" } };
+    const s = summaryOf(withResult(signed(held()), skewed), T0);
+    expect(s.delivery?.text).toBe('Stored on the relay (direct delivery refused: clock 3 min behind)');
+    expect(summaryOf(signed(held()), T0).delivery).toBeUndefined();
+  });
+
+  it('a failed signature or post is a danger with the message as the cause, and Allow again is offered', () => {
+    const before = reduceProgress(held(), { type: 'failed', message: 'wrong passphrase: nothing was signed' }, T0 + 300);
+    expect(summaryOf(before, T0)).toMatchObject({ tone: 'danger', text: 'Signing failed', cause: 'wrong passphrase: nothing was signed', finished: true, succeeded: false, retryable: true });
+    const post = reduceProgress(signed(held()), { type: 'failed', message: 'the relay did not store it' }, T0 + 300);
+    expect(summaryOf(post, T0)).toMatchObject({ tone: 'danger', text: 'Delivery failed', cause: 'the relay did not store it', retryable: true });
+  });
+
+  it('an end that is not allowed says Not released with the cause; no retry: the request is over', () => {
+    const r = reduceProgress(withResult(signed(held()), direct), { type: 'hold', answer: { state: 'ended', outcome: 'denied' } }, T0 + 2000);
+    expect(summaryOf(r, T0)).toMatchObject({ tone: 'danger', text: 'Not released', cause: 'denied: nothing ran', finished: true, retryable: false });
+  });
+
+  it('a timeout is Not confirmed with the actionable message', () => {
+    const r = reduceProgress(withResult(signed(held()), inbox), { type: 'timeout' }, T0 + HOLD_TIMEOUT_MS);
+    expect(summaryOf(r, T0)).toMatchObject({ tone: 'danger', text: 'Not confirmed', cause: noConfirmationMessage('thinkcentre'), retryable: false });
   });
 });

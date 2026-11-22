@@ -64,10 +64,7 @@ export function useAllowProgress<R extends { id: string }>(api: AllowApi | null)
         setEntries((prev) => ({ ...prev, [row.id]: { row, record: initialProgress({ machineName: target.name, held: true, now: Date.now() }) } }));
         return;
       }
-      if (event.type === 'abort') {
-        setEntries((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== row.id)));
-        return;
-      }
+      // A failure stays on the card (`failed`: the cause and Allow again): the entry is not removed.
       dispatch(row.id, event);
       if (event.type === 'result' && apiRef.current !== null) {
         const current = apiRef.current;
