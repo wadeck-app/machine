@@ -58,7 +58,17 @@ describe('requestsPage (the Requests page, local machine)', () => {
     expect(text).toContain('run: sh "uptime" -> exit 0 in 1.5 s');
     expect(text).toContain('refused: (not-listed) sh "df -h"');
     expect(text).toContain('session: session-closed (too-many-refusals)');
-    expect(page.history.at(-1)?.whenText).toBe('10 s ago');
+    // Newest first: the most recent entry opens the list.
+    expect(page.history[0]?.whenText).toBe('10 s ago');
+  });
+
+  it('shows only the 10 newest history entries, newest first, and says how many exist', () => {
+    const many = lines(Array.from({ length: 25 }, (_, i) => refusal(-(25 - i) * 10, `cmd-${i}`)));
+    const page = requestsPage(daemonAnswer(many), NOW);
+    expect(page.history).toHaveLength(10);
+    expect(page.history[0]?.text).toContain('cmd-24');
+    expect(page.history[9]?.text).toContain('cmd-15');
+    expect(page.notes.join(' ')).toMatch(/10 newest of 25 entries/);
   });
 
   it('says in mode local that the command is run on the machine itself', () => {

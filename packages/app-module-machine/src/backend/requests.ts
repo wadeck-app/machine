@@ -135,6 +135,8 @@ export interface RequestsPage {
   notes: string[];
 }
 
+/** History entries the Requests page shows (newest first). */
+const HISTORY_PAGE_ROWS = 10;
 const ago = (at: number, now: number): string => (now - at < 5 ? 'now' : `${ageText(now - at)} ago`);
 const times = (n: number): string => `${n} time${n === 1 ? '' : 's'}`;
 
@@ -254,7 +256,7 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
   const chain = summary.chain;
   const notes: string[] = [...answer.problems];
   if (summary.pendingTotal > summary.pending.length) notes.push(`Showing ${summary.pending.length} of ${summary.pendingTotal} pending requests (the newest).`);
-  if (summary.historyTotal > summary.history.length) notes.push(`Showing the last ${summary.history.length} of ${summary.historyTotal} entries.`);
+  if (summary.historyTotal > HISTORY_PAGE_ROWS) notes.push(`Showing the ${HISTORY_PAGE_ROWS} newest of ${summary.historyTotal} entries; the whole history is on the Activity page and in \`machine log\`.`);
   if (summary.allowedNow > 0) notes.push(`${summary.allowedNow} earlier request${summary.allowedNow === 1 ? ' is' : 's are'} allowed now and not listed.`);
   if (summary.skipped > 0) notes.push(`${summary.skipped} verified entr${summary.skipped === 1 ? 'y has' : 'ies have'} no usable time or event name and ${summary.skipped === 1 ? 'is' : 'are'} not shown.`);
   const remote: RemoteCapability = answer.adminKeyHere
@@ -276,7 +278,8 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: summary.pendingTotal,
     ...noticesOf(answer, nowSeconds),
-    history: summary.history.map((h) => historyRow(h, nowSeconds)),
+    // The daemon answers oldest first: the page shows the HISTORY_PAGE_ROWS newest, newest first (the full log is `machine log` and the Activity page).
+    history: summary.history.slice(-HISTORY_PAGE_ROWS).reverse().map((h) => historyRow(h, nowSeconds)),
     historyTotal: summary.historyTotal,
     logPresent: answer.logPresent,
     chainOk: chain.ok,
