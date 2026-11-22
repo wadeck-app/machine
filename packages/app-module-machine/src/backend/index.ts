@@ -6,6 +6,7 @@ import { runHealth } from './health.js';
 import { checkModuleHeader } from './guard.js';
 import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './requests.js';
 import { registerActivityRoute } from './activityRoute.js'; // run-log
+import { registerAllowedRoute } from './allowedRoute.js';
 import { checkDenyReason, type RequestsListAnswer } from '@wadeck-app/machine-core';
 
 // Backend of the machine module. Read routes, plus the routes of the Allow button (decision 76: `sensitive`, they carry only the ENCRYPTED admin key
@@ -508,6 +509,8 @@ export default function register(ctx: ModuleContextLike): void {
 
   // run-log: the Activity page (the commands this machine sent and received), a plain read route in its own file
   registerActivityRoute(ctx, configDir); // run-log
+  // The Allowed page (what every machine allows), a plain read route in its own file
+  registerAllowedRoute(ctx, configDir);
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

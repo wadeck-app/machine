@@ -107,6 +107,7 @@ import { SearchBar } from '@wadeck-app/dsl-ui/dist/components/table/SearchBar.js
 import { SortableColumn } from '@wadeck-app/dsl-ui/dist/components/table/SortableColumn.js'
 import { ActivityLog } from '../components/ActivityLog.js'
 import { AllowRequestsTable } from '../components/AllowRequestsTable.js'
+import { AllowedList } from '../components/AllowedList.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
 import { HeldRequests } from '../components/HeldRequests.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
@@ -1878,6 +1879,15 @@ export const AllowRequestsTableEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const AllowedListEntry: ComponentRegistryEntry = {
+	name: 'AllowedList', category: 'composite', tags: ["allowed","whitelist","allow","list","policy","commands","approved","machines"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const refreshSeconds = coerceProp(resolveExpressionValue(node['refreshSeconds'], ctx), 'AllowedList.refreshSeconds', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['refreshSeconds']
+		return <AllowedList refreshSeconds={refreshSeconds} />
+	},
+}
+
 export const FinalCodeDisplayEntry: ComponentRegistryEntry = {
 	name: 'FinalCodeDisplay', category: 'atomic', tags: ["verification","code","enrollment"],
 	nodeSchema: null as never,
@@ -2045,6 +2055,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	SortableColumnEntry,
 	ActivityLogEntry,
 	AllowRequestsTableEntry,
+	AllowedListEntry,
 	FinalCodeDisplayEntry,
 	HeldRequestsEntry,
 	PassphraseSignerEntry,
@@ -2190,6 +2201,7 @@ SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["debounceMs"
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
+AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["refreshSeconds"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];

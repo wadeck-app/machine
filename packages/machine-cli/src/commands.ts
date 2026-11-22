@@ -13,6 +13,7 @@ import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
+import { allowedAnswer, type AllowedAnswer } from './allowedAnswer.js';
 import { activityFromPayload, type ActivityAnswer } from './activityView.js'; // run-log
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
@@ -199,6 +200,11 @@ export function makeCommands(configDir: string, version: string | (() => string)
     activity(payload?: unknown): ActivityAnswer { // run-log
       return activityFromPayload(configDir, payload, now()); // run-log
     }, // run-log
+
+    /** The Allowed page: what every machine allows (the policy installed here, the policies signed here), the data of `machine allowed`. Read-only. */
+    allowed(): AllowedAnswer {
+      return allowedAnswer(configDir, now());
+    },
 
     /** The Requests page, remote section (decision 74): forwards a request signed in the browser with the admin key to a peer. Read-only; signs nothing. */
     remoteRequests(payload?: unknown): Promise<RemoteRequestsAnswer> {

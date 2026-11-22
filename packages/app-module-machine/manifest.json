@@ -34,6 +34,16 @@
     {
       "kind": "page",
       "slot": "nav",
+      "label": "Allowed",
+      "path": "/allowed",
+      "view": {
+        "type": "path",
+        "value": "./src/dsl-views/allowed.yaml"
+      }
+    },
+    {
+      "kind": "page",
+      "slot": "nav",
       "label": "Activity",
       "path": "/activity",
       "view": {

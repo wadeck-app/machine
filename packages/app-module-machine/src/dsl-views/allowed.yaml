@@ -1,0 +1,11 @@
+# The commands approved for each machine (the allow list, "whitelist"): the same lists `machine allowed <machine>` prints, in the browser.
+# Read-only: machine:AllowedList reads GET /api/modules/machine/allowed itself (one daemon command, local files only: the policy installed on THIS
+# machine and the policies signed on this machine for the others; nothing is asked of a peer). A list signed here may differ from the one installed on
+# its target until delivered, and the page says so.
+$type: PageContent
+sections:
+  - $type: PageHeader
+    title: Allowed
+    subtitle: The commands approved for each machine, as `machine allowed <machine>` shows them. Read-only.
+  - $type: machine:AllowedList
+    refreshSeconds: 15
