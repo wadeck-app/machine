@@ -79,8 +79,16 @@ describe('machine run: the shell comes from --shell, else the default of the pee
   });
 
   it('--shell wins', async () => {
+    // Timed out at 60 s on the Windows runners of 7b4ae48, 3b45748 and 5e4158d (warm-up 4.9 s in the last one, cause not established, the log shows nothing between the warm-up and the timeout). The stages and a 50 s watchdog below make the next failure say WHERE the time went instead of an anonymous timeout.
+    const started = Date.now();
+    const seconds = (): string => `${((Date.now() - started) / 1000).toFixed(1)} s`;
     const address = await setUp([{ shell: ALT, command: LS }]);
-    const r = await cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', ALT, '--', 'echo', 'hi']);
+    const setUpDone = seconds();
+    let watchdog: NodeJS.Timeout | undefined;
+    const hung = new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error(`machine run --shell ${ALT} was still running after 50 s: provision and daemon start were done at ${setUpDone}, now ${seconds()} into the test. Either the daemon or the ${ALT} child hung; the cause is not established (see the test comment).`)), 50_000);
+    });
+    const r = await Promise.race([cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', ALT, '--', 'echo', 'hi']), hung]).finally(() => clearTimeout(watchdog));
     // powershell writes its own progress XML on stderr: only what machine says matters here.
     expect(r.err).not.toContain('refused');
     expect(r.code).toBe(0);
