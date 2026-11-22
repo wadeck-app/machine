@@ -320,6 +320,22 @@ export {
   type ActivitySources,
 } from './activity.js';
 export { parseRunLogLine } from './runLog.js';
+// run-log: `machine log --follow`, the pure tailing and the rows of the new lines
+export {
+  createAuditFollower,
+  createSentFollower,
+  createTailer,
+  FOLLOW_HEAD_BYTES,
+  FOLLOW_MAX_LINE,
+  FOLLOW_OVERSIZED,
+  FOLLOW_POLL_MS,
+  type AuditFollower,
+  type LogObservation,
+  type FollowItem,
+  type SentFollower,
+  type TailPlan,
+  type Tailer,
+} from './activityFollow.js';
 export {
   MAX_NOTICES,
   MAX_NOTICES_PER_MINUTE,

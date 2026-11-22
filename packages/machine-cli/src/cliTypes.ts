@@ -166,7 +166,7 @@ export interface Parsed {
   check: boolean;
   /** `machine install <id> --refresh`: write the whole plan again, even when the status says up to date. */
   refresh: boolean;
-  /** `machine cli logs --follow` (-f). */
+  /** `machine cli logs --follow` (-f), and `machine log --follow` (-f): the live stream of the activity of this machine. */
   follow: boolean;
   /** `machine cli register --force-register`: register even when the config dir is under the OS temporary folder. */
   forceRegister: boolean;

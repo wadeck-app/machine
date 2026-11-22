@@ -55,6 +55,8 @@ export interface ActivityEvent {
   execMs?: number;
   /** True when `execMs` is an estimate, the whole run minus the wait, because the line was written before the run time was recorded. */
   execDerived?: boolean;
+  /** Follow mode only: the one word that qualifies an audit entry with no row of its own (`session-closed (peer-revoked)`). */
+  detail?: string;
   /** Sent: the command was cut in the log. */
   truncated?: boolean;
   /** Sent: how long the request was held waiting for the owner, in seconds. */
@@ -147,7 +149,7 @@ function checkRange(name: string, value: number | undefined, min: number, max: n
   return value;
 }
 
-const clean = (text: string | undefined, max = 2048): string | undefined => (text === undefined ? undefined : printable(text, max));
+export const clean = (text: string | undefined, max = 2048): string | undefined => (text === undefined ? undefined : printable(text, max));
 
 /** 1234567 -> "1,234,567": a count with thousands separators (the same in every locale, so a page and a test read alike). */
 export function formatCount(n: number): string {
@@ -178,7 +180,7 @@ export function formatRunTime(ms: number): string {
 
 // ---------------------------------------------------------------------------------------------------------------- sent
 
-function sentEvent(e: RunLogEntry): ActivityEvent {
+export function sentEvent(e: RunLogEntry): ActivityEvent {
   // The run time of the command: as recorded, else (old line) the whole run minus the wait, flagged as an estimate; never a negative or a made-up number.
   let execMs: number | undefined;
   let execDerived = false;
@@ -255,7 +257,7 @@ interface AuditLine {
   entry: Record<string, unknown>;
 }
 
-function parseAuditLine(line: string): AuditLine | undefined {
+export function parseAuditLine(line: string): AuditLine | undefined {
   try {
     const p = JSON.parse(line) as Partial<Record<string, unknown>> | null;
     const entry = p?.['entry'];
@@ -268,8 +270,8 @@ function parseAuditLine(line: string): AuditLine | undefined {
   }
 }
 
-const str = (v: unknown, max?: number): string | undefined => (typeof v === 'string' ? printable(v, max) : undefined);
-const atMsOf = (entry: Record<string, unknown>): number => (typeof entry['ts'] === 'string' ? Date.parse(entry['ts']) : Number.NaN);
+export const str = (v: unknown, max?: number): string | undefined => (typeof v === 'string' ? printable(v, max) : undefined);
+export const atMsOf = (entry: Record<string, unknown>): number => (typeof entry['ts'] === 'string' ? Date.parse(entry['ts']) : Number.NaN);
 
 /**
  * What one audit line is for the timeline: a `row` (a command accepted, or refused), `other` (a completion, a hold, a session...: no row of its
@@ -282,6 +284,45 @@ export function classifyAuditLine(line: string): 'row' | 'other' | 'damaged' {
   }
   const event = parsed.entry['event'];
   return (event === 'accepted' || event === 'refused') && !Number.isNaN(atMsOf(parsed.entry)) ? 'row' : 'other';
+}
+
+/**
+ * The row of one received request: its `accepted` or `refused` entry, and the `completed` / `failed` entry of the same id when there is one.
+ * The ONE builder of a received row: the pages of `machine log` and its live follow mode (activityFollow.ts) both use it.
+ */
+export function receivedRowEvent(entry: Record<string, unknown>, kind: 'accepted' | 'refused', atMs: number, done: Record<string, unknown> | undefined, self: { uuid: string; name: string }, nameOf: (uuid: string) => string | undefined): ActivityEvent {
+  const id = str(entry['id']);
+  const peer = str(entry['source']);
+  const peerName = peer === undefined ? undefined : nameOf(peer);
+  const reason = str(entry['reason']);
+  let outcome: string;
+  if (kind === 'refused') {
+    outcome = reason === 'denied' ? 'denied' : 'refused';
+  } else if (done === undefined) {
+    outcome = 'unfinished';
+  } else {
+    outcome = done['event'] === 'completed' ? 'ran' : 'error';
+  }
+  const exitCode = done?.['exitCode'];
+  const durationMs = done?.['durationMs'];
+  const error = done?.['event'] === 'failed' ? str(done['error'], 300) : undefined;
+  return {
+    ts: new Date(atMs).toISOString(),
+    atMs,
+    direction: 'received',
+    from: { ...(peer !== undefined ? { uuid: peer } : {}), ...(peerName !== undefined ? { name: clean(peerName, 100) as string } : {}) },
+    to: { uuid: self.uuid, name: clean(self.name, 100) as string },
+    shell: str(entry['shell']) ?? '',
+    command: str(entry['command']) ?? '',
+    outcome,
+    ...(id !== undefined ? { id } : {}),
+    ...(outcome === 'ran' && (typeof exitCode === 'number' || exitCode === null) ? { exitCode } : {}),
+    ...(done?.['timedOut'] === true ? { timedOut: true } : {}),
+    ...(kind === 'refused' && reason !== undefined ? { reason } : {}),
+    ...(error !== undefined ? { cause: error } : {}),
+    ...(outcome === 'ran' && typeof durationMs === 'number' ? { durationMs, execMs: durationMs } : {}),
+    verified: true,
+  };
 }
 
 interface AuditLineMeta {
@@ -327,41 +368,11 @@ function* auditStream(lines: Iterable<string>, self: { uuid: string; name: strin
     if (Number.isNaN(atMs)) {
       continue;
     }
-    const peer = str(entry['source']);
-    const peerName = peer === undefined ? undefined : nameOf(peer);
-    const reason = str(entry['reason']);
     const done = kind === 'accepted' && id !== undefined ? completions.get(id) : undefined;
     if (id !== undefined) {
       completions.delete(id);
     }
-    let outcome: string;
-    if (kind === 'refused') {
-      outcome = reason === 'denied' ? 'denied' : 'refused';
-    } else if (done === undefined) {
-      outcome = 'unfinished';
-    } else {
-      outcome = done['event'] === 'completed' ? 'ran' : 'error';
-    }
-    const exitCode = done?.['exitCode'];
-    const durationMs = done?.['durationMs'];
-    const error = done?.['event'] === 'failed' ? str(done['error'], 300) : undefined;
-    const event: ActivityEvent = {
-      ts: new Date(atMs).toISOString(),
-      atMs,
-      direction: 'received',
-      from: { ...(peer !== undefined ? { uuid: peer } : {}), ...(peerName !== undefined ? { name: clean(peerName, 100) as string } : {}) },
-      to: { uuid: self.uuid, name: clean(self.name, 100) as string },
-      shell: str(entry['shell']) ?? '',
-      command: str(entry['command']) ?? '',
-      outcome,
-      ...(id !== undefined ? { id } : {}),
-      ...(outcome === 'ran' && (typeof exitCode === 'number' || exitCode === null) ? { exitCode } : {}),
-      ...(done?.['timedOut'] === true ? { timedOut: true } : {}),
-      ...(kind === 'refused' && reason !== undefined ? { reason } : {}),
-      ...(error !== undefined ? { cause: error } : {}),
-      ...(outcome === 'ran' && typeof durationMs === 'number' ? { durationMs, execMs: durationMs } : {}),
-      verified: true,
-    };
+    const event = receivedRowEvent(entry, kind, atMs, done, self, nameOf);
     seqOf.set(event, parsed.seq);
     yield { event, frontier: atMs };
     if (sinceMs !== undefined && atMs < sinceMs) {

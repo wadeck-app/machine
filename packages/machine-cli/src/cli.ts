@@ -15,6 +15,7 @@ import { RunDefaultsError } from './runDefaultsStore.js';
 import { noticeRecipientsStatus } from './noticeRecipientsStatus.js';
 import { runRequests } from './cliRequests.js';
 import { logOnlyFlagProblem, runActivityLog } from './cliActivity.js'; // run-log
+import { runActivityFollow } from './cliFollow.js'; // run-log
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
 import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { DEFAULT_PEER_HOST, startMachineDaemon } from './daemonEntry.js';
@@ -327,6 +328,11 @@ Administration (enrollment through the relay, or by files):
                                      RECEIVED (its audit log), as one list, newest first, 50 per page (--limit up to 500, --offset for the
                                      next page). Read-only, no daemon needed. The sent runs are kept in <config dir>/run-log/ (5 MiB per
                                      file, the newest 5 files); the output of a command and its environment are never stored
+  log --follow | -f [--sent | --received] [--since <30m|2h|3d|date> [--limit <n>]] [--json]
+                                     like \`tail -f\`: prints each new entry of this machine's audit log (accepted and run with exit code and
+                                     time, refused with its reason, held, sessions, documents, notices) and run log as it happens, one line
+                                     each in the columns of \`machine log\`; --received only the audit log, --sent only the run log; --since
+                                     shows the history first. Starts from now; Ctrl+C stops (exit 0). Read-only, no daemon needed
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy for this machine: signed by the admin (mode admin, the default) or by the local policy key (mode local)
@@ -651,7 +657,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.forceRegister && command !== 'cli') return fail('--force-register only applies to `machine cli register`', EXIT.usage);
-  if (args.follow && command !== 'cli') return fail('--follow only applies to `machine cli logs`', EXIT.usage);
+  if (args.follow && command !== 'cli' && command !== 'log') return fail('--follow only applies to `machine log` (the live stream of the activity of this machine) and `machine cli logs` (the updater and daemon log)', EXIT.usage);
   if (args.fullAccess && !(command === 'admin' && rest[0] === 'login')) {
     return fail('--full-access only applies to `machine admin login` (a FULL-ACCESS token, which can also manage tokens; without it the admin token is limited to machine rights)', EXIT.usage);
   }
@@ -739,7 +745,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'run-defaults') {
       return runRunDefaults(ctx);
     }
-    if (command === 'log') return runActivityLog(ctx); // run-log
+    if (command === 'log') return args.follow ? await runActivityFollow(ctx) : runActivityLog(ctx); // run-log
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).
     if (command === 'requests' && (rest.length === 0 || args.deny !== undefined) && args.all !== true) return await runRequests(ctx);
 

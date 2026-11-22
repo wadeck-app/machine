@@ -9,13 +9,13 @@ const LINE_WIDTH = 100;
 const pad = (n: number): string => String(n).padStart(2, '0');
 
 /** "2026-11-21 10:00", local time; "11-21 10:00" (no year) when every entry of the page is from the current year. */
-function clock(atMs: number, withYear: boolean): string {
+export function clock(atMs: number, withYear: boolean, withSeconds = false): string {
   const d = new Date(atMs);
-  return `${withYear ? `${d.getFullYear()}-` : ''}${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${withYear ? `${d.getFullYear()}-` : ''}${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}${withSeconds ? `:${pad(d.getSeconds())}` : ''}`;
 }
 
 /** `text` cut to `max` characters, ending with `...` when it was cut. */
-function fit(text: string, max: number): string {
+export function fit(text: string, max: number): string {
   if (text.length <= max) {
     return text;
   }
@@ -31,6 +31,10 @@ function resultText(e: ActivityEvent): string {
   }
   if (e.outcome === 'error' && e.cause !== undefined) {
     return `error (${e.cause})`;
+  }
+  // Follow mode: an audit entry with no row of its own, qualified by one word.
+  if (e.detail !== undefined) {
+    return `${e.outcome} (${e.detail})`;
   }
   return e.outcome;
 }
@@ -51,6 +55,41 @@ const ranText = (e: ActivityEvent): string => (e.execMs === undefined ? '-' : `$
 
 /** The WAITED column: how long the request was held waiting for the owner; a dash when it was not. */
 const waitedText = (e: ActivityEvent): string => (e.waitedSeconds === undefined || e.waitedSeconds <= 0 ? '-' : formatRunTime(e.waitedSeconds * 1000));
+
+export const arrowOf = (e: ActivityEvent): string => (e.direction === 'sent' ? '=>' : '<=');
+
+/** The cells of a row, cut to the caps of a width step: the ONE definition of what a row of `machine log` says (the page and `--follow` both use it). */
+export function activityCells(e: ActivityEvent, caps: { route: number; result: number }): { route: string; shell: string; result: string; exit: string; ran: string; waited: string } {
+  const half = Math.max(3, Math.floor((caps.route - 4) / 2));
+  return { route: `${fit(nameOf(e.from), half)} -> ${fit(nameOf(e.to), half)}`, shell: e.shell === '' ? '-' : fit(e.shell, 6), result: fit(resultText(e), caps.result), exit: exitText(e), ran: ranText(e), waited: waitedText(e) };
+}
+
+/** Column widths of a row. */
+export interface RowLayout {
+  time: number;
+  route: number;
+  shell: number;
+  command: number;
+  result: number;
+  exit: number;
+  ran: number;
+  waited: number;
+}
+
+export interface RowCells {
+  time: string;
+  arrow: string;
+  route: string;
+  shell: string;
+  command: string;
+  result: string;
+  exit: string;
+  ran: string;
+  waited: string;
+}
+
+export const formatActivityRow = (w: RowLayout, c: RowCells): string =>
+  `${c.time.padEnd(w.time)} ${c.arrow} ${c.route.padEnd(w.route)} ${c.shell.padEnd(w.shell)}  ${c.command.padEnd(w.command)}  ${c.result.padEnd(w.result)} ${c.exit.padStart(w.exit)} ${c.ran.padStart(w.ran)} ${c.waited.padStart(w.waited)}`.trimEnd();
 
 /** Widest first: the caps of the route and result columns are lowered until the command keeps at least 14 characters (8 as a last resort). */
 const WIDTH_STEPS = [{ route: 21, result: 20 }, { route: 19, result: 18 }, { route: 19, result: 16 }, { route: 15, result: 16 }, { route: 11, result: 14 }] as const;
@@ -74,24 +113,18 @@ export function activityText(view: ActivityView, filterNote: string): string[] {
   const thisYear = new Date(view.now * 1000).getFullYear();
   const withYear = page.items.some((e) => new Date(e.atMs).getFullYear() !== thisYear);
   const timeWidth = withYear ? 16 : 11;
-  const arrowOf = (e: ActivityEvent): string => (e.direction === 'sent' ? '=>' : '<=');
   const step = WIDTH_STEPS.find((s) => {
     const natural = fixedWidth(page.items, s.route, s.result, timeWidth);
     return LINE_WIDTH - natural >= 14;
   }) ?? (WIDTH_STEPS[WIDTH_STEPS.length - 1] as (typeof WIDTH_STEPS)[number]);
-  const routeOf = (e: ActivityEvent, max: number): string => {
-    const half = Math.max(3, Math.floor((max - 4) / 2));
-    return `${fit(nameOf(e.from), half)} -> ${fit(nameOf(e.to), half)}`;
-  };
-  const cells = page.items.map((e) => ({ e, route: routeOf(e, step.route), shell: e.shell === '' ? '-' : fit(e.shell, 6), result: fit(resultText(e), step.result), exit: exitText(e), ran: ranText(e), waited: waitedText(e) }));
+  const cells = page.items.map((e) => ({ e, ...activityCells(e, step) }));
   const widthOf = (header: string, pick: (c: (typeof cells)[number]) => string): number => Math.max(header.length, ...cells.map((c) => pick(c).length));
   const w = { route: widthOf('FROM -> TO', (c) => c.route), shell: widthOf('SHELL', (c) => c.shell), result: widthOf('RESULT', (c) => c.result), exit: widthOf('EXIT', (c) => c.exit), ran: widthOf('RAN', (c) => c.ran), waited: widthOf('WAITED', (c) => c.waited) };
   const commandWidth = Math.max(8, LINE_WIDTH - (timeWidth + 2 + w.route + w.shell + w.result + w.exit + w.ran + w.waited + GAPS));
-  const row = (time: string, arrow: string, route: string, shell: string, command: string, result: string, exit: string, ran: string, waited: string): string =>
-    `${time.padEnd(timeWidth)} ${arrow} ${route.padEnd(w.route)} ${shell.padEnd(w.shell)}  ${command.padEnd(commandWidth)}  ${result.padEnd(w.result)} ${exit.padStart(w.exit)} ${ran.padStart(w.ran)} ${waited.padStart(w.waited)}`.trimEnd();
-  lines.push(row('TIME', '  ', 'FROM -> TO', 'SHELL', 'COMMAND', 'RESULT', 'EXIT', 'RAN', 'WAITED'));
+  const layout: RowLayout = { time: timeWidth, ...w, command: commandWidth };
+  lines.push(formatActivityRow(layout, { time: 'TIME', arrow: '  ', route: 'FROM -> TO', shell: 'SHELL', command: 'COMMAND', result: 'RESULT', exit: 'EXIT', ran: 'RAN', waited: 'WAITED' }));
   for (const c of cells) {
-    lines.push(row(clock(c.e.atMs, withYear), arrowOf(c.e), c.route, c.shell, c.e.command === '' ? '-' : fit(c.e.command, commandWidth), c.result, c.exit, c.ran, c.waited));
+    lines.push(formatActivityRow(layout, { time: clock(c.e.atMs, withYear), arrow: arrowOf(c.e), ...c, command: c.e.command === '' ? '-' : fit(c.e.command, commandWidth) }));
     if (!c.e.verified) {
       lines.push('  [UNVERIFIED] the audit log is broken before this entry: it cannot be trusted');
     }
