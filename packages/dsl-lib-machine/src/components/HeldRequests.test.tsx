@@ -36,7 +36,9 @@ let allowAnswer: unknown;
 let postGate: Promise<void> | null;
 
 beforeEach(() => {
-  calls = [];
+  // Each test records into its OWN array: a signing of an earlier test that finishes late (real PBKDF2, slower on a CI runner) must not land in the calls of the next one.
+  const mine: Call[] = [];
+  calls = mine;
   keyFileText = keyFile;
   holdAnswer = { state: 'held' };
   allowAnswer = { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
@@ -44,7 +46,7 @@ beforeEach(() => {
   denyAnswer = { ok: true, id: 'aaaa1111', peer: PEER, shell: 'sh', command: 'ls' };
   elevate = vi.fn(async () => undefined);
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
-    calls.push({ url, body, headers });
+    mine.push({ url, body, headers });
     if (url === `GET /api/modules/machine/allow/${SELF}`) {
       return context();
     }
