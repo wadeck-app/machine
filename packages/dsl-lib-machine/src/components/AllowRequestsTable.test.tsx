@@ -351,7 +351,7 @@ describe('a notice row whose command is already allowed (decision 100)', () => {
   let dismissFails: string | undefined;
   beforeEach(() => {
     dismissFails = undefined;
-    const base = (globalThis as { __APP_CORE_SHELL__: { elevate: unknown; fetcher: (...a: any[]) => Promise<unknown> } }).__APP_CORE_SHELL__;
+    const base = (globalThis as unknown as { __APP_CORE_SHELL__: { elevate: unknown; fetcher: (...a: any[]) => Promise<unknown> } }).__APP_CORE_SHELL__;
     const fetcher = async (url: string, params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
       if (url === 'POST /api/modules/machine/dismiss-notice') {
         calls.push({ url, body, headers });
