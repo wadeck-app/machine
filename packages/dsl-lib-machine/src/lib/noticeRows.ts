@@ -1,5 +1,6 @@
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { PendingRequestRow } from '../components/AllowRequestsTable.js';
+import type { ExpiredRow } from '../components/ExpiredNotices.js';
 import type { HeldRequestRow } from '../components/HeldRequests.js';
 import { askAllowFlags, type CallerAsk } from './callerAsk.js';
 
@@ -115,7 +116,30 @@ export function mergeNotices(input: { notices: NoticeData[]; selfUuid: string | 
       canAllow,
       note,
       commandTruncated: n.commandTruncated,
+      // What Dismiss names (decision 100): the machine that reported it and the request id.
+      notice: { machine: n.machine, id: n.id },
     });
   }
   return { held, refused: [...sections.values()] };
+}
+
+/**
+ * The expired notices to show (decision 100): held requests past their deadline with no end notice. Dropped: those outside the machine filter and a request id
+ * repeated by the same machine. Not dropped when the machine was loaded live: the live view lists what is held now, an expired notice is a stale row to dismiss.
+ */
+export function mergeExpired(input: { expired: NoticeData[]; filter: string }): ExpiredRow[] {
+  const seen = new Set<string>();
+  const rows: ExpiredRow[] = [];
+  for (const n of input.expired) {
+    if (input.filter !== 'all' && input.filter !== n.machine) {
+      continue;
+    }
+    const key = `${n.machine}\u0000${n.id}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    rows.push({ id: n.id, machine: { uuid: n.machine, name: n.machineName }, peerText: n.peerText, shell: n.shell, command: n.command, commandTruncated: n.commandTruncated, note: `reported by ${n.machineName} at ${clock(n.receivedAt)}; its deadline passed and no end notice came` });
+  }
+  return rows;
 }

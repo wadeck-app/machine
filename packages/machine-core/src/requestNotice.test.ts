@@ -6,7 +6,10 @@ import {
   applyNotice,
   buildRequestNotice,
   buildRequestNoticeEnd,
+  dismissNotices,
   endNotice,
+  expiredNotices,
+  isNoticeExpired,
   parseRequestNotice,
   parseRequestNoticeEnd,
   visibleNotices,
@@ -106,5 +109,65 @@ describe('notices store logic', () => {
     expect(visibleNotices([live, stale], NOW + 100).map((n) => n.id)).toEqual([live.id]);
     const refused = { ...stored(3, NOW + 2), state: 'refused' as const, deadline: null };
     expect(visibleNotices([live, refused], NOW + 100).map((n) => n.id)).toEqual([refused.id, live.id]);
+  });
+});
+
+describe('expired and dismissed notices', () => {
+  const stored = (n: number, receivedAt: number): StoredNotice => {
+    const { type: _type, ...rest } = held();
+    return { ...rest, machine: SENDER, machineName: 'thinkcentre', receivedAt, id: `3f1c2d3e-4a5b-4c6d-8e7f-${String(n).padStart(12, '0')}` };
+  };
+  const refusedAt = (n: number): StoredNotice => ({ ...stored(n, NOW + n), state: 'refused' as const, deadline: null });
+
+  it('a held notice is expired at its deadline (no end frame needed); a refused one never is', () => {
+    const h = stored(1, NOW);
+    expect(isNoticeExpired(h, (h.deadline as number) - 1)).toBe(false);
+    expect(isNoticeExpired(h, h.deadline as number)).toBe(true);
+    expect(isNoticeExpired(refusedAt(2), NOW + 10_000_000)).toBe(false);
+  });
+
+  it('expiredNotices lists the held notices past their deadline, newest first, and visibleNotices stays the live view', () => {
+    const live = stored(1, NOW);
+    const stale1 = { ...stored(2, NOW + 1), deadline: NOW + 10 };
+    const stale2 = { ...stored(3, NOW + 2), deadline: NOW + 20 };
+    expect(expiredNotices([live, stale1, stale2, refusedAt(4)], NOW + 100).map((n) => n.id)).toEqual([stale2.id, stale1.id]);
+    expect(visibleNotices([live, stale1, stale2], NOW + 100).map((n) => n.id)).toEqual([live.id]);
+  });
+
+  it('dismisses one expired notice by machine and id and keeps the others', () => {
+    const live = stored(1, NOW);
+    const stale = { ...stored(2, NOW + 1), deadline: NOW + 10 };
+    const r = dismissNotices([live, stale], { machine: SENDER, id: stale.id }, NOW + 100);
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { list: StoredNotice[] }).list.map((n) => n.id)).toEqual([live.id]);
+    expect((r as { removed: StoredNotice[] }).removed.map((n) => n.id)).toEqual([stale.id]);
+  });
+
+  it('dismisses a refused notice (it has no end by design)', () => {
+    const r = dismissNotices([refusedAt(3)], { machine: SENDER, id: refusedAt(3).id }, NOW + 100);
+    expect(r).toMatchObject({ ok: true, list: [] });
+  });
+
+  it('refuses to dismiss a live held notice and says to deny it or wait', () => {
+    const live = stored(1, NOW);
+    const r = dismissNotices([live], { machine: SENDER, id: live.id }, NOW + 1);
+    expect(r).toMatchObject({ ok: false, reason: 'live', message: expect.stringMatching(/Deny|wait/) });
+  });
+
+  it('refuses an unknown id or a machine that did not report it, with a message that says what to do', () => {
+    const live = stored(1, NOW);
+    expect(dismissNotices([live], { machine: SENDER, id: ID }, NOW)).toMatchObject({ ok: false, reason: 'unknown', message: expect.stringMatching(/reload|already/i) });
+    expect(dismissNotices([live], { machine: PEER, id: live.id }, NOW)).toMatchObject({ ok: false, reason: 'unknown' });
+  });
+
+  it('clears every expired notice at once and nothing else; refuses when there is none', () => {
+    const live = stored(1, NOW);
+    const a = { ...stored(2, NOW + 1), deadline: NOW + 10 };
+    const b = { ...stored(3, NOW + 2), deadline: NOW + 20 };
+    const r = dismissNotices([live, a, b, refusedAt(4)], { expired: true }, NOW + 100);
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { list: StoredNotice[] }).list.map((n) => n.id)).toEqual([live.id, refusedAt(4).id]);
+    expect((r as { removed: StoredNotice[] }).removed).toHaveLength(2);
+    expect(dismissNotices([live], { expired: true }, NOW)).toMatchObject({ ok: false, reason: 'none', message: expect.stringContaining('no expired') });
   });
 });

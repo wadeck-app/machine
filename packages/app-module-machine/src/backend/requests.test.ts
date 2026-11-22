@@ -176,6 +176,27 @@ describe('requestsPage: request notices (request-notices.md, phase 2)', () => {
     expect(page.noticesError).toBe('notices.json is damaged: delete it');
   });
 
+  it('the held notices past their deadline (expiredNotices) become expired rows with no countdown, apart from the live notices; a refused one never is', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [stored({ state: 'refused', deadline: null })], expiredNotices: [stored({ id: 'bbbb2222-0000-4000-8000-000000000000', deadline: NOW - 100, ts: NOW - 700, receivedAt: NOW - 650 })] }), NOW);
+    expect(page.notices.map((n) => n.state)).toEqual(['refused']);
+    expect(page.expired).toHaveLength(1);
+    expect(page.expired[0]).toMatchObject({ id: 'bbbb2222-0000-4000-8000-000000000000', machine: REPORTER, machineName: 'laptop', state: 'held', secondsLeft: 0 });
+    expect(page.noticesError).toBe('');
+  });
+
+  it('expired notices do not count in the tab indicator and an older daemon without the field gives none (no error: it hides them itself)', () => {
+    expect(requestsPage(daemonAnswer([], { notices: [], expiredNotices: [stored({ deadline: NOW - 1 })] }), NOW).count).toBe(0);
+    const older = requestsPage(daemonAnswer([], { notices: [] }), NOW);
+    expect(older.expired).toEqual([]);
+    expect(older.noticesError).toBe('');
+  });
+
+  it('an expiredNotices field that is not a list is reported, with the fix', () => {
+    const page = requestsPage(daemonAnswer([], { notices: [], expiredNotices: 'x' }), NOW);
+    expect(page.expired).toEqual([]);
+    expect(page.noticesError).toMatch(/expired.*unexpected.*machine cli update/);
+  });
+
   it('an older daemon that does not report notices is named, with the fix', () => {
     const page = requestsPage(daemonAnswer([]), NOW);
     expect(page.notices).toEqual([]);

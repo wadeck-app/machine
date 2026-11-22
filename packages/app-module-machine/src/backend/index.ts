@@ -144,6 +144,38 @@ function parseDenyBody(body: unknown): DenyBody {
   return { ok: true, id, reason: checked.reason, machine };
 }
 
+/** The HTTP status of a refusal of the daemon command `dismissNotice` (anything not listed is 502): the answer carries the daemon's own sentence. */
+const DISMISS_STATUS: Record<string, number> = { unknown: 404, none: 404, live: 409 };
+
+const DISMISS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The body of a Dismiss: `{ machine, id }` or `{ expired: true }`, or why it is not (names the offending field, never its value). */
+function parseDismissBody(body: unknown): { ok: true; payload: { machine: string; id: string } | { expired: true } } | { ok: false; problem: string } {
+  const expected = 'expected {"machine": "<uuid of the machine that reported the request>", "id": "<request id>"} or {"expired": true}';
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, problem: expected };
+  }
+  const record: Record<string, unknown> = Object.fromEntries(Object.entries(body));
+  const extra = Object.keys(record).find((k) => k !== 'machine' && k !== 'id' && k !== 'expired');
+  if (extra !== undefined) {
+    return { ok: false, problem: `the field "${extra}" is not accepted: a Dismiss signs nothing and takes no passphrase, this route takes only the machine and the id, or "expired" (${expected})` };
+  }
+  if (record['expired'] !== undefined) {
+    if (record['expired'] !== true || record['machine'] !== undefined || record['id'] !== undefined) {
+      return { ok: false, problem: `"expired" must be true and alone (${expected})` };
+    }
+    return { ok: true, payload: { expired: true } };
+  }
+  const { machine, id } = record;
+  if (typeof machine !== 'string' || !DISMISS_UUID.test(machine)) {
+    return { ok: false, problem: `"machine" must be the uuid of the machine that reported the request (the Requests page sends it); ${expected}` };
+  }
+  if (typeof id !== 'string' || !DISMISS_UUID.test(id)) {
+    return { ok: false, problem: `"id" must be the request id, a UUID; ${expected}` };
+  }
+  return { ok: true, payload: { machine, id } };
+}
+
 interface Failure {
   status: number;
   kind: string;
@@ -459,6 +491,20 @@ export default function register(ctx: ModuleContextLike): void {
     }
     return viaDaemon(req, reply, 'deny', rest, undefined, (r) => r, DENY_STATUS);
   }, SENSITIVE);
+
+  // The Dismiss and Clear expired buttons (decision 100): a restricting, local action on a display row of notices.json. It answers nobody, signs nothing and touches no
+  // target and no audit line, so it is a plain write route (no PIN), unlike Deny. Only {machine, id} or {expired: true} reach the daemon, re-built here.
+  ctx.registerRoute('POST', '/dismiss-notice', (req, reply) => {
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) {
+      return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    }
+    const parsed = parseDismissBody(typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined);
+    if (!parsed.ok) {
+      return reply.code(400).send({ status: 400, kind: 'bad_request', error: parsed.problem });
+    }
+    return viaDaemon(req, reply, 'dismissNotice', parsed.payload, undefined, (r) => r, DISMISS_STATUS);
+  }, { effect: 'write' });
 
   // run-log: the Activity page (the commands this machine sent and received), a plain read route in its own file
   registerActivityRoute(ctx, configDir); // run-log

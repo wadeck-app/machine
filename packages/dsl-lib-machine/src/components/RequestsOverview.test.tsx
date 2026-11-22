@@ -45,9 +45,11 @@ interface Call { url: string; body: unknown }
 let calls: Call[];
 let elevate: ReturnType<typeof vi.fn>;
 let remoteAnswer: (machine: string) => unknown;
+let dismissError: string | undefined;
 
 beforeEach(() => {
   calls = [];
+  dismissError = undefined;
   keyFileText = keyFile;
   elevate = vi.fn(async () => undefined);
   remoteAnswer = (machine) => (machine === THINK ? thinkPage : laptopPage);
@@ -62,6 +64,12 @@ beforeEach(() => {
         throw answer;
       }
       return answer;
+    }
+    if (url === 'POST /api/modules/machine/dismiss-notice') {
+      if (dismissError !== undefined) {
+        throw new Error(dismissError);
+      }
+      return { ok: true, removed: 1 };
     }
     if (url.startsWith('GET /api/modules/machine/allow/')) {
       throw new Error('stop here: only the machine asked is under test');
@@ -414,5 +422,85 @@ describe('the Allow style (Dialog | Inline), kept in this browser', () => {
     expect(alerts).toHaveLength(2);
     expect(alerts.some((t) => /Allow style is inline/.test(t))).toBe(true);
     expect(alerts.every((t) => /cannot be read \(denied\)/.test(t))).toBe(true);
+  });
+});
+
+describe('expired notices and Dismiss (decision 100)', () => {
+  const RECEIVED = Math.floor(new Date(2026, 10, 21, 14, 2, 30).getTime() / 1000);
+  const idOf = (n: number): string => `eeee000${n}-0000-4000-8000-000000000000`;
+  const notice = (n: number, over: Partial<NoticeData> = {}): NoticeData => ({ id: idOf(n), machine: THINK, machineName: 'thinkcentre', peerText: 'midgard2', peer: SELF, shell: 'sh', command: `echo ${n}`, commandTruncated: false, state: 'held', secondsLeft: 0, receivedAt: RECEIVED, ...over });
+  const dismissCalls = () => calls.filter((c) => c.url === 'POST /api/modules/machine/dismiss-notice');
+
+  it('shows a held request past its deadline as Expired, apart from the live ones, with Dismiss and without Allow or Deny', () => {
+    render(<RequestsOverview {...props({ held: [], expired: [notice(1)] } as Partial<RequestsOverviewProps>)} />);
+    expect(screen.getByRole('heading', { name: 'Expired (no end notice received)' })).toBeInTheDocument();
+    const row = screen.getByRole('listitem', { name: 'Expired request echo 1' });
+    expect(within(row).getByText('thinkcentre')).toBeInTheDocument();
+    expect(row).toHaveTextContent(/no end notice/i);
+    expect(within(row).getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /Allow|Deny/ })).toBeNull();
+    // Not a live card: no "Held request" item and no live heading.
+    expect(screen.queryByRole('listitem', { name: 'Held request echo 1' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Held requests/ })).toBeNull();
+  });
+
+  it('a live row is unaffected: no Dismiss on it, and it stays next to the expired ones', () => {
+    render(<RequestsOverview {...props({ expired: [notice(1)] } as Partial<RequestsOverviewProps>)} />);
+    const live = screen.getByRole('listitem', { name: 'Held request ls' });
+    expect(within(live).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+    expect(within(live).queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  });
+
+  it('Dismiss posts {machine, id} without the PIN dialog, removes the row at once and refreshes the page data', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    render(<RequestsOverview {...props({ held: [], expired: [notice(1), notice(2)], onRefresh } as Partial<RequestsOverviewProps>)} />);
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Expired request echo 1' })).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Expired request echo 1' })).toBeNull());
+    expect(dismissCalls()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { machine: THINK, id: idOf(1) } }]);
+    expect(elevate).not.toHaveBeenCalled();
+    expect(screen.getByRole('listitem', { name: 'Expired request echo 2' })).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledWith('requests');
+  });
+
+  it('a dismissed row stays gone when the page reloads its data (the daemon no longer lists it)', async () => {
+    const { rerender } = render(<RequestsOverview {...props({ held: [], expired: [notice(1), notice(2)] } as Partial<RequestsOverviewProps>)} />);
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Expired request echo 1' })).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Expired request echo 1' })).toBeNull());
+    rerender(<RequestsOverview {...props({ held: [], expired: [notice(2)] } as Partial<RequestsOverviewProps>)} />);
+    expect(screen.queryByRole('listitem', { name: 'Expired request echo 1' })).toBeNull();
+    expect(screen.getByRole('listitem', { name: 'Expired request echo 2' })).toBeInTheDocument();
+  });
+
+  it('Clear expired is offered only above two rows, posts {expired: true} and clears them all', async () => {
+    const { unmount } = render(<RequestsOverview {...props({ held: [], expired: [notice(1), notice(2)] } as Partial<RequestsOverviewProps>)} />);
+    expect(screen.queryByRole('button', { name: 'Clear expired' })).toBeNull();
+    unmount();
+    render(<RequestsOverview {...props({ held: [], expired: [notice(1), notice(2), notice(3)] } as Partial<RequestsOverviewProps>)} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Clear expired' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Expired (no end notice received)' })).toBeNull());
+    expect(dismissCalls()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { expired: true } }]);
+    expect(screen.queryByRole('listitem', { name: /Expired request/ })).toBeNull();
+  });
+
+  it('a refused dismiss keeps the row and shows the daemon sentence', async () => {
+    dismissError = 'no request notice with the id x from that machine: it is already gone; reload the Requests page';
+    render(<RequestsOverview {...props({ held: [], expired: [notice(1)] } as Partial<RequestsOverviewProps>)} />);
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Expired request echo 1' })).getByRole('button', { name: 'Dismiss' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already gone; reload the Requests page/);
+    expect(screen.getByRole('listitem', { name: 'Expired request echo 1' })).toBeInTheDocument();
+  });
+
+  it('a refused request (no end by design) has a Dismiss too, which posts {machine, id} and removes the row', async () => {
+    render(<RequestsOverview {...props({ notices: [notice(4, { state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
+    const row = screen.getByTestId('notice-row');
+    expect(within(row).getByRole('button', { name: 'Allow whoami' })).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByTestId('notice-row')).toBeNull());
+    expect(dismissCalls()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { machine: THINK, id: idOf(4) } }]);
+  });
+
+  it('the own pending rows of this machine have no Dismiss (they come from its audit log, not from a notice)', () => {
+    render(<RequestsOverview {...props()} />);
+    expect(screen.queryByRole('button', { name: /Dismiss/ })).toBeNull();
   });
 });

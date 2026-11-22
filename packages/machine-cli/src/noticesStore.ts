@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MAX_NOTICES, applyNotice, endNotice, parseRequestNotice, type NoticeOutcome, type StoredNotice } from '@wadeck-app/machine-core';
+import { MAX_NOTICES, applyNotice, dismissNotices, endNotice, parseRequestNotice, type DismissSelector, type NoticeOutcome, type StoredNotice } from '@wadeck-app/machine-core';
 import { withFileLock, writeFileAtomic } from './fsutil.js';
 import { recordNoticeEndOutcome } from './noticeEnds.js';
 
@@ -90,4 +90,20 @@ export function recordNoticeEnd(configDir: string, machine: string, id: string, 
   if (outcome !== undefined) {
     recordNoticeEndOutcome(configDir, { machine, id, outcome, at: now }, now);
   }
+}
+
+/**
+ * Dismiss display rows (decision 100): a refused notice or a held one past its deadline leaves notices.json. Restricting and local: nothing is sent to the
+ * target and the audit log is never touched. A refusal (unknown id, live hold, nothing expired) leaves the file as it was. A damaged file stops the caller.
+ */
+export function dismissStoredNotices(configDir: string, selector: DismissSelector, now: number): { ok: true; removed: number } | { ok: false; reason: 'unknown' | 'live' | 'none'; message: string } {
+  const file = noticesFile(configDir);
+  return withFileLock(file, () => {
+    const result = dismissNotices(readNotices(configDir), selector, now);
+    if (!result.ok) {
+      return result;
+    }
+    writeFileAtomic(file, `${JSON.stringify({ v: 1, notices: result.list.map(canonical) })}\n`, 0o600);
+    return { ok: true as const, removed: result.removed.length };
+  });
 }

@@ -341,3 +341,62 @@ describe('outside the app-core shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/the app-core shell does not provide elevate\(\)/);
   });
 });
+
+describe('a notice row whose command is already allowed (decision 100)', () => {
+  const REPORTER = SELF;
+  const NOTICE_ID = 'cccc3333-0000-4000-8000-000000000000';
+  const NOTICE_ROW: PendingRequestRow = { ...ROWS[1] as PendingRequestRow, note: 'reported by desktop at 15:20; not verified live', notice: { machine: REPORTER, id: NOTICE_ID } };
+  const allowedPolicy = () => coreSignPolicy({ v: 1, target: SELF, version: 1, baseVersion: 0, adminKeyId: ADMIN_KEY_ID, issuedAt: NOW - 5, notBefore: NOW - 5, notAfter: NOW + 3600, defaults: [{ shell: 'sh', command: 'ls' }], peers: {} }, admin.privateKeyPkcs8);
+  const dismisses = () => calls.filter((c) => c.url === 'POST /api/modules/machine/dismiss-notice');
+  let dismissFails: string | undefined;
+  beforeEach(() => {
+    dismissFails = undefined;
+    const base = (globalThis as { __APP_CORE_SHELL__: { elevate: unknown; fetcher: (...a: any[]) => Promise<unknown> } }).__APP_CORE_SHELL__;
+    const fetcher = async (url: string, params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
+      if (url === 'POST /api/modules/machine/dismiss-notice') {
+        calls.push({ url, body, headers });
+        if (dismissFails !== undefined) throw new Error(dismissFails);
+        return { ok: true, removed: 1 };
+      }
+      return base.fetcher(url, params, body, headers);
+    };
+    Object.defineProperty(globalThis, '__APP_CORE_SHELL__', { value: { elevate, fetcher }, configurable: true, writable: true });
+  });
+
+  it('removes the row at once (the same dismiss as the Dismiss button) and says the notice was removed, not that a refresh will catch up', async () => {
+    answers.context = context({ current: allowedPolicy() });
+    const onRefresh = vi.fn(async () => undefined);
+    render(<AllowRequestsTable rows={[NOTICE_ROW]} allow={ALLOW} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/already allowed/i)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/request notice was removed from the list/i);
+    expect(dialog).not.toHaveTextContent(/catches up/i);
+    expect(dismisses()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { machine: REPORTER, id: NOTICE_ID }, headers: expect.anything() }]);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+    expect(onRefresh).toHaveBeenCalledWith('requests');
+    await userEvent.click(within(dialog).getByRole('button', { name: /close/i }));
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('when the notice cannot be removed it says so and names the way out (Dismiss on the row), the row stays', async () => {
+    answers.context = context({ current: allowedPolicy() });
+    dismissFails = 'the daemon is not reachable';
+    render(<AllowRequestsTable rows={[NOTICE_ROW]} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/could not be removed.*the daemon is not reachable.*Dismiss/is)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: /close/i }));
+    expect(within(screen.getByRole('table')).getByText('ls')).toBeInTheDocument();
+  });
+
+  it('a row of this machine (no notice) is not dismissed: it only asks the page to refresh', async () => {
+    answers.context = context({ current: allowedPolicy() });
+    const onRefresh = vi.fn(async () => undefined);
+    render(<AllowRequestsTable rows={[ROWS[1] as PendingRequestRow]} allow={ALLOW} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    expect(await screen.findByText(/already allowed/i)).toBeInTheDocument();
+    expect(dismisses()).toEqual([]);
+    expect(onRefresh).toHaveBeenCalledWith('requests');
+  });
+});

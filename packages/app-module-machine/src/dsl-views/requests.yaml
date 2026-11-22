@@ -43,6 +43,7 @@ sections:
     remote: $sources.requests.remote
     notices: $sources.requests.notices
     noticesError: $sources.requests.noticesError
+    expired: $sources.requests.expired
     emptyMessage: $sources.requests.emptyMessage
   - $type: Markdown
     text: "### History of this machine"

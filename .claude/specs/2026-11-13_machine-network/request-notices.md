@@ -96,3 +96,14 @@ Deviations:
 - Frame `request-deny {id, reason?}` (machine-core `requestDeny.ts`): `id` is the request id or a prefix of at least 6 hex characters; answer `deny-ack {id}` or a normal `refused`. Handled in `peerService.ts` (`deps.remoteDeny`; absent = `unknown-message`).
 - The target honours it only for a sender in its notice-recipients list, for a request held now, with a reason that passes `checkDenyReason`. Refusals: `not-a-recipient` (no list, or sender not in it; the message names `machine admin distribute` / `machine admin notify-to` and the local `--deny`), `recipients-unreadable`, `not-held`, `ambiguous`, `bad-deny`, `audit-unavailable`. The audit line `request-denied-remotely` (who, id, shell, command, reason) is written BEFORE the hold is refused.
 - Sender: daemon command `denyRemote` (`denyRemote.ts`: connect 3 s per address, answer 10 s, one attempt, no wake). CLI `machine requests <machine> --deny <id> [--reason <text>]`; web `POST /deny` with an optional `machine` (sensitive route, PIN, no passphrase). An older target: `peer-too-old`, the message says `machine cli update` on that machine.
+
+## Expired and dismissed notices (decision 100, built 2026-11-22)
+
+Root cause of "rows I cannot get rid of": a `refused` notice has no end frame by design and stayed 7 days in `notices.json`; Allow, Deny and the refresh never removed it. A `held` notice whose end frame was lost stayed too (the daemon hid it after its deadline, but nothing said so).
+
+- A held notice past its `deadline` is expired, end frame or not. The daemon answer of `requests` carries it apart (`expiredNotices`, newest first); `notices` stays the live view, so `machine requests` is unchanged.
+- The Requests page shows them under "Expired (no end notice received)": no Allow, no Deny (nobody waits), only Dismiss; "Clear expired" when there are more than two.
+- A refused notice row has Dismiss too. Allow of a notice row whose command is already allowed (nothing to sign) dismisses its notice at once and says so.
+- Dismiss is the daemon command `dismissNotice {machine, id}` or `{expired: true}` (route `POST /dismiss-notice`, plain `write`). It removes the row from `notices.json` only: never an audit line, nothing sent to the target. A live hold is refused (`live`), an id not stored is refused (`unknown`), `{expired: true}` with none is refused (`none`); each message names the fix.
+- No PIN and no passphrase: Dismiss answers nobody and widens nothing (Deny answers a waiting caller, hence the PIN). A notice that is re-sent for a hold still live comes back.
+- Not done: Allow on a notice row that does sign does not dismiss the row; it leaves at the next notice end or with the 7 days.

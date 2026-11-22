@@ -203,3 +203,42 @@ export function endNotice(list: StoredNotice[], machine: string, id: string): St
 export function visibleNotices(list: StoredNotice[], now: number): StoredNotice[] {
   return list.filter((n) => n.state === 'refused' || (n.deadline !== null && n.deadline > now)).sort((a, b) => b.receivedAt - a.receivedAt);
 }
+
+/** A held notice whose deadline passed: the target answered the caller by itself (or the end frame was lost). Only a hold expires; a refusal has no deadline. */
+export function isNoticeExpired(n: StoredNotice, now: number): boolean {
+  return n.state === 'held' && n.deadline !== null && n.deadline <= now;
+}
+
+/** The held notices past their deadline with no end notice received, newest first: the Requests page shows them as expired, to dismiss (decision 100). */
+export function expiredNotices(list: StoredNotice[], now: number): StoredNotice[] {
+  return list.filter((n) => isNoticeExpired(n, now)).sort((a, b) => b.receivedAt - a.receivedAt);
+}
+
+/** What a dismiss names: one notice by the machine that reported it and its request id, or every expired one. */
+export type DismissSelector = { machine: string; id: string } | { expired: true };
+
+export type DismissResult =
+  | { ok: true; list: StoredNotice[]; removed: StoredNotice[] }
+  | { ok: false; reason: 'unknown' | 'live' | 'none'; message: string };
+
+/**
+ * Dismiss display rows of the notice store (decision 100). Only a refused notice or a held one past its deadline can go: a live hold is a caller waiting, it
+ * ends by Allow, Deny or its deadline. Pure: the caller writes `list`. It touches the notices only, never the audit log.
+ */
+export function dismissNotices(list: StoredNotice[], selector: DismissSelector, now: number): DismissResult {
+  if ('expired' in selector) {
+    const removed = list.filter((n) => isNoticeExpired(n, now));
+    if (removed.length === 0) {
+      return { ok: false, reason: 'none', message: 'there is no expired request notice to clear (a held request that is still waiting ends by Allow, Deny or its deadline)' };
+    }
+    return { ok: true, list: list.filter((n) => !isNoticeExpired(n, now)), removed };
+  }
+  const found = list.find((n) => n.machine === selector.machine && n.id === selector.id);
+  if (found === undefined) {
+    return { ok: false, reason: 'unknown', message: `no request notice with the id ${selector.id} from that machine: it is already gone (ended, aged out or dismissed); reload the Requests page` };
+  }
+  if (found.state === 'held' && !isNoticeExpired(found, now)) {
+    return { ok: false, reason: 'live', message: `the request ${selector.id} is still held on ${found.machineName}: a caller is waiting. Deny it, or wait for its deadline; only a refused or expired notice can be dismissed` };
+  }
+  return { ok: true, list: list.filter((n) => n !== found), removed: [found] };
+}

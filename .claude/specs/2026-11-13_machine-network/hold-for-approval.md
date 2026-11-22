@@ -139,3 +139,7 @@ Header with counts, WAITING NOW, REFUSED, one aligned row per request, at most o
   - For a hold of THIS machine `notice-ends.json` and `holdProgress` also carry `reason` and `message` (printable ASCII, 300 characters max); the card ends at once with "the target allowed it but could not run it, cannot-run: <fix>".
   - Wire unchanged: the frame carries the outcome alone (older receivers reject extra fields). The page of ANOTHER machine therefore shows the generic "the target refused it after all: nothing ran"; the cause is in `machine run` of the caller and `machine log` on the target.
   - `machine run` already printed `refused by <machine>: cannot-run: <message with the fix>` (test: holdE2e.test.ts).
+
+## Stale rows on the owner's page (decision 100)
+
+A hold the owner's page only knows by notice can outlive the hold (lost end frame, refused notice). The Requests page marks a held one past its deadline "Expired (no end notice received)" and offers Dismiss (no PIN: it is not an action on the target); see request-notices.md, "Expired and dismissed notices".

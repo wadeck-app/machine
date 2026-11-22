@@ -1,4 +1,5 @@
-import { resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
+import { dismissStoredNotices } from './noticesStore.js';
+import { isUuid, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
@@ -60,7 +61,9 @@ export interface ListAnswer {
   note?: string;
 }
 
-export type DenyAnswer = { ok: true; id: string; peer: string; shell: string; command: string } | { ok: false; reason: 'unknown' | 'ambiguous' | 'too-short' | 'bad-reason' | 'no-daemon'; message: string };
+/** The answer of the daemon command `dismissNotice` (decision 100). */
+export type DismissAnswer = { ok: true; removed: number } | { ok: false; reason: 'unknown' | 'live' | 'none'; message: string };
+export type DenyAnswer ={ ok: true; id: string; peer: string; shell: string; command: string } | { ok: false; reason: 'unknown' | 'ambiguous' | 'too-short' | 'bad-reason' | 'no-daemon'; message: string };
 export type ResolveAnswer = (Resolution & { name?: string }) | NotInitialized;
 export type AliasAnswer = { ok: true; alias: string; uuid: string; previous?: string } | Exclude<Resolution, { ok: true }> | { ok: false; reason: 'conflict' | 'missing'; message: string } | NotInitialized;
 
@@ -247,6 +250,34 @@ export function makeCommands(configDir: string, version: string | (() => string)
       }
       const { hold } = denied;
       return { ok: true, id: hold.id, peer: hold.peer, shell: hold.shell, command: hold.command };
+    },
+
+    /**
+     * The Dismiss and Clear expired buttons of the Requests page (decision 100): a refused notice, or a held one past its deadline, leaves notices.json. Only
+     * a display row goes: restricting and local, no signature, nothing is sent to the target, the audit log is never touched. Payload: `{ machine, id }` or `{ expired: true }`.
+     */
+    dismissNotice(payload?: unknown): DismissAnswer {
+      const p = payloadOf(payload);
+      const expected = 'expected {"machine": "<uuid of the machine that reported it>", "id": "<request id>"} or {"expired": true}';
+      const extra = Object.keys(p).find((k) => k !== 'machine' && k !== 'id' && k !== 'expired');
+      if (extra !== undefined) {
+        throw new Error(`the field "${extra}" is not accepted by dismissNotice: ${expected}`);
+      }
+      if (p['expired'] !== undefined) {
+        if (p['expired'] !== true || p['machine'] !== undefined || p['id'] !== undefined) {
+          throw new Error(`"expired" must be true and alone: ${expected}`);
+        }
+        return dismissStoredNotices(configDir, { expired: true }, now());
+      }
+      const machine = p['machine'];
+      const id = p['id'];
+      if (typeof machine !== 'string' || !isUuid(machine)) {
+        throw new Error(`"machine" must be the uuid of the machine that reported the notice: ${expected}`);
+      }
+      if (typeof id !== 'string' || !isUuid(id)) {
+        throw new Error(`"id" must be the request id (a UUID): ${expected}`);
+      }
+      return dismissStoredNotices(configDir, { machine, id }, now());
     },
 
     resolve(payload?: unknown): ResolveAnswer {

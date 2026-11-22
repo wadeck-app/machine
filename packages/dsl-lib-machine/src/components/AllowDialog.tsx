@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, renewalSummary, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
 import type { ProgressEvent } from '../lib/allowProgress.js';
 import { choiceFromAsk } from '../lib/callerAsk.js';
+import { dismissFailureMessage } from '../lib/dismissNotice.js';
 import { choiceFromLimits, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { LifetimePicker } from './LifetimePicker.js';
@@ -27,6 +28,11 @@ export interface AllowDialogProps {
   /** The lifetime preselected: `once` for a request a caller is waiting for (it runs once, then is refused again), `permanent` for the list of refused commands. Default permanent. */
   defaultLifetime?: Extract<LifetimeKind, 'once' | 'permanent'>;
   onClose: () => void;
+  /**
+   * Called when the command is already allowed (nothing to sign): the owner drops what is obsolete (the request notice of the row, or a refresh of the list).
+   * It rejects when it cannot; the dialog then says so. Absent: the dialog only says the list catches up at its next refresh.
+   */
+  onAlreadyAllowed?: () => Promise<void>;
   onDone: (result: AllowResult) => void;
   /**
    * The owner shows the progress on its own card (decision 86). When given, this dialog is only the CONFIRMATION: it closes itself (`onClose`) as soon as
@@ -55,7 +61,7 @@ function renewalWarningText(machineName: string, entry: string, words: string): 
 }
 
 /** The confirmation of ONE row: loads the context (after the PIN), shows the exact change and its lifetime, asks the passphrase, signs in the page and posts. */
-export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onDone, onEvent }: AllowDialogProps) {
+export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', onClose, onAlreadyAllowed, onDone, onEvent }: AllowDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
   const renewal = allowRenewalOf(row);
@@ -75,7 +81,22 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
         }
         // A permanent entry already there: nothing to sign. An entry with limits is not "already allowed": the choice below renews it (checked again when signing).
         if (!prepared.changed) {
-          setPhase({ kind: 'info', message: `${row.shell} ${JSON.stringify(row.command)} is already allowed on "${machine.name}": nothing to sign. The list below catches up at its next refresh.` });
+          const base = `${row.shell} ${JSON.stringify(row.command)} is already allowed on "${machine.name}": nothing to sign.`;
+          if (onAlreadyAllowed === undefined) {
+            setPhase({ kind: 'info', message: `${base} The list below catches up at its next refresh.` });
+            return;
+          }
+          // The owner removes what is obsolete now (a request notice never ends by itself): the row goes at once, and a failure is said with the way out.
+          try {
+            await onAlreadyAllowed();
+            if (mounted.current) {
+              setPhase({ kind: 'info', message: `${base} Its request notice was removed from the list.` });
+            }
+          } catch (e) {
+            if (mounted.current) {
+              setPhase({ kind: 'failed', message: `${base} Its request notice could not be removed: ${dismissFailureMessage(e)}. Use Dismiss on its row.` });
+            }
+          }
           return;
         }
         // The hint of the key is stored in clear: read it now, so it is on screen before the passphrase is typed (a damaged key file stops here, with its fix).

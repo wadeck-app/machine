@@ -163,9 +163,18 @@ describe('requestsAnswer: notices of other machines (request-notices.md)', () =>
     expect(v.noticesError).toBeUndefined();
   });
 
+  it('lists the held notices past their deadline apart (expiredNotices, newest first): they are not live, and a refused one is never expired', () => {
+    initMachine(dir, 'target');
+    writeFileSync(join(dir, 'notices.json'), JSON.stringify({ v: 1, notices: [stored(30, { deadline: NOW - 5 }), stored(10), stored(20, { deadline: NOW - 1 }), stored(40, { state: 'refused', deadline: null })] }));
+    const v = view();
+    expect(v.notices.map((n) => n.command)).toEqual(['echo 10', 'echo 40']);
+    expect(v.expiredNotices.map((n) => n.command)).toEqual(['echo 20', 'echo 30']);
+  });
+
   it('no file: an empty list and no error', () => {
     initMachine(dir, 'target');
     expect(view().notices).toEqual([]);
+    expect(view().expiredNotices).toEqual([]);
     expect(view().noticesError).toBeUndefined();
   });
 

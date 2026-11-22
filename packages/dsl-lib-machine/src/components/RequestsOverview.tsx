@@ -1,12 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ButtonAction, FieldSelect } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
-import { mergeNotices, type NoticeData } from '../lib/noticeRows.js';
+import { mergeExpired, mergeNotices, type NoticeData } from '../lib/noticeRows.js';
 import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../lib/remoteRequestsFlow.js';
 import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowStyleSwitch } from './AllowStyleSwitch.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { ExpiredNotices } from './ExpiredNotices.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
@@ -33,6 +34,8 @@ export interface RequestsOverviewProps {
   notices?: NoticeData[];
   /** Why the notices may be incomplete (`$sources.requests.noticesError`); shown as a warning when not empty. */
   noticesError?: string;
+  /** Held requests of other machines whose deadline passed with no end notice (`$sources.requests.expired`): shown as Expired with Dismiss, never as live cards (decision 100). */
+  expired?: NoticeData[];
   emptyMessage?: string;
   /**
    * Re-runs the page's sources, so the lists are the daemon's own after an allow or a deny. Defaults to the page's $refresh.
@@ -58,7 +61,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  * @registryCategory composite
  * @registryTags requests allow hold policy admin machines
  */
-export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
+export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', expired = NO_NOTICES, emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
   const allowStyle = useAllowStyle();
   const saferMode = useSaferMode();
   const [filter, setFilter] = useState(ALL);
@@ -94,6 +97,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
   const noticesFetchedAt = useMemo(() => Date.now(), [notices]);
   const noticeRows = useMemo(() => mergeNotices({ notices, selfUuid: self?.uuid, loadedMachines, filter, allowAvailable: allow?.available === true }), [notices, self?.uuid, loadedMachines, filter, allow?.available]);
   const noticeHeld = useMemo<HeldRequestRow[]>(() => noticeRows.held.map((r) => ({ ...r, fetchedAtMs: noticesFetchedAt })), [noticeRows, noticesFetchedAt]);
+  const expiredRows = useMemo(() => mergeExpired({ expired, filter }), [expired, filter]);
   const rows = useMemo(() => [...ownRows, ...remoteRows, ...noticeHeld].sort((a, b) => a.secondsLeft - b.secondsLeft), [ownRows, remoteRows, noticeHeld]);
 
   const options = [{ value: ALL, label: 'All machines' }, ...(self !== undefined ? [{ value: self.uuid, label: `${self.name} (this machine)` }] : []), ...peers.map((p) => ({ value: p.uuid, label: p.name }))];
@@ -183,6 +187,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
       <HeldRequests rows={rows} allow={allow} reachability={reachability} allowStyle={allowStyle.style} saferMode={saferMode.on} {...(onRefresh !== undefined ? { onRefresh } : {})} />
       {rows.length === 0 && <div className={TEXT_MUTED_SM}>No held request{filter === ALL ? '' : ' for this machine'} ({counts}).</div>}
+      <ExpiredNotices rows={expiredRows} {...(onRefresh !== undefined ? { onRefresh } : {})} />
 
       {showSelf && (
         <div className="flex flex-col gap-2">

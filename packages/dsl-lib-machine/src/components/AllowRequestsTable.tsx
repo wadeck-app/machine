@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
+import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { dismissFailureMessage, dismissNotice } from '../lib/dismissNotice.js';
+import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
@@ -24,6 +26,8 @@ export interface PendingRequestRow {
   note?: string;
   /** The notice carries only the first part of the command. */
   commandTruncated?: boolean;
+  /** A notice row only (decision 100): what Dismiss names, the machine that reported it and the request id. Present: the row has a Dismiss button. */
+  notice?: { machine: string; id: string };
   /** The request waits for the renewal of an exhausted or expired entry: the Allow replaces that entry. */
   renewal?: WaitingRenewal;
   /** What the caller asked the owner for (a held request only): pre-fills the lifetime of the Allow, never applied by itself. */
@@ -57,6 +61,8 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
   const [selected, setSelected] = useState<PendingRequestRow | null>(null);
   const [allowed, setAllowed] = useState<ReadonlySet<string>>(new Set());
   const [result, setResult] = useState<{ tone: 'success' | 'warning'; text: string; machine: string } | null>(null);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState<string | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
 
@@ -74,8 +80,35 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
     void onRefresh?.('requests');
   };
 
+  // Dismiss of a notice row (decision 100): local, no passphrase and no PIN; the row leaves notices.json of this machine, never an audit line.
+  const removeNotice = async (row: PendingRequestRow, notice: { machine: string; id: string }): Promise<void> => {
+    await dismissNotice(api.current as AllowApi, notice);
+    setAllowed((prev) => new Set(prev).add(rowKey(row)));
+    void onRefresh?.('requests');
+  };
+  const dismiss = (row: PendingRequestRow, notice: { machine: string; id: string }) => {
+    setDismissing(true);
+    setDismissError(null);
+    removeNotice(row, notice).then(
+      () => setDismissing(false),
+      (e: unknown) => {
+        setDismissing(false);
+        setDismissError(dismissFailureMessage(e));
+      },
+    );
+  };
+  // The command is already allowed (the dialog has nothing to sign): the row is obsolete. A notice row is dismissed at once (it never ends by itself); a row of this machine leaves at the refresh.
+  const alreadyAllowed = async (row: PendingRequestRow): Promise<void> => {
+    if (row.notice !== undefined) {
+      await removeNotice(row, row.notice);
+      return;
+    }
+    void onRefresh?.('requests');
+  };
+
   return (
     <div className="flex flex-col gap-3">
+      {dismissError !== null && <div role="alert" className={TEXT_ERROR}>{dismissError}</div>}
       {result !== null && (
         <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}><MachineText text={result.text} names={[result.machine]} /></div>
       )}
@@ -117,6 +150,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
                   <td className="whitespace-nowrap px-2 py-2">{r.firstSeenText}</td>
                   <td className="whitespace-nowrap px-2 py-2">{r.lastSeenText}</td>
                   <td className="px-2 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
                     {rowCanAllow(r) ? (
                       // violations-suppress: react/no-raw-button ButtonAction has no aria-label and dsl-ui's Button is not exported: the name "Allow <command>" tells the rows apart for a screen reader (looks like dsl-ui's primary Button, same tokens as its Badge)
                       <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
@@ -125,6 +159,8 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
                     ) : (
                       <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>
                     )}
+                    {r.notice !== undefined && <ButtonAction label="Dismiss" variant="secondary" size="sm" disabled={dismissing} onClick={() => dismiss(r, r.notice as NonNullable<PendingRequestRow['notice']>)} />}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -133,7 +169,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
         </div>
       )}
       {selected !== null && allow !== undefined && (
-        <AllowDialog key={rowKey(selected)} row={selected} machine={allow.machine} api={api.current} onClose={() => setSelected(null)} onDone={answer => done(selected, answer)} />
+        <AllowDialog key={rowKey(selected)} row={selected} machine={allow.machine} api={api.current} onClose={() => setSelected(null)} onAlreadyAllowed={() => alreadyAllowed(selected)} onDone={answer => done(selected, answer)} />
       )}
     </div>
   );

@@ -25,6 +25,8 @@ interface RequestsAnswerLike {
   problems: string[];
   /** Request notices reported by other machines (request-notices.md, phase 2); absent in an older daemon. */
   notices?: unknown;
+  /** Held notices past their deadline with no end notice received (decision 100); absent in a daemon of before it. */
+  expiredNotices?: unknown;
   noticesError?: unknown;
 }
 
@@ -123,6 +125,8 @@ export interface RequestsPage {
   pendingTotal: number;
   /** Held and refused requests other machines reported, newest first. */
   notices: NoticeRow[];
+  /** Held requests whose deadline passed without an end notice (decision 100): not live, no Allow or Deny, only Dismiss. Newest first. */
+  expired: NoticeRow[];
   /** Why the notices may be incomplete (damaged store, older daemon, unexpected entries); empty when all is well. */
   noticesError: string;
   history: HistoryRow[];
@@ -217,12 +221,12 @@ function noticeRow(n: unknown, now: number): NoticeRow | undefined {
   return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt, ...(renewal !== undefined ? { renewal } : {}), ...(asked?.ok === true ? { ask: asked.ask } : {}) };
 }
 
-function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRow[]; noticesError: string } {
+function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRow[]; expired: NoticeRow[]; noticesError: string } {
   if (answer.notices === undefined) {
-    return { notices: [], noticesError: 'the daemon does not report request notices: it is an older version, update it with `machine cli update` and restart it' };
+    return { notices: [], expired: [], noticesError: 'the daemon does not report request notices: it is an older version, update it with `machine cli update` and restart it' };
   }
   if (!Array.isArray(answer.notices)) {
-    return { notices: [], noticesError: 'the daemon sent request notices in an unexpected shape: it is probably another version, update it with `machine cli update` and restart it' };
+    return { notices: [], expired: [], noticesError: 'the daemon sent request notices in an unexpected shape: it is probably another version, update it with `machine cli update` and restart it' };
   }
   const rows: NoticeRow[] = [];
   let skipped = 0;
@@ -234,14 +238,28 @@ function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRo
       rows.push(row);
     }
   }
+  const expired: NoticeRow[] = [];
   const messages: string[] = [];
+  // Absent: a daemon of before decision 100, which hides such notices itself. Present: the held requests past their deadline, shown as expired (no countdown, only Dismiss).
+  if (answer.expiredNotices !== undefined && !Array.isArray(answer.expiredNotices)) {
+    messages.push('the daemon sent the expired request notices in an unexpected shape: it is probably another version, update it with `machine cli update` and restart it');
+  } else {
+    for (const n of (answer.expiredNotices as unknown[] | undefined) ?? []) {
+      const row = noticeRow(n, now);
+      if (row === undefined) {
+        skipped += 1;
+      } else {
+        expired.push({ ...row, secondsLeft: 0 });
+      }
+    }
+  }
   if (typeof answer.noticesError === 'string' && answer.noticesError !== '') {
     messages.push(answer.noticesError);
   }
   if (skipped > 0) {
     messages.push(`${skipped} request notice${skipped === 1 ? ' is' : 's are'} not shown: not shaped like a notice, the daemon and the module are probably not the same version (\`machine cli update\`).`);
   }
-  return { notices: rows, noticesError: messages.join(' ') };
+  return { notices: rows, expired, noticesError: messages.join(' ') };
 }
 
 export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage {
