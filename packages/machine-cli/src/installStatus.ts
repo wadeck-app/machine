@@ -5,7 +5,7 @@ import {
   classifyInstalled,
   deriveInstallState,
   idleSuspendInstalledMinutes,
-  platformName,
+  findInstallable,
   stateLabel,
   stateNextSteps,
   unsupportedMessage,
@@ -17,6 +17,7 @@ import {
   type Installable,
   type PlannedFile,
 } from '@wadeck-app/machine-core';
+import { fit } from './cliActivity.js';
 import type { InstallEnv } from './installEnv.js';
 
 // The STATUS of an installable on this machine (install.md, "Lifecycle"): read-only, never asks a password, never changes a file.
@@ -131,7 +132,7 @@ export interface ItemStatus {
   /** The answer of the non-prompting probe; undefined when it was not asked. */
   sudoAllowsCommand?: boolean;
   nextSteps: string[];
-  /** What is configured and the last decision of the item (`suspends after 30 min idle`, `last decision: ...`). */
+  /** What is configured and the last decision of the item (`suspends after 30 min idle`, `last decision: <raw journal line>`; the text commands show it parsed, see presentDetails). */
   details?: string[];
   /** The last decision line of the journal, when it was read. */
   lastDecision?: string;
@@ -247,21 +248,112 @@ export async function listStatuses(env: InstallEnv): Promise<ItemStatus[]> {
   return out;
 }
 
-/** One line per item for the list and `install status`. */
-export function statusBlock(s: ItemStatus, platform: string): string[] {
-  const here = s.supportedHere ? `supported on this machine (${platformName(platform)})` : `not supported here`;
-  const lines = [`  ${s.id}   platforms: ${s.platforms.join(', ')}   ${here}`, `      ${s.description}`, `      state: ${stateLabel(s.state)}`];
-  if (s.reason !== undefined) {
-    lines.push(`      why: ${s.reason}`);
+export interface Decision {
+  atMs: number;
+  /** Local HH:MM:SS. */
+  time: string;
+  reason: string;
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** A journal line `<iso time> <host> <tag>[<pid>]: <reason>` without the host, the tag and the pid; undefined when it does not look like that (never throws). */
+export function parseDecision(line: string): Decision | undefined {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:[.,]\d+)?(Z|[+-]\d{2}:?\d{2})\s+\S+\s+[^\s:[\]]+(?:\[\d+\])?:\s+(\S.*)$/.exec(line.trim());
+  if (m === null) {
+    return undefined;
+  }
+  const zone = (m[2] as string).length === 5 ? `${(m[2] as string).slice(0, 3)}:${(m[2] as string).slice(3)}` : (m[2] as string);
+  const atMs = Date.parse(`${m[1] as string}${zone}`);
+  if (Number.isNaN(atMs)) {
+    return undefined;
+  }
+  const d = new Date(atMs);
+  return { atMs, time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`, reason: m[3] as string };
+}
+
+/** `3 min ago`; a time in the future (clock skew) is `just now`. */
+export function ageText(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s <= 0) {
+    return 'just now';
+  }
+  if (s < 60) {
+    return `${s} s ago`;
+  }
+  if (s < 3600) {
+    return `${Math.floor(s / 60)} min ago`;
+  }
+  if (s < 2 * 86400) {
+    return `${Math.floor(s / 3600)} h ago`;
+  }
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+/** `18:13:56 not idle: rdp connected (3 min ago)`; a line that does not parse is shown as it is, cut to 80 characters. */
+export function decisionText(raw: string, now: number): string {
+  const d = parseDecision(raw);
+  return d === undefined ? fit(raw, VISIBLE_MAX) : `${d.time} ${d.reason} (${ageText(now - d.atMs)})`;
+}
+
+const LAST_PREFIX = 'last decision: ';
+
+/** The details of an item for the lines that stay one-liners (`--check`, `machine status`): the last decision parsed. `ItemStatus.details` (the --json) is untouched. */
+export function presentDetails(s: ItemStatus, now: number): string[] {
+  return (s.details ?? []).map((d) => (s.lastDecision !== undefined && d.startsWith(LAST_PREFIX) ? `${LAST_PREFIX}${decisionText(s.lastDecision, now)}` : d));
+}
+
+export interface BlockOptions {
+  /** Width of the terminal; undefined when unknown (then 80). */
+  columns: number | undefined;
+  now: number;
+}
+
+const MIN_WIDTH = 40;
+const MAX_WIDTH = 300;
+
+function wrap(text: string, width: number, indent: string): string[] {
+  const out: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line !== '' && indent.length + line.length + 1 + word.length > width) {
+      out.push(`${indent}${line}`);
+      line = word;
+    } else {
+      line = line === '' ? word : `${line} ${word}`;
+    }
+  }
+  return line === '' ? out : [...out, `${indent}${line}`];
+}
+
+/** One compact block per item for the list and `install status`: state first, what it does, the last decision. The long text is in `<id> --dry-run`. */
+export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
+  const width = options.columns === undefined ? VISIBLE_MAX : Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.floor(options.columns))) - 1;
+  if (!s.supportedHere) {
+    const lines = [`${s.id}  not supported here (platforms: ${s.platforms.join(', ')})`];
+    // A platform that is supported but where the plan cannot be built has a cause the user can fix.
+    if (s.reason !== undefined && !/^not supported on \S+ yet/.test(s.reason)) {
+      lines.push(...wrap(s.reason, width, '  '));
+    }
+    return lines;
+  }
+  const config = (s.details ?? []).filter((d) => !d.startsWith(LAST_PREFIX));
+  const lines = [fit(`${s.id}  ${stateLabel(s.state)}${config.length === 0 ? '' : `  (${config.join('; ')})`}`, width)];
+  const def = findInstallable(s.id);
+  if (def !== undefined) {
+    lines.push(fit(`  ${def.summaryLine}`, width));
   }
   if (s.missing.length > 0 && s.state === 'partial') {
-    lines.push(`      missing: ${s.missing.join(', ')}`);
+    lines.push(`  missing: ${s.missing.join(', ')}`);
   }
-  for (const detail of s.details ?? []) {
-    lines.push(`      ${detail}`);
+  const unreadable = /^last decision: not readable by your user \(try: (.+)\)$/.exec((s.details ?? []).find((d) => d.startsWith(LAST_PREFIX)) ?? '');
+  if (s.lastDecision !== undefined) {
+    lines.push(fit(`  last: ${decisionText(s.lastDecision, options.now)}`, width));
+  } else if (unreadable !== null) {
+    lines.push('  last: not readable by your user, try:', `    ${unreadable[1] as string}`);
   }
   if (s.nextSteps.length > 0) {
-    lines.push(`      next: ${s.nextSteps.join(' ; ')}`);
+    lines.push(`  next: ${s.nextSteps.join(' ; ')}`);
   }
   return lines;
 }
@@ -289,7 +381,7 @@ export async function installedStatusLines(env: InstallEnv): Promise<{ lines: st
     try {
       const { status } = await readStatus(def, plan, env, false);
       if (status.state === 'installed') {
-        lines.push(`installed: ${def.id} (up to date${(status.details ?? []).map((d) => `; ${d}`).join('')})`);
+        lines.push(`installed: ${def.id} (up to date${presentDetails(status, Date.now()).map((d) => `; ${d}`).join('')})`);
         items.push({ id: def.id, state: status.state });
       } else if (status.state === 'outdated') {
         lines.push(`[warn] installed: ${def.id} is outdated: run machine install ${def.id} --refresh`);

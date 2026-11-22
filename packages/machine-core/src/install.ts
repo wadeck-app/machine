@@ -116,6 +116,8 @@ export interface InstallPlan {
 export interface Installable {
   id: string;
   description: string;
+  /** What it does in at most 80 characters: the second line of the list (the long `description` is in `--dry-run` and `--help`). */
+  summaryLine: string;
   /** `process.platform` values this build can install on. */
   platforms: string[];
   /** What the owner accepts by installing AND allowing it: printed in the help and in the output. */
@@ -297,6 +299,7 @@ function suspendPlan(facts: InstallFacts): InstallPlan {
 const SUSPEND: Installable = {
   id: 'suspend',
   description: 'let `machine run` suspend this machine (a root-owned script and a sudoers rule for ONE command: systemctl suspend); wake it with `machine wake`',
+  summaryLine: 'lets `machine run` suspend this box (one sudoers rule); wake: `machine wake`',
   platforms: ['linux'],
   consequence:
     'Once the command is allowed in the DEFAULT list of this machine, every trusted peer can suspend it (a per-peer list restricts that: `machine policy allow --peer <machine>` in mode local). The rule itself only lets YOUR user run `systemctl suspend` without a password, nothing else.',
@@ -399,6 +402,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
 const IDLE_SUSPEND: Installable = {
   id: 'idle-suspend',
   description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no RDP/ssh/peer connection, no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
+  summaryLine: 'suspends this box by itself when really idle (root timer, every 2 min)',
   platforms: ['linux'],
   consequence:
     'This only RESTRICTS uptime: the box suspends itself when idle. It adds no network surface and no right for any peer (a peer keeps the box awake only by sending commands, as before). To keep it awake on purpose: touch /run/machine-keep-awake or <config dir>/keep-awake (content "keep awake until <epoch>" for a limited time); remove the file to release it.',

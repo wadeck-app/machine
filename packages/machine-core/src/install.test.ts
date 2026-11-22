@@ -34,6 +34,12 @@ const suspend = (): NonNullable<ReturnType<typeof findInstallable>> => {
 };
 
 describe('registry', () => {
+  it.each(INSTALLABLES.map((d) => [d.id, d] as const))('%s has a one-line summary of at most 80 characters for the list', (_id, def) => {
+    expect(def.summaryLine.length).toBeGreaterThan(10);
+    expect(def.summaryLine.length).toBeLessThanOrEqual(80);
+    expect(def.summaryLine).not.toContain('\n');
+  });
+
   it('lists suspend, for linux only, with a description and the consequence of allowing it', () => {
     expect(INSTALLABLES.map((d) => d.id)).toEqual(['suspend', 'idle-suspend']);
     const def = suspend();

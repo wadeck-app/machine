@@ -44,7 +44,7 @@ All 5 pass: the timer runs on `/run/machine-idle-suspend/since` (`<since> <last 
 - A disconnected xrdp session is NOT activity; an ESTABLISHED RDP connection is.
 - The audit lines are matched ANCHORED on `{"seq":..,"prev":..,"entry":{"ts":"..","event":"<e>"`: `ts` and `event` are the first keys the daemon writes, so a command text containing `"event":"accepted"` (escaped in the JSON line) never matches.
 - Peer connections are short-lived (probes close at once); a long-lived peer socket would keep the box awake (check on the box: `ss -Htn state established`).
-- Every decision goes to the journal: `logger -t machine-idle-suspend -- <reason>`. `machine install` list, `--check` and `machine status` show `suspends after N min idle` and the last line of `journalctl -t machine-idle-suspend -n 1` when the user can read it, else `last decision: not readable by your user (try: sudo ...)`; never an error.
+- Every decision goes to the journal: `logger -t machine-idle-suspend -- <reason>`. `machine install` list, `--check` and `machine status` show `suspends after N min idle` and the last line of `journalctl -t machine-idle-suspend -n 1` when the user can read it, parsed (`last: 18:13:56 not idle: rdp connected (3 min ago)`: no host, tag or pid, local time, age; cut to 80 characters when it does not parse; layout in `install.md`), else `not readable by your user` with the `sudo ...` command; never an error. `--json` keeps the raw line.
 - A state file that cannot be written, a clock that cannot be read, or a failing `systemctl suspend` exit 1 after logging the cause, without suspending.
 
 ## Tests

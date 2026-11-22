@@ -241,7 +241,7 @@ requests waiting for approval on laptop (2 commands refused because not allowed,
 Run in a terminal ON the target (a local command, never remote). Items, Linux only: `suspend` (see `install.md`) and `idle-suspend` (the box suspends by itself when really idle, see `idle-suspend.md`).
 
 ```
-machine install                      list what can be installed, where, and its state here (alias: machine install status; --json)
+machine install                      one block per item: state, what it does, last decision (alias: machine install status; --json)
 machine install suspend --dry-run    every file and command, nothing changed (no terminal needed)
 machine install suspend              the same, then y/N, then sudo (your own password) installs the script and the sudo rule
 machine install suspend --check      the state of this item, no password; exit 0 only when installed and up to date

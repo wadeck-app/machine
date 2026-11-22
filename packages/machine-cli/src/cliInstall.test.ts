@@ -45,9 +45,12 @@ describe('machine install (list)', () => {
     const r = await run([]);
     expect(r.code).toBe(0);
     expect(r.err).toBe('');
-    expect(r.out).toContain('suspend');
-    expect(r.out).toMatch(/platforms: linux/);
-    expect(r.out).toMatch(/supported on this machine \(linux\)/);
+    expect(r.out).toMatch(/^suspend {2}not installed$/m);
+    expect(r.out).toMatch(/^idle-suspend {2}not installed {2}\(suspends after 30 min idle\)$/m);
+    // One compact block per item: no generic text repeated, the long description stays in --dry-run.
+    expect(r.out).not.toMatch(/platforms: linux|supported on this machine|state:/);
+    expect(r.out).not.toContain('a root-owned script and a sudoers rule');
+    for (const line of r.out.split('\n').filter((l) => /^ {2}\S/.test(l) && !l.includes('machine install'))) expect(line.length, line).toBeLessThanOrEqual(80);
     expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--json]');
     // The only sudo call of the list is the listing that never prompts.
     expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual(['/usr/bin/sudo -n -l /usr/bin/systemctl suspend']);
@@ -55,23 +58,23 @@ describe('machine install (list)', () => {
   });
 
   it('shows the state of every item on this machine: not installed, installed, outdated, partial, foreign', async () => {
-    expect((await run([])).out).toContain('state: not installed');
-    expect((await run([], INSTALLED)).out).toContain('state: installed, up to date');
-    expect((await run([], { ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': 'x' } })).out).toContain('state: foreign');
+    expect((await run([])).out).toMatch(/^suspend {2}not installed$/m);
+    expect((await run([], INSTALLED)).out).toMatch(/^suspend {2}installed, up to date$/m);
+    expect((await run([], { ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': 'x' } })).out).toMatch(/^suspend {2}foreign/m);
     const old = (shipped.files[0] as { content: string }).content.replace('3 s', '9 s');
     const outdated = await run([], { ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': old } });
-    expect(outdated.out).toContain('state: outdated (this build ships newer content)');
+    expect(outdated.out).toMatch(/^suspend {2}outdated \(this build ships newer content\)$/m);
     expect(outdated.out).toContain('machine install suspend --refresh');
     const partial = await run([], { userFiles: INSTALLED.userFiles ?? {} });
-    expect(partial.out).toContain('state: partial');
+    expect(partial.out).toMatch(/^suspend {2}partial/m);
     expect(partial.out).toContain('missing: /etc/sudoers.d/machine-suspend');
   });
 
   it('says when this machine is not supported yet', async () => {
     const r = await run([], { platform: 'win32' });
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/not supported on windows yet \(supported: linux\)/);
-    expect(r.out).toContain('state: unsupported here');
+    expect(r.out).toMatch(/^suspend {2}not supported here \(platforms: linux\)$/m);
+    expect(r.out).toMatch(/^idle-suspend {2}not supported here \(platforms: linux\)$/m);
     expect(r.fake.calls).toEqual([]);
   });
 

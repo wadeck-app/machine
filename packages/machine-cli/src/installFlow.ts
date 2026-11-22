@@ -13,7 +13,7 @@ import {
   type PlannedFile,
 } from '@wadeck-app/machine-core';
 import type { ExecResult, InstallEnv } from './installEnv.js';
-import { fileStatuses, measure, observationOf, readStatus, visible, type Seen } from './installStatus.js';
+import { fileStatuses, measure, observationOf, presentDetails, readStatus, visible, type Seen } from './installStatus.js';
 
 // `machine install <id> [--dry-run | --check | --refresh | --remove] [--yes]` (install.md): runs the plan of an installable with an injected fs and exec.
 // A LOCAL command: it refuses without a terminal, and the only root actions are `sudo` child processes that share the terminal of the owner,
@@ -165,7 +165,7 @@ async function checkFlow(def: Installable, plan: InstallPlan, env: InstallEnv, i
   const allowed = status.sudoAllowsCommand === true;
   const command = plan.probe.join(' ');
   io.say(`${def.id} on ${env.platform}: ${stateLabel(status.state)}\n`);
-  for (const detail of status.details ?? []) {
+  for (const detail of presentDetails(status, Date.now())) {
     io.say(`${detail}\n`);
   }
   for (const s of seen) {

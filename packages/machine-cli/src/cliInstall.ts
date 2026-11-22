@@ -50,19 +50,20 @@ export function installFlagProblem(command: string, rest: string[], args: Parsed
   return undefined;
 }
 
-function listText(platform: string, statuses: ItemStatus[]): string {
-  const lines = ['machine install: what machine can set up on THIS machine, and its state here (local command: run it in a terminal here, never remotely)', ''];
+function listText(statuses: ItemStatus[], columns: number | undefined): string {
+  const lines = ['machine install: what can be set up on THIS machine, and its state (a local command: never remote)', ''];
+  const now = Date.now();
   for (const status of statuses) {
-    lines.push(...statusBlock(status, platform));
+    lines.push(...statusBlock(status, { columns, now }));
   }
   lines.push(
     '',
     `Usage: ${USAGE}`,
     '  machine install status            this list again (read-only, no password; --json for scripts)',
     '  machine install <id> --check      the state of one item; exit 0 only when installed and up to date',
-    '  machine install <id> --dry-run    shows every file and command, changes nothing',
+    '  machine install <id> --dry-run    the full description, every file and command; changes nothing',
     '  machine install <id>              shows them, asks y/N, then runs them with sudo (your own password)',
-    '  machine install <id> --refresh    writes the whole plan again, even when up to date (repairs a file or a rule changed by hand)',
+    '  machine install <id> --refresh    writes the whole plan again (repairs what was changed by hand)',
     '  machine install <id> --remove     removes exactly what was installed',
     'More: machine install --help',
   );
@@ -81,7 +82,9 @@ export async function runInstallCommand(ctx: CommandContext): Promise<number> {
   // `machine install` and `machine install status` are the same read-only list, with the state of every item on this machine.
   if (rest.length === 0 || rest[0] === 'status') {
     const statuses = await listStatuses(env);
-    emit({ platform: env.platform, installables: statuses }, listText(env.platform, statuses));
+    // The width logic of `machine log --follow`: the terminal's own (a test double may give it), unknown when the output is not a terminal.
+    const columns = io.columns?.() ?? (io.columns === undefined && process.stdout.isTTY ? process.stdout.columns : undefined);
+    emit({ platform: env.platform, installables: statuses }, listText(statuses, columns));
     return EXIT.ok;
   }
   const id = rest[0] as string;

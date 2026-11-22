@@ -12,12 +12,28 @@ Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the
 
 | Command | Effect |
 |---|---|
-| `machine install`, `machine install status` | Same read-only list: every installable with platforms, state here, missing parts, next step. `--json` supported. |
+| `machine install`, `machine install status` | Same read-only list, one compact block per item (see below). `--json` supported, unchanged. |
 | `machine install <id>` | Shows state, every file (exact content, owner, mode, sha256) and every command, asks y/N (`--yes` skips), runs, then checks with `sudo -n -l`. |
 | `--dry-run` | Prints the plan. Runs nothing, not even sudo (the root-only rule is reported as not read). |
 | `--check` | State of one item. Exit 0 only for `installed`, 1 for every other state, 2 for a usage error. Never asks a password. |
 | `--refresh` | Force: the whole plan again (both files, visudo, verification) even when `installed`; same plan display, y/N, terminal and foreign-file refusal as install. |
 | `--remove` | Shows then removes exactly the managed files (rule first, script second). Refuses everything if one file is foreign. Post-check: the files are read again; anything left fails with path, owner and the sudo command to remove it. |
+
+### The list
+
+State first, no generic text repeated, lines cut to the terminal width (the `machine log -f` logic; 80 when it is not a terminal). The long description is in `<id> --dry-run` and `--help`.
+
+```
+suspend  installed, up to date
+  lets `machine run` suspend this box (one sudoers rule); wake: `machine wake`
+idle-suspend  installed, up to date  (suspends after 5 min idle)
+  suspends this box by itself when really idle (root timer, every 2 min)
+  last: 18:13:56 not idle: rdp connected (3 min ago)
+```
+
+- `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown cut to 80 characters; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
+- `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.
+- The one-line summary is `Installable.summaryLine` (machine-core, at most 80 characters, tested).
 
 `--minutes <n>` (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 5..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 

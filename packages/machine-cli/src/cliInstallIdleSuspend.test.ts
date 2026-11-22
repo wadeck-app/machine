@@ -119,7 +119,9 @@ describe('machine install idle-suspend: install, status, refresh, remove', () =>
     expect(r.code, r.out + r.err).toBe(0);
     expect(r.out).toContain('idle-suspend on linux: installed, up to date');
     expect(r.out).toContain('suspends after 45 min idle');
-    expect(r.out).toContain('last decision: 2026-11-22T10:00:00+0000 thinkcentre machine-idle-suspend[42]: idle 12/45 min');
+    // Parsed: no host, tag or pid; local time and the age.
+    expect(r.out).toMatch(/^last decision: \d\d:\d\d:\d\d idle 12\/45 min \((just now|\d+ (s|min|h|d) ago)\)$/m);
+    expect(r.out).not.toContain('machine-idle-suspend[42]');
     const json = JSON.parse((await b.go(['idle-suspend', '--check', '--json'])).out) as { state: string; details: string[] };
     expect(json.state).toBe('installed');
     expect(json.details[0]).toBe('suspends after 45 min idle');
@@ -255,8 +257,8 @@ describe('a tool the script needs is missing: never a silent default', () => {
     expect(r.err).toContain(`${tool} was not found`);
     expect(r.err).toContain(pkg);
     const list = await b.go([]);
-    expect(list.out).toContain('state: unsupported here');
-    expect(list.out).toContain(`why: ${tool} was not found`);
+    expect(list.out).toContain('idle-suspend  not supported here (platforms: linux)');
+    expect(list.out.replace(/\s+/g, ' ')).toContain(`${tool} was not found`);
     expect((await b.go(['suspend', '--dry-run'])).code).toBe(0);
   });
 
