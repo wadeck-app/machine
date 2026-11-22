@@ -1,4 +1,4 @@
-import { allowCommand, describeHistory, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
+import { allowCommand, clockSkewProblem, describeHistory, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRequest } from '@wadeck-app/machine-core';
 import { ageText } from './candidacies.js';
 
 // The Requests page (decision 73): what the peers asked THIS machine to run and what became of it. The data is the answer of the daemon
@@ -296,7 +296,9 @@ export function remoteRequestsPage(answer: RequestsListAnswer, nowSeconds: numbe
   if (answer.truncated || answer.pendingTotal > answer.pending.length) notes.push(`Showing ${answer.pending.length} of ${answer.pendingTotal} pending requests (the newest).`);
   if (answer.allowedNow > 0) notes.push(`${answer.allowedNow} earlier request${answer.allowedNow === 1 ? ' is' : 's are'} allowed now and not listed.`);
   const skew = answer.now - nowSeconds;
-  if (Math.abs(skew) > 120) notes.push(`The clock of ${machine.name} differs from this machine by ${Math.abs(skew)} s: the ages use this machine's clock.`);
+  // Above 30 s (decision 88): say which clock is off, by how much, and the fix. The ages use this machine's clock.
+  const clockProblem = clockSkewProblem(machine.name, answer.now, nowSeconds);
+  if (clockProblem !== undefined) notes.push(`${clockProblem}.`);
   const allowNote = answer.policyMode === 'local' ? `${machine.name} manages its own allow list (policy mode local): an admin signature would be refused. Run the command shown in each row on ${machine.name} (\`machine policy allow\`, it asks the local passphrase).` : '';
   return {
     machine: answer.machine,

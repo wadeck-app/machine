@@ -91,7 +91,7 @@ const frame = { type: 'deliver-document', document: DOC };
 describe('deliver-document (decision 86)', () => {
   it('applies the document through the shared applier and acknowledges it, audited with the sender and without the document', async () => {
     const w = await world();
-    expect(await w.exchange(frame)).toEqual({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed' });
+    expect(await w.exchange(frame)).toEqual({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed', peerNow: 1_800_000_000 });
     expect(w.state.applied).toEqual([DOC]);
     const line = w.audit.find((e) => e['event'] === 'document-delivered');
     expect(line).toMatchObject({ source: A, kind: 'policy', id: 'abcdefghijklmnopqrstuv', outcome: 'installed' });
@@ -118,6 +118,12 @@ describe('deliver-document (decision 86)', () => {
     const w = await world({ apply: () => result });
     expect(await w.exchange(frame)).toMatchObject({ type: 'refused', reason, message: expect.stringMatching(message) });
     expect(w.audit.find((e) => e['event'] === 'document-delivery-refused')).toMatchObject({ source: A, reason });
+  });
+
+  it('a refusal carries the clock of this machine (peerNow), in the answer and in the audit line, so the sender can measure the skew', async () => {
+    const w = await world({ apply: () => ({ status: 'deferred', reason: 'not-yet-valid', kind: 'policy', id: 'x', message: 'dated in the future' }) });
+    expect(await w.exchange(frame)).toMatchObject({ type: 'refused', reason: 'not-yet-valid', peerNow: 1_800_000_000 });
+    expect(w.audit.find((e) => e['event'] === 'document-delivery-refused')).toMatchObject({ reason: 'not-yet-valid', now: 1_800_000_000 });
   });
 
   it('refuses a malformed frame as bad-deliver, and never calls the applier', async () => {

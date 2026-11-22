@@ -1,5 +1,6 @@
 import { createHash, createHmac, hkdfSync } from 'node:crypto';
 import { canonicalize, type Json } from './canonical.js';
+import { NOT_YET_VALID_LEEWAY_SECONDS } from './clockSkew.js';
 import { INVALID_ADMIN_KEY_MESSAGE, decodeBase64urlStrict, signBytes, tryKeyId } from './keys.js';
 import { POLICY_DOMAIN, assertPolicyBody, type SignedPolicy } from './policy.js';
 import { verifyRegistration, type RegistrationBody, type SignedRegistration } from './registration.js';
@@ -329,7 +330,8 @@ export function verifyDocumentEnvelope(signed: unknown, ctx: EnvelopeContext): {
   }
   if (body.to !== ctx.selfUuid) return fail('wrong-recipient', `document ${body.id} is addressed to machine ${body.to}, not to this machine (${ctx.selfUuid})`);
   const skew = ctx.skewSeconds ?? DOCUMENT_SKEW_SECONDS;
-  if (ctx.now + skew < body.issuedAt) {
+  // Not-yet-valid side: the leeway of decision 88 (a clock a little behind the admin's); the expiry side below keeps `skew`.
+  if (ctx.now + Math.max(skew, NOT_YET_VALID_LEEWAY_SECONDS) < body.issuedAt) {
     return fail('not-yet-valid', `document ${body.id} is dated ${new Date(body.issuedAt * 1000).toISOString()}, in the future; check the clocks of this machine and of the admin machine`);
   }
   if (ctx.now - skew > body.expiresAt) {
@@ -383,6 +385,7 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
       adminPublicKey: ctx.adminPublicKey,
       now: ctx.now,
       skewSeconds: skew,
+      notBeforeLeewaySeconds: NOT_YET_VALID_LEEWAY_SECONDS,
       ...(ctx.isRevoked ? { isRevoked: ctx.isRevoked } : {}),
     });
     if (!registration.ok) {

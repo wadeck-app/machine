@@ -75,8 +75,10 @@ export interface VerifyRegistrationContext {
   adminPublicKey: string;
   /** Epoch seconds, from the verifying machine's own clock. */
   now: number;
-  /** Tolerated clock skew applied to validFrom only. */
+  /** Tolerated clock skew applied to validFrom and validTo. */
   skewSeconds?: number;
+  /** Extra tolerance for validFrom only (not-yet-valid side); the larger of this and `skewSeconds` applies there. */
+  notBeforeLeewaySeconds?: number;
   isRevoked?: (uuid: string, serial: number) => boolean;
 }
 
@@ -103,7 +105,7 @@ export function verifyRegistration(signed: SignedRegistration, ctx: VerifyRegist
   if (ctx.isRevoked?.(body.uuid, body.serial) === true) {
     return { ok: false, reason: 'revoked', message: `machine "${body.name}" (serial ${body.serial}) is revoked` };
   }
-  if (ctx.now + (ctx.skewSeconds ?? 0) < body.validFrom) {
+  if (ctx.now + Math.max(ctx.skewSeconds ?? 0, ctx.notBeforeLeewaySeconds ?? 0) < body.validFrom) {
     return { ok: false, reason: 'not-yet-valid', message: `registration of "${body.name}" starts at ${new Date(body.validFrom * 1000).toISOString()}; check the clock of this machine or of the admin machine` };
   }
   if (ctx.now - (ctx.skewSeconds ?? 0) > body.validTo) {

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import {
   DOCUMENT_RETENTION_SECONDS,
   buildDocument,
+  clockSkewProblem,
   decodeBase64urlStrict,
   derivePairSecretV2,
   documentId,
@@ -127,6 +128,11 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
       attempt = await sender.direct(to, document);
     } catch (e) {
       attempt = { ok: false, code: 'unreachable', cause: (e as Error).message, ms: 0 };
+    }
+    // The target says its own clock in its answer: a skew above 30 s is told once (decision 88). A refusal already carries it in its cause.
+    const skew = attempt.ok ? clockSkewProblem(to.name, attempt.peerNow, sender.now()) : undefined;
+    if (skew !== undefined && !(report.warnings ?? []).includes(skew)) {
+      (report.warnings ??= []).push(skew);
     }
     if (attempt.ok) {
       if (kind === 'notice-recipients') {

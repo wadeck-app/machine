@@ -523,10 +523,10 @@ describe('the inbox loop: a clock a little behind the admin one', () => {
     expect(machineNames('laptop')).toEqual(['server']);
   });
 
-  it('beyond the tolerance (45 s behind) the document is kept, not rejected, and installed once the clock catches up', async () => {
+  it('beyond the tolerance (150 s behind, the leeway is 120 s) the document is kept, not rejected, and installed once the clock catches up', async () => {
     await enroll('laptop');
     await enroll('server');
-    clockOverride = nowSeconds() - 45;
+    clockOverride = nowSeconds() - 150;
     const { loop } = loopFor('laptop');
     await loop.ready;
     await loop.runOnce();

@@ -26,7 +26,9 @@ function session(answer: () => Promise<unknown>): Fake {
   return s;
 }
 
-function make(over: { answer?: () => Promise<unknown>; connect?: () => Promise<DeliverSession>; peer?: PeerToReach | undefined; ackTimeoutMs?: number } = {}) {
+const NOW = 1_795_343_366;
+
+function make(over: { now?: number; answer?: () => Promise<unknown>; connect?: () => Promise<DeliverSession>; peer?: PeerToReach | undefined; ackTimeoutMs?: number } = {}) {
   const sessions: Fake[] = [];
   const connects: string[] = [];
   const clock = { t: 1000 };
@@ -42,6 +44,7 @@ function make(over: { answer?: () => Promise<unknown>; connect?: () => Promise<D
       return s;
     },
     clock: () => (clock.t += 400),
+    now: () => over.now ?? NOW,
     ...(over.ackTimeoutMs !== undefined ? { ackTimeoutMs: over.ackTimeoutMs } : {}),
   });
   return { delivery, sessions, connects };
@@ -54,6 +57,27 @@ describe('direct delivery', () => {
     expect(r).toEqual({ ok: true, outcome: 'installed', ms: 400 });
     expect(w.sessions[0]?.sent).toEqual([{ type: 'deliver-document', document: DOC }]);
     expect(w.sessions[0]?.closed).toBe(true);
+  });
+
+  it('keeps the clock the target reported in its acknowledgement', async () => {
+    const w = make({ answer: async () => ({ type: 'deliver-ack', id: DOC.body.id, outcome: 'installed', peerNow: NOW - 5 }) });
+    expect(await w.delivery(TO, DOC)).toEqual({ ok: true, outcome: 'installed', ms: 400, peerNow: NOW - 5 });
+  });
+
+  it('a not-yet-valid refusal carries the MEASURED skew and the fix, from the clock of the target', async () => {
+    const w = make({ answer: async () => ({ type: 'refused', reason: 'not-yet-valid', message: 'policy refused (not-yet-valid): policy can be applied from 2026-11-22T10:29:26.000Z', peerNow: NOW - 196 }) });
+    const r = await w.delivery(TO, DOC);
+    expect(r).toMatchObject({ ok: false, code: 'refused', peerNow: NOW - 196 });
+    if (!r.ok) {
+      expect(r.cause).toContain("thinkcentre's clock is 3 min 16 s behind this machine (its time 10:26:10, this machine 10:29:26): fix its time sync");
+      expect(r.cause).not.toContain('check the clocks');
+    }
+  });
+
+  it('a refusal without peerNow (an older build) keeps the target message as it is', async () => {
+    const w = make({ answer: async () => ({ type: 'refused', reason: 'not-yet-valid', message: 'policy refused (not-yet-valid): later' }) });
+    const r = await w.delivery(TO, DOC);
+    expect(r).toMatchObject({ ok: false, cause: expect.stringMatching(/thinkcentre refused the document \(not-yet-valid\): policy refused/) });
   });
 
   it('reports already-installed as a delivery too', async () => {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Json } from './canonical.js';
+import { NOT_YET_VALID_LEEWAY_SECONDS, TIME_SYNC_FIX, formatDuration } from './clockSkew.js';
 import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 import { canonicalEntry, looksLikePlaceholder, matchTemplate, parseTemplate, type Template } from './template.js';
@@ -285,8 +286,13 @@ export function applyPolicy(state: PolicyState, signed: SignedPolicy, ctx: Apply
   if (body.target !== ctx.targetUuid) {
     return { ok: false, reason: 'wrong-target', message: `policy is written for machine ${body.target}, not for this machine (${ctx.targetUuid})` };
   }
-  if (ctx.now < body.notBefore) {
-    return { ok: false, reason: 'not-yet-valid', message: `policy can be applied from ${new Date(body.notBefore * 1000).toISOString()}; check the clocks` };
+  // Not-yet-valid side only: a clock a little behind the signing clock must not refuse a policy the admin just signed (decision 88).
+  if (ctx.now + NOT_YET_VALID_LEEWAY_SECONDS < body.notBefore) {
+    return {
+      ok: false,
+      reason: 'not-yet-valid',
+      message: `policy can be applied from ${new Date(body.notBefore * 1000).toISOString()}, but this machine's clock reads ${new Date(ctx.now * 1000).toISOString()}, ${formatDuration(body.notBefore - ctx.now)} earlier (up to ${NOT_YET_VALID_LEEWAY_SECONDS} s is tolerated): fix the time sync of this machine or of the admin machine (${TIME_SYNC_FIX})`,
+    };
   }
   if (ctx.now > body.notAfter) {
     return { ok: false, reason: 'expired', message: `policy could be applied until ${new Date(body.notAfter * 1000).toISOString()}; sign it again` };

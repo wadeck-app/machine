@@ -228,9 +228,21 @@ describe('verifyDocument: tampering and addressing', () => {
     const doc = built(s, { issuedAt: NOW - 100, expiresAt: NOW + 100 });
     expect(verifyDocument(doc, s.ctx({ now: NOW + 101 }))).toMatchObject({ ok: true });
     expect(verifyDocument(doc, s.ctx({ now: NOW + 131 }))).toMatchObject({ ok: false, reason: 'expired' });
-    expect(verifyDocument(doc, s.ctx({ now: NOW - 100 - 29 }))).toMatchObject({ ok: true });
-    expect(verifyDocument(doc, s.ctx({ now: NOW - 100 - 31 }))).toMatchObject({ ok: false, reason: 'not-yet-valid' });
+    // Not-yet-valid side: the leeway of 120 s (decision 88); the expiry side keeps its 30 s.
+    expect(verifyDocument(doc, s.ctx({ now: NOW - 100 - 120 }))).toMatchObject({ ok: true });
+    expect(verifyDocument(doc, s.ctx({ now: NOW - 100 - 121 }))).toMatchObject({ ok: false, reason: 'not-yet-valid' });
     expect(verifyDocument(doc, s.ctx({ now: NOW + 131, skewSeconds: 60 }))).toMatchObject({ ok: true });
+  });
+
+  it('a registration inside a peer document starts up to the leeway before its validFrom, not more', () => {
+    const s = setup();
+    const future = { ...s.registration(PEER, s.peerKeys.publicKey) };
+    const body: RegistrationBody = { ...future.body, validFrom: NOW + 120, validTo: NOW + 90_000 };
+    const payload = s.peerPayload({ registration: signRegistration(body, s.admin.privateKeyPkcs8) }) as unknown as Json;
+    expect(verifyDocument(built(s, { payload, issuedAt: NOW - 100 }), s.ctx())).toMatchObject({ ok: true });
+    const late: RegistrationBody = { ...body, validFrom: NOW + 121 };
+    const latePayload = s.peerPayload({ registration: signRegistration(late, s.admin.privateKeyPkcs8) }) as unknown as Json;
+    expect(verifyDocument(built(s, { payload: latePayload, issuedAt: NOW - 100 }), s.ctx())).toMatchObject({ ok: false, reason: 'not-yet-valid' });
   });
 
   it('refuses things that are not documents', () => {

@@ -208,6 +208,12 @@ describe('remoteRequestsPage', () => {
     expect(page.notes.join(' ')).toMatch(/1 earlier request/);
   });
 
+  it('says which clock is off, by how much and the fix, above 30 s only', () => {
+    const answer = (now: number) => ({ type: 'requests-list' as const, id: 'x', machine: { uuid: SELF, name: 'laptop' }, policyMode: 'admin' as const, now, chain: { ok: true as const }, pendingTotal: 0, allowedNow: 0, truncated: false, waiting: [], pending: [] });
+    expect(remoteRequestsPage(answer(NOW - 31), NOW).notes.join(' ')).toMatch(/laptop's clock is 31 s behind this machine .*fix its time sync/);
+    expect(remoteRequestsPage(answer(NOW - 30), NOW).notes.join(' ')).not.toMatch(/clock/);
+  });
+
   it('carries the requests the peer HOLDS: seconds left by the clock of the peer, the exact allow command for that peer, an Allow capability, and no Deny button', () => {
     const page = remoteRequestsPage(
       {

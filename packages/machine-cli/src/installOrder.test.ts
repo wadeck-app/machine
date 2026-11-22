@@ -40,12 +40,12 @@ describe('installPolicy writes highestSeen first, then the policy, then the vers
   });
 });
 
-describe('importPeer has the same 30 s clock tolerance as the documents', () => {
-  it('accepts a registration dated 20 s ahead, refuses one dated 40 s ahead', async () => {
+describe('importPeer has the same clock tolerance as the documents (120 s on the not-yet-valid side)', () => {
+  it('accepts a registration dated 100 s ahead, refuses one dated 140 s ahead', async () => {
     const info = exportMachineInfo(join(root, 'b'));
     const make = (ahead: number) => registerMachine(join(root, 'a'), info, { now: T + ahead, prompt: async () => admin.passphrase, validForDays: 1 });
-    importPeer(join(root, 'b'), await make(20), { now: T });
-    await expect(Promise.resolve().then(async () => importPeer(join(root, 'b'), await make(40), { now: T }))).rejects.toThrow(/not-yet-valid/);
+    importPeer(join(root, 'b'), await make(100), { now: T });
+    await expect(Promise.resolve().then(async () => importPeer(join(root, 'b'), await make(140), { now: T }))).rejects.toThrow(/not-yet-valid/);
   });
 });
 

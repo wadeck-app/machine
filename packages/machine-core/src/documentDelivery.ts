@@ -52,15 +52,22 @@ export function parseDeliverDocument(message: unknown): { ok: true; document: un
   return { ok: true, document };
 }
 
-/** The acknowledgement of a delivery: only these two outcomes mean the addressee holds the document. */
-export function parseDeliverAck(answer: unknown): { ok: true; id: string; outcome: DeliverOutcome } | Fail {
+/** A clock reading sent by a peer: kept only when it is a whole, non-negative number of seconds. */
+export const peerClock = (value: unknown): number | undefined => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined);
+
+/**
+ * The acknowledgement of a delivery: only these two outcomes mean the addressee holds the document. `peerNow` (epoch seconds on the addressee) is
+ * optional: an older build sends none, and junk is ignored, never trusted for anything but a message to the person.
+ */
+export function parseDeliverAck(answer: unknown): { ok: true; id: string; outcome: DeliverOutcome; peerNow?: number } | Fail {
   const fail = (m: string): Fail => ({ ok: false, message: m });
   if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
     return fail('the answer is not an acknowledgement');
   }
-  const a = answer as { type?: unknown; id?: unknown; outcome?: unknown };
+  const a = answer as { type?: unknown; id?: unknown; outcome?: unknown; peerNow?: unknown };
   if (a.type !== 'deliver-ack' || typeof a.id !== 'string' || (a.outcome !== 'installed' && a.outcome !== 'already-installed')) {
     return fail('the answer is not a deliver-ack with outcome installed or already-installed');
   }
-  return { ok: true, id: a.id.slice(0, 64), outcome: a.outcome };
+  const peerNow = peerClock(a.peerNow);
+  return { ok: true, id: a.id.slice(0, 64), outcome: a.outcome, ...(peerNow !== undefined ? { peerNow } : {}) };
 }

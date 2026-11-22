@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { REQUESTS_LIST_MAX_GROUPS, type RequestsListAnswer } from '@wadeck-app/machine-core';
+import { REQUESTS_LIST_MAX_GROUPS, clockSkewProblem, type RequestsListAnswer } from '@wadeck-app/machine-core';
 import { adminKeyFile, unlockAdminKey, type Prompt } from './admin.js';
 import { pendingText } from './cliRequests.js';
 import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, stderrSinks, targetFor, wakeSettingsFor, type TrustedPeer } from './cliWake.js';
@@ -117,7 +117,10 @@ export async function runRemoteRequests(ctx: CommandContext, prompt: Prompt): Pr
     if (text.length > 0) text.push('');
     text.push(...pendingText({ machine: { name: o.name, policyMode: a.policyMode }, adminKeyHere: true, full: args.full === true, summary: { waiting: a.waiting.map((w) => ({ ...w, since: w.since + (now - a.now), deadline: w.deadline + (now - a.now) })), pending: a.pending, pendingTotal: a.pendingTotal, allowedNow: a.allowedNow }, logPresent: true, now, where: o.name }));
     // The clock of the peer is not the one used for the ages: a large gap is worth a line.
-    if (Math.abs(a.now - now) > 120) text.push(`[warn] the clock of ${o.name} differs from this machine by ${Math.abs(a.now - now)} s: the ages above use this machine's clock`);
+    const clockProblem = clockSkewProblem(o.name, a.now, now);
+    if (clockProblem !== undefined) {
+      text.push(`[warn] ${clockProblem}`);
+    }
   }
   const failed = outcomes.filter((o) => !o.ok).length;
   emit({ machines: outcomes }, `${text.join('\n')}${text.length > 0 ? '\n' : ''}`);

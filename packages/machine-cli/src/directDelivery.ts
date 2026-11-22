@@ -1,4 +1,4 @@
-import { buildDeliverDocument, parseDeliverAck, printable, type DeliverOutcome, type SignedDocument } from '@wadeck-app/machine-core';
+import { buildDeliverDocument, clockSkewProblem, parseDeliverAck, peerClock, printable, type DeliverOutcome, type SignedDocument } from '@wadeck-app/machine-core';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { makeNoticeConnect } from './noticeWiring.js';
@@ -24,7 +24,8 @@ export interface DeliverSession {
 
 export type DirectCode = 'unknown-peer' | 'unreachable' | 'no-answer' | 'peer-too-old' | 'refused' | 'unexpected-answer';
 
-export type DirectAttempt = { ok: true; outcome: DeliverOutcome; ms: number } | { ok: false; code: DirectCode; cause: string; ms: number };
+/** `peerNow`: the clock of the target (epoch seconds) when it said so in its answer; absent for an older build. */
+export type DirectAttempt = { ok: true; outcome: DeliverOutcome; ms: number; peerNow?: number } | { ok: false; code: DirectCode; cause: string; ms: number; peerNow?: number };
 
 /** Delivers one document to one machine; never throws. */
 export type DirectDelivery = (to: { uuid: string; name: string }, document: SignedDocument) => Promise<DirectAttempt>;
@@ -36,6 +37,8 @@ export interface DirectDeliveryDeps {
   connect: (peer: PeerToReach) => Promise<DeliverSession>;
   /** Monotonic milliseconds. */
   clock?: () => number;
+  /** Epoch seconds of this machine, to measure the skew with the clock the target reports (default: the system clock). */
+  now?: () => number;
   /** Longest wait for the acknowledgement (default 5 s). */
   ackTimeoutMs?: number;
 }
@@ -46,6 +49,7 @@ export const PEER_TOO_OLD_DELIVER_MESSAGE = (name: string): string => `${name} r
 export function createDirectDelivery(deps: DirectDeliveryDeps): DirectDelivery {
   const clock = deps.clock ?? (() => performance.now());
   const ackTimeoutMs = deps.ackTimeoutMs ?? DIRECT_ACK_TIMEOUT_MS;
+  const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const skipped = new Map<string, { code: DirectCode; cause: string }>();
 
   return async (to, document) => {
@@ -88,9 +92,9 @@ export function createDirectDelivery(deps: DirectDeliveryDeps): DirectDelivery {
         if (ack.id !== document.body.id) {
           return fail('unexpected-answer', `${peer.name} acknowledged another document than the one sent: it runs an incompatible version, run \`machine cli update\` on both machines`);
         }
-        return { ok: true, outcome: ack.outcome, ms: Math.round(clock() - started) };
+        return { ok: true, outcome: ack.outcome, ms: Math.round(clock() - started), ...(ack.peerNow !== undefined ? { peerNow: ack.peerNow } : {}) };
       }
-      const a = (typeof answer === 'object' && answer !== null ? answer : {}) as { type?: unknown; reason?: unknown; message?: unknown };
+      const a = (typeof answer === 'object' && answer !== null ? answer : {}) as { type?: unknown; reason?: unknown; message?: unknown; peerNow?: unknown };
       if (a.type === 'refused') {
         const reason = typeof a.reason === 'string' ? printable(a.reason, 40) : 'refused';
         // An older build refuses any message it does not know as `unknown-message`.
@@ -98,7 +102,11 @@ export function createDirectDelivery(deps: DirectDeliveryDeps): DirectDelivery {
           return fail('peer-too-old', PEER_TOO_OLD_DELIVER_MESSAGE(peer.name), true);
         }
         const text = typeof a.message === 'string' ? printable(a.message, 500) : 'no detail';
-        return fail('refused', `${peer.name} refused the document (${reason}): ${text}`);
+        const peerNow = peerClock(a.peerNow);
+        // A refusal for the date of the document, with the clock of the target: say which clock is off and by how much, not just "check the clocks".
+        const skew = reason === 'not-yet-valid' ? clockSkewProblem(peer.name, peerNow, now()) : undefined;
+        const failed = fail('refused', skew !== undefined ? `${peer.name} refused the document (not-yet-valid): ${skew}` : `${peer.name} refused the document (${reason}): ${text}`);
+        return peerNow !== undefined ? { ...failed, peerNow } : failed;
       }
       return fail('unexpected-answer', `${peer.name} answered something that is not an acknowledgement of the document: it runs an incompatible version, run \`machine cli update\` on both machines`);
     } finally {
@@ -137,6 +145,7 @@ export function directDeliveryFor(configDir: string, options: DirectOptions = {}
   // Read at the first delivery: a machine without identity says so as the cause of the fallback instead of failing the command that asked.
   let connect: ReturnType<typeof makeNoticeConnect> | undefined;
   return createDirectDelivery({
+    now,
     peerOf: (uuid) => loadNetwork(configDir, now()).directory.find(uuid),
     connect: async (peer) => {
       // The lookup plus the connection is bounded as a whole; a connection that finishes after the limit is closed.

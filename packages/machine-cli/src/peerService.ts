@@ -143,7 +143,7 @@ export interface RequestsListDeps {
 
 export type PeerAnswer =
   | { type: 'result'; id: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean; outputNotUtf8: boolean; decodedFrom?: string; durationMs: number }
-  | { type: 'refused'; id?: string; reason: string; message: string; allowedShells?: string[]; held?: HeldInfo };
+  | { type: 'refused'; id?: string; reason: string; message: string; allowedShells?: string[]; held?: HeldInfo; /** The clock of this machine, on a refused delivery (decision 88). */ peerNow?: number };
 
 /** Present on the refusal of a request that was held: the wait applied and the wait asked for (`capped`: this machine shortened it). */
 export interface HeldInfo {
@@ -170,7 +170,7 @@ type Step = { ok: true; decision: AllowedDecision } | { ok: false; reason: strin
 type HoldOutcome = { kind: 'decision'; decision: AllowedDecision } | { kind: 'answer'; answer: PeerAnswer } | { kind: 'dropped' };
 
 /** What the service sends: the answer of a `run`, or the answer of a `requests-list` (read-only, decision 74).*/
-type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string } | { type: 'deliver-ack'; id: string; outcome: 'installed' | 'already-installed' };
+type ServiceAnswer = PeerAnswer | RequestsListAnswer | { type: 'notice-ack'; id: string } | { type: 'deny-ack'; id: string } | { type: 'deliver-ack'; id: string; outcome: 'installed' | 'already-installed'; peerNow: number };
 
 
 interface SyncState {
@@ -769,8 +769,10 @@ class PeerService {
 
   /** The refusal of a delivery: audited (never silent), with the cause and the fix for the sender. The document itself is never logged. */
   private refuseDelivery(session: PeerSession, reason: string, message: string, detail: Record<string, Json> = {}): ServiceAnswer {
-    this.recordQuiet({ event: 'document-delivery-refused', source: session.peerId, reason, ...detail });
-    return { type: 'refused', reason, message };
+    // This machine's own clock rides along (audit and answer): the sender measures the skew from it (decision 88).
+    const now = this.deps.now();
+    this.recordQuiet({ event: 'document-delivery-refused', source: session.peerId, reason, now, ...detail });
+    return { type: 'refused', reason, message, peerNow: now };
   }
 
   /**
@@ -806,7 +808,7 @@ class PeerService {
         if (result.status === 'installed') {
           this.wakeHolds();
         }
-        return { type: 'deliver-ack', id: result.id, outcome: result.status };
+        return { type: 'deliver-ack', id: result.id, outcome: result.status, peerNow: this.deps.now() };
       }
       case 'not-enrolled':
         return this.refuseDelivery(session, 'not-enrolled', 'this machine has not pinned an admin key yet, so it cannot verify any document: finish `machine join` there first');

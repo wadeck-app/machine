@@ -102,6 +102,26 @@ describe('direct delivery first', () => {
     expect(report.fallbacks?.[0]?.cause).toMatch(/install-refused/);
   });
 
+  it('warns, once per machine, when the clock the target reported differs by more than 30 s (the delivery itself still counts)', async () => {
+    const skewed: DirectDelivery = async () => ({ ok: true, outcome: 'installed', ms: 10, peerNow: nowSeconds() - 200 });
+    const { sender } = await senderWith(skewed);
+    const report = await distributePolicy(await signedPolicy(), sender);
+    expect(report.direct?.length).toBeGreaterThan(0);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings?.[0]).toMatch(/laptop's clock is 3 min 2\d s behind this machine .*fix its time sync/);
+    const text = formatDistribution(report, 'the policy', 'retry');
+    expect(text.out).toMatch(/\[warn\] laptop's clock is/);
+  });
+
+  it('says nothing for a skew of a few seconds, or when the target reported no clock', async () => {
+    for (const peerNow of [nowSeconds() - 5, undefined]) {
+      const direct: DirectDelivery = async () => ({ ok: true, outcome: 'installed', ms: 10, ...(peerNow !== undefined ? { peerNow } : {}) });
+      const { sender } = await senderWith(direct);
+      const report = await distributePolicy(await signedPolicy(), sender);
+      expect(report.warnings).toBeUndefined();
+    }
+  });
+
   it('without a direct delivery everything is as before (the inbox only)', async () => {
     const { sender } = await senderWith(undefined);
     const report = await distributePolicy(await signedPolicy(), sender);

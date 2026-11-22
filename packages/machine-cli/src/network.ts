@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DOCUMENT_SKEW_SECONDS,
+  NOT_YET_VALID_LEEWAY_SECONDS,
   applyPolicy,
   applyRevocation,
   canonicalSignedRevocation,
@@ -147,7 +148,7 @@ export function importPeer(configDir: string, bundle: PeerBundle, options: { now
   }
   const pin = readAdminPin(configDir);
   // The same clock tolerance as the documents that carry a registration (machine-core DOCUMENT_SKEW_SECONDS).
-  const verified = verifyRegistration(bundle.registration, { adminPublicKey: pin.adminPublicKey, now: options.now, skewSeconds: DOCUMENT_SKEW_SECONDS });
+  const verified = verifyRegistration(bundle.registration, { adminPublicKey: pin.adminPublicKey, now: options.now, skewSeconds: DOCUMENT_SKEW_SECONDS, notBeforeLeewaySeconds: NOT_YET_VALID_LEEWAY_SECONDS });
   if (!verified.ok) {
     throw new Error(`this machine does not trust that registration: it was not accepted by this network's admin key (${verified.reason}: ${verified.message})`);
   }

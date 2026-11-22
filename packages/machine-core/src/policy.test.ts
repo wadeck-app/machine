@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NOT_YET_VALID_LEEWAY_SECONDS } from './clockSkew.js';
 import { generateSigningKeyPair, keyId } from './keys.js';
 import { applyPolicy, authorize, commandTextProblem, entryKey, signPolicy, type PolicyBody, type PolicyEntry } from './policy.js';
 
@@ -55,10 +56,27 @@ describe('applyPolicy (compare-and-set, decision 27)', () => {
   });
 
   it('refuses a policy outside its application window', () => {
-    const early = setup({ notBefore: NOW + 100 });
+    const early = setup({ notBefore: NOW + NOT_YET_VALID_LEEWAY_SECONDS + 1 });
     const late = setup({ notAfter: NOW - 1 });
     expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(early.body, early.admin.privateKeyPkcs8), ctx(early.admin))).toMatchObject({ ok: false, reason: 'not-yet-valid' });
     expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(late.body, late.admin.privateKeyPkcs8), ctx(late.admin))).toMatchObject({ ok: false, reason: 'expired' });
+  });
+
+  it('accepts a policy up to the leeway before its notBefore (a clock a little behind), and refuses one second more', () => {
+    const edge = setup({ notBefore: NOW + NOT_YET_VALID_LEEWAY_SECONDS });
+    const over = setup({ notBefore: NOW + NOT_YET_VALID_LEEWAY_SECONDS + 1 });
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(edge.body, edge.admin.privateKeyPkcs8), ctx(edge.admin))).toMatchObject({ ok: true });
+    const refused = applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(over.body, over.admin.privateKeyPkcs8), ctx(over.admin));
+    expect(refused).toMatchObject({ ok: false, reason: 'not-yet-valid' });
+    // The message says by how much and names the fix, not just "check the clocks".
+    if (!refused.ok) expect(refused.message).toMatch(/2 min 1 s.*time sync/);
+  });
+
+  it('the leeway does not touch the expiry side, nor the compare-and-set rules', () => {
+    const expired = setup({ notAfter: NOW - 1 });
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, signPolicy(expired.body, expired.admin.privateKeyPkcs8), ctx(expired.admin))).toMatchObject({ ok: false, reason: 'expired' });
+    const early = setup({ notBefore: NOW + NOT_YET_VALID_LEEWAY_SECONDS, version: 3, baseVersion: 2 });
+    expect(applyPolicy({ version: 4, highestSeen: 4 }, signPolicy(early.body, early.admin.privateKeyPkcs8), ctx(early.admin))).toMatchObject({ ok: false, reason: 'stale-base' });
   });
 
   it('refuses a tampered policy and a policy signed by another admin key', () => {

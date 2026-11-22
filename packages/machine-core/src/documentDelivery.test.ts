@@ -32,6 +32,10 @@ describe('deliver-document frame (decision 86)', () => {
     expect(parseDeliverAck({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed' })).toEqual({ ok: true, id: 'abcdefghijklmnopqrstuv', outcome: 'installed' });
     expect(parseDeliverAck({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'already-installed' })).toMatchObject({ ok: true, outcome: 'already-installed' });
     expect(parseDeliverAck({ type: 'deliver-ack', id: 'abc', outcome: 'maybe' })).toMatchObject({ ok: false });
+    // The target's own clock rides along, optional (an older build sends none) and ignored when it is not a whole number of seconds.
+    expect(parseDeliverAck({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed', peerNow: 1_800_000_000 })).toEqual({ ok: true, id: 'abcdefghijklmnopqrstuv', outcome: 'installed', peerNow: 1_800_000_000 });
+    expect(parseDeliverAck({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed', peerNow: 'soon' })).toEqual({ ok: true, id: 'abcdefghijklmnopqrstuv', outcome: 'installed' });
+    expect(parseDeliverAck({ type: 'deliver-ack', id: 'abcdefghijklmnopqrstuv', outcome: 'installed', peerNow: 1.5 })).toEqual({ ok: true, id: 'abcdefghijklmnopqrstuv', outcome: 'installed' });
     expect(parseDeliverAck({ type: 'refused', reason: 'x', message: 'y' })).toMatchObject({ ok: false });
     expect(parseDeliverAck('nope')).toMatchObject({ ok: false });
   });
