@@ -6,6 +6,7 @@ import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { daemonStateText, runStartupCommand } from './cliStartup.js';
+import { installFlagProblem, runInstallCommand } from './cliInstall.js';
 import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWake, runWakeInfo } from './cliWake.js';
@@ -32,7 +33,7 @@ const HELP = `machine - private network between your machines
 
 Usage: machine <command> [options]
 
-Command groups (admin, peer, startup, cli, alias, policy):
+Command groups (admin, peer, startup, cli, alias, policy, install):
   machine <group>                    shows the current state of the group, read-only (admin: the candidacies waiting for approval;
                                      peer: the peers; startup: the job status; cli: the versions; alias: the aliases; policy: its help)
   machine <group> --help             the help of that group (also \`machine help <group>\`); \`machine <group> <subcommand> --help\` for one
@@ -171,6 +172,13 @@ Commands:
                                      running (--no-start: register only); disable removes it; status shows
                                      whether the daemon runs, whether the job exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
+  install [<id>] [--dry-run | --check | --remove] [--yes]
+                                     set up an item on THIS machine, a LOCAL command run in a terminal on it (never remote, never by the daemon).
+                                     Without an id: lists what can be installed and where. \`install suspend\` (Linux only): the root-owned script
+                                     /usr/local/bin/machine-suspend and a sudoers rule for the ONE command \`systemctl suspend\`, written through sudo with
+                                     YOUR password (typed to sudo, never read by machine); shows every file and command, asks y/N; idempotent;
+                                     --dry-run changes nothing, --check reports installed / not installed / outdated, --remove removes exactly what
+                                     it installed. Once allowed in the default list, every trusted peer can suspend this machine
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
@@ -371,7 +379,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, yes: false, dryRun: false, check: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -392,6 +400,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--reject') out.reject = true;
     else if (a === '--auto-startup') out.autoStartup = true;
     else if (a === '--no-start') out.noStart = true;
+    else if (a === '--yes') out.yes = true;
+    else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--check') out.check = true;
     else if (a === '--full-access') out.fullAccess = true;
     else if (a === '--quiet') out.quiet = true;
     else if (a === '--verbose') out.verbose = true;
@@ -536,7 +547,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0, log: 0 }; // run-log
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0, log: 0, install: 1 }; // run-log
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -546,8 +557,12 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     return fail('"--" is only used by `machine run`, `machine admin allow` and `machine policy allow` (it introduces the command line)', EXIT.usage);
   }
   const peerConnect = command === 'peer' && rest[0] === 'connect';
-  if ((args.list || args.remove) && !(command === 'admin' && (rest[0] === 'allow' || (rest[0] === 'notify-to' && args.list && !args.remove))) && !policyAllow && !(peerConnect && args.remove && !args.list)) {
+  if ((args.list || args.remove) && !(command === 'admin' && (rest[0] === 'allow' || (rest[0] === 'notify-to' && args.list && !args.remove))) && !policyAllow && !(peerConnect && args.remove && !args.list) && !(command === 'install' && args.remove && !args.list)) {
     return fail('--list and --remove only apply to `machine admin allow` and `machine policy allow` (`machine admin allow <machine> --list`, `machine policy allow --remove -- <command>`); --remove also applies to `machine peer connect <machine> --remove`', EXIT.usage);
+  }
+  const installProblem = installFlagProblem(command, rest, args);
+  if (installProblem !== undefined) {
+    return fail(installProblem, EXIT.usage);
   }
   const adminAllow = command === 'admin' && rest[0] === 'allow';
   const lifetimeFlags: Array<[string, string | undefined]> = [['--times', args.times], ['--for', args.for], ['--until', args.until]];
@@ -714,6 +729,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     }
 
     if (command === 'startup') return await runStartupCommand(ctx);
+    if (command === 'install') {
+      return await runInstallCommand(ctx);
+    }
     if (command === 'cli') return await runCliMeta(ctx);
     if (command === 'wake') return await runWake(ctx);
     if (command === 'wake-info') return runWakeInfo(ctx);

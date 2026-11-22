@@ -221,6 +221,20 @@ requests waiting for approval on laptop (2 commands refused because not allowed,
 - The module page Activity shows the same list with direction, machine, outcome and period filters.
 - `[warn] this run is NOT recorded in the run log`: the run itself went through; fix the permissions or free the disk of the folder named. See run-log.md.
 
+## Setting up the target: `machine install` (decision 87)
+
+Run in a terminal ON the target (a local command, never remote). First item: `suspend`, Linux only; see `install.md`.
+
+```
+machine install                      list what can be installed and where
+machine install suspend --dry-run    every file and command, nothing changed (no terminal needed)
+machine install suspend              the same, then y/N, then sudo (your own password) installs the script and the sudo rule
+machine install suspend --check      installed / not installed / outdated, no password
+machine install suspend --remove     remove exactly what it installed
+```
+
+It then prints the line for the admin machine (`machine admin allow <machine> --shell sh -- /usr/local/bin/machine-suspend`), how to run it and how to wake the machine (`machine wake <machine>`). Once allowed in the default list, every trusted peer can suspend the machine; a per-peer list restricts that. Windows and macOS: `not supported on <platform> yet (supported: linux)`.
+
 ## Rules a user meets
 
 - Command groups (decision 66): `machine <group>` alone shows the current state, read-only: `admin` the candidacies waiting for approval (never asks, never approves; `machine admin approve [<id>]` does), `peer` the peers, `startup` the job status, `cli` the versions, `alias` the aliases, `policy` its help. `machine <group> --help` (or `machine <group> help`, `machine help <group>`) is the help of the group, `machine <group> <subcommand> --help` of one subcommand. An unknown subcommand is a usage error (exit 2) with the list.

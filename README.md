@@ -347,6 +347,10 @@ A flag changes that value and keeps the others. Values out of range are refused,
 
 Tuning: a successful wake prints the measured time, for example `answered after 14.2 s, woken by unicast (probe window 3, 4.2 s into its 5 s)`. When the answer came after more than 80% of a window, it prints the command that raises `--wake-probe` for that peer. If the answer always comes late, raise `--wake-probe` (a slow resume) or `--wake-connect-timeout` (a freshly resumed host answers TCP late and TLS later). "By unicast" names the last packet before the answer, not proof that it was the one that worked.
 
+### Suspend the target with `machine install suspend`
+
+On the Linux target, in a terminal: `machine install suspend` installs, through sudo with your own password, a root-owned script and a sudo rule for the one command `systemctl suspend` (`--dry-run` shows everything first, `--check` reports the state, `--remove` undoes it). It prints the `machine admin allow <machine> --shell sh -- /usr/local/bin/machine-suspend` line to run on the admin machine; after that every trusted peer can suspend the machine with `machine run`, and wake it with `machine wake`. UNVERIFIED on a real box (`.claude/specs/2026-11-13_machine-network/install.md`).
+
 ### Trace and limits
 
 - Every packet is recorded in `<configDir>/wake-audit.log` (hash-chained, written before the send; "sent", never "woke"). If the log cannot be written, no packet is sent.

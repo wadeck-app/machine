@@ -233,6 +233,29 @@ const GROUPS: GroupHelp[] = [
     ],
     examples: ['machine policy local enable', 'machine policy allow -- "ipconfig /all"', 'machine policy allow --list', 'machine policy delegate', 'machine policy install signed.json'],
   },
+  {
+    name: 'install',
+    summary: 'set up an item on THIS machine (a local command: run it in a terminal here, never remotely)',
+    bare: 'lists what can be installed, with its platforms and whether this machine supports it (read-only)',
+    subs: [
+      {
+        name: 'suspend',
+        usage: 'suspend [--dry-run | --check | --remove] [--yes] [--json]',
+        text: 'Linux only: let `machine run` suspend this machine. Installs two root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-suspend and the sudoers rule /etc/sudoers.d/machine-suspend, which lets your user run `systemctl suspend` (this one command) without a password. Shows every file and command, then asks y/N',
+        options: [
+          '--dry-run   print the plan (files, commands) and change nothing, not even by running sudo; needs no terminal',
+          '--check   report installed / not installed / outdated (this build ships another content) without changing anything and without a password; exit 0 only when installed',
+          '--remove   remove exactly what was installed (the rule, then the script), after showing them; a file machine did not write is never touched',
+          '--yes   skip the y/N question (sudo still asks your password: a terminal is required, e.g. `ssh -t` on a remote box)',
+          'Safe to run again: "already installed, up to date"; an outdated script is replaced after showing the hashes and asking. A file at those paths without the "# managed by machine install suspend" line is refused',
+          'After it: allow it on the ADMIN machine with `machine admin allow <this machine> --shell sh -- /usr/local/bin/machine-suspend`, call it with `machine run <this machine> -- /usr/local/bin/machine-suspend`, wake it with `machine wake <this machine>`',
+          'Consequence: once the command is allowed in the DEFAULT list, every trusted peer can suspend this machine (a per-peer list restricts that: `machine policy allow --peer <machine>` in mode local)',
+        ],
+        examples: ['machine install suspend --dry-run', 'machine install suspend', 'machine install suspend --check', 'machine install suspend --remove'],
+      },
+    ],
+    examples: ['machine install', 'machine install suspend --dry-run', 'machine install suspend'],
+  },
 ];
 
 export const GROUP_NAMES: string[] = GROUPS.map((g) => g.name);

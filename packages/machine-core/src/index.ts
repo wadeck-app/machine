@@ -330,3 +330,26 @@ export {
 export { MAX_DENY_FRAME_BYTES, buildRequestDeny, parseRequestDeny, type ParsedRequestDeny, type RequestDeny } from './requestDeny.js';
 export { MAX_DELIVER_FRAME_BYTES, MAX_DELIVERS_PER_MINUTE, buildDeliverDocument, parseDeliverAck, parseDeliverDocument, type DeliverDocumentFrame, type DeliverOutcome } from './documentDelivery.js';
 export { reachableText, type Reachable } from './reachability.js';
+export {
+  INSTALLABLES,
+  INSTALL_USER_PATTERN,
+  InstallError,
+  ROOT_READ_ABSENT,
+  classifyInstalled,
+  findInstallable,
+  markerLine,
+  platformName,
+  rootReadArgv,
+  sha256Hex,
+  unsupportedMessage,
+  type InstallFacts,
+  type InstallPlan,
+  type InstalledClass,
+  type InstalledState,
+  type Installable,
+  type PlanArg,
+  type PlanStep,
+  type PlannedFile,
+  type RunStep,
+  type StageStep,
+} from './install.js';

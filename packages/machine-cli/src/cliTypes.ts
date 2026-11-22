@@ -4,6 +4,7 @@ import type { CliMetaDeps } from './cliMeta.js';
 import type { StartupContext } from './startup.js';
 import type { AddressEntry, ConnectFailureKind, LocalInterface } from '@wadeck-app/machine-core';
 import type { WakeSender } from './wakeSender.js';
+import type { InstallEnv } from './installEnv.js';
 
 /** Waiting for the admin's decision. Tests inject a fake clock so that a 15 minute wait takes no time. */
 export interface Timing {
@@ -27,6 +28,8 @@ export interface CliIo {
   promptTimer?: PromptTimer;
   /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
   startup?: Partial<StartupContext>;
+  /** Tests only: the platform, the user, the terminal, the files and the commands behind `machine install` (no command line option exists for it): nothing in a test runs sudo or touches /etc. */
+  install?: Partial<InstallEnv>;
   /** Tests only: the updater process, npm, orch and the daemon behind `machine cli` (no command line option exists for it). */
   cliMeta?: Partial<CliMetaDeps>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
@@ -157,6 +160,10 @@ export interface Parsed {
   /** `machine admin allow <machine> --list` / `--remove`. */
   list: boolean;
   remove: boolean;
+  /** `machine install <id>`: skip the y/N question, print the plan only, report the state only. */
+  yes: boolean;
+  dryRun: boolean;
+  check: boolean;
   /** `machine cli logs --follow` (-f). */
   follow: boolean;
   /** `machine cli register --force-register`: register even when the config dir is under the OS temporary folder. */
