@@ -91,14 +91,14 @@ export interface WakeStep {
 }
 
 /**
- * The packets in order: unicast, a probe window, broadcast, a probe window, and so on, alternating (the one that is exhausted or impossible is
- * skipped). A step that would start after the wait budget is dropped. Never more than `maxUnicast` + `maxBroadcast` steps.
+ * The packets in order: broadcast, a probe window, unicast, a probe window, and so on, alternating (the one that is exhausted or impossible is
+ * skipped). Broadcast first since 2026-11-22: on the one box measured, the unicast packet never woke it and the broadcast did. A step that would start after the wait budget is dropped. Never more than `maxUnicast` + `maxBroadcast` steps.
  */
 export function planWakeSteps(options: { canUnicast: boolean; maxUnicast: number; maxBroadcast: number; probeMs: number; waitMs: number }): WakeStep[] {
   let unicast = options.canUnicast ? options.maxUnicast : 0;
   let broadcast = options.maxBroadcast;
   const steps: WakeStep[] = [];
-  let next: WakeMethod = 'unicast';
+  let next: WakeMethod = 'broadcast';
   while (unicast + broadcast > 0) {
     if (next === 'unicast' && unicast === 0) next = 'broadcast';
     if (next === 'broadcast' && broadcast === 0) next = 'unicast';

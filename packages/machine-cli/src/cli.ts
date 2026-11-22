@@ -271,8 +271,8 @@ Administration (enrollment through the relay, or by files):
                 [--wake-mac <aa:bb:cc:dd:ee:ff>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>]
                 [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>]
                                      how THIS machine reaches a peer (stored in connections.json, no secret). --address pins
-                                     addresses (up to 8) that win over the relay record. A MAC turns on the wake: unicast to the
-                                     peer address, a probe window, a directed broadcast, a probe window, alternating, never more
+                                     addresses (up to 8) that win over the relay record. A MAC turns on the wake: a directed
+                                     broadcast, a probe window, unicast to the peer address, a probe window, alternating, never more
                                      than --wake-max-unicast and --wake-max-broadcast (default 4 each, at most 8 each), the
                                      whole wait <= --wake-wait (default 90, 10 to 600), each probe window --wake-probe (default 5,
                                      1 to 60), each probe attempt (connect and handshake) --wake-connect-timeout (default 3000 ms, 200 to 10000), --wake-settle seconds of

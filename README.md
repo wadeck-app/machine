@@ -231,9 +231,9 @@ Not verified on real hardware yet (see the end of this file). Tune it per peer.
 
 The sender (the machine where you run `machine run` or `machine wake`) sends magic packets over UDP port 9, alternating:
 
-1. a unicast packet to the known IPv4 address of the target (pinned by you, else the relay record), then a probe window;
-2. a directed broadcast of the subnet shared with the target, then a probe window;
-3. and so on, until the target answers or the limits are reached.
+1. a directed broadcast of the subnet shared with the target (first since 2026-11-22), then a probe window;
+2. a unicast packet to the known IPv4 address of the target (pinned by you, else the relay record), then a probe window;
+3. and so on, until the target answers or the limits are reached. Stored per-peer limits (`--wake-max-unicast`, `--wake-max-broadcast`) keep their meaning; only the default order changed.
 
 Same LAN only: the packets leave from the machine that runs the command, so both machines must share a subnet. Another network gets an explicit error and nothing is sent. Wake-on-LAN gives no acknowledgement: the only proof is the target answering afterwards.
 
@@ -351,7 +351,9 @@ Tuning: a successful wake prints the measured time, for example `answered after 
 
 - Every packet is recorded in `<configDir>/wake-audit.log` (hash-chained, written before the send; "sent", never "woke"). If the log cannot be written, no packet is sent.
 - Verified once, on one machine: a Linux box (wired Intel I219-LM, `Wake-on: g` kept across a reboot with netplan `wakeonlan: true`) suspended with `systemctl suspend` woke from `machine ping` and answered after 12.2 s (packets: unicast, broadcast, unicast, answer 2.2 s into the third 5 s window), on the same LAN.
-- Not verified: which of the packets woke it (no acknowledgement; unicast alone and broadcast alone were not tested yet); a Mac, a Windows machine, a Wi-Fi target; that a router or switch passes the directed broadcast; resume times of other hardware.
+- Measured on that same box (a Windows sender), which is why the broadcast goes first since 2026-11-22: the default order (unicast first) answered after 13.9 s, the first unicast did nothing and the broadcast sent 6 s later woke it; broadcast only answered after 7 to 7.1 s; unicast only (4 packets) got no answer in the ~9 s observed (not a full 90 s run). The floor is the resume time of the box (about 7 s); a first packet that does not wake it costs one probe window. Why unicast does not wake it is not proven (a suspended host cannot answer ARP, so the sender may not be able to build the frame: unverified). One box only: other machines (Mac, work laptop, Wi-Fi) are unmeasured.
+- Probe attempts that fail fast are retried every 500 ms (since 2026-11-22), an attempt that uses its whole `--wake-connect-timeout` is followed at once by the next.
+- Not verified: which of the packets woke it in the first run (no acknowledgement); a Mac, a Windows machine, a Wi-Fi target; that a router or switch passes the directed broadcast; resume times of other hardware.
 - Not across routers or VPNs. The "waker" role (a machine on the target's LAN that sends the packet for you, phase B) is not built.
 - After a suspend the daemon is still running, so a locked screen is fine. A cold boot with disk encryption or without auto-login is not: the daemon does not start until someone logs in.
 

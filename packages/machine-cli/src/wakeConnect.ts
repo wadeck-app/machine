@@ -25,8 +25,11 @@ import { writeWakeAudit } from './wakeAudit.js';
 import type { WakeSender } from './wakeSender.js';
 
 // The connection of `machine run`, `machine ping` and `machine wake` to a peer that may be asleep (decision 62): try, and when every failure
-// says "unreachable" or "timeout" (a TYPE, see ConnectFailureKind), send magic packets (unicast then broadcast, a probe window after each) and keep
+// says "unreachable" or "timeout" (a TYPE, see ConnectFailureKind), send magic packets (broadcast then unicast, alternating, a probe window after each) and keep
 // trying. Everything that touches the world (clock, sockets, interfaces, connection, files of the config dir) is in `WakeEnv`.
+
+/** Attempts of a wake start at least this far apart (or `connectTimeoutMs` when that is shorter): bounded, no flood. */
+const WAKE_RETRY_INTERVAL_MS = 500;
 
 /** The wake cannot be tried or did not work: the message says why and what to do. */
 export class WakeError extends Error {}
@@ -181,7 +184,7 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
     env.info(`"${name}" was woken ${fmt((lastWakeAt === undefined ? 0 : env.epochSeconds() - lastWakeAt))} s ago from this machine: no new packet for another ${cooldown} s (cooldown ${WAKE_COOLDOWN_SECONDS} s), waiting for it to answer`);
   } else {
     if (!canUnicast) env.info(`no known IPv4 address of "${name}" on this network: broadcast only`);
-    const where = [canUnicast ? `unicast to ${destinationsOf('unicast', routes.routes).join(', ')}` : undefined, `broadcast to ${destinationsOf('broadcast', routes.routes).join(', ')}`].filter((x) => x !== undefined).join(' and ');
+    const where = [`broadcast to ${destinationsOf('broadcast', routes.routes).join(', ')}`, canUnicast ? `unicast to ${destinationsOf('unicast', routes.routes).join(', ')}` : undefined].filter((x) => x !== undefined).join(' and ');
     env.info(
       `sending magic packets for ${settings.mac}: ${where} (UDP port ${WAKE_PORT}), alternating, with a probe window of ${tuning.probeSeconds} s after each; at most ${canUnicast ? tuning.maxUnicast : 0} unicast and ${tuning.maxBroadcast} broadcast; waiting up to ${tuning.waitSeconds} s`,
     );
@@ -241,7 +244,8 @@ export async function connectWithWake(env: WakeEnv, target: PeerTarget, settings
         env.info(event.n === 1 ? what : `still unreachable after ${fmt(Math.round(event.elapsedMs / 100) / 10)} s: ${what}`);
       },
     },
-    { waitMs: tuning.waitSeconds * 1000, steps, attemptIntervalMs: tuning.connectTimeoutMs, refreshEveryMs: 10_000 },
+    // An attempt that fails fast is retried after 500 ms at most (never faster); one that uses its whole limit is followed at once by the next.
+    { waitMs: tuning.waitSeconds * 1000, steps, attemptIntervalMs: Math.min(tuning.connectTimeoutMs, WAKE_RETRY_INTERVAL_MS), refreshEveryMs: 10_000 },
   );
 
   const result = (extra: Record<string, string | number | string[]>): void => {

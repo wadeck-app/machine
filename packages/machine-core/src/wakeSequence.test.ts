@@ -38,10 +38,10 @@ const plan = (over: Partial<Parameters<typeof planWakeSteps>[0]> = {}) => planWa
 const options = (over: Partial<WakeSequenceOptions> = {}): WakeSequenceOptions => ({ waitMs: 90_000, steps: plan(), attemptIntervalMs: 1000, refreshEveryMs: 10_000, ...over });
 
 describe('runWakeSequence', () => {
-  it('sends unicast first, probes the connection, then broadcast, probes again, alternating', async () => {
+  it('sends broadcast first, probes the connection, then unicast, probes again, alternating', async () => {
     const h = harness({ connectCostMs: 1000 });
     await runWakeSequence(h.deps, options());
-    expect(h.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['unicast@0', 'broadcast@5000', 'unicast@10000', 'broadcast@15000', 'unicast@20000', 'broadcast@25000', 'unicast@30000', 'broadcast@35000']);
+    expect(h.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['broadcast@0', 'unicast@5000', 'broadcast@10000', 'unicast@15000', 'broadcast@20000', 'unicast@25000', 'broadcast@30000', 'unicast@35000']);
   });
 
   it('probes the connection between two packets: several attempts, about one per second', async () => {
@@ -58,17 +58,17 @@ describe('runWakeSequence', () => {
     if (r.outcome === 'answered') {
       expect(r.value).toBe('connected');
       expect(r.packets).toBe(3);
-      expect(r.lastStep).toEqual({ n: 3, method: 'unicast', atMs: 10_000 });
+      expect(r.lastStep).toEqual({ n: 3, method: 'broadcast', atMs: 10_000 });
       expect(r.elapsedMs).toBe(12_000);
     }
     expect(h.log.sends.length).toBe(3);
   });
 
-  it('success right after the first (unicast) packet stops at once: no broadcast is ever sent', async () => {
+  it('success right after the first (broadcast) packet stops at once: no unicast is ever sent', async () => {
     const h = harness({ upAtMs: 1000, connectCostMs: 1000 });
     const r = await runWakeSequence(h.deps, options());
     expect(r.outcome).toBe('answered');
-    expect(h.log.sends.map((s) => s.method)).toEqual(['unicast']);
+    expect(h.log.sends.map((s) => s.method)).toEqual(['broadcast']);
   });
 
   it('never sends more than 4 unicast and 4 broadcast packets, then keeps probing until the budget is used', async () => {
@@ -92,9 +92,9 @@ describe('runWakeSequence', () => {
     const h = harness({ upAtMs: 12_000, connectCostMs: 1000 });
     await runWakeSequence(h.deps, options());
     expect(h.log.events).toEqual([
-      { type: 'packet', n: 1, total: 8, method: 'unicast', elapsedMs: 0 },
-      { type: 'packet', n: 2, total: 8, method: 'broadcast', elapsedMs: 5000 },
-      { type: 'packet', n: 3, total: 8, method: 'unicast', elapsedMs: 10_000 },
+      { type: 'packet', n: 1, total: 8, method: 'broadcast', elapsedMs: 0 },
+      { type: 'packet', n: 2, total: 8, method: 'unicast', elapsedMs: 5000 },
+      { type: 'packet', n: 3, total: 8, method: 'broadcast', elapsedMs: 10_000 },
     ]);
   });
 
@@ -180,7 +180,7 @@ describe('runWakeSequence', () => {
     const h = harness({ connectCostMs: 1000 });
     const r = await runWakeSequence(h.deps, options({ waitMs: 12_000, steps: plan({ probeMs: 10_000, waitMs: 12_000 }) }));
     expect(r.outcome).toBe('no-answer');
-    expect(h.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['unicast@0', 'broadcast@10000']);
+    expect(h.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['broadcast@0', 'unicast@10000']);
   });
 
   it('does not spin: a connection that fails instantly is retried at most once per interval', async () => {

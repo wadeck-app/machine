@@ -227,9 +227,9 @@ describe('tuning', () => {
 describe('planWakeSteps', () => {
   const base = { canUnicast: true, maxUnicast: 4, maxBroadcast: 4, probeMs: 5000, waitMs: 90_000 };
 
-  it('alternates unicast, probe window, broadcast, probe window, ... with at most 4 of each by default: 8 packets, never more', () => {
+  it('alternates broadcast, probe window, unicast, probe window, ... (broadcast first since 2026-11-22) with at most 4 of each by default: 8 packets, never more', () => {
     const steps = planWakeSteps(base);
-    expect(steps.map((s) => s.method)).toEqual(['unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast']);
+    expect(steps.map((s) => s.method)).toEqual(['broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast']);
     expect(steps.map((s) => s.atMs)).toEqual([0, 5000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000]);
   });
 
@@ -241,7 +241,12 @@ describe('planWakeSteps', () => {
 
   it('skips an exhausted method and keeps the other: 2 unicast + 4 broadcast', () => {
     const steps = planWakeSteps({ ...base, maxUnicast: 2 });
-    expect(steps.map((s) => s.method)).toEqual(['unicast', 'broadcast', 'unicast', 'broadcast', 'broadcast', 'broadcast']);
+    expect(steps.map((s) => s.method)).toEqual(['broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'broadcast']);
+  });
+
+  it('skips an exhausted method and keeps the other: 4 unicast + 1 broadcast', () => {
+    const steps = planWakeSteps({ ...base, maxBroadcast: 1 });
+    expect(steps.map((s) => s.method)).toEqual(['broadcast', 'unicast', 'unicast', 'unicast', 'unicast']);
   });
 
   it('maxUnicast 0 is broadcast only, maxBroadcast 0 is unicast only', () => {

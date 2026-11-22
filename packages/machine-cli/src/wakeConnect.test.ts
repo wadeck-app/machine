@@ -165,11 +165,11 @@ describe('connectWithWake', () => {
     expect(w.log.sends).toEqual([]);
   });
 
-  it('sends unicast, probes, sends broadcast, probes, alternating; success after the third packet stops it and is measured', async () => {
+  it('sends broadcast, probes, sends unicast, probes, alternating; success after the third packet stops it and is measured', async () => {
     // 1000 ms attempts (the fake attempt costs 1000 ms): one probe per second.
     const w = world({ upAtMs: 12_000, costMs: 1000 });
     const r = await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 1000 }));
-    expect(w.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['unicast@0', 'broadcast@5000', 'unicast@10000']);
+    expect(w.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['broadcast@0', 'unicast@5000', 'broadcast@10000']);
     expect(w.log.sends[0]?.routes[0]).toMatchObject({ unicast: ['192.168.1.40'], broadcast: '192.168.1.255', localAddress: '192.168.1.10' });
     // Probes between the packets: about one attempt per second, each with the limit of the peer settings.
     const between = w.log.connects.filter((c) => c.at > 0 && c.at < 5000);
@@ -177,29 +177,29 @@ describe('connectWithWake', () => {
     expect(between.every((c) => c.timeoutMs === 1000)).toBe(true);
     // The first attempt (before any wake) keeps the normal limit.
     expect(w.log.connects[0]?.timeoutMs).toBeUndefined();
-    expect(r.wake).toMatchObject({ outcome: 'answered', packets: 3, followedBy: 'unicast', window: 3, elapsedSeconds: 12 });
+    expect(r.wake).toMatchObject({ outcome: 'answered', packets: 3, followedBy: 'broadcast', window: 3, elapsedSeconds: 12 });
     const said = w.log.info.join('\n');
     expect(said).toMatch(/"linux-box" is unreachable/);
-    expect(said).toMatch(/\[1\/8\] unicast to 192\.168\.1\.40/);
-    expect(said).toMatch(/still unreachable after 5 s: \[2\/8\] broadcast to 192\.168\.1\.255/);
-    expect(said).toMatch(/answered after 12 s, woken by unicast \(probe window 3, 2 s into its 5 s\)/);
+    expect(said).toMatch(/\[1\/8\] broadcast to 192\.168\.1\.255/);
+    expect(said).toMatch(/still unreachable after 5 s: \[2\/8\] unicast to 192\.168\.1\.40/);
+    expect(said).toMatch(/answered after 12 s, woken by broadcast \(probe window 3, 2 s into its 5 s\)/);
     expect(said).toMatch(/no acknowledgement/);
     // Early in its window (2 s of 5): no tuning hint.
     expect(said).not.toMatch(/--wake-probe/);
   });
 
-  it('an answer right after the first unicast packet sends no broadcast at all', async () => {
+  it('an answer right after the first broadcast packet sends no unicast at all', async () => {
     const w = world({ upAtMs: 1000, costMs: 1000 });
     const r = await connectWithWake(w.env, target(), settings());
-    expect(w.log.sends.map((s) => s.method)).toEqual(['unicast']);
-    expect(r.wake?.followedBy).toBe('unicast');
+    expect(w.log.sends.map((s) => s.method)).toEqual(['broadcast']);
+    expect(r.wake?.followedBy).toBe('broadcast');
   });
 
   it('prints the measured time and, when it took more than 80% of a window, the hint to raise probeSeconds for that peer', async () => {
     const w = world({ upAtMs: 14_000, upCostMs: 200, costMs: 1000 });
     await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 1000 }));
     const said = w.log.info.join('\n');
-    expect(said).toMatch(/answered after 14\.2 s, woken by unicast \(probe window 3, 4\.2 s into its 5 s\)/);
+    expect(said).toMatch(/answered after 14\.2 s, woken by broadcast \(probe window 3, 4\.2 s into its 5 s\)/);
     expect(said).toMatch(/4\.2 s into a 5 s probe window/);
     expect(said).toMatch(/machine peer connect linux-box --wake-probe 10/);
   });
@@ -216,13 +216,13 @@ describe('connectWithWake', () => {
       peerUuid: UUID,
       peerName: 'linux-box',
       mac: MAC,
-      method: 'unicast',
+      method: 'broadcast',
       n: 1,
       total: 8,
-      to: ['192.168.1.40'],
+      to: ['192.168.1.255'],
     });
-    expect(entries[1]).toMatchObject({ method: 'broadcast', n: 2, to: ['192.168.1.255'] });
-    expect(entries[2]).toMatchObject({ outcome: 'answered', packets: 2, followedBy: 'broadcast', window: 2 });
+    expect(entries[1]).toMatchObject({ method: 'unicast', n: 2, to: ['192.168.1.40'] });
+    expect(entries[2]).toMatchObject({ outcome: 'answered', packets: 2, followedBy: 'unicast', window: 2 });
     expect(verifyAuditChain(readFileSync(wakeAuditFile(dir), 'utf8').trimEnd().split('\n'))).toMatchObject({ ok: true, entries: 3 });
     // Never "woke": a packet that was sent is "sent".
     expect(JSON.stringify(entries)).not.toMatch(/"woke"/);
@@ -239,7 +239,7 @@ describe('connectWithWake', () => {
     explicit.env.bypassCooldown = true;
     const again = await connectWithWake(explicit.env, target(), settings({ waitSeconds: 10, probeSeconds: 2, maxUnicast: 2, maxBroadcast: 1 })).catch((x: unknown) => x);
     expect(again).toBeInstanceOf(WakeError);
-    expect(explicit.log.sends.map((s) => s.method)).toEqual(['unicast', 'broadcast', 'unicast']);
+    expect(explicit.log.sends.map((s) => s.method)).toEqual(['broadcast', 'unicast', 'unicast']);
     expect(explicit.log.info.join('\n')).not.toMatch(/cooldown/);
   });
 
@@ -386,10 +386,27 @@ describe('connectWithWake', () => {
     it('timings come from the settings of the peer: 2 s windows, 1 unicast + 2 broadcast, 20 s wait', async () => {
       const w = world({ costMs: 500 });
       await connectWithWake(w.env, target(), settings({ probeSeconds: 2, maxUnicast: 1, maxBroadcast: 2, waitSeconds: 20, connectTimeoutMs: 500 })).catch(() => undefined);
-      expect(w.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['unicast@0', 'broadcast@2000', 'broadcast@4000']);
+      expect(w.log.sends.map((s) => `${s.method}@${s.at}`)).toEqual(['broadcast@0', 'unicast@2000', 'broadcast@4000']);
       expect(w.now()).toBeGreaterThanOrEqual(20_000);
       expect(w.now()).toBeLessThan(21_500);
       expect(w.log.connects.slice(1).every((c) => c.timeoutMs === 500)).toBe(true);
+    });
+
+    it('a probe that fails fast is retried every 500 ms, not every connectTimeoutMs: the answer is noticed early, and the attempts stay bounded', async () => {
+      // costMs 0: the fake attempt fails at once (the real one can, e.g. no route right after a resume). connectTimeoutMs stays 3000 (the limit of ONE attempt).
+      const w = world({ costMs: 0, upAtMs: 7300 });
+      const r = await connectWithWake(w.env, target(), settings());
+      expect(w.log.connects.slice(1).filter((c) => c.at < 5000).map((c) => c.at)).toEqual([0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]);
+      expect(w.log.connects.every((c) => c.timeoutMs === undefined || c.timeoutMs === 3000)).toBe(true);
+      expect(r.wake?.elapsedSeconds).toBe(7.5);
+      // Never faster than every 500 ms: at most 2 attempts per second.
+      expect(w.log.sleeps.every((ms) => ms > 0 && ms <= 500)).toBe(true);
+    });
+
+    it('a short connectTimeoutMs below 500 ms keeps the retry interval at that value (the attempts still start about one limit apart)', async () => {
+      const w = world({ costMs: 0 });
+      await connectWithWake(w.env, target(), settings({ connectTimeoutMs: 200, waitSeconds: 5, probeSeconds: 5 })).catch(() => undefined);
+      expect(w.log.connects.slice(1, 5).map((c) => c.at)).toEqual([0, 200, 400, 600]);
     });
 
     it('cooldown: a wake sent less than 60 s ago sends no packet but still waits and answers if the peer comes up', async () => {

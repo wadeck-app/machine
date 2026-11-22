@@ -111,31 +111,31 @@ describe('machine run with a sleeping peer', () => {
     const world = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
     const r = await run(world);
     expect(r.err).toMatch(/\[info\] "laptop" is unreachable/);
-    expect(r.err).toMatch(/\[info\] sending magic packets for aa:bb:cc:dd:ee:01: unicast to 127\.0\.0\.1 and broadcast to 127\.0\.0\.255/);
-    expect(r.err).toMatch(/\[info\] \[1\/8\] unicast to 127\.0\.0\.1/);
-    expect(r.err).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by unicast \(probe window 1/);
+    expect(r.err).toMatch(/\[info\] sending magic packets for aa:bb:cc:dd:ee:01: broadcast to 127\.0\.0\.255 and unicast to 127\.0\.0\.1/);
+    expect(r.err).toMatch(/\[info\] \[1\/8\] broadcast to 127\.0\.0\.255/);
+    expect(r.err).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by broadcast \(probe window 1/);
     expect(r.out).toContain('hi');
     expect(r.code).toBe(0);
-    // Unicast first, and the answer came during its probe window: no broadcast.
-    expect(world.sent).toEqual(['unicast']);
+    // Broadcast first, and the answer came during its probe window: no unicast.
+    expect(world.sent).toEqual(['broadcast']);
     // The caller's wake audit: who woke what, how many packets, never "woke".
     const entries = auditEntries();
     expect(entries.map((e) => e.event)).toEqual(['wake.packet', 'wake.result']);
-    expect(entries[0]).toMatchObject({ requestedBy: 'run', sourceName: 'desktop', peerName: 'laptop', peerUuid: readMachine(b).uuid, method: 'unicast', n: 1, total: 8, to: ['127.0.0.1'] });
-    expect(entries[1]).toMatchObject({ outcome: 'answered', packets: 1, followedBy: 'unicast' });
+    expect(entries[0]).toMatchObject({ requestedBy: 'run', sourceName: 'desktop', peerName: 'laptop', peerUuid: readMachine(b).uuid, method: 'broadcast', n: 1, total: 8, to: ['127.0.0.255'] });
+    expect(entries[1]).toMatchObject({ outcome: 'answered', packets: 1, followedBy: 'broadcast' });
     // The peer audits the command only: nothing about the wake.
     expect(auditOfB()).toMatch(/"echo hi"|echo hi/);
     expect(auditOfB()).not.toMatch(/wake/);
   });
 
-  it('wakes with a broadcast when the unicast was not enough: unicast, probe, broadcast, probe, and the answer follows the broadcast', async () => {
+  it('wakes with a unicast when the broadcast was not enough: broadcast, probe, unicast, probe, and the answer follows the unicast', async () => {
     const port = await freePort();
     await cli(a, ['peer', 'connect', 'laptop', '--address', `127.0.0.1:${port}`, '--wake-mac', 'aa:bb:cc:dd:ee:01', '--wake-probe', '2']);
     const world = wakeWorld({ wakeAt: 2, start: () => startDaemon(b, port) });
     const r = await run(world);
     expect(r.code).toBe(0);
-    expect(world.sent).toEqual(['unicast', 'broadcast']);
-    expect(r.err).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by broadcast \(probe window 2/);
+    expect(world.sent).toEqual(['broadcast', 'unicast']);
+    expect(r.err).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by unicast \(probe window 2/);
   });
 
   it('an authentication failure never wakes: another key answers at the pinned address', async () => {
@@ -184,7 +184,7 @@ describe('machine run with a sleeping peer', () => {
     const world = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
     const r = await run(world, ['--wake']);
     expect(r.code).toBe(0);
-    expect(world.sent).toEqual(['unicast']);
+    expect(world.sent).toEqual(['broadcast']);
   });
 
   it('--wake with no MAC configured fails before any connection, with the command to run', async () => {
@@ -201,7 +201,7 @@ describe('machine run with a sleeping peer', () => {
     const world = wakeWorld();
     const r = await run(world);
     expect(r.code).toBe(255);
-    expect(world.sent).toEqual(['unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast']);
+    expect(world.sent).toEqual(['broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast', 'broadcast', 'unicast']);
     expect(r.err).toMatch(/no answer from "laptop" after 30 s and 8 packets \(4 unicast, 4 broadcast\)/);
     expect(r.err).toMatch(/--wake-wait 60/);
     expect(auditEntries().at(-1)).toMatchObject({ event: 'wake.result', outcome: 'no-answer', packets: 8 });
@@ -232,7 +232,7 @@ describe('machine ping --wake and machine wake', () => {
     const explicit = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
     const r = await cli(a, ['wake', 'laptop'], undefined, explicit.io);
     expect(r.code).toBe(0);
-    expect(explicit.sent).toEqual(['unicast']);
+    expect(explicit.sent).toEqual(['broadcast']);
     // The audit entries of the explicit wake say who asked: `wake` (entries written before the rename keep their `peer wake`, the chain does not read the value).
     expect(auditEntries().filter((e) => e.requestedBy === 'wake').length).toBeGreaterThan(0);
     expect(auditEntries().some((e) => e.requestedBy === 'peer wake')).toBe(false);
@@ -246,8 +246,8 @@ describe('machine ping --wake and machine wake', () => {
     const r = await cli(a, ['ping', 'laptop', '--json'], undefined, { ...world.io, timing: { sleep: async () => undefined, nowMs: () => 0, pollIntervalMs: 1 } });
     expect(r.code).toBe(0);
     const doc = JSON.parse(r.out) as { ok: boolean; target: { source: string }; wake: { outcome: string; followedBy: string; window: number } };
-    expect(doc).toMatchObject({ ok: true, target: { source: 'pinned' }, wake: { outcome: 'answered', followedBy: 'unicast', window: 1 } });
-    expect(world.sent).toEqual(['unicast']);
+    expect(doc).toMatchObject({ ok: true, target: { source: 'pinned' }, wake: { outcome: 'answered', followedBy: 'broadcast', window: 1 } });
+    expect(world.sent).toEqual(['broadcast']);
     expect(auditOfB()).toBe('');
   });
 
@@ -266,8 +266,8 @@ describe('machine ping --wake and machine wake', () => {
     const world = wakeWorld({ wakeAt: 1, start: () => startDaemon(b, port) });
     const r = await cli(a, ['wake', 'laptop'], undefined, world.io);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by unicast \(probe window 1, [\d.]+ s into its 5 s\)/);
-    expect(world.sent).toEqual(['unicast']);
+    expect(r.out).toMatch(/\[ok\] "laptop" answered after [\d.]+ s, woken by broadcast \(probe window 1, [\d.]+ s into its 5 s\)/);
+    expect(world.sent).toEqual(['broadcast']);
     const awake = wakeWorld({ asleep: false });
     const again = await cli(a, ['wake', 'laptop'], undefined, awake.io);
     expect(again.code).toBe(0);
