@@ -234,13 +234,15 @@ describe('machine run: the wait is the default', () => {
   });
 
   it('a hold limit tells the caller what to do now that waiting is the default', async () => {
-    // The target holds 2 requests per peer: the third is refused at once, with the advice.
+    // The owner of the target lowered the limit to 2 per peer AFTER its daemon started (hold-limits.json, read at each admission): the third is refused at once, with the advice.
+    expect((await cli(b, ['hold-limits', '--per-peer', '2'])).code).toBe(0);
     const first = run([], ['echo', 'one']);
     const second = run([], ['echo', 'two']);
     await waitingCount(2);
     const third = await run([], ['echo', 'three']);
     expect(third.code).toBe(255);
     expect(third.err).toContain('hold-limit-peer');
+    expect(third.err).toContain('machine hold-limits --per-peer <n>');
     expect(third.err).toMatch(/wait for the owner of laptop to answer the pending ones/);
     expect(third.err).toMatch(/--no-wait/);
     await denyAll(await waitingOf());

@@ -116,8 +116,10 @@ export {
   HOLD_ANSWER_MARGIN_MS,
   HoldTable,
   MAX_DENY_REASON_LENGTH,
-  MAX_HELD_PER_MACHINE,
-  MAX_HELD_PER_PEER,
+  DEFAULT_HELD_PER_MACHINE,
+  DEFAULT_HELD_PER_PEER,
+  MAX_HELD_PER_MACHINE_SETTING,
+  MAX_HELD_PER_PEER_SETTING,
   MAX_WAIT_SECONDS,
   MIN_WAIT_SECONDS,
   PROGRESS_INTERVAL_SECONDS,
@@ -135,7 +137,20 @@ export {
   type Hold,
   type HoldCheck,
   type HoldLimits,
+  type HoldLimitsSource,
 } from './hold.js';
+export {
+  checkConsistency as checkHoldLimitsConsistency,
+  describeHoldLimit,
+  parseHoldLimits,
+  readHoldLimits,
+  resolveHoldLimits,
+  serializeHoldLimits,
+  type EffectiveHoldLimits,
+  type HoldLimitSource,
+  type HoldLimitsRead,
+  type HoldLimitsSetting,
+} from './holdLimits.js';
 export {
   MAX_REQUESTS_LISTS_PER_MINUTE,
   REQUESTS_LIST_DOMAIN,

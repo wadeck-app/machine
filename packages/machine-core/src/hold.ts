@@ -8,8 +8,14 @@ export const MIN_WAIT_SECONDS = 10;
 export const MAX_WAIT_SECONDS = 3600;
 /** The target bounds the wait the caller chose (default 30 min). */
 export const DEFAULT_TARGET_WAIT_CAP_SECONDS = 1800;
-export const MAX_HELD_PER_PEER = 2;
-export const MAX_HELD_PER_MACHINE = 4;
+/** Requests this machine holds per calling peer and in all, unless its owner set other limits (`machine hold-limits`, holdLimits.ts). */
+export const DEFAULT_HELD_PER_PEER = 5;
+export const DEFAULT_HELD_PER_MACHINE = 10;
+/** The highest values the owner may set: raising a limit only lets an authenticated peer leave more requests open, so it is bounded. */
+export const MAX_HELD_PER_PEER_SETTING = 20;
+export const MAX_HELD_PER_MACHINE_SETTING = 50;
+/** Longest command text of a refusal that lists the held requests of the caller. */
+const LISTED_COMMAND_LENGTH = 60;
 /** The caller waits for the wait, then for a command that was just allowed to run, plus this margin for the network and the output. */
 export const HOLD_ANSWER_MARGIN_MS = 30_000;
 /** The caller prints a progress line this often. */
@@ -106,6 +112,14 @@ export interface HoldLimits {
   perMachine?: number;
 }
 
+/** A fixed pair, or a function read at each admission (the daemon: the setting file of the owner, no restart needed). */
+export type HoldLimitsSource = HoldLimits | (() => HoldLimits);
+
+function shortCommand(command: string): string {
+  const one = command.replace(/\s+/g, ' ').trim();
+  return one.length > LISTED_COMMAND_LENGTH ? `${one.slice(0, LISTED_COMMAND_LENGTH - 3)}...` : one;
+}
+
 export type AdmitResult = { ok: true; hold: Hold } | { ok: false; reason: 'hold-limit-peer' | 'hold-limit-machine'; message: string };
 export type DenyResult = { ok: true; hold: Hold } | { ok: false; reason: 'unknown' | 'ambiguous' | 'too-short' | 'bad-reason'; message: string };
 export type HoldCheck = { state: 'waiting' } | { state: 'deadline' } | { state: 'denied'; reason?: string } | { state: 'gone' };
@@ -114,21 +128,28 @@ export type HoldCheck = { state: 'waiting' } | { state: 'deadline' } | { state: 
 export class HoldTable {
   private readonly holds = new Map<string, Hold>();
   private readonly denials = new Map<string, { reason?: string }>();
-  private readonly perPeer: number;
-  private readonly perMachine: number;
+  private readonly limits: () => HoldLimits;
 
-  constructor(limits: HoldLimits = {}) {
-    this.perPeer = limits.perPeer ?? MAX_HELD_PER_PEER;
-    this.perMachine = limits.perMachine ?? MAX_HELD_PER_MACHINE;
+  constructor(limits: HoldLimitsSource = {}) {
+    this.limits = typeof limits === 'function' ? limits : () => limits;
   }
 
   admit(input: { id: string; peer: string; shell: string; command: string; now: number; requestedSeconds: number; capSeconds: number }): AdmitResult {
+    const limits = this.limits();
+    const perPeer = limits.perPeer ?? DEFAULT_HELD_PER_PEER;
+    const perMachine = limits.perMachine ?? DEFAULT_HELD_PER_MACHINE;
     const all = [...this.holds.values()];
-    if (all.filter((h) => h.peer === input.peer).length >= this.perPeer) {
-      return { ok: false, reason: 'hold-limit-peer', message: `this machine already holds ${this.perPeer} requests of yours waiting for approval (the limit per peer): wait for their answer, or ask its owner to allow or deny them (\`machine requests\`), then retry` };
+    const mine = all.filter((h) => h.peer === input.peer);
+    if (mine.length >= perPeer) {
+      const slots = mine.map((h) => `${h.id.slice(0, MIN_ID_PREFIX)} ${shortCommand(h.command)}`).join('; ');
+      return {
+        ok: false,
+        reason: 'hold-limit-peer',
+        message: `this machine already holds ${perPeer} requests of yours waiting for approval (the limit per peer; its owner can change it with \`machine hold-limits --per-peer <n>\` on that machine): ${slots}. Wait for their answer, or ask its owner to allow or deny them (\`machine requests\` lists them, \`machine requests --deny <id>\` refuses one), then retry`,
+      };
     }
-    if (all.length >= this.perMachine) {
-      return { ok: false, reason: 'hold-limit-machine', message: `this machine already holds ${this.perMachine} requests waiting for approval (the limit per machine): retry later, or ask its owner to allow or deny them (\`machine requests\`)` };
+    if (all.length >= perMachine) {
+      return { ok: false, reason: 'hold-limit-machine', message: `this machine already holds ${perMachine} requests waiting for approval (the limit per machine; its owner can change it with \`machine hold-limits --per-machine <n>\` on that machine): retry later, or ask its owner to allow or deny them (\`machine requests\`)` };
     }
     const wait = capWait(input.requestedSeconds, input.capSeconds);
     const hold: Hold = {

@@ -150,6 +150,9 @@ export interface Parsed {
   onRefusal?: string;
   /** `machine run-defaults --reset`: delete the machine setting. */
   reset?: true;
+  /** `machine hold-limits --per-peer <n> --per-machine <n>`: requests this machine holds (raw text, validated by machine-cli). */
+  perPeer?: string;
+  perMachine?: string;
   /** `machine requests --deny <id> [--reason <text>]`: refuse a request that a peer holds. */
   deny?: string;
   reason?: string;

@@ -20,8 +20,8 @@ import { signDocument } from './signed.js';
 
 export const REQUESTS_LIST_DOMAIN = 'machine/requests-list/v1';
 export const REQUESTS_LIST_MAX_GROUPS = DEFAULT_PENDING_LIMIT;
-/** Held requests an answer may carry (a machine holds at most 4 today, MAX_HELD_PER_MACHINE: room for a raised limit). */
-export const REQUESTS_LIST_MAX_WAITING = 16;
+/** Held requests an answer may carry: at least the highest limit per machine the owner may set (MAX_HELD_PER_MACHINE_SETTING, 50). */
+export const REQUESTS_LIST_MAX_WAITING = 50;
 export const REQUESTS_LIST_LIFETIME_SECONDS = 30;
 export const REQUESTS_LIST_MAX_LIFETIME_SECONDS = 60;
 export const REQUESTS_LIST_SKEW_SECONDS = 30;

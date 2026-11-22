@@ -301,8 +301,8 @@ describe('hold of a refused request', () => {
     expect(w.audit.entries.find((e) => e.event === 'hold-ended')).toMatchObject({ outcome: 'refused' });
   });
 
-  it('refuses a third held request of the same peer at once, naming the limit', async () => {
-    const w = await world();
+  it('refuses a held request beyond the limit of the peer at once, naming the limit and the requests that fill it', async () => {
+    const w = await world({ holds: new HoldTable({ perPeer: 2 }) });
     const s1 = await w.connect();
     const s2 = await w.connect();
     const s3 = await w.connect();
@@ -312,6 +312,7 @@ describe('hold of a refused request', () => {
     w.send(s3, 'echo three', 600);
     const answer = await answerOf(s3);
     expect(answer).toMatchObject({ type: 'refused', reason: 'hold-limit-peer' });
+    expect((answer as { message: string }).message).toMatch(/machine hold-limits --per-peer <n>.*echo one.*echo two/s);
     expect(w.table.list()).toHaveLength(2);
     expect(w.runs).toHaveLength(0);
   });

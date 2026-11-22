@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressPrinter, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, describeSeconds, parseWait, waitedText } from './hold.js';
+import { DEFAULT_HELD_PER_MACHINE, DEFAULT_HELD_PER_PEER, DEFAULT_TARGET_WAIT_CAP_SECONDS, HoldTable, holdAnswerTimeoutMs, progressPrinter, progressText, MAX_WAIT_SECONDS, MIN_WAIT_SECONDS, capWait, checkDenyReason, describeSeconds, parseWait, waitedText } from './hold.js';
 
 const PEER_A = '11111111-1111-4111-8111-111111111111';
 const PEER_B = '22222222-2222-4222-8222-222222222222';
@@ -98,40 +98,59 @@ describe('HoldTable.admit', () => {
     expect(r.ok && r.hold).toMatchObject({ waitSeconds: 1800, requestedSeconds: 3600, capped: true, deadline: T0 + 1800 });
   });
 
-  it('refuses a third hold of the same peer, naming the limit and the fix', () => {
+  it('refuses a sixth hold of the same peer, naming the limit, the way to change it and the holds that fill it', () => {
     const table = new HoldTable();
-    admit(table, 'a');
-    admit(table, 'b');
-    const r = admit(table, 'c');
+    for (const id of ['aaaaaa1', 'bbbbbb2', 'cccccc3', 'dddddd4', 'eeeeee5']) expect(admit(table, id).ok).toBe(true);
+    const r = admit(table, 'ffffff6');
     expect(r).toMatchObject({ ok: false, reason: 'hold-limit-peer' });
-    expect((r as { message: string }).message).toMatch(/2/);
-    expect((r as { message: string }).message).toMatch(/wait|deny|allow/i);
+    const message = (r as { message: string }).message;
+    expect(message).toContain('holds 5 requests of yours');
+    expect(message).toContain('machine hold-limits --per-peer <n>');
+    expect(message).toContain('aaaaaa ls');
+    expect(message).toContain('eeeeee ls');
+    expect(message).toContain('machine requests --deny <id>');
   });
 
-  it('refuses a fifth hold of the machine', () => {
-    const table = new HoldTable({ perPeer: 4 });
-    for (const id of ['a', 'b', 'c', 'd']) expect(admit(table, id, id === 'a' || id === 'b' ? PEER_A : PEER_B).ok).toBe(true);
-    const r = admit(table, 'e', PEER_B);
-    expect(r).toMatchObject({ ok: false, reason: 'hold-limit-machine' });
+  it('lists only the holds of the caller, with a shortened command', () => {
+    const table = new HoldTable({ perPeer: 1 });
+    table.admit({ id: 'mine-0001', peer: PEER_A, shell: 'sh', command: `echo ${'x'.repeat(100)}`, now: T0, requestedSeconds: 600, capSeconds: 1800 });
+    admit(table, 'other-0002', PEER_B);
+    const message = (admit(table, 'again-0003') as { message: string }).message;
+    expect(message).toContain('mine-0');
+    expect(message).toContain('...');
+    expect(message).not.toContain('other-');
+    expect(message).not.toContain('x'.repeat(100));
   });
 
-  it('the default limits are 2 per peer and 4 per machine', () => {
+  it('refuses an eleventh hold of the machine, naming the setting', () => {
     const table = new HoldTable();
-    const p3 = '33333333-3333-4333-8333-333333333333';
-    const p4 = '44444444-4444-4444-8444-444444444444';
-    const p5 = '55555555-5555-4555-8555-555555555555';
-    expect(admit(table, '1', PEER_A).ok).toBe(true);
-    expect(admit(table, '2', PEER_A).ok).toBe(true);
-    expect(admit(table, '3', PEER_B).ok).toBe(true);
-    expect(admit(table, '4', p3).ok).toBe(true);
-    expect(admit(table, '5', p4)).toMatchObject({ ok: false, reason: 'hold-limit-machine' });
-    expect(admit(table, '6', p5)).toMatchObject({ ok: false, reason: 'hold-limit-machine' });
+    const peers = Array.from({ length: 5 }, (_, i) => `${i}${i}${i}${i}${i}${i}${i}${i}-0000-4000-8000-000000000000`);
+    let n = 0;
+    for (const p of peers) for (let k = 0; k < 2; k++) expect(admit(table, `id${n++}`, p).ok).toBe(true);
+    const r = admit(table, 'last', 'ffffffff-0000-4000-8000-000000000000');
+    expect(r).toMatchObject({ ok: false, reason: 'hold-limit-machine' });
+    expect((r as { message: string }).message).toContain('machine hold-limits --per-machine <n>');
+  });
+
+  it('the default limits are 5 per peer and 10 per machine', () => {
+    expect(DEFAULT_HELD_PER_PEER).toBe(5);
+    expect(DEFAULT_HELD_PER_MACHINE).toBe(10);
+  });
+
+  it('reads the limits at each admission when they are given as a function', () => {
+    let limits = { perPeer: 1, perMachine: 10 };
+    const table = new HoldTable(() => limits);
+    expect(admit(table, 'a').ok).toBe(true);
+    expect(admit(table, 'b')).toMatchObject({ ok: false, reason: 'hold-limit-peer' });
+    limits = { perPeer: 2, perMachine: 10 };
+    expect(admit(table, 'b').ok).toBe(true);
   });
 
   it('a slot is free again once a hold ends', () => {
-    const table = new HoldTable();
+    const table = new HoldTable({ perPeer: 2 });
     admit(table, 'a');
     admit(table, 'b');
+    expect(admit(table, 'c').ok).toBe(false);
     table.end('a');
     expect(admit(table, 'c').ok).toBe(true);
   });

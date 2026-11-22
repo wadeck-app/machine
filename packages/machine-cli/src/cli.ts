@@ -10,6 +10,7 @@ import { installFlagProblem, installedItemsForStatus, runInstallCommand } from '
 import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWake, runWakeInfo } from './cliWake.js';
+import { runHoldLimits } from './cliHoldLimits.js';
 import { runDefaultsDocument, runDefaultsStatusLine, runDefaultsView, runRunDefaults } from './cliRunDefaults.js';
 import { RunDefaultsError } from './runDefaultsStore.js';
 import { noticeRecipientsStatus } from './noticeRecipientsStatus.js';
@@ -117,6 +118,12 @@ Commands:
                                      shows what \`machine run\` does when the target does not allow the command yet, with where each
                                      value comes from (flag, setting, built-in), and changes the machine setting
                                      (<config dir>/run-defaults.json; a damaged file is an error, never a fallback). --reset deletes it
+  hold-limits [--per-peer <1..20>] [--per-machine <1..50>] [--reset] [--json]
+                                     shows how many requests THIS machine holds for \`machine run --wait\` of its peers (per calling peer,
+                                     default 5; in all, default 10), with where each value comes from, and changes the setting
+                                     (<config dir>/hold-limits.json). Per machine must be at least per peer. Local owner command: no peer
+                                     or signed policy can raise it. The running daemon applies a change at its next held request.
+                                     --reset deletes the setting
   ping [<machine>] [--count <n>] [--address <host:port>] [--wake | --no-wake] [--json]
                                      without a machine: relay.json, the relay answers (time, version), the token is accepted and its
                                      access level (machine, machine-admin, full), the local daemon runs, this machine's address record is
@@ -435,6 +442,8 @@ function parse(argv: string[]): Parsed {
     else if (a === '--wait') out.wait = valueOf('--wait');
     else if (a === '--on-refusal') out.onRefusal = valueOf('--on-refusal');
     else if (a === '--reset') out.reset = true;
+    else if (a === '--per-peer') out.perPeer = valueOf('--per-peer');
+    else if (a === '--per-machine') out.perMachine = valueOf('--per-machine');
     else if (a === '--deny') out.deny = valueOf('--deny');
     else if (a === '--reason') out.reason = valueOf('--reason');
     else if (a === '--timeout') out.timeout = valueOf('--timeout');
@@ -556,7 +565,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
-  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0, log: 0, install: 1 }; // run-log
+  const maxPositional: Record<string, number> = { init: 0, status: 0, list: 0, daemon: 0, stop: 0, resolve: 1, join: 1, setup: 1, ping: 1, wake: 1, 'wake-info': 1, allowed: 1, requests: 1, 'run-defaults': 0, 'hold-limits': 0, log: 0, install: 1 }; // run-log
   const allowed = maxPositional[command];
   if (allowed !== undefined && rest.length > allowed) {
     return fail(`unexpected argument "${rest[allowed]}" for \`machine ${command}\`: see \`machine --help\``, EXIT.usage);
@@ -604,8 +613,11 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   if (args.onRefusal !== undefined && command !== 'run' && command !== 'run-defaults') {
     return fail('--on-refusal only applies to `machine run` and `machine run-defaults` (wait | fail: what to do when the target does not allow the command yet)', EXIT.usage);
   }
-  if (args.reset === true && command !== 'run-defaults') {
-    return fail('--reset only applies to `machine run-defaults` (it deletes the machine setting of `machine run`)', EXIT.usage);
+  if (args.reset === true && command !== 'run-defaults' && command !== 'hold-limits') {
+    return fail('--reset only applies to `machine run-defaults` (it deletes the machine setting of `machine run`) and `machine hold-limits` (it deletes the hold limits setting)', EXIT.usage);
+  }
+  if ((args.perPeer !== undefined || args.perMachine !== undefined) && command !== 'hold-limits') {
+    return fail('--per-peer and --per-machine only apply to `machine hold-limits` (how many requests this machine holds for the `run --wait` of its peers)', EXIT.usage);
   }
   // --no-wait belongs to join (its own wait for the admin) and to run (do not wait for the target's owner); setup and admin approve refuse it themselves.
   if (args.noWait && !(command === 'join' || command === 'setup' || command === 'run' || (command === 'admin' && rest[0] === 'approve'))) {
@@ -749,6 +761,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     if (command === 'wake-info') return runWakeInfo(ctx);
     if (command === 'run-defaults') {
       return runRunDefaults(ctx);
+    }
+    if (command === 'hold-limits') {
+      return runHoldLimits(ctx);
     }
     if (command === 'log') return args.follow ? await runActivityFollow(ctx) : runActivityLog(ctx); // run-log
     // `machine requests` reads this machine's audit log; `requests <machine>` and `--all` ask the peers (admin machine, handled with the network commands).

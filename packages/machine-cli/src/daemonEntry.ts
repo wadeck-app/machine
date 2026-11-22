@@ -10,6 +10,7 @@ import { readMachine } from './identity.js';
 import { installRevocation, loadNetwork, recordRevocationSeen, revocationState, type Network } from './network.js';
 import { startInboxLoop, type InboxLoop, type InboxTimer } from './inboxLoop.js';
 import { HoldTable } from '@wadeck-app/machine-core';
+import { createHoldLimitsReader } from './holdLimitsStore.js';
 import { startPeerListener, type ServicedPeerListener } from './peerService.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
@@ -90,7 +91,10 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
   const now = () => Math.floor(Date.now() / 1000);
 
   // The requests held for approval (`run --wait`): in memory, shared by the peer service and the `deny` command of the local API.
-  const holds = new HoldTable();
+  // How many it keeps is the owner's setting (hold-limits.json): read now (a bad file is a [warn] at start) and again at each admission, no restart needed.
+  const holdLimits = createHoldLimitsReader(configDir, log);
+  holdLimits();
+  const holds = new HoldTable(holdLimits);
   let listener: ServicedPeerListener | undefined;
   let inbox: InboxLoop | undefined;
   let updateCheck: { stop: () => void } | undefined;
