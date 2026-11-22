@@ -120,6 +120,9 @@ describe('the admin key kept in the page (decision 92)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Reload the other machines' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).queryByLabelText('Admin passphrase')).toBeNull();
+    // The key indicator exists ONCE for the page, even with a dialog open: not repeated in the dialog, and no block of the old bar kind.
+    expect(screen.getAllByText(/key unlocked/i)).toHaveLength(1);
+    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Sign and load' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 5000 });
     const posts = calls.filter((c) => c.url === 'POST /api/modules/machine/requests/remote');
