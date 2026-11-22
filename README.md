@@ -349,7 +349,7 @@ Tuning: a successful wake prints the measured time, for example `answered after 
 
 ### Suspend the target with `machine install suspend`
 
-On the Linux target, in a terminal: `machine install suspend` installs, through sudo with your own password, a root-owned script and a sudo rule for the one command `systemctl suspend` (`--dry-run` shows everything first, `--check` reports the state, `--remove` undoes it). It prints the `machine admin allow <machine> --shell sh -- /usr/local/bin/machine-suspend` line to run on the admin machine; after that every trusted peer can suspend the machine with `machine run`, and wake it with `machine wake`. UNVERIFIED on a real box (`.claude/specs/2026-11-13_machine-network/install.md`).
+On the Linux target, in a terminal: `machine install suspend` installs, through sudo with your own password, a root-owned script and a sudo rule for the one command `systemctl suspend` (`--dry-run` shows everything first, `--check` reports the state, `--refresh` writes it again to repair a hand edit, `--remove` undoes it; `machine install` lists every item with its state). It prints the `machine admin allow <machine> --shell sh -- /usr/local/bin/machine-suspend` line to run on the admin machine; after that every trusted peer can suspend the machine with `machine run`, and wake it with `machine wake`. UNVERIFIED on a real box (`.claude/specs/2026-11-13_machine-network/install.md`).
 
 ### Trace and limits
 

@@ -6,7 +6,7 @@ import type { RevokedMachine } from './network.js';
 import { runNetworkCommand } from './cliNetwork.js';
 import { printUpdateNotice, runCliMeta } from './cliMeta.js';
 import { daemonStateText, runStartupCommand } from './cliStartup.js';
-import { installFlagProblem, runInstallCommand } from './cliInstall.js';
+import { installFlagProblem, installedItemsForStatus, runInstallCommand } from './cliInstall.js';
 import { readDaemonState } from './daemonPortFile.js';
 import { groupHelpText, helpRequest, unknownSubcommandMessage } from './cliHelp.js';
 import { runWake, runWakeInfo } from './cliWake.js';
@@ -172,13 +172,13 @@ Commands:
                                      running (--no-start: register only); disable removes it; status shows
                                      whether the daemon runs, whether the job exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
-  install [<id>] [--dry-run | --check | --remove] [--yes]
+  install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes]
                                      set up an item on THIS machine, a LOCAL command run in a terminal on it (never remote, never by the daemon).
-                                     Without an id: lists what can be installed and where. \`install suspend\` (Linux only): the root-owned script
+                                     Without an id (or \`install status\`): lists what can be installed, where, and its state here. \`install suspend\` (Linux only): the root-owned script
                                      /usr/local/bin/machine-suspend and a sudoers rule for the ONE command \`systemctl suspend\`, written through sudo with
                                      YOUR password (typed to sudo, never read by machine); shows every file and command, asks y/N; idempotent;
-                                     --dry-run changes nothing, --check reports installed / not installed / outdated, --remove removes exactly what
-                                     it installed. Once allowed in the default list, every trusted peer can suspend this machine
+                                     --dry-run changes nothing, --check reports the state (exit 0 only when installed and up to date), --refresh writes
+                                     everything again (repairs a file changed by hand), --remove removes exactly what it installed and checks it. Once allowed in the default list, every trusted peer can suspend this machine
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
@@ -379,7 +379,7 @@ function revokedBlock(revoked: RevokedMachine[], nowSeconds: number): string[] {
 }
 
 function parse(argv: string[]): Parsed {
-  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, yes: false, dryRun: false, check: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
+  const out: Parsed = { positional: [], passthrough: [], json: false, help: false, version: false, replace: false, force: false, resume: false, noWait: false, reject: false, autoStartup: false, noStart: false, yes: false, dryRun: false, check: false, refresh: false, fullAccess: false, verbose: false, quiet: false, generate: false, list: false, remove: false, follow: false, forceRegister: false, advertise: [], addressList: [], wake: false, noWake: false, show: false, noShell: false, optionLike: [] };
   const split = argv.indexOf('--');
   const own = split === -1 ? argv : argv.slice(0, split);
   if (split !== -1) out.passthrough = argv.slice(split + 1);
@@ -403,6 +403,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--yes') out.yes = true;
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--check') out.check = true;
+    else if (a === '--refresh') out.refresh = true;
     else if (a === '--full-access') out.fullAccess = true;
     else if (a === '--quiet') out.quiet = true;
     else if (a === '--verbose') out.verbose = true;
@@ -796,6 +797,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           }
         }
         const notices = noticeRecipientsStatus(configDir, { uuid: r.uuid, name: r.name }, Math.floor((io.now?.() ?? new Date()).getTime() / 1000));
+        // The items installed on this machine by `machine install` (read-only, no sudo): one line, nothing when none is installed.
+        const installedItems = await installedItemsForStatus(io);
         const lines = [
           `${r.name} (${r.uuid})`,
           `version: ${r.version}`,
@@ -812,8 +815,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           ...reachLines,
           ...(notices === undefined ? [] : [notices.line]),
           ...runLines.text,
+          ...installedItems.lines,
         ];
-        emit({ ...r, daemon, ...(reachability.length > 0 ? { reachability } : {}), runDefaults: runLines.document, ...(notices === undefined ? {} : { noticeRecipients: { state: notices.state, recipients: notices.recipients } }) }, `${lines.join('\n')}\n`);
+        emit({ ...r, daemon, ...(reachability.length > 0 ? { reachability } : {}), runDefaults: runLines.document, ...(notices === undefined ? {} : { noticeRecipients: { state: notices.state, recipients: notices.recipients } }), ...(installedItems.items.length > 0 ? { installedItems: installedItems.items } : {}) }, `${lines.join('\n')}\n`);
         return EXIT.ok;
       }
       case 'list': {

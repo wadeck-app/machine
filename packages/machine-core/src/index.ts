@@ -351,6 +351,12 @@ export {
   type PlanArg,
   type PlanStep,
   type PlannedFile,
+  deriveInstallState,
   type RunStep,
   type StageStep,
 } from './install.js';
+  stateLabel,
+  stateNextSteps,
+  type FileObservation,
+  type InstallState,
+  type ObservedFile,

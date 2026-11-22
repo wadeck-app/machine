@@ -20,6 +20,8 @@ export interface FakeInstallOptions {
   rootReadFails?: string;
   /** What `sudo -n -l` answers when the rule is not in the fake sudoers (default: exit 1). */
   probeAllowsWithoutRule?: boolean;
+  /** `sudo rm -- <path>` answers 0 for these paths but leaves the file there (a removal that did not take). */
+  rmLeaves?: string[];
 }
 
 export interface FakeInstall {
@@ -95,6 +97,9 @@ export function fakeInstall(o: FakeInstallOptions = {}): FakeInstall {
     }
     if (verb === 'rm') {
       const target = args[args.length - 1] ?? '';
+      if (o.rmLeaves?.includes(target) === true) {
+        return ok();
+      }
       if (!store(target).delete(target)) {
         return fail(`rm: cannot remove '${target}': No such file or directory`);
       }

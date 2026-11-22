@@ -137,6 +137,65 @@ export function classifyInstalled(file: PlannedFile, found: string | undefined):
   return { state: 'outdated', sha256, version: Number(marker[1]) };
 }
 
+// ---------------------------------------------------------------- lifecycle: the states (install.md, "Lifecycle")
+
+/**
+ * The state of an installable on this machine. These names are part of the `--json` documents and of the exit-code rule (0 only for `installed`):
+ * never rename one.
+ */
+export type InstallState = 'not installed' | 'installed' | 'outdated' | 'partial' | 'foreign' | 'unsupported here';
+
+/** What was seen of one planned file: `unread` is a root-only file that was not read (its content needs sudo with a password). */
+export type FileObservation = InstalledState | 'unread';
+
+export interface ObservedFile {
+  path: string;
+  rootOnly: boolean;
+  observed: FileObservation;
+}
+
+/**
+ * The verdict over every file of a plan. `sudoLists` answers the non-prompting probe (`sudo -n -l <command>`) for the root-only files that were not
+ * read; undefined when it was not asked (then those files are left out of the verdict). A foreign file wins over everything (it is never touched),
+ * then an outdated one; otherwise installed needs every part, not installed needs none, anything between is partial with the missing parts named.
+ */
+export function deriveInstallState(files: ObservedFile[], sudoLists: boolean | undefined): { state: Exclude<InstallState, 'unsupported here'>; missing: string[] } {
+  if (files.some((f) => f.observed === 'foreign')) {
+    return { state: 'foreign', missing: [] };
+  }
+  if (files.some((f) => f.observed === 'outdated')) {
+    return { state: 'outdated', missing: [] };
+  }
+  const counted = sudoLists === undefined ? files.filter((f) => f.observed !== 'unread') : files;
+  const missing = counted.filter((f) => (f.observed === 'unread' ? sudoLists !== true : f.observed === 'absent')).map((f) => f.path);
+  if (missing.length === 0) {
+    return { state: 'installed', missing };
+  }
+  return { state: missing.length === counted.length ? 'not installed' : 'partial', missing };
+}
+
+/** The state as a person reads it: `installed` alone does not say that the content is the one this build ships. */
+export function stateLabel(state: InstallState): string {
+  if (state === 'installed') {
+    return 'installed, up to date';
+  }
+  return state === 'outdated' ? 'outdated (this build ships newer content)' : state;
+}
+
+/** The command that moves a state forward (empty for installed and unsupported). `foreignPaths` are the files machine will not touch. */
+export function stateNextSteps(id: string, state: InstallState, foreignPaths: string[]): string[] {
+  if (state === 'not installed' || state === 'partial') {
+    return [`machine install ${id}`];
+  }
+  if (state === 'outdated') {
+    return [`machine install ${id} --refresh`];
+  }
+  if (state === 'foreign') {
+    return [...foreignPaths.map((p) => `sudo rm -- ${p}   (after reading it: machine never touches a file it did not write)`), `machine install ${id}`];
+  }
+  return [];
+}
+
 // ---------------------------------------------------------------- suspend (linux)
 
 const SUSPEND_VERSION = 1;

@@ -4,12 +4,16 @@ import {
   INSTALL_USER_PATTERN,
   InstallError,
   classifyInstalled,
+  deriveInstallState,
+  stateLabel,
+  stateNextSteps,
   findInstallable,
   markerLine,
   platformName,
   rootReadArgv,
   sha256Hex,
   unsupportedMessage,
+  type FileObservation,
   type InstallFacts,
 } from './install.js';
 
@@ -182,5 +186,92 @@ describe('classifyInstalled', () => {
   });
   it('a marker of ANOTHER installable is foreign', () => {
     expect(classifyInstalled(file, '# managed by machine install wake, version 1\n').state).toBe('foreign');
+  });
+});
+
+// ---------------------------------------------------------------- lifecycle (install.md, "Lifecycle")
+
+describe('lifecycle contract: every installable of the registry', () => {
+  it.each(INSTALLABLES.map((d) => [d.id, d] as const))('%s provides status, install, refresh and remove', (_id, def) => {
+    // The id is a word of the command line: it can never be the sub-command `status` (or an option).
+    expect(def.id).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(def.id).not.toBe('status');
+    expect(def.platforms.length).toBeGreaterThan(0);
+    const facts: InstallFacts = { ...FACTS, platform: def.platforms[0] as string };
+    const plan = def.plan(facts);
+    expect(plan.id).toBe(def.id);
+    // install and refresh: both run plan.steps; every file is staged and installed by a step that names it.
+    expect(plan.files.length).toBeGreaterThan(0);
+    for (const f of plan.files) {
+      expect(f.content.split('\n'), `${f.path} carries the marker`).toContain(markerLine(def.id, plan.version));
+      expect(f.sha256).toBe(sha256Hex(f.content));
+      expect(plan.steps.some((s) => s.kind === 'stage' && s.file === f.id), `${f.path} is staged`).toBe(true);
+      expect(plan.steps.some((s) => s.kind === 'run' && s.purpose === 'install' && s.file === f.id), `${f.path} is installed`).toBe(true);
+      // remove: every file has a removal step, with the fix to apply by hand.
+      const removal = plan.removeSteps.filter((s) => s.file === f.id);
+      expect(removal, `${f.path} is removed`).toHaveLength(1);
+      expect(removal[0]?.fix.length).toBeGreaterThan(5);
+    }
+    expect(plan.removeSteps.every((s) => plan.files.some((f) => f.id === s.file))).toBe(true);
+    // status: a probe that never prompts (sudo -n) when a file is root-only, and the lines of the three outcomes.
+    expect(plan.probe.length).toBeGreaterThan(0);
+    if (plan.files.some((f) => f.rootOnly)) {
+      expect(plan.probe).toContain('-n');
+    }
+    expect(def.next(plan, 'desktop').length).toBeGreaterThan(0);
+    expect(def.afterRemove(plan, 'desktop').length).toBeGreaterThan(0);
+  });
+
+  it('refuses a platform it does not list, with the supported ones', () => {
+    for (const def of INSTALLABLES) {
+      expect(() => def.plan({ ...FACTS, platform: 'plan9' })).toThrow(unsupportedMessage(def, 'plan9'));
+    }
+  });
+});
+
+describe('deriveInstallState', () => {
+  const F = (path: string, rootOnly: boolean, observed: FileObservation) => ({ path, rootOnly, observed });
+
+  it('every part there and current: installed', () => {
+    expect(deriveInstallState([F('/a', false, 'current'), F('/b', true, 'unread')], true)).toEqual({ state: 'installed', missing: [] });
+    expect(deriveInstallState([F('/a', false, 'current'), F('/b', true, 'current')], undefined)).toEqual({ state: 'installed', missing: [] });
+  });
+
+  it('nothing there: not installed', () => {
+    expect(deriveInstallState([F('/a', false, 'absent'), F('/b', true, 'unread')], false)).toEqual({ state: 'not installed', missing: ['/a', '/b'] });
+  });
+
+  it('one part without the other: partial, naming what is missing', () => {
+    expect(deriveInstallState([F('/a', false, 'current'), F('/b', true, 'unread')], false)).toEqual({ state: 'partial', missing: ['/b'] });
+    expect(deriveInstallState([F('/a', false, 'absent'), F('/b', true, 'unread')], true)).toEqual({ state: 'partial', missing: ['/a'] });
+  });
+
+  it('a file machine did not write wins over everything: foreign; then outdated', () => {
+    expect(deriveInstallState([F('/a', false, 'foreign'), F('/b', true, 'unread')], true).state).toBe('foreign');
+    expect(deriveInstallState([F('/a', false, 'outdated'), F('/b', true, 'unread')], true).state).toBe('outdated');
+    expect(deriveInstallState([F('/a', false, 'outdated'), F('/b', true, 'foreign')], undefined).state).toBe('foreign');
+  });
+
+  it('without a question to sudo (undefined) the root-only files are left out of the verdict', () => {
+    expect(deriveInstallState([F('/a', false, 'current'), F('/b', true, 'unread')], undefined)).toEqual({ state: 'installed', missing: [] });
+    expect(deriveInstallState([F('/a', false, 'absent'), F('/b', true, 'unread')], undefined)).toEqual({ state: 'not installed', missing: ['/a'] });
+  });
+});
+
+describe('state vocabulary', () => {
+  it('stateLabel spells out "installed, up to date"; the other states keep their name', () => {
+    expect(stateLabel('installed')).toBe('installed, up to date');
+    expect(stateLabel('not installed')).toBe('not installed');
+    expect(stateLabel('outdated')).toBe('outdated (this build ships newer content)');
+    expect(stateLabel('unsupported here')).toBe('unsupported here');
+  });
+
+  it('stateNextSteps: the command that moves each state forward', () => {
+    expect(stateNextSteps('suspend', 'installed', [])).toEqual([]);
+    expect(stateNextSteps('suspend', 'unsupported here', [])).toEqual([]);
+    expect(stateNextSteps('suspend', 'not installed', [])).toEqual(['machine install suspend']);
+    expect(stateNextSteps('suspend', 'outdated', [])).toEqual(['machine install suspend --refresh']);
+    expect(stateNextSteps('suspend', 'partial', [])).toEqual(['machine install suspend']);
+    expect(stateNextSteps('suspend', 'foreign', ['/x/y'])).toEqual(['sudo rm -- /x/y   (after reading it: machine never touches a file it did not write)', 'machine install suspend']);
   });
 });

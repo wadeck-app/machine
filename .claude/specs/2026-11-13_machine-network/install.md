@@ -12,11 +12,14 @@ Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the
 
 | Command | Effect |
 |---|---|
-| `machine install` | Lists every installable with its platforms and whether this machine supports it. `--json` supported. |
+| `machine install`, `machine install status` | Same read-only list: every installable with platforms, state here, missing parts, next step. `--json` supported. |
 | `machine install <id>` | Shows state, every file (exact content, owner, mode, sha256) and every command, asks y/N (`--yes` skips), runs, then checks with `sudo -n -l`. |
 | `--dry-run` | Prints the plan. Runs nothing, not even sudo (the root-only rule is reported as not read). |
-| `--check` | `installed` / `not installed` / `outdated` / `partial` / `foreign`. Exit 0 only for `installed`. Never asks a password. |
-| `--remove` | Shows then removes exactly the managed files (rule first, script second). Refuses everything if one file is foreign. |
+| `--check` | State of one item. Exit 0 only for `installed`, 1 for every other state, 2 for a usage error. Never asks a password. |
+| `--refresh` | Force: the whole plan again (both files, visudo, verification) even when `installed`; same plan display, y/N, terminal and foreign-file refusal as install. |
+| `--remove` | Shows then removes exactly the managed files (rule first, script second). Refuses everything if one file is foreign. Post-check: the files are read again; anything left fails with path, owner and the sudo command to remove it. |
+
+`--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 
 Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit 1, nothing run. Unknown id: exit 2.
 
@@ -28,6 +31,24 @@ Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit
 - `plan(facts)` returns data and throws `InstallError` on an unsupported platform or an unsafe fact: `files` (path, mode, owner, content, sha256, `rootOnly`), `steps` (`stage` a temporary file, `run` a command: validate, install), `removeSteps`, `probe` (a never-prompting command that exits 0 when installed).
 - A file carries `# managed by machine install <id>, version <n>`. Present without it: foreign, never touched. Same marker, other sha256: outdated.
 - Executor (`installFlow.ts`) takes an injected fs and exec (`installEnv.ts`); tests use `installTesting.ts`.
+
+## Lifecycle
+
+Contract for every installable (`INSTALLABLES`); the tests in `install.test.ts` (plan shape) and `cliInstall.test.ts` (status, install, refresh, remove, status through the command) fail for an item that breaks it.
+
+| Operation | Provided by the plan | Rule |
+|---|---|---|
+| status | `files`, `probe` | Read-only, no password: user-readable files are classified, a root-only file is only asked through the `probe` (`sudo -n`). |
+| install | `steps` | Stage, validate, install; skips files already current. |
+| refresh | `steps` | Same steps for every file, whatever the status. |
+| remove | `removeSteps` | One step per file, with its `fix`; then the post-check. |
+
+- Every file carries the marker; the id is not `status` and not an option.
+- States (stable names, also in `--json`): `not installed`, `installed`, `outdated`, `partial`, `foreign`, `unsupported here` (platform, missing tool, unsafe user name; `reason` says which). `foreign` wins over `outdated` over `partial`.
+- JSON fields: `id`, `state`, `files[{id, path, state, sha256?, shippedSha256}]`, `supportedHere`, `missing`, `nextSteps`; plus `action`, `applied` on a change. File states: `absent`, `current`, `outdated`, `foreign`, `listed by sudo`, `not listed by sudo`, `not read`.
+- Exit codes: 0 for `--check` only when `installed`; every flow exits 1 on a refusal or a failed step, 2 on a usage error.
+- The status of a root-only file is the probe: it cannot see a rule edited by hand, nor tell machine's rule from another rule that allows the same command. `--refresh` rewrites it whatever it holds.
+- `machine status` prints `installed: <id> (up to date)` or `[warn] installed: <id> is outdated: run machine install <id> --refresh`, from the user-readable files only (no sudo at all); nothing when no item is installed. `--json` adds `installedItems`.
 
 ## `suspend` (Linux)
 

@@ -48,22 +48,74 @@ describe('machine install (list)', () => {
     expect(r.out).toContain('suspend');
     expect(r.out).toMatch(/platforms: linux/);
     expect(r.out).toMatch(/supported on this machine \(linux\)/);
-    expect(r.out).toContain('machine install <id> [--dry-run | --check | --remove] [--yes] [--json]');
-    expect(r.fake.calls).toEqual([]);
+    expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--json]');
+    // The only sudo call of the list is the listing that never prompts.
+    expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual(['/usr/bin/sudo -n -l /usr/bin/systemctl suspend']);
+    expect(r.fake.staged.size).toBe(0);
+  });
+
+  it('shows the state of every item on this machine: not installed, installed, outdated, partial, foreign', async () => {
+    expect((await run([])).out).toContain('state: not installed');
+    expect((await run([], INSTALLED)).out).toContain('state: installed, up to date');
+    expect((await run([], { ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': 'x' } })).out).toContain('state: foreign');
+    const old = (shipped.files[0] as { content: string }).content.replace('3 s', '9 s');
+    const outdated = await run([], { ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': old } });
+    expect(outdated.out).toContain('state: outdated (this build ships newer content)');
+    expect(outdated.out).toContain('machine install suspend --refresh');
+    const partial = await run([], { userFiles: INSTALLED.userFiles ?? {} });
+    expect(partial.out).toContain('state: partial');
+    expect(partial.out).toContain('missing: /etc/sudoers.d/machine-suspend');
   });
 
   it('says when this machine is not supported yet', async () => {
     const r = await run([], { platform: 'win32' });
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/not supported on windows yet \(supported: linux\)/);
+    expect(r.out).toContain('state: unsupported here');
+    expect(r.fake.calls).toEqual([]);
+  });
+
+  it('`install status` is the explicit alias of the list (same text, same document)', async () => {
+    const list = await run([], INSTALLED);
+    const status = await run(['status'], INSTALLED);
+    expect(status.code).toBe(0);
+    expect(status.out).toBe(list.out);
+    const a = await run(['--json'], INSTALLED);
+    const b = await run(['status', '--json'], INSTALLED);
+    expect(b.out).toBe(a.out);
+  });
+
+  it('`install status` takes no flag but --json', async () => {
+    for (const flag of ['--check', '--refresh', '--remove', '--dry-run', '--yes']) {
+      const r = await run(['status', flag]);
+      expect(r.code, flag).toBe(2);
+      expect(r.err, flag).toMatch(/`machine install status` takes no `--/);
+    }
   });
 
   it('--json: one document with every installable', async () => {
     const r = await run(['--json'], { platform: 'darwin' });
     expect(JSON.parse(r.out)).toEqual({
       platform: 'darwin',
-      installables: INSTALLABLES.map((d) => ({ id: d.id, description: d.description, platforms: d.platforms, supportedHere: false })),
+      installables: INSTALLABLES.map((d) => ({
+        id: d.id,
+        description: d.description,
+        platforms: d.platforms,
+        supportedHere: false,
+        state: 'unsupported here',
+        reason: 'not supported on macos yet (supported: linux)',
+        files: [],
+        missing: [],
+        nextSteps: [],
+      })),
     });
+  });
+
+  it('--json: the stable fields id, state, files[{path, state}], supportedHere, nextSteps for an installed item', async () => {
+    const r = await run(['--json'], INSTALLED);
+    const doc = JSON.parse(r.out) as { installables: Array<{ id: string; state: string; supportedHere: boolean; nextSteps: string[]; files: Array<{ path: string; state: string }> }> };
+    expect(doc.installables[0]).toMatchObject({ id: 'suspend', state: 'installed', supportedHere: true, nextSteps: [] });
+    expect(doc.installables[0]?.files.map((f) => [f.path, f.state])).toEqual([['/usr/local/bin/machine-suspend', 'current'], ['/etc/sudoers.d/machine-suspend', 'listed by sudo']]);
   });
 });
 
@@ -77,6 +129,10 @@ describe('machine install: help', () => {
       expect(r.out, args.join(' ')).toMatch(/--dry-run/);
       expect(r.out, args.join(' ')).toMatch(/--check/);
       expect(r.out, args.join(' ')).toMatch(/--remove/);
+      expect(r.out, args.join(' ')).toMatch(/--refresh/);
+      if (!args.includes('suspend')) {
+        expect(r.out, args.join(' ')).toMatch(/install status/);
+      }
       expect(r.out, args.join(' ')).toMatch(/--yes/);
     }
   });
@@ -87,7 +143,7 @@ describe('machine install: help', () => {
 
   it('the global help mentions the command', async () => {
     const r = await cli(join(root, 'none'), ['--help']);
-    expect(r.out).toMatch(/install \[<id>\]/);
+    expect(r.out).toContain('install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes]');
   });
 });
 
@@ -105,19 +161,19 @@ describe('machine install: usage errors (exit 2)', () => {
     expect(r.err).toContain('unexpected argument "extra"');
   });
 
-  it.each([['--check', '--remove'], ['--check', '--dry-run'], ['--check', '--yes']])('%s with %s', async (a, b) => {
+  it.each([['--check', '--remove'], ['--check', '--dry-run'], ['--check', '--yes'], ['--check', '--refresh'], ['--refresh', '--remove']])('%s with %s', async (a, b) => {
     const r = await run(['suspend', a, b]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/cannot be combined/);
   });
 
-  it.each(['--check', '--remove', '--dry-run', '--yes'])('%s without an id', async (flag) => {
+  it.each(['--check', '--remove', '--dry-run', '--yes', '--refresh'])('%s without an id', async (flag) => {
     const r = await run([flag]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/needs an id/);
   });
 
-  it.each([['--yes'], ['--dry-run'], ['--check']])('%s on another command', async (flag) => {
+  it.each([['--yes'], ['--dry-run'], ['--check'], ['--refresh']])('%s on another command', async (flag) => {
     const r = await cli(dir, ['status', flag]);
     expect(r.code).toBe(2);
     expect(r.err).toContain('only apply to `machine install <id>`');
@@ -238,6 +294,87 @@ describe('machine install is local only (hard rule 7: the daemon is never elevat
     const src = dirname(fileURLToPath(import.meta.url));
     const sources = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
     const importers = sources.filter((f) => /from '\.{1,2}\/(?:[\w/]*\/)?(?:installFlow|installEnv|cliInstall)\.js'/.test(readFileSync(join(src, f), 'utf8'))).map((f) => f.replaceAll('\\', '/')).sort();
-    expect(importers).toEqual(['cli.ts', 'cliInstall.ts', 'cliTypes.ts', 'installFlow.ts', 'installTesting.ts']);
+    expect(importers).toEqual(['cli.ts', 'cliInstall.ts', 'cliTypes.ts', 'installFlow.ts', 'installStatus.ts', 'installTesting.ts']);
+  });
+});
+
+describe('machine install <id> --refresh', () => {
+  it('rewrites an installed item after a y, and says what it did', async () => {
+    const r = await run(['suspend', '--refresh'], INSTALLED);
+    expect(r.code).toBe(0);
+    expect(r.asked).toHaveLength(1);
+    expect(r.out).toContain('refreshed and verified');
+    expect(r.fake.calls.filter((c) => c.includes('visudo -c -f'))).toHaveLength(1);
+  });
+
+  it('--json: one document with action refresh', async () => {
+    const r = await run(['suspend', '--refresh', '--yes', '--json'], INSTALLED);
+    expect(JSON.parse(r.out)).toMatchObject({ id: 'suspend', action: 'refresh', state: 'installed', applied: true, supportedHere: true });
+  });
+
+  it('--refresh --dry-run needs no terminal and runs no sudo', async () => {
+    const r = await run(['suspend', '--refresh', '--dry-run'], { ...INSTALLED, tty: false });
+    expect(r.code).toBe(0);
+    expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual([]);
+  });
+});
+
+describe('the lifecycle contract, through the command, for EVERY installable of the registry', () => {
+  it.each(INSTALLABLES.map((d) => [d.id] as const))('%s: status, install, status, refresh, remove, status', async (id) => {
+    const fake = fakeInstall({ platform: (INSTALLABLES.find((d) => d.id === id) as Installable).platforms[0] as string });
+    const go = (args: string[]) => cli(dir, ['install', ...args], undefined, { install: fake.env, ask: async () => 'y' });
+    const before = await go([id, '--check']);
+    expect(before.code, before.err).toBe(1);
+    expect(before.out).toContain('not installed');
+    const installed = await go([id, '--yes']);
+    expect(installed.code, installed.err).toBe(0);
+    const after = await go([id, '--check']);
+    expect(after.code, after.out + after.err).toBe(0);
+    const refreshed = await go([id, '--refresh', '--yes']);
+    expect(refreshed.code, refreshed.err).toBe(0);
+    expect(refreshed.out).toContain('refreshed and verified');
+    expect((await go([id, '--check'])).code).toBe(0);
+    const removed = await go([id, '--remove', '--yes']);
+    expect(removed.code, removed.err).toBe(0);
+    expect(removed.out).toContain('status after the removal: not installed');
+    const gone = await go([id, '--check']);
+    expect(gone.code).toBe(1);
+    expect(gone.out).toContain('not installed');
+    // The list shows the same state.
+    const list = await go(['status', '--json']);
+    expect((JSON.parse(list.out) as { installables: Array<{ id: string; state: string }> }).installables.find((d) => d.id === id)?.state).toBe('not installed');
+  });
+});
+
+describe('machine status: the line of the installed items', () => {
+  const statusWith = async (o: FakeInstallOptions) => {
+    expect((await cli(dir, ['init', '--name', 'desktop'])).code).toBe(0);
+    const fake = fakeInstall(o);
+    const r = await cli(dir, ['status'], undefined, { install: fake.env });
+    return { ...r, fake };
+  };
+
+  it('prints "installed: suspend (up to date)" and runs no sudo', async () => {
+    const r = await statusWith({ ...INSTALLED, tty: false });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^installed: suspend \(up to date\)$/m);
+    expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual([]);
+  });
+
+  it('an outdated item is a warning with the command', async () => {
+    const old = (shipped.files[0] as { content: string }).content.replace('3 s', '9 s');
+    const r = await statusWith({ ...INSTALLED, userFiles: { '/usr/local/bin/machine-suspend': old } });
+    expect(r.out).toMatch(/^\[warn\] installed: suspend is outdated: run machine install suspend --refresh$/m);
+  });
+
+  it('prints nothing about it when no item is installed, and in --json lists the installed ones only', async () => {
+    const none = await statusWith({});
+    expect(none.out).not.toMatch(/installed: suspend/);
+    const dir2 = join(root, 'cfg2');
+    expect((await cli(dir2, ['init', '--name', 'desktop'])).code).toBe(0);
+    const json = await cli(dir2, ['status', '--json'], undefined, { install: fakeInstall(INSTALLED).env });
+    expect((JSON.parse(json.out) as { installedItems?: unknown }).installedItems).toEqual([{ id: 'suspend', state: 'installed' }]);
+    const json0 = await cli(dir2, ['status', '--json'], undefined, { install: fakeInstall({}).env });
+    expect(JSON.parse(json0.out)).not.toHaveProperty('installedItems');
   });
 });
