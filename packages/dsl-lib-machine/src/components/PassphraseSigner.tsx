@@ -1,12 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { adminKeyHint, signRegistration, unlockAdminKey, type UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
+import React, { useEffect, useRef, useState } from 'react';
+import { adminKeyHint, signRegistration, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { INPUT, TEXT_ERROR } from '../lib/styleTokens.js';
+import { adminKeyHolder } from '../lib/adminKeyHolder.js';
+import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { PassphraseHint } from './PassphraseHint.js';
+import { UnlockedKeyBar } from './UnlockedKeyBar.js';
+import { useAdminKey } from './useAdminKey.js';
 
 // Where the secrets live (decision D25): the passphrase only in the input element, read at submit and cleared at once; the
-// unlocked key only in a ref, as a NON-EXTRACTABLE CryptoKey. Neither goes through $setVar, $publishOutput, a URL, a prop
-// callback or an Error message. onUnlocked hands over the public key id and an isLocked probe, never the key.
+// unlocked key only in the module-level holder (adminKeyHolder, decision 92), as a NON-EXTRACTABLE CryptoKey, shared with the Allow flows. Neither goes
+// through $setVar, $publishOutput, a URL, a prop callback or an Error message. onUnlocked hands over the public key id and an isLocked probe, never the key.
 
 type RegistrationBody = Parameters<typeof signRegistration>[0];
 type SignedRegistration = Awaited<ReturnType<typeof signRegistration>>;
@@ -16,7 +20,7 @@ export interface PassphraseSignerProps {
   keyFileUrl: string;
   /** The registration to sign once unlocked. */
   registration: RegistrationBody;
-  /** How long the key stays unlocked, in seconds (default 300). */
+  /** How long the key stays unlocked, in seconds. Absent: the person's choice "Keep unlocked for" (default 5 minutes; with "Ask every time", the key is locked right after the signature). */
   unlockSeconds?: number;
   /** Called with the signed registration. Signing never leaves the page: posting the result is the caller's job. */
   onSigned?: (signed: SignedRegistration) => void;
@@ -24,7 +28,8 @@ export interface PassphraseSignerProps {
   onUnlocked?: (info: { keyId: string; publicKey: string; isLocked: () => boolean }) => void;
 }
 
-const DEFAULT_UNLOCK_SECONDS = 300;
+/** "Ask every time" still needs the key between the Unlock and the Sign click of this component: it is kept this long, and locked after the signature. */
+const ASK_WINDOW_MS = 5 * 60_000;
 
 async function readKeyFile(url: string): Promise<string> {
   let response: Response;
@@ -41,16 +46,14 @@ async function readKeyFile(url: string): Promise<string> {
 
 /**
  * Unlocks the admin key with a passphrase typed in the page and signs a registration with it, in the browser.
- * The key is wiped on "Lock now", when the unlock time runs out and when the component unmounts.
+ * The key is wiped on "Lock now", when the idle time runs out and when the page goes. Unmounting the component does NOT lock it (decision 92).
  *
  * @registryCategory composite
  * @registryTags passphrase signing admin
  */
-export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEFAULT_UNLOCK_SECONDS, onSigned, onUnlocked }: PassphraseSignerProps) {
+export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSigned, onUnlocked }: PassphraseSignerProps) {
   const passphraseInput = useRef<HTMLInputElement>(null);
-  const keyRef = useRef<UnlockedAdminKey | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [unlocked, setUnlocked] = useState(false);
+  const { unlocked } = useAdminKey();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | undefined>(undefined);
@@ -81,19 +84,6 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
     };
   }, [keyFileUrl]);
 
-  const lock = useCallback(() => {
-    if (timer.current !== null) {
-      clearTimeout(timer.current);
-    }
-    timer.current = null;
-    keyRef.current?.lock();
-    keyRef.current = null;
-    setUnlocked(false);
-  }, []);
-
-  // Tab close and page change: the key is dropped with the component.
-  useEffect(() => lock, [lock]);
-
   const unlock = async () => {
     const passphrase = passphraseInput.current?.value ?? '';
     if (passphrase === '') {
@@ -105,12 +95,8 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
     try {
       const file = await readKeyFile(keyFileUrl);
       const key = await unlockAdminKey(file, passphrase, { extractable: false });
-      keyRef.current = key;
-      if (timer.current !== null) {
-        clearTimeout(timer.current);
-      }
-      timer.current = setTimeout(lock, unlockSeconds * 1000);
-      setUnlocked(true);
+      const ms = unlockSeconds !== undefined ? unlockSeconds * 1000 : adminKeyHolder.keepChoice() === 'ask' ? ASK_WINDOW_MS : undefined;
+      adminKeyHolder.hold(key, ms === undefined ? {} : { ms });
       onUnlocked?.({ keyId: key.keyId, publicKey: key.publicKey, isLocked: () => key.isLocked() });
     } catch (e) {
       setError((e as Error).message);
@@ -123,14 +109,21 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
   };
 
   const sign = async () => {
-    const key = keyRef.current;
+    const key = adminKeyHolder.current();
     if (key === null) {
       setError('The admin key is locked: unlock it with the passphrase first.');
       return;
     }
     setError(null);
     try {
-      onSigned?.(await signRegistration(registration, key.privateKey));
+      const signed = await signRegistration(registration, key.privateKey);
+      // A signature is a use: the idle time restarts. "Ask every time": the key does not outlive this signature.
+      if (adminKeyHolder.keepChoice() === 'ask') {
+        adminKeyHolder.lock();
+      } else {
+        adminKeyHolder.touch();
+      }
+      onSigned?.(signed);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -139,9 +132,11 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
   return (
     <div className="flex flex-col gap-3">
       {unlocked ? (
-        <div className="flex gap-2">
-          <ButtonAction label="Sign" variant="primary" onClick={sign} />
-          <ButtonAction label="Lock now" variant="secondary" onClick={lock} />
+        <div className="flex flex-col gap-2">
+          <UnlockedKeyBar />
+          <div>
+            <ButtonAction label="Sign" variant="primary" onClick={sign} />
+          </div>
         </div>
       ) : (
         <form
@@ -160,6 +155,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds = DEF
             {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}
             <input ref={passphraseInput} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase" autoComplete="current-password" className={INPUT} />
           </label>
+          <KeepUnlockedSelect busy={busy} />
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />
           </div>

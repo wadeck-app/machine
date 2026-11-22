@@ -16,7 +16,9 @@ import {
   verifyBody,
   type LifetimeInput,
   type PolicyEdit,
+  type UnlockedAdminKey,
 } from '@wadeck-app/machine-webcrypto';
+import { adminKeyHolder } from './adminKeyHolder.js';
 import type { PolicyBody, PolicyEntry, SignedNoticeRecipients, SignedPolicy } from '@wadeck-app/machine-core';
 import { appFetcher, elevate } from './shellApi.js';
 
@@ -229,12 +231,45 @@ async function checkDelivery(context: AllowContext): Promise<DeliveryCheck> {
 }
 
 /** The encrypted key file, as the backend keeps it (sensitive GET: call it after the PIN). */
-async function readKeyFile(api: AllowApi): Promise<string> {
+export async function readKeyFile(api: AllowApi): Promise<string> {
   const answer = await api.get('/admin-key');
   if (!isObject(answer) || typeof answer['file'] !== 'string') {
     throw unexpected('the admin key file');
   }
   return answer['file'];
+}
+
+export const LOCKED_MESSAGE = 'The admin key is locked (it locked itself after its idle time, or Lock now was pressed): type the admin passphrase to unlock it again. Nothing was signed';
+
+/**
+ * Runs `use` with the admin key (decision 92). `passphrase` null: the key held in this page (adminKeyHolder), which is refused with the fix when locked; the idle
+ * timeout restarts. A passphrase: the encrypted key file is read, unlocked as a NON-EXTRACTABLE key, and after a successful `use` KEPT by the holder for the
+ * chosen duration ("ask every time": locked at once). A failed `use` always locks the key it unlocked. Either way the key is not locked by the caller: the
+ * holder owns it, so nothing posted to the network ever depends on it. The passphrase is never stored: it is a parameter of this call only.
+ */
+export async function withAdminKey<T>(api: AllowApi, passphrase: string | null, use: (key: UnlockedAdminKey) => Promise<T>): Promise<T> {
+  if (passphrase === null) {
+    const held = adminKeyHolder.current();
+    if (held === null) {
+      throw new Error(LOCKED_MESSAGE);
+    }
+    const out = await use(held);
+    adminKeyHolder.touch();
+    return out;
+  }
+  const file = await readKeyFile(api);
+  const key = await unlockAdminKey(file, passphrase, { extractable: false });
+  let done = false;
+  try {
+    const out = await use(key);
+    done = true;
+    return out;
+  } finally {
+    // Kept for the idle time, or locked: before anything goes to the network, whatever happened.
+    if (!done || !adminKeyHolder.hold(key)) {
+      key.lock();
+    }
+  }
 }
 
 type AllowPost = { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
@@ -276,23 +311,16 @@ function assertPinnedKey(key: { keyId: string; publicKey: string }, context: All
  * Unlock the admin key with `passphrase`, sign the policy (and its inbox document for another machine), lock the key, and post the signed documents.
  * Throws with the actionable sentence of whoever refused: wrong passphrase, another key than the pinned one, the daemon (stale base, mode local ...).
  */
-export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string, now: number, onSigned?: () => void): Promise<AllowResult> {
+export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string | null, now: number, onSigned?: () => void): Promise<AllowResult> {
   const prepared = await prepareAllow(context, change, now);
   if (!prepared.changed) {
     throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
   }
   const check = await checkDelivery(context);
-  const file = await readKeyFile(api);
-
-  const key = await unlockAdminKey(file, passphrase, { extractable: false });
-  let body: AllowPost;
-  try {
+  const body = await withAdminKey(api, passphrase, async (key) => {
     assertPinnedKey(key, context);
-    body = await signDocuments(key, context, prepared.body, now, check);
-  } finally {
-    // Locked before anything goes to the network: a failure of the post never leaves an unlocked key behind.
-    key.lock();
-  }
+    return signDocuments(key, context, prepared.body, now, check);
+  });
   // The signature is made and the key is locked: the one event of the progress that happens before the network.
   onSigned?.();
   return postSigned(api, context, body);
@@ -365,24 +393,19 @@ export async function prepareBatch(groups: BatchGroupInput[], lifetime: Lifetime
  * told, and the policies are posted. A machine whose post fails is reported as `failed` and does not hide the others. A machine whose entries were
  * all allowed already is `unchanged` (nothing signed for it). Throws when nothing at all is to be signed, or on a wrong passphrase.
  */
-export async function signAndSubmitBatch(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
+export async function signAndSubmitBatch(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string | null, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
   const plans = await planBatch(groups, lifetime, now);
   const changed = plans.filter((p) => p.body !== undefined);
   if (changed.length === 0) {
     throw new Error(`the selected commands are already allowed on ${plans.map((p) => `"${p.context.target.name}"`).join(', ')}: nothing to sign`);
   }
-  const file = await readKeyFile(api);
-  const key = await unlockAdminKey(file, passphrase, { extractable: false });
   const bodies = new Map<BatchPlan, AllowPost>();
-  try {
+  await withAdminKey(api, passphrase, async (key) => {
     for (const plan of changed) {
       assertPinnedKey(key, plan.context);
       bodies.set(plan, await signDocuments(key, plan.context, plan.body as PolicyBody, now, (plan as { check: DeliveryCheck }).check));
     }
-  } finally {
-    // Locked before anything goes to the network, whatever happened.
-    key.lock();
-  }
+  });
   onSigned?.();
   return Promise.all(
     plans.map(async (plan): Promise<BatchOutcome> => {

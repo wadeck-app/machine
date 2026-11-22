@@ -1,5 +1,6 @@
 import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
+import { adminKeyHolder } from './adminKeyHolder.js';
 import { deliveryNotice, loadContext, loadContexts, prepareAllow, prepareBatch, readAdminKeyHint, signAndSubmitAllow, signAndSubmitBatch, type AllowApi, type AllowContext } from './allowFlow.js';
 
 // The flow of the Allow button without React: context, preview, unlock, signature, post. Real crypto (each unlock derives 600 000 PBKDF2 rounds:
@@ -528,4 +529,73 @@ describe('prepareBatch (what the form checks before the passphrase is typed)', (
   it('refuses a command the policy cannot hold, naming the machine', async () => {
     await expect(prepareBatch([{ context: context(), entries: [{ shell: SHELL, command: `x${String.fromCharCode(233)}` }] }], {}, NOW)).rejects.toThrow(/on "desktop": command.*printable ASCII/s);
   });
+});
+
+describe('the held key (decision 92): one unlock serves the next signatures, the passphrase is not asked again', () => {
+  const keyReads = (api: ReturnType<typeof stubApi>) => api.sent.filter((s) => s.method === 'GET' && s.path === '/admin-key').length;
+
+  it('the first Allow with the passphrase keeps the key (default 5 min); the next ones pass null: no key file read, no unlock, a valid policy, the idle timeout restarts', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api, context(), { shell: SHELL, command: 'ls' }, PASSPHRASE, NOW);
+    const held = adminKeyHolder.current();
+    expect(held).not.toBeNull();
+    expect(held?.isLocked()).toBe(false);
+    expect(keyReads(api)).toBe(1);
+    const firstExpiry = adminKeyHolder.snapshot().expiresAt as number;
+    await new Promise((r) => setTimeout(r, 15));
+
+    const ctx = context({ current: signedBase(1, [{ shell: SHELL, command: 'ls' }]) });
+    const answer = await signAndSubmitAllow(api, ctx, { shell: SHELL, command: 'uptime' }, null, NOW);
+    expect(answer).toMatchObject({ ok: true });
+    expect(keyReads(api)).toBe(1);
+    expect(adminKeyHolder.current()).toBe(held);
+    expect(adminKeyHolder.snapshot().expiresAt as number).toBeGreaterThan(firstExpiry);
+    const policy = (api.sent.filter((s) => s.method === 'POST')[1]?.body as { policy: SignedPolicy }).policy;
+    expect(applyPolicy({ version: 1, highestSeen: 1 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW, targetUuid: SELF }).ok).toBe(true);
+    adminKeyHolder.reset();
+  }, 120_000);
+
+  it('"ask every time": the key is locked after the signature and nothing is kept', async () => {
+    adminKeyHolder.reset();
+    adminKeyHolder.setKeep('ask');
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api, context(), { shell: SHELL, command: 'ls' }, PASSPHRASE, NOW);
+    expect(adminKeyHolder.current()).toBeNull();
+    expect(adminKeyHolder.snapshot().unlocked).toBe(false);
+    adminKeyHolder.reset();
+  }, 120_000);
+
+  it('null while locked says so with the fix, and nothing is read, signed or posted', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await expect(signAndSubmitAllow(api, context(), { shell: SHELL, command: 'ls' }, null, NOW)).rejects.toThrow(/admin key is locked.*type the admin passphrase/is);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('a wrong passphrase keeps nothing', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await expect(signAndSubmitAllow(api, context(), { shell: SHELL, command: 'ls' }, 'not the passphrase', NOW)).rejects.toThrow();
+    expect(adminKeyHolder.current()).toBeNull();
+  }, 120_000);
+
+  it('a key unlocked from ANOTHER key file than the pinned one is refused and not kept', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await expect(signAndSubmitAllow(api, context({ adminKeyId: 'f'.repeat(32) }), { shell: SHELL, command: 'ls' }, PASSPHRASE, NOW)).rejects.toThrow(/not the admin key pinned/);
+    expect(adminKeyHolder.current()).toBeNull();
+    expect(api.sent.filter((s) => s.method === 'POST')).toEqual([]);
+  }, 120_000);
+
+  it('the batch signs with the held key too (null): no key file read, one policy posted per machine', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    await signAndSubmitAllow(api, context(), { shell: SHELL, command: 'ls' }, PASSPHRASE, NOW);
+    expect(keyReads(api)).toBe(1);
+    const outcomes = await signAndSubmitBatch(api, [{ context: context({ current: signedBase(1, [{ shell: SHELL, command: 'ls' }]) }), entries: [{ shell: SHELL, command: 'a' }, { shell: SHELL, command: 'b' }] }], {}, null, NOW);
+    expect(outcomes).toMatchObject([{ status: 'posted' }]);
+    expect(keyReads(api)).toBe(1);
+    adminKeyHolder.reset();
+  }, 120_000);
 });

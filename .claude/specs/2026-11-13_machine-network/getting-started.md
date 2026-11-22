@@ -184,6 +184,16 @@ machine status                                shows "policy mode"; machine list 
 - `machine admin allow <machine>` cannot tell that the target is in mode `local` (a peer's mode is not published): the target refuses the document and says why. Allow on the target itself: `machine policy allow`.
 - Forgotten local passphrase: the list stays as it is. To go back to the admin: stop the daemon (`machine startup disable`, or `orch kill machine`), delete `policy-mode.json` and `policy-local.json` in the config dir and `_secrets_/policy.key.json`, start the daemon, then have the admin sign a policy (`machine admin allow <this machine> -- <command>`).
 
+## Not retyping the passphrase in the browser (decision 92)
+
+On the Requests page the admin passphrase is typed once: the unlocked key is then kept in the memory of the page and the next Allow signs with ONE click (the dialog still shows machine, shell, exact command and lifetime; there is no passphrase field).
+
+- A green bar shows `Admin key unlocked, locks in 4:32` and `Lock now`. Every signature restarts the countdown.
+- `Keep unlocked for` sits next to the passphrase field: 1, 5 (default), 15, 30 min, or `Ask every time` (keeps nothing, the passphrase is asked for each signature).
+- It locks on: `Lock now`, no signing for the chosen time, closing or reloading the tab. Moving between the pages of the module does not lock it.
+- Nothing is stored: not the passphrase, not the key, not the choice (it is back to 5 min after a reload). The CLI is not affected: it always asks the passphrase.
+- Risk while unlocked: a hostile script in the page could sign; see threat T-63. Use `Ask every time` or 1 min on a shared screen.
+
 ## Requests: what peers asked and could not run (decisions 73 and 74)
 
 A command a peer sends that is not allowed is refused and written to the audit log of the target. `machine requests` reads that log; nothing is run or changed.

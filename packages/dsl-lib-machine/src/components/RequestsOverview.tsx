@@ -7,6 +7,7 @@ import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../li
 import { AllowStyleSwitch } from './AllowStyleSwitch.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
 import { useAllowStyle } from './useAllowStyle.js';
@@ -48,7 +49,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
 
 /**
  * The held and refused requests of ALL the trusted machines, with a machine filter. This machine's own come from the page; the others are loaded on
- * demand by the admin machine: the page signs a read-only requests-list per peer IN THE BROWSER with the admin key (passphrase asked each time, never
+ * demand by the admin machine: the page signs a read-only requests-list per peer IN THE BROWSER with the admin key (passphrase asked once, then the unlocked key is kept in the page's memory for the chosen idle time: decision 92; the passphrase is never
  * stored), the daemon forwards it, the peer answers (same authorization as the CLI `machine requests <machine>`). Allow signs the policy of the machine the row
  * belongs to. Deny of a request held elsewhere is sent by the daemon of this machine to the machine that holds it (it must name this machine among its notice recipients).
  *
@@ -108,7 +109,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
     }
   };
 
-  const confirm = (take: () => string) => {
+  const confirm = (take: () => string | null) => {
     if (self === undefined) {
       return;
     }
@@ -142,6 +143,8 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
   return (
     <div className="flex flex-col gap-4">
+      {/* The admin key kept in this page (decision 92): the countdown and Lock now, on every Allow path of the page. Nothing while the key is locked. */}
+      <UnlockedKeyBar />
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-48">
           <FieldSelect label="Machine" value={filter} onChange={setFilter} options={options} />

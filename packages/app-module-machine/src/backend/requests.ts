@@ -265,7 +265,7 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
       : `The audit log is broken at line ${chain.line}: ${chain.message}. The ${chain.trustedEntries} entries before it are verified; ${chain.unverifiedEntries} after it are shown as unverified and never listed as pending${chain.unreadableLines > 0 ? `; ${chain.unreadableLines} line(s) cannot be read at all` : ''}. Keep a copy of the file for the investigation, then move it away to start a new log (the daemon refuses to start on a broken log).`,
     emptyMessage: answer.logPresent ? 'No request is waiting for approval' : 'No audit log yet: no request ever reached this machine',
     remoteNote: answer.adminKeyHere
-      ? 'The requests of the other trusted machines are loaded below: it asks the admin passphrase each time (it signs a read-only request in your browser, nothing is stored and nothing is run).'
+      ? 'The requests of the other trusted machines are loaded below: it asks the admin passphrase (once while the key stays unlocked in this page; it signs a read-only request in your browser, nothing is stored and nothing is run).'
       : remote.note,
     notes,
   };

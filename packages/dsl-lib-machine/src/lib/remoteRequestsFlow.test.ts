@@ -1,5 +1,6 @@
 import { encryptAdminKey, generateSigningKeyPair, verifyRequestsList } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
+import { adminKeyHolder } from './adminKeyHolder.js';
 import type { AllowApi } from './allowFlow.js';
 import { elevateForRemote, fetchRemoteRequests } from './remoteRequestsFlow.js';
 
@@ -103,6 +104,29 @@ describe('fetchRemoteRequests', () => {
   it('no peer to ask is an error that says so, before the key is read', async () => {
     const api = stubApi(() => page('x'));
     await expect(fetchRemoteRequests(api, { selfUuid: SELF, peers: [], passphrase: PASSPHRASE, now: NOW })).rejects.toThrow(/no other trusted machine/);
+    expect(api.sent).toEqual([]);
+  });
+});
+
+describe('fetchRemoteRequests with the held key (decision 92)', () => {
+  it('passphrase null signs with the held key: no key file read, no unlock, and a valid document per peer', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi(() => page('thinkcentre'));
+    await fetchRemoteRequests(api, { selfUuid: SELF, peers: [first], passphrase: PASSPHRASE, now: NOW });
+    expect(adminKeyHolder.current()).not.toBeNull();
+    const api2 = stubApi(() => page('thinkcentre'));
+    const out = await fetchRemoteRequests(api2, { selfUuid: SELF, peers: [first], passphrase: null, now: NOW });
+    expect(out[0]?.ok).toBe(true);
+    expect(api2.sent.filter((s) => s.method === 'GET')).toEqual([]);
+    const body = api2.sent.find((s) => s.method === 'POST')?.body as { request: unknown };
+    expect(verifyRequestsList(body.request, { adminPublicKey: admin.publicKey, selfUuid: THINK, peerUuid: SELF, now: NOW })).toMatchObject({ ok: true });
+    adminKeyHolder.reset();
+  }, 120_000);
+
+  it('null while locked says so with the fix and sends nothing', async () => {
+    adminKeyHolder.reset();
+    const api = stubApi(() => page('thinkcentre'));
+    await expect(fetchRemoteRequests(api, { selfUuid: SELF, peers: [first], passphrase: null, now: NOW })).rejects.toThrow(/admin key is locked/i);
     expect(api.sent).toEqual([]);
   });
 });

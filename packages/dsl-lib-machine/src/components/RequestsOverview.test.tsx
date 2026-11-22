@@ -107,6 +107,35 @@ describe('the passphrase hint of the load dialog', () => {
   });
 });
 
+describe('the admin key kept in the page (decision 92)', () => {
+  it('after the first load the page shows "Admin key unlocked, locks in ..." with Lock now, and the NEXT load asks no passphrase and signs with the held key', async () => {
+    render(<RequestsOverview {...props()} />);
+    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    await load();
+    const bar = await screen.findByTestId('unlocked-key-bar');
+    expect(bar).toHaveTextContent(/Admin key unlocked, locks in [45]:[0-9]{2}/);
+    expect(within(bar).getByRole('button', { name: 'Lock now' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reload the other machines' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByLabelText('Admin passphrase')).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Sign and load' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 5000 });
+    const posts = calls.filter((c) => c.url === 'POST /api/modules/machine/requests/remote');
+    expect(posts).toHaveLength(4);
+    for (const p of posts) {
+      const { machine, request } = p.body as { machine: string; request: unknown };
+      expect(verifyRequestsList(request, { adminPublicKey: admin.publicKey, selfUuid: machine, peerUuid: SELF, now: Math.floor(Date.now() / 1000) })).toMatchObject({ ok: true });
+    }
+
+    // Lock now brings the passphrase prompt back.
+    await userEvent.click(within(screen.getByTestId('unlocked-key-bar')).getByRole('button', { name: 'Lock now' }));
+    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Reload the other machines' }));
+    expect(await within(await screen.findByRole('dialog')).findByLabelText('Admin passphrase')).toBeInTheDocument();
+  }, 120_000);
+});
+
 describe('this machine only (before anything is loaded)', () => {
   it('shows its own held and refused requests, and the machine filter lists every trusted machine', () => {
     render(<RequestsOverview {...props()} />);

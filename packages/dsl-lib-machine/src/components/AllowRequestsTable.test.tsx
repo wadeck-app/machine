@@ -2,6 +2,7 @@ import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, signPolicy
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 
 // The Allow button of the Requests page, driven like a user: click, read the confirmation, type the passphrase, confirm. The app-core shell is a stub on
@@ -257,6 +258,78 @@ describe('signing in the page', () => {
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Delivered directly to desktop (installed, 0.4 s)');
     expect(status).toHaveClass('border-success');
+  }, 120_000);
+});
+
+describe('the admin key kept in the page (decision 92)', () => {
+  it('the passphrase is typed ONCE: the second Allow signs with one click, no passphrase field, the summary still names what is signed; nothing is written to the browser storage', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const cookie = vi.spyOn(document, 'cookie', 'set');
+    const open = vi.fn();
+    vi.stubGlobal('indexedDB', { open });
+    try {
+      render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Allow df -h' }));
+      await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+      expect(screen.getByLabelText('Keep unlocked for')).toHaveValue('5');
+      await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+      expect(screen.queryByText('df -h')).toBeNull();
+
+      // Second Allow: the dialog has no field, shows the exact command, and ONE click signs.
+      await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/Admin key unlocked, locks in/);
+      expect(within(dialog).queryByLabelText('Admin passphrase')).toBeNull();
+      expect(within(dialog).getByText('ls')).toBeInTheDocument();
+      expect(within(dialog).getAllByText('desktop').length).toBeGreaterThan(0);
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Allow and sign' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 5000 });
+      const posts = calls.filter((c) => c.url === 'POST /api/modules/machine/allow').map((c) => (c.body as { policy: SignedPolicy }).policy);
+      expect(posts).toHaveLength(2);
+      for (const policy of posts) {
+        expect(applyPolicy({ version: 0, highestSeen: 0 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: Math.floor(Date.now() / 1000) + 5, targetUuid: SELF }).ok).toBe(true);
+      }
+      expect(posts[1]?.body.defaults).toEqual([{ shell: 'sh', command: 'ls' }]);
+      expect(JSON.stringify(calls)).not.toContain(PASSPHRASE);
+
+      // Nothing about the key or the choice reached any browser storage.
+      expect(setItem).not.toHaveBeenCalled();
+      expect(cookie).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(window.localStorage.length).toBe(0);
+      expect(window.sessionStorage.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      setItem.mockRestore();
+      cookie.mockRestore();
+    }
+  }, 120_000);
+
+  it('"Ask every time" is the old behaviour: the second Allow asks the passphrase again', async () => {
+    adminKeyHolder.setKeep('ask');
+    render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow df -h' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    expect(await screen.findByLabelText('Admin passphrase')).toBeInTheDocument();
+    expect(adminKeyHolder.current()).toBeNull();
+  }, 120_000);
+
+  it('a key that locked itself between the dialog and the click says so and shows the passphrase field again', async () => {
+    render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow df -h' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
+    await screen.findByText(/Admin key unlocked/);
+    // Lock now from the dialog: the field is back, nothing is posted.
+    await userEvent.click(screen.getByRole('button', { name: 'Lock now' }));
+    expect(screen.getByLabelText('Admin passphrase')).toBeInTheDocument();
+    expect(calls.filter((c) => c.url === 'POST /api/modules/machine/allow')).toHaveLength(1);
   }, 120_000);
 });
 

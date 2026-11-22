@@ -85,7 +85,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const words = resolution.ok ? lifetimeWords(resolution.limits(nowSeconds), nowSeconds) : null;
 
-  const confirm = (take: () => string) => {
+  const confirm = (take: () => string | null) => {
     if (phase.kind !== 'ready') {
       return;
     }

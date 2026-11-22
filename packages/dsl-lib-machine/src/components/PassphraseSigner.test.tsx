@@ -2,6 +2,7 @@ import { encryptAdminKey, generateSigningKeyPair, keyId, verifyRegistration, typ
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { PassphraseSigner } from './PassphraseSigner.js';
 
 const PASSPHRASE = 'correct horse battery staple 7391';
@@ -130,21 +131,40 @@ describe('PassphraseSigner', () => {
   }, 120_000);
 
   it('locks itself when the unlock time runs out', async () => {
-    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} unlockSeconds={0.3} />);
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} unlockSeconds={1} />);
     await unlock();
+    // The unlock must have happened first (the field is on screen while the key is still being derived): then the time runs out.
+    await screen.findByRole('button', { name: 'Sign' }, { timeout: 20_000 });
     await waitFor(() => expect(screen.getByLabelText('Admin passphrase')).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.queryByRole('button', { name: 'Sign' })).toBeNull();
   }, 120_000);
 
-  it('locks on unmount (page change)', async () => {
+  it('does NOT lock on unmount (decision 92): the key survives a navigation inside the SPA, and the next mount signs without asking the passphrase again', async () => {
     const onUnlocked = vi.fn();
-    const { unmount } = render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} onUnlocked={onUnlocked} unlockSeconds={300} />);
+    const onSigned = vi.fn();
+    const first = render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} onUnlocked={onUnlocked} unlockSeconds={300} />);
     await unlock();
     await screen.findByRole('button', { name: 'Sign' });
     const { isLocked } = onUnlocked.mock.calls[0]![0] as { isLocked: () => boolean };
     expect(isLocked()).toBe(false);
-    unmount();
-    expect(isLocked()).toBe(true);
+    first.unmount();
+    expect(isLocked()).toBe(false);
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} onSigned={onSigned} />);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+    expect(screen.getByText(/Admin key unlocked, locks in/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Sign' }));
+    await waitFor(() => expect(onSigned).toHaveBeenCalledTimes(1));
+  }, 120_000);
+
+  it('"Ask every time" (and no explicit duration): the key is locked again right after the signature', async () => {
+    adminKeyHolder.setKeep('ask');
+    const onSigned = vi.fn();
+    render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} onSigned={onSigned} />);
+    await unlock();
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign' }));
+    await waitFor(() => expect(onSigned).toHaveBeenCalledTimes(1));
+    expect(adminKeyHolder.current()).toBeNull();
+    expect(screen.getByLabelText('Admin passphrase')).toBeInTheDocument();
   }, 120_000);
 
   it('rejects a body machine-webcrypto refuses, naming the field, and calls nothing', async () => {

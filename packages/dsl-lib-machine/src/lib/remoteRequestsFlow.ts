@@ -1,5 +1,5 @@
-import { newRequestsListBody, signRequestsList, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
-import type { AllowApi } from './allowFlow.js';
+import { newRequestsListBody, signRequestsList } from '@wadeck-app/machine-webcrypto';
+import { withAdminKey, type AllowApi } from './allowFlow.js';
 
 // The requests of the OTHER machines on the Requests page (decision 74), without React. Only the admin machine can ask a peer: the request is signed with
 // the ADMIN key, here, in the browser, one document per peer (each names its target). The passphrase is a parameter of `fetchRemoteRequests` only: never
@@ -49,24 +49,17 @@ export function elevateForRemote(api: AllowApi): Promise<void> {
   return api.elevate();
 }
 
-export async function fetchRemoteRequests(api: AllowApi, input: { selfUuid: string; peers: RemotePeer[]; passphrase: string; now: number }): Promise<RemoteOutcome[]> {
+export async function fetchRemoteRequests(api: AllowApi, input: { selfUuid: string; peers: RemotePeer[]; passphrase: string | null; now: number }): Promise<RemoteOutcome[]> {
   if (input.peers.length === 0) {
     throw new Error('there is no other trusted machine to ask: see the Machines page, or `machine list`');
   }
-  const answer = await api.get('/admin-key');
-  if (!isObject(answer) || typeof answer['file'] !== 'string') {
-    throw new Error('the module backend sent an unexpected answer for the admin key file: the page and the module are not the same version: update the machine module (`app-core-cli update`) and reload the page');
-  }
-  const key = await unlockAdminKey(answer['file'], input.passphrase, { extractable: false });
   const requests: Array<{ peer: RemotePeer; request: unknown }> = [];
-  try {
+  // Passphrase null: the key held in this page (decision 92). Otherwise unlocked here, kept for the chosen idle time or locked before anything goes to the network.
+  await withAdminKey(api, input.passphrase, async (key) => {
     for (const peer of input.peers) {
       requests.push({ peer, request: await signRequestsList(newRequestsListBody({ source: input.selfUuid, target: peer.uuid, limit: GROUPS_ASKED, now: input.now }), key.privateKey) });
     }
-  } finally {
-    // Locked before anything goes to the network.
-    key.lock();
-  }
+  });
   const outcomes: RemoteOutcome[] = [];
   for (const { peer, request } of requests) {
     try {

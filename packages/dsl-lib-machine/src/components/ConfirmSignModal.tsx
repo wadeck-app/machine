@@ -1,6 +1,10 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { adminKeyHolder } from '../lib/adminKeyHolder.js';
+import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { PassphraseHint } from './PassphraseHint.js';
+import { UnlockedKeyBar } from './UnlockedKeyBar.js';
+import { useAdminKey } from './useAdminKey.js';
 import { INPUT, MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
@@ -9,6 +13,9 @@ import { INPUT, MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ER
 //
 // The passphrase lives in the input element only. `onConfirm` receives `take`, which returns it ONCE and empties the field at the same time, so the
 // string exists only in the caller's local variable for the duration of one signature. It is never kept in state or a ref, and never shown.
+//
+// While the admin key is unlocked in this page (adminKeyHolder, decision 92) there is no passphrase field: the summary and the warning stay, one click
+// signs, and `take()` returns null (the signing code then uses the held key).
 
 export interface ConfirmSignModalProps {
   /** Text, or text with machine names (MachineName). */
@@ -30,8 +37,8 @@ export interface ConfirmSignModalProps {
   hint?: string | null;
   /** False: nothing to sign (already allowed, load failure): the dialog only informs, with a Close button. */
   needsPassphrase?: boolean;
-  /** Called with `take` when the person confirms; `take()` returns the typed passphrase and empties the field. */
-  onConfirm: (take: () => string) => void;
+  /** Called with `take` when the person confirms; `take()` returns the typed passphrase and empties the field, or null when the admin key is unlocked in this page (no passphrase then). */
+  onConfirm: (take: () => string | null) => void;
   onCancel: () => void;
 }
 
@@ -42,6 +49,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
+  const { unlocked } = useAdminKey();
 
   // Cancel is the default focus: Enter without thinking must never sign.
   useEffect(() => {
@@ -77,6 +85,12 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
     if (busy) {
       return;
     }
+    // Unlocked: nothing to type. The key is read again at signing time; an expiry in between is said by the signing code, with the fix.
+    if (adminKeyHolder.current() !== null) {
+      setLocalError(null);
+      onConfirm(() => null);
+      return;
+    }
     const input = passphrase.current;
     if (input === null || input.value === '') {
       setLocalError('Enter the admin passphrase to sign. Nothing was signed.');
@@ -109,17 +123,21 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
         {children}
         {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}
         <form className="flex flex-col gap-3" onSubmit={submit}>
-          {needsPassphrase && (
+          {needsPassphrase && unlocked && <UnlockedKeyBar />}
+          {needsPassphrase && !unlocked && (
             <>
               {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
               {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
               <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
-            <PassphraseHint hint={hint} />
-            <label className="flex flex-col gap-1 text-sm">
-              Admin passphrase
-              {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
-              <input ref={passphrase} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase-confirm" autoComplete="current-password" disabled={busy} className={INPUT} />
-            </label>
+              <PassphraseHint hint={hint} />
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="flex min-w-48 flex-1 flex-col gap-1 text-sm">
+                  Admin passphrase
+                  {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
+                  <input ref={passphrase} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase-confirm" autoComplete="current-password" disabled={busy} className={INPUT} />
+                </label>
+              <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
+              </div>
             </>
           )}
           {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
