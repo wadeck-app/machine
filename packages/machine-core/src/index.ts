@@ -66,7 +66,7 @@ export {
   type SignedPolicy,
   type TypedEntry,
 } from './policy.js';
-export { DEFAULT_APPLY_WINDOW_SECONDS, entryFromText, nextPolicyBody, type EditContext, type PolicyChange, type PolicyEdit } from './policyEdit.js';
+export { DEFAULT_APPLY_WINDOW_SECONDS, POLICY_MAX_ENTRIES_PER_LIST, entryFromText, nextPolicyBody, nextPolicyBodyMany, type EditContext, type PolicyChange, type PolicyEdit, type PolicyEditMany } from './policyEdit.js';
 export { describeLimits, limitsEqual, MAX_LIFETIME_SECONDS, MAX_TIMES, parseLifetime, type LifetimeInput, type LifetimeLimits } from './lifetime.js';
 export { canonicalEntry, hasAngleBracket, looksLikePlaceholder, matchTemplate, MAX_PLACEHOLDERS, MAX_TEXT, parseEntryText, parseTemplate, templateExamples, type EntryText, type Template, type TemplateMatch, type Token } from './template.js';
 export { canonicalType, checkValue, describeType, parseTypeSpec, sampleValues, TemplateError, type Platform, type TypeSpec, type ValueCheck } from './typedParams.js';

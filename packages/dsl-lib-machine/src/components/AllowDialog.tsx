@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FieldSelect, FieldText } from '@wadeck-app/dsl-ui';
 import { loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
 import type { ProgressEvent } from '../lib/allowProgress.js';
-import { LIFETIME_PRESETS, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
-import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { LifetimePicker } from './LifetimePicker.js';
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import type { PendingRequestRow } from './AllowRequestsTable.js';
@@ -34,12 +33,6 @@ export interface AllowDialogProps {
    */
   onEvent?: (event: AllowDialogEvent) => void;
 }
-
-const OPTIONS = LIFETIME_PRESETS.map((p) => ({ value: p.kind, label: p.label }));
-const CUSTOM_KINDS = [
-  { value: 'duration', label: 'A duration' },
-  { value: 'calls', label: 'A number of calls' },
-];
 
 /** The sentence under the lifetime summary: what the entry lets EVERY trusted peer do, and until when. */
 function warningText(machineName: string, peerText: string, words: string): React.ReactNode {
@@ -91,7 +84,6 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
   const resolution = useMemo(() => lifetimeInput(choice), [choice]);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const words = resolution.ok ? lifetimeWords(resolution.limits(nowSeconds), nowSeconds) : null;
-  const problem = !resolution.ok && choice.kind === 'custom' && choice.customText.trim() !== '' ? resolution.message : null;
 
   const confirm = (take: () => string) => {
     if (phase.kind !== 'ready') {
@@ -176,24 +168,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
       onConfirm={confirm}
       onCancel={onClose}
     >
-      <div className="flex flex-col gap-2" data-testid="lifetime-picker">
-        <FieldSelect label="How long is it allowed?" value={choice.kind} onChange={(v) => setChoice({ ...choice, kind: v as LifetimeKind })} options={OPTIONS} disabled={phase.kind === 'signing'} />
-        {choice.kind === 'custom' && (
-          <div className="flex flex-wrap items-end gap-2">
-            <FieldSelect label="Limit by" value={choice.customKind} onChange={(v) => setChoice({ ...choice, customKind: v as 'calls' | 'duration', customText: '' })} options={CUSTOM_KINDS} disabled={phase.kind === 'signing'} />
-            <FieldText
-              label={choice.customKind === 'calls' ? 'Number of calls (1 to 10000)' : 'Duration (like 30m, 2h, 7d; at most 365d)'}
-              name="machine-allow-lifetime"
-              autoComplete="off"
-              value={choice.customText}
-              disabled={phase.kind === 'signing'}
-              onChange={(v) => setChoice({ ...choice, customText: v })}
-            />
-          </div>
-        )}
-        {problem !== null && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
-        {choice.kind === 'once' && <div className={TEXT_MUTED_SM}>The command runs once, then the next identical request is refused (or held) again.</div>}
-      </div>
+      <LifetimePicker choice={choice} onChange={setChoice} busy={phase.kind === 'signing'} />
     </ConfirmSignModal>
   );
 }

@@ -1,8 +1,8 @@
-import { entryFromText as coreEntryFromText, buildDocument as coreBuildDocument, documentId as coreDocumentId, nextPolicyBody as coreNext, signPolicy as coreSignPolicy, DOCUMENT_RETENTION_SECONDS as CORE_RETENTION, verifyInboxDocument as coreVerifyDocument, verifyDocumentEnvelope, type PolicyBody, type PolicyChange, type PolicyEntry } from '@wadeck-app/machine-core';
+import { entryFromText as coreEntryFromText, buildDocument as coreBuildDocument, documentId as coreDocumentId, nextPolicyBody as coreNext, nextPolicyBodyMany as coreMany, signPolicy as coreSignPolicy, DOCUMENT_RETENTION_SECONDS as CORE_RETENTION, verifyInboxDocument as coreVerifyDocument, verifyDocumentEnvelope, type PolicyBody, type PolicyChange, type PolicyEntry } from '@wadeck-app/machine-core';
 import { keyId as coreKeyId } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import { newPair, prng, uuid, webKeyFrom } from '../test-support/kit.js';
-import { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody } from './policyEdit.js';
+import { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, nextPolicyBodyMany } from './policyEdit.js';
 import { sealedPolicyDocument, signPolicy } from './documents.js';
 
 // The browser builds the next policy itself (the page must not sign a body that a hostile backend wrote), so its rule is a copy of machine-core
@@ -212,5 +212,30 @@ describe('sealedPolicyDocument: the inbox document of a policy the page signed (
     if (!edit.changed) throw new Error('expected a change');
     const signed = coreSignPolicy(edit.body, admin.privateKeyPkcs8);
     await expect(sealedPolicyDocument(signed, signed.body.notAfter + 1, await webKeyFrom(admin), newPair().publicKey)).rejects.toThrow(/sign it again/);
+  });
+});
+
+describe('nextPolicyBodyMany (copy of machine-core): several entries in one version', () => {
+  const cases: Array<[string, PolicyBody | undefined, PolicyEntry[]]> = [
+    ['three new entries on a policy', base(3, [entry('sh', 'ls')]), [entry('sh', 'a'), entry('sh', 'b'), entry('cmd', 'c')]],
+    ['from nothing', undefined, [entry('sh', 'a'), entry('sh', 'b')]],
+    ['a duplicate and an entry already there', base(3, [entry('sh', 'ls')]), [entry('sh', 'a'), entry('sh', 'a'), entry('sh', 'ls')]],
+    ['everything already allowed', base(3, [entry('sh', 'ls')]), [entry('sh', 'ls')]],
+    ['a renewal with other limits', base(3, [entry('sh', 'ls', { maxCalls: 1 })]), [entry('sh', 'ls', { maxCalls: 4 }), entry('sh', 'a')]],
+    ['a typed entry among exact ones', base(3, [entry('sh', 'ls')]), [entry('sh', 'a'), coreEntryFromText('orch logs <j:name>', 'sh')]],
+  ];
+  it.each(cases)('%s: same result as machine-core', (_name, current, entries) => {
+    expect(nextPolicyBodyMany(current, ctx, entries)).toEqual(coreMany(current, ctx, entries));
+  });
+
+  it('refuses an entry of the typed grammar and a full list with machine-core wording', () => {
+    const messageOf = (run: () => unknown): string => { try { run(); } catch (e) { return (e as Error).message; } return ''; };
+    const bad = [entry('sh', 'a'), entry('sh', 'echo <oops>')];
+    expect(messageOf(() => nextPolicyBodyMany(base(1, []), ctx, bad))).not.toBe('');
+    expect(messageOf(() => nextPolicyBodyMany(base(1, []), ctx, bad))).toBe(messageOf(() => coreMany(base(1, []), ctx, bad)));
+    const full = base(1, Array.from({ length: 199 }, (_, i) => entry('sh', `c${i}`)));
+    const two = [entry('sh', 'x'), entry('sh', 'y')];
+    expect(messageOf(() => nextPolicyBodyMany(full, ctx, two))).toMatch(/at most 200/);
+    expect(messageOf(() => nextPolicyBodyMany(full, ctx, two))).toBe(messageOf(() => coreMany(full, ctx, two)));
   });
 });

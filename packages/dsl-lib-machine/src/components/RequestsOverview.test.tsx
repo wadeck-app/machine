@@ -293,3 +293,66 @@ describe('request notices (reported by other machines, no passphrase)', () => {
     expect(screen.getByRole('listitem', { name: 'Held request uptime' })).toBeInTheDocument();
   });
 });
+
+describe('the Allow style (Dialog | Inline), kept in this browser', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it('is INLINE by default: the switch says so, every held card has a checkbox, nothing is written until a choice is made', () => {
+    render(<RequestsOverview {...props()} />);
+    const group = screen.getByRole('radiogroup', { name: 'Allow style' });
+    expect(within(group).getByRole('radio', { name: 'Inline' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('checkbox', { name: 'Select ls' })).toBeInTheDocument();
+    expect(window.localStorage.getItem('machine:requests:allowStyle')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('choosing Dialog stores the choice, removes the checkboxes, and is remembered by the next page', async () => {
+    const { unmount } = render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('radio', { name: 'Dialog' }));
+    expect(window.localStorage.getItem('machine:requests:allowStyle')).toBe('dialog');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    unmount();
+    render(<RequestsOverview {...props()} />);
+    expect(screen.getByRole('radio', { name: 'Dialog' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('in Dialog style Allow opens the confirmation dialog', async () => {
+    window.localStorage.setItem('machine:requests:allowStyle', 'dialog');
+    render(<RequestsOverview {...props()} />);
+    await userEvent.click(within(screen.getByRole('listitem', { name: 'Held request ls' })).getByRole('button', { name: 'Allow' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('a stored value that is not Dialog or Inline is reported in one line, Inline is used, and picking replaces it', async () => {
+    window.localStorage.setItem('machine:requests:allowStyle', 'sideways');
+    render(<RequestsOverview {...props()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/"sideways" is not Dialog or Inline/);
+    expect(screen.getByRole('radio', { name: 'Inline' })).toHaveAttribute('aria-checked', 'true');
+    await userEvent.click(screen.getByRole('radio', { name: 'Dialog' }));
+    expect(window.localStorage.getItem('machine:requests:allowStyle')).toBe('dialog');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a storage that refuses the choice is reported, and the choice still applies to this page', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+    render(<RequestsOverview {...props()} />);
+    await userEvent.click(screen.getByRole('radio', { name: 'Dialog' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/storage refused the choice \(quota exceeded\)/);
+    expect(screen.getByRole('radio', { name: 'Dialog' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('a storage that cannot be read is reported', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied');
+    });
+    render(<RequestsOverview {...props()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/cannot be read \(denied\)/);
+  });
+});

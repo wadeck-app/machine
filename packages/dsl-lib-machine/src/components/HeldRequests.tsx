@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import type { AllowStyle } from '../lib/allowStyle.js';
 import { AllowDialog } from './AllowDialog.js';
+import { BatchAllowBar, type BatchItem } from './BatchAllowBar.js';
 import { DenyForm } from './DenyForm.js';
+import { InlineAllow } from './InlineAllow.js';
 import { MachineName } from './MachineName.js';
 import { RequestProgressCard } from './RequestProgressCard.js';
 import { useAllowProgress } from './useAllowProgress.js';
@@ -50,6 +53,11 @@ export interface HeldRequestsProps {
    * @ctxDefault $refresh
    */
   onRefresh?: (source?: string) => Promise<void>;
+  /**
+   * How Allow asks: in a confirmation `dialog` (default), or `inline` in the card, with a checkbox per card and a sticky bar that signs the selected requests
+   * with one passphrase (one policy per machine). The Requests page passes the person's choice (AllowStyleSwitch).
+   */
+  allowStyle?: AllowStyle;
 }
 
 const NO_ROWS: HeldRequestRow[] = [];
@@ -72,8 +80,12 @@ function leftText(seconds: number): string {
  * @registryCategory composite
  * @registryTags requests allow deny hold policy admin
  */
-export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }: HeldRequestsProps) {
+export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, allowStyle = 'dialog' }: HeldRequestsProps) {
+  const inline = allowStyle === 'inline';
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
+  // Inline style: the card whose form is open, and the cards ticked for one batch.
+  const [inlineOpen, setInlineOpen] = useState<string | null>(null);
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   // The one short line of a Deny (nothing else shows it). An Allow has none: its card says everything.
@@ -106,6 +118,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
   const leave = (row: HeldRequestRow) => {
     setAnswered((prev) => new Set(prev).add(row.id));
     setSelected(null);
+    setInlineOpen(null);
     setDenying(null);
     // The page's own data catches up (the request leaves the held list); a failure is reported by the page's notifier.
     void onRefresh?.('requests');
@@ -141,6 +154,25 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
     leave(row);
   };
 
+  const machineOf = (r: HeldRequestRow) => r.machine ?? (allow as NonNullable<typeof allow>).machine;
+  const progressFor = (r: HeldRequestRow) => (event: Parameters<typeof progress.handle>[3]) => progress.handle(r, machineOf(r), r.machine?.uuid ?? 'self', event);
+  // The ticked requests that can still be allowed (no progress yet, not expired), in the order of the list.
+  const batchItems: Array<BatchItem<HeldRequestRow>> = inline
+    ? visible
+        .filter((r) => ticked.has(r.id) && progress.entries[r.id] === undefined && (r.canAllow ?? canAllow) && r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt) > 0)
+        .map((r) => ({ row: r, machine: machineOf(r), machineRef: r.machine?.uuid ?? 'self' }))
+    : [];
+  const tick = (id: string, on: boolean) =>
+    setTicked((prev) => {
+      const next = new Set(prev);
+      if (on) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+
   if (visible.length === 0 && result === null) {
     return null;
   }
@@ -166,7 +198,15 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
                 now={progress.now}
                 canRetry={rowCanAllow}
                 {...(warning !== undefined ? { warning } : {})}
-                onRetry={() => setSelected(r)}
+                onRetry={() => {
+                  if (inline) {
+                    // The card goes back to the held request with its form open: a failure before the signature stays in the form.
+                    progress.dismiss(r.id);
+                    setInlineOpen(r.id);
+                    return;
+                  }
+                  setSelected(r);
+                }}
                 onDismiss={() => {
                   progress.dismiss(r.id);
                   // A request that ended left the daemon's list (the rows of the page may not have caught up yet); one whose signature or delivery failed is still held: its card comes back.
@@ -180,6 +220,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
           return (
             <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
               <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
                 <span className={`text-sm ${TEXT_MUTED_SM}`}>
                   From <MachineName name={r.peerText} />
                   {r.machine !== undefined && (
@@ -206,18 +247,31 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh }:
                   Reachability: {reach.text}
                 </span>
               )}
-              {left > 0 && denying !== r.id && (
+              {left > 0 && denying !== r.id && !(inline && inlineOpen === r.id) && (
                 // The buttons say "Allow" and "Deny": the group tells which request they answer (the design-system button has no aria-label).
                 <div role="group" aria-label={`Answer ${r.command}`} className="flex flex-wrap items-center gap-2">
-                  {rowCanAllow ? <ButtonAction label="Allow" variant="primary" size="sm" onClick={() => setSelected(r)} /> : <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>}
+                  {rowCanAllow ? <ButtonAction label="Allow" variant="primary" size="sm" onClick={() => (inline ? setInlineOpen(r.id) : setSelected(r))} /> : <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>}
                   <ButtonAction label="Deny" variant="danger-outline" size="sm" onClick={() => setDenying(r.id)} />
                 </div>
+              )}
+              {left > 0 && inline && inlineOpen === r.id && rowCanAllow && api.current !== null && (
+                <InlineAllow key={r.id} row={r} machine={machineOf(r)} api={api.current} onEvent={progressFor(r)} onClose={() => setInlineOpen(null)} onDone={(answer) => allowed(r, answer)} />
               )}
               {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={() => denied(r)} />}
             </li>
           );
         })}
       </ul>
+      {inline && batchItems.length > 0 && api.current !== null && (
+        <BatchAllowBar
+          key={batchItems.map((i) => i.row.id).join('|')}
+          items={batchItems}
+          api={api.current}
+          onEvent={(item, event) => progress.handle(item.row, item.machine, item.machineRef, event)}
+          onDone={(item, answer) => allowed(item.row, answer)}
+          onClear={() => setTicked(new Set())}
+        />
+      )}
       {selected !== null && (selected.machine !== undefined || allow !== undefined) && api.current !== null && (
         <AllowDialog
           key={selected.id}

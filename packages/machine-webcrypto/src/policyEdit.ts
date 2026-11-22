@@ -163,3 +163,53 @@ export function nextPolicyBody(current: PolicyBody | undefined, ctx: EditContext
   return { changed: true, body, added, removed, renewed, peersWithOwnList: Object.keys(peers), seededPeerList, leftOut };
 }
 
+/** The most entries one list of a policy holds (policy.ts `assertPolicyBody`): a batch that would exceed it is refused before anything is signed. */
+export const POLICY_MAX_ENTRIES_PER_LIST = 200;
+
+export type PolicyEditMany =
+  | { changed: false; reason: 'already-allowed' }
+  | {
+      changed: true;
+      /** ONE version (current + 1) holding every entry that was new or renewed. */
+      body: PolicyBody;
+      added: PolicyEntry[];
+      renewed: Array<{ before: PolicyEntry; after: PolicyEntry }>;
+      /** Entries left out because the list already holds them (or an identical one given earlier in the same batch). */
+      skipped: PolicyEntry[];
+      peersWithOwnList: string[];
+    };
+
+/**
+ * Several allows of the DEFAULT list in one version: the owner selects several requests and signs once. Entries are applied in order; one that is
+ * already allowed (or a duplicate of an earlier one) is skipped; one the typed grammar refuses throws and nothing is built (no entry is signed without
+ * the others). More entries than a list can hold throws with the numbers.
+ */
+export function nextPolicyBodyMany(current: PolicyBody | undefined, ctx: EditContext, entries: PolicyEntry[]): PolicyEditMany {
+  if (entries.length === 0) {
+    throw new Error('nothing to sign: give at least one entry');
+  }
+  let working = current;
+  const added: PolicyEntry[] = [];
+  const renewed: Array<{ before: PolicyEntry; after: PolicyEntry }> = [];
+  const skipped: PolicyEntry[] = [];
+  let peersWithOwnList: string[] = [];
+  for (const entry of entries) {
+    const edit = nextPolicyBody(working, ctx, { kind: 'allow', entry });
+    if (!edit.changed) {
+      skipped.push(entry);
+      continue;
+    }
+    working = edit.body;
+    added.push(...edit.added);
+    renewed.push(...edit.renewed);
+    peersWithOwnList = edit.peersWithOwnList;
+  }
+  if (working === undefined || working === current) {
+    return { changed: false, reason: 'already-allowed' };
+  }
+  if (working.defaults.length > POLICY_MAX_ENTRIES_PER_LIST) {
+    throw new Error(`the list would hold ${working.defaults.length} entries and a policy list holds at most ${POLICY_MAX_ENTRIES_PER_LIST}: allow fewer requests at once, or remove entries first (machine allowed lists them). Nothing was signed`);
+  }
+  const base = current?.version ?? 0;
+  return { changed: true, body: { ...working, version: base + 1, baseVersion: base }, added, renewed, skipped, peersWithOwnList };
+}

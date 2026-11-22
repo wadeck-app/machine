@@ -1,6 +1,6 @@
 import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
-import { deliveryNotice, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext } from './allowFlow.js';
+import { deliveryNotice, loadContext, loadContexts, prepareAllow, prepareBatch, readAdminKeyHint, signAndSubmitAllow, signAndSubmitBatch, type AllowApi, type AllowContext } from './allowFlow.js';
 
 // The flow of the Allow button without React: context, preview, unlock, signature, post. Real crypto (each unlock derives 600 000 PBKDF2 rounds:
 // a few in this file, not more). The server side is a recording stub, so the tests can read EVERY byte that leaves the page.
@@ -32,13 +32,19 @@ function stubApi(answers: { get?: Record<string, unknown>; post?: unknown } = {}
     async get(path: string) {
       sent.push({ method: 'GET', path });
       const answer = answers.get?.[path];
-      if (answer instanceof Error) throw answer;
-      if (answer === undefined) throw new Error(`no stub for GET ${path}`);
+      if (answer instanceof Error) {
+        throw answer;
+      }
+      if (answer === undefined) {
+        throw new Error(`no stub for GET ${path}`);
+      }
       return answer;
     },
     async post(path: string, body: unknown) {
       sent.push({ method: 'POST', path, body });
-      if (answers.post instanceof Error) throw answers.post;
+      if (answers.post instanceof Error) {
+        throw answers.post;
+      }
       return answers.post ?? { ok: true, target: { uuid: SELF, name: 'desktop' }, version: 1, delivery: 'installed' };
     },
   };
@@ -167,7 +173,9 @@ describe('signAndSubmitAllow', () => {
     expect(JSON.stringify(body.document)).not.toContain('uptime');
     const verified = verifyInboxDocument(body.document, { adminPublicKey: admin.publicKey, selfUuid: PEER, now: NOW, identityPrivateKeyPkcs8: targetKeys.privateKeyPkcs8 });
     expect(verified.ok).toBe(true);
-    if (verified.ok && verified.kind === 'policy') expect(verified.policy).toEqual(body.policy);
+    if (verified.ok && verified.kind === 'policy') {
+      expect(verified.policy).toEqual(body.policy);
+    }
     expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
   }, 120_000);
 
@@ -351,5 +359,173 @@ describe('readAdminKeyHint (the hint is shown before the passphrase is typed)', 
   it('an answer that is not a key file says the page and the module differ, with the fix', async () => {
     const api = stubApi({ get: { '/admin-key': { nope: 1 } } });
     await expect(readAdminKeyHint(api)).rejects.toThrow(/unexpected answer.*update the machine module/s);
+  });
+});
+
+describe('loadContexts (one PIN for every machine of a batch)', () => {
+  it('asks for the PIN ONCE, then reads the context of each machine, in order', async () => {
+    const laptop = context({ target: { uuid: PEER, name: 'laptop' }, toSelf: false, delivery: 'inbox' });
+    const api = stubApi({ get: { [`/allow/${SELF}`]: context(), [`/allow/${PEER}`]: laptop } });
+    const loaded = await loadContexts(api, [SELF, PEER]);
+    expect(api.elevated).toBe(1);
+    expect(api.sent.map((s) => s.path)).toEqual([`/allow/${SELF}`, `/allow/${PEER}`]);
+    expect(loaded.map((c) => c.target.name)).toEqual(['desktop', 'laptop']);
+  });
+
+  it('a cancelled PIN reads nothing', async () => {
+    const api = stubApi();
+    api.elevate = async () => { throw new Error('Sensitive action cancelled: PIN not entered'); };
+    await expect(loadContexts(api, [SELF, PEER])).rejects.toThrow('PIN not entered');
+    expect(api.sent).toEqual([]);
+  });
+});
+
+describe('signAndSubmitBatch (several requests, ONE unlock, one policy per machine)', () => {
+  const targetKeys = generateSigningKeyPair();
+  const laptopContext = (over: Partial<AllowContext> = {}) => context({ target: { uuid: PEER, name: 'laptop', identityPublicKey: targetKeys.publicKey }, toSelf: false, delivery: 'inbox', source: 'the last one signed here', noticeRecipients: { selfUuid: SELF, current: null }, ...over });
+  const answerFor = (uuid: string, name: string, delivery: 'installed' | 'inbox') => ({ ok: true, target: { uuid, name }, version: 1, delivery });
+  const batchApi = (post?: (path: string, body: unknown) => unknown) => {
+    const api = stubApi({ get: { '/admin-key': { file: keyFile } } });
+    api.post = async (path: string, body: unknown) => {
+      api.sent.push({ method: 'POST', path, body });
+      const policy = (body as { policy: SignedPolicy }).policy;
+      const answer = post?.(path, body);
+      if (answer instanceof Error) {
+        throw answer;
+      }
+      return answer ?? (policy.body.target === SELF ? answerFor(SELF, 'desktop', 'installed') : answerFor(PEER, 'laptop', 'inbox'));
+    };
+    return api;
+  };
+  const posts = (api: ReturnType<typeof stubApi>) => api.sent.filter((s) => s.method === 'POST').map((s) => s.body as { policy: SignedPolicy; document?: unknown });
+  const keyReads = (api: ReturnType<typeof stubApi>) => api.sent.filter((s) => s.method === 'GET' && s.path === '/admin-key').length;
+  const E = (command: string, shell = SHELL) => ({ shell, command });
+
+  it('three entries of one machine: ONE post holding the three entries in one version, the key file read once, machine-core accepts it, no passphrase leaves', async () => {
+    const api = batchApi();
+    const outcomes = await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls'), E('df -h'), E('uptime')] }], { times: '1' }, PASSPHRASE, NOW);
+    expect(posts(api)).toHaveLength(1);
+    const policy = (posts(api)[0] as { policy: SignedPolicy }).policy;
+    expect(policy.body.version).toBe(1);
+    expect(policy.body.defaults).toEqual([
+      { shell: SHELL, command: 'ls', limits: { maxCalls: 1 } },
+      { shell: SHELL, command: 'df -h', limits: { maxCalls: 1 } },
+      { shell: SHELL, command: 'uptime', limits: { maxCalls: 1 } },
+    ]);
+    expect(applyPolicy({ version: 0, highestSeen: 0 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW, targetUuid: SELF }).ok).toBe(true);
+    expect(keyReads(api)).toBe(1);
+    expect(outcomes).toMatchObject([{ status: 'posted', machine: { uuid: SELF, name: 'desktop' }, result: { delivery: 'installed' } }]);
+    expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
+  }, 120_000);
+
+  it('two machines: two policies (each for its own target, the inbox one sealed with its notice list) in ONE unlock', async () => {
+    const api = batchApi();
+    const outcomes = await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }, { context: laptopContext(), entries: [E('hostname', 'cmd'), E('whoami', 'cmd')] }], {}, PASSPHRASE, NOW);
+    const [first, second] = posts(api) as Array<{ policy: SignedPolicy; document?: unknown; noticeRecipients?: unknown }>;
+    expect(posts(api)).toHaveLength(2);
+    expect(first?.policy.body.target).toBe(SELF);
+    expect(first?.document).toBeUndefined();
+    expect(second?.policy.body.target).toBe(PEER);
+    expect(second?.policy.body.defaults.map((e) => e.command)).toEqual(['hostname', 'whoami']);
+    expect(verifyInboxDocument(second?.document, { adminPublicKey: admin.publicKey, selfUuid: PEER, now: NOW, identityPrivateKeyPkcs8: targetKeys.privateKeyPkcs8 }).ok).toBe(true);
+    expect(second?.noticeRecipients).toBeDefined();
+    expect(keyReads(api)).toBe(1);
+    expect(outcomes.map((o) => o.status)).toEqual(['posted', 'posted']);
+    expect(JSON.stringify(api.sent)).not.toContain(PASSPHRASE);
+  }, 120_000);
+
+  it('the same text twice is ONE entry', async () => {
+    const api = batchApi();
+    await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls'), E('ls'), E('df -h')] }], {}, PASSPHRASE, NOW);
+    expect((posts(api)[0] as { policy: SignedPolicy }).policy.body.defaults.map((e) => e.command)).toEqual(['ls', 'df -h']);
+  }, 120_000);
+
+  it('an entry the policy cannot hold on ONE machine signs NOTHING for the others: the key file is not even read', async () => {
+    const api = batchApi();
+    const error = await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }, { context: laptopContext(), entries: [E(`echo caf${String.fromCharCode(233)}`)] }], {}, PASSPHRASE, NOW).catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/laptop.*printable ASCII/s);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('a list that would exceed the limit is refused with the numbers, nothing read or signed', async () => {
+    const api = batchApi();
+    const full = Array.from({ length: 199 }, (_v, i) => ({ shell: SHELL, command: `cmd-${i}` }));
+    const ctx = context({ current: signedBase(1, full as PolicyBody['defaults']) });
+    const error = await signAndSubmitBatch(api, [{ context: ctx, entries: [E('a1'), E('a2')] }], {}, PASSPHRASE, NOW).catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/201 entries.*at most 200/s);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('a base the pinned key did not sign is refused for the whole batch, before anything is read', async () => {
+    const api = batchApi();
+    const forged = signedBase(1, [], {}, generateSigningKeyPair());
+    await expect(signAndSubmitBatch(api, [{ context: context({ current: forged }), entries: [E('ls')] }], {}, PASSPHRASE, NOW)).rejects.toThrow(/not signed by the admin key pinned/);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('another machine without its identity key: refused before the unlock, naming the machine', async () => {
+    const api = batchApi();
+    await expect(signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }, { context: laptopContext({ target: { uuid: PEER, name: 'laptop' } }), entries: [E('ls')] }], {}, PASSPHRASE, NOW)).rejects.toThrow(/identity key of "laptop"/);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('a wrong passphrase posts nothing and does not echo it', async () => {
+    const api = batchApi();
+    const wrong = 'definitely not the passphrase 123';
+    const error = await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }], {}, wrong, NOW).catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/wrong passphrase or damaged key file/);
+    expect((error as Error).message).not.toContain(wrong);
+    expect(posts(api)).toHaveLength(0);
+  }, 120_000);
+
+  it('one machine failing does not hide the other: both outcomes are reported, and the signature is announced before any post', async () => {
+    const events: string[] = [];
+    const api = batchApi((_path, body) => {
+      events.push('post');
+      return (body as { policy: SignedPolicy }).policy.body.target === PEER ? new Error('the relay refused the inbox document: try again in a minute') : undefined;
+    });
+    const outcomes = await signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }, { context: laptopContext(), entries: [E('ls')] }], {}, PASSPHRASE, NOW, () => events.push('signed'));
+    expect(events[0]).toBe('signed');
+    expect(outcomes).toMatchObject([{ status: 'posted', machine: { name: 'desktop' } }, { status: 'failed', machine: { name: 'laptop' }, message: 'the relay refused the inbox document: try again in a minute' }]);
+  }, 120_000);
+
+  it('an entry already allowed on one machine: that machine is reported unchanged (nothing signed for it), the other is posted', async () => {
+    const api = batchApi();
+    const ctx = context({ current: signedBase(1, [{ shell: SHELL, command: 'ls' }]) });
+    const outcomes = await signAndSubmitBatch(api, [{ context: ctx, entries: [E('ls')] }, { context: laptopContext(), entries: [E('ls')] }], {}, PASSPHRASE, NOW);
+    expect(outcomes).toMatchObject([{ status: 'unchanged', machine: { name: 'desktop' }, message: expect.stringMatching(/already allowed on "desktop"/) }, { status: 'posted', machine: { name: 'laptop' } }]);
+    expect(posts(api)).toHaveLength(1);
+  }, 120_000);
+
+  it('everything already allowed: nothing to sign, the key file is not read', async () => {
+    const api = batchApi();
+    const ctx = context({ current: signedBase(1, [{ shell: SHELL, command: 'ls' }]) });
+    await expect(signAndSubmitBatch(api, [{ context: ctx, entries: [E('ls')] }], {}, PASSPHRASE, NOW)).rejects.toThrow(/already allowed.*nothing to sign/s);
+    expect(api.sent).toEqual([]);
+  });
+
+  it('an invalid lifetime is refused with the parser message before the key is read', async () => {
+    const api = batchApi();
+    await expect(signAndSubmitBatch(api, [{ context: context(), entries: [E('ls')] }], { times: '0' }, PASSPHRASE, NOW)).rejects.toThrow();
+    expect(api.sent).toEqual([]);
+  });
+
+  it('an older module backend (no notice list in the context): the result of that machine says the list was not sent', async () => {
+    const api = batchApi();
+    const { noticeRecipients: _omit, ...older } = laptopContext();
+    const outcomes = await signAndSubmitBatch(api, [{ context: older as AllowContext, entries: [E('ls')] }], {}, PASSPHRASE, NOW);
+    expect(outcomes[0]).toMatchObject({ status: 'posted', result: { noticeRecipients: 'skipped' } });
+  }, 120_000);
+});
+
+describe('prepareBatch (what the form checks before the passphrase is typed)', () => {
+  it('says per machine whether anything would be signed, and reads nothing', async () => {
+    const ctx = context({ current: signedBase(1, [{ shell: SHELL, command: 'ls' }]) });
+    const prepared = await prepareBatch([{ context: ctx, entries: [{ shell: SHELL, command: 'ls' }] }, { context: context({ target: { uuid: PEER, name: 'laptop' } }), entries: [{ shell: SHELL, command: 'ls' }] }], {}, NOW);
+    expect(prepared).toEqual([{ machine: { uuid: SELF, name: 'desktop' }, changed: false }, { machine: { uuid: PEER, name: 'laptop' }, changed: true }]);
+  });
+
+  it('refuses a command the policy cannot hold, naming the machine', async () => {
+    await expect(prepareBatch([{ context: context(), entries: [{ shell: SHELL, command: `x${String.fromCharCode(233)}` }] }], {}, NOW)).rejects.toThrow(/on "desktop": command.*printable ASCII/s);
   });
 });

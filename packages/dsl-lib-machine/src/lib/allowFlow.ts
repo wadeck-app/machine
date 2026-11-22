@@ -2,6 +2,7 @@ import {
   commandTextProblem,
   nextNoticeRecipientsBody,
   nextPolicyBody,
+  nextPolicyBodyMany,
   parseLifetime,
   sealedNoticeRecipientsDocument,
   sealedPolicyDocument,
@@ -130,7 +131,9 @@ const unexpected = (what: string): Error =>
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 function asContext(raw: unknown): AllowContext {
-  if (!isObject(raw) || raw['ok'] !== true || !isObject(raw['target']) || typeof raw['target']['uuid'] !== 'string' || typeof raw['target']['name'] !== 'string') throw unexpected('the policy context');
+  if (!isObject(raw) || raw['ok'] !== true || !isObject(raw['target']) || typeof raw['target']['uuid'] !== 'string' || typeof raw['target']['name'] !== 'string') {
+    throw unexpected('the policy context');
+  }
   const current = raw['current'];
   const signed = isObject(current) && isObject(current['body']) && typeof current['signature'] === 'string';
   if (typeof raw['adminKeyId'] !== 'string' || typeof raw['adminPublicKey'] !== 'string' || typeof raw['toSelf'] !== 'boolean' || (raw['delivery'] !== 'install' && raw['delivery'] !== 'inbox') || (current !== null && !signed)) {
@@ -157,24 +160,44 @@ export async function loadContext(api: AllowApi, machineUuid: string): Promise<A
   return asContext(await api.get(`/allow/${encodeURIComponent(machineUuid)}`));
 }
 
+/** What needs no key: the shell is one of the four, the text of the command is one the policy can hold. */
+function assertChange(shell: string, command: string): void {
+  if (!(SHELLS as readonly string[]).includes(shell)) {
+    throw new Error(`shell must be one of ${SHELLS.join(', ')} (got ${JSON.stringify(shell)})`);
+  }
+  const problem = commandTextProblem(command);
+  if (problem !== undefined) {
+    throw new Error(`command ${problem.replace(/^command /, '')}`);
+  }
+}
+
+/** The signed policy the next one is edited from must be one the pinned admin key signed, for this machine: a base a backend wrote is never used. */
+async function assertBase(context: AllowContext): Promise<void> {
+  const { current } = context;
+  if (current === null) {
+    return;
+  }
+  if (!(await verifyBody(POLICY_DOMAIN, current as never, context.adminPublicKey))) {
+    throw new Error(`the policy sent as the current one of "${context.target.name}" is not signed by the admin key pinned on this machine, so it is not used as a base (a base the admin never signed could carry entries the admin never saw). Reload the page; if it persists, check the policy files of the machine and the module`);
+  }
+  if (current.body.target !== context.target.uuid) {
+    throw new Error(`the policy sent as the current one is written for another machine (${current.body.target}), not for "${context.target.name}": it is not used as a base. Reload the page`);
+  }
+}
+
 /**
  * The next policy, computed here, from a base this page verified. No secret involved: it is what the confirmation shows. Throws a sentence naming the
  * problem (a command the policy cannot hold, a base the pinned key did not sign).
  */
 export async function prepareAllow(context: AllowContext, change: AllowChange, now: number): Promise<AllowPreview> {
-  if (!(SHELLS as readonly string[]).includes(change.shell)) throw new Error(`shell must be one of ${SHELLS.join(', ')} (got ${JSON.stringify(change.shell)})`);
-  const problem = commandTextProblem(change.command);
-  if (problem !== undefined) throw new Error(`command ${problem.replace(/^command /, '')}`);
+  assertChange(change.shell, change.command);
+  await assertBase(context);
   const { current } = context;
-  if (current !== null) {
-    if (!(await verifyBody(POLICY_DOMAIN, current as never, context.adminPublicKey))) {
-      throw new Error(`the policy sent as the current one of "${context.target.name}" is not signed by the admin key pinned on this machine, so it is not used as a base (a base the admin never signed could carry entries the admin never saw). Reload the page; if it persists, check the policy files of the machine and the module`);
-    }
-    if (current.body.target !== context.target.uuid) throw new Error(`the policy sent as the current one is written for another machine (${current.body.target}), not for "${context.target.name}": it is not used as a base. Reload the page`);
-  }
   const limits = change.lifetime === undefined ? undefined : parseLifetime(change.lifetime, now);
   const edit: PolicyEdit = nextPolicyBody(current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, { kind: 'allow', entry: { shell: change.shell as PolicyEntry['shell'], command: change.command, ...(limits === undefined ? {} : { limits }) } });
-  if (!edit.changed) return { changed: false, reason: edit.reason };
+  if (!edit.changed) {
+    return { changed: false, reason: edit.reason };
+  }
   return {
     changed: true,
     fromVersion: edit.body.baseVersion,
@@ -186,15 +209,10 @@ export async function prepareAllow(context: AllowContext, change: AllowChange, n
   };
 }
 
-/**
- * Unlock the admin key with `passphrase`, sign the policy (and its inbox document for another machine), lock the key, and post the signed documents.
- * Throws with the actionable sentence of whoever refused: wrong passphrase, another key than the pinned one, the daemon (stale base, mode local ...).
- */
-export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string, now: number, onSigned?: () => void): Promise<AllowResult> {
-  const prepared = await prepareAllow(context, change, now);
-  if (!prepared.changed) {
-    throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
-  }
+type DeliveryCheck = { targetKey: string | undefined; stored: SignedNoticeRecipients | null };
+
+/** What must be true BEFORE any key is unlocked for a policy sent to `context`: the key the document is sealed to, and a stored notice list the pinned key signed. */
+async function checkDelivery(context: AllowContext): Promise<DeliveryCheck> {
   // Decision 78: the document is sealed to the target, so its key is needed BEFORE anything is unlocked. No key, no document (never a clear one).
   const targetKey = context.target.identityPublicKey;
   if (context.delivery === 'inbox' && (typeof targetKey !== 'string' || targetKey.length === 0)) {
@@ -207,35 +225,179 @@ export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, c
   if (stored !== null && !(await verifyBody(NOTICE_RECIPIENTS_DOMAIN, stored as never, context.adminPublicKey))) {
     throw new Error('the list of notice recipients sent by the module backend is not signed by the admin key pinned on this machine, so the page does not send it. Nothing was signed. Delete notice-recipients.json on the admin machine and run `machine admin notify-to <machines>` there');
   }
-  const answer = await api.get('/admin-key');
-  if (!isObject(answer) || typeof answer['file'] !== 'string') throw unexpected('the admin key file');
+  return { targetKey, stored };
+}
 
-  const key = await unlockAdminKey(answer['file'], passphrase, { extractable: false });
-  let body: { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
+/** The encrypted key file, as the backend keeps it (sensitive GET: call it after the PIN). */
+async function readKeyFile(api: AllowApi): Promise<string> {
+  const answer = await api.get('/admin-key');
+  if (!isObject(answer) || typeof answer['file'] !== 'string') {
+    throw unexpected('the admin key file');
+  }
+  return answer['file'];
+}
+
+type AllowPost = { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
+
+/** With the key unlocked: signs the policy, its inbox document for another machine, and the list of notice recipients (the same unlock, like every distribution of the CLI). */
+async function signDocuments(key: { privateKey: Parameters<typeof signPolicy>[1] }, context: AllowContext, policyBody: PolicyBody, now: number, check: DeliveryCheck): Promise<AllowPost> {
+  const { targetKey, stored } = check;
+  const policy = await signPolicy(policyBody, key.privateKey);
+  const body: AllowPost = context.delivery === 'inbox' ? { policy, document: await sealedPolicyDocument(policy, now, key.privateKey, targetKey as string) } : { policy };
+  // The list of notice recipients rides the same unlock: the stored list as it is, or a new one for this machine.
+  if (context.delivery === 'inbox' && context.noticeRecipients !== undefined) {
+    const signed = stored ?? ((await signNoticeRecipients(nextNoticeRecipientsBody({ adminKeyId: context.adminKeyId, now, current: null, recipients: [context.noticeRecipients.selfUuid] }), key.privateKey)) as unknown as SignedNoticeRecipients);
+    body.noticeRecipients = { signed, document: await sealedNoticeRecipientsDocument(signed as never, context.target.uuid, now, key.privateKey, targetKey as string) };
+  }
+  return body;
+}
+
+/** The daemon's answer to the post of the signed documents. */
+async function postSigned(api: AllowApi, context: AllowContext, body: AllowPost): Promise<AllowResult> {
+  const result = await api.post('/allow', body);
+  if (!isObject(result) || result['ok'] === false) {
+    throw unexpected('the signed policy');
+  }
+  const allowResult = result as unknown as AllowResult;
+  if (context.delivery === 'inbox' && context.noticeRecipients === undefined) {
+    return { ...allowResult, noticeRecipients: 'skipped', noticeRecipientsMessage: SKIPPED_MESSAGE };
+  }
+  return allowResult;
+}
+
+/** The key unlocked from the file must be the admin key this machine pinned. */
+function assertPinnedKey(key: { keyId: string; publicKey: string }, context: AllowContext): void {
+  if (key.keyId !== context.adminKeyId || key.publicKey !== context.adminPublicKey) {
+    throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
+  }
+}
+
+/**
+ * Unlock the admin key with `passphrase`, sign the policy (and its inbox document for another machine), lock the key, and post the signed documents.
+ * Throws with the actionable sentence of whoever refused: wrong passphrase, another key than the pinned one, the daemon (stale base, mode local ...).
+ */
+export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string, now: number, onSigned?: () => void): Promise<AllowResult> {
+  const prepared = await prepareAllow(context, change, now);
+  if (!prepared.changed) {
+    throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
+  }
+  const check = await checkDelivery(context);
+  const file = await readKeyFile(api);
+
+  const key = await unlockAdminKey(file, passphrase, { extractable: false });
+  let body: AllowPost;
   try {
-    if (key.keyId !== context.adminKeyId || key.publicKey !== context.adminPublicKey) {
-      throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
-    }
-    const policy = await signPolicy(prepared.body, key.privateKey);
-    body = context.delivery === 'inbox' ? { policy, document: await sealedPolicyDocument(policy, now, key.privateKey, targetKey as string) } : { policy };
-    // The list of notice recipients rides the same unlock, like every distribution of the CLI: the stored list as it is, or a new one for this machine.
-    if (context.delivery === 'inbox' && context.noticeRecipients !== undefined) {
-      const signed = stored ?? ((await signNoticeRecipients(nextNoticeRecipientsBody({ adminKeyId: context.adminKeyId, now, current: null, recipients: [context.noticeRecipients.selfUuid] }), key.privateKey)) as unknown as SignedNoticeRecipients);
-      body.noticeRecipients = { signed, document: await sealedNoticeRecipientsDocument(signed as never, context.target.uuid, now, key.privateKey, targetKey as string) };
-    }
+    assertPinnedKey(key, context);
+    body = await signDocuments(key, context, prepared.body, now, check);
   } finally {
     // Locked before anything goes to the network: a failure of the post never leaves an unlocked key behind.
     key.lock();
   }
   // The signature is made and the key is locked: the one event of the progress that happens before the network.
   onSigned?.();
-  const result = await api.post('/allow', body);
-  if (!isObject(result) || result['ok'] === false) throw unexpected('the signed policy');
-  const allowResult = result as unknown as AllowResult;
-  if (context.delivery === 'inbox' && context.noticeRecipients === undefined) {
-    return { ...allowResult, noticeRecipients: 'skipped', noticeRecipientsMessage: SKIPPED_MESSAGE };
+  return postSigned(api, context, body);
+}
+
+/** The PIN once, then the context of every machine of a batch (one elevation for the whole selection). */
+export async function loadContexts(api: AllowApi, machineUuids: string[]): Promise<AllowContext[]> {
+  await api.elevate();
+  const contexts: AllowContext[] = [];
+  for (const uuid of machineUuids) {
+    contexts.push(asContext(await api.get(`/allow/${encodeURIComponent(uuid)}`)));
   }
-  return allowResult;
+  return contexts;
+}
+
+export interface BatchGroupInput {
+  context: AllowContext;
+  /** What the policy of this machine gets: one entry per distinct shell and text (duplicates are skipped anyway). */
+  entries: Array<{ shell: string; command: string }>;
+}
+
+export type BatchOutcome =
+  | { status: 'posted'; machine: { uuid: string; name: string }; result: AllowResult }
+  /** Every entry of this machine was already allowed: nothing was signed for it. */
+  | { status: 'unchanged'; machine: { uuid: string; name: string }; message: string }
+  /** Signed, but the post failed (the daemon, the relay ...): the other machines are not affected. */
+  | { status: 'failed'; machine: { uuid: string; name: string }; message: string };
+
+interface BatchPlan {
+  context: AllowContext;
+  /** Absent: nothing to sign for this machine. */
+  body?: PolicyBody;
+}
+
+/**
+ * Everything that can be refused without a key, for EVERY machine of the batch: nothing is signed for any machine when one refuses (a command the
+ * grammar refuses, a list over the limit, a base or a list the pinned key did not sign, a missing identity key). The sentences name the machine.
+ */
+async function planBatch(groups: BatchGroupInput[], lifetime: LifetimeInput, now: number): Promise<Array<BatchPlan & { check?: DeliveryCheck }>> {
+  const limits = parseLifetime(lifetime, now);
+  const plans: Array<BatchPlan & { check?: DeliveryCheck }> = [];
+  for (const group of groups) {
+    const { context } = group;
+    try {
+      for (const e of group.entries) assertChange(e.shell, e.command);
+      await assertBase(context);
+      const entries = group.entries.map((e): PolicyEntry => ({ shell: e.shell as PolicyEntry['shell'], command: e.command, ...(limits === undefined ? {} : { limits: { ...limits } }) }));
+      const edit = nextPolicyBodyMany(context.current?.body, { target: context.target.uuid, adminKeyId: context.adminKeyId, now }, entries);
+      if (!edit.changed) {
+        plans.push({ context });
+        continue;
+      }
+      plans.push({ context, body: edit.body, check: await checkDelivery(context) });
+    } catch (e) {
+      throw new Error(`on "${context.target.name}": ${(e as Error).message}`);
+    }
+  }
+  return plans;
+}
+
+/** What the batch would sign, per machine, without any key: `changed` false means every entry is allowed already. Throws like `signAndSubmitBatch` when a machine refuses. */
+export async function prepareBatch(groups: BatchGroupInput[], lifetime: LifetimeInput, now: number): Promise<Array<{ machine: { uuid: string; name: string }; changed: boolean }>> {
+  const plans = await planBatch(groups, lifetime, now);
+  return plans.map((p) => ({ machine: { uuid: p.context.target.uuid, name: p.context.target.name }, changed: p.body !== undefined }));
+}
+
+/**
+ * Several requests allowed at once: ONE policy per machine, signed in a SINGLE unlock of the admin key. Every machine is checked first (nothing is
+ * signed if any refuses); then the key is unlocked once, every policy (and inbox document, notice list) is signed, the key is locked, `onSigned` is
+ * told, and the policies are posted. A machine whose post fails is reported as `failed` and does not hide the others. A machine whose entries were
+ * all allowed already is `unchanged` (nothing signed for it). Throws when nothing at all is to be signed, or on a wrong passphrase.
+ */
+export async function signAndSubmitBatch(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
+  const plans = await planBatch(groups, lifetime, now);
+  const changed = plans.filter((p) => p.body !== undefined);
+  if (changed.length === 0) {
+    throw new Error(`the selected commands are already allowed on ${plans.map((p) => `"${p.context.target.name}"`).join(', ')}: nothing to sign`);
+  }
+  const file = await readKeyFile(api);
+  const key = await unlockAdminKey(file, passphrase, { extractable: false });
+  const bodies = new Map<BatchPlan, AllowPost>();
+  try {
+    for (const plan of changed) {
+      assertPinnedKey(key, plan.context);
+      bodies.set(plan, await signDocuments(key, plan.context, plan.body as PolicyBody, now, (plan as { check: DeliveryCheck }).check));
+    }
+  } finally {
+    // Locked before anything goes to the network, whatever happened.
+    key.lock();
+  }
+  onSigned?.();
+  return Promise.all(
+    plans.map(async (plan): Promise<BatchOutcome> => {
+      const machine = { uuid: plan.context.target.uuid, name: plan.context.target.name };
+      const body = bodies.get(plan);
+      if (body === undefined) {
+        return { status: 'unchanged', machine, message: `the selected commands are already allowed on "${machine.name}": nothing to sign` };
+      }
+      try {
+        return { status: 'posted', machine, result: await postSigned(api, plan.context, body) };
+      } catch (e) {
+        return { status: 'failed', machine, message: (e as Error).message };
+      }
+    }),
+  );
 }
 
 /**

@@ -4,10 +4,12 @@ import { readAdminKeyHint, shellAllowApi, type AllowApi } from '../lib/allowFlow
 import { mergeNotices, type NoticeData } from '../lib/noticeRows.js';
 import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../lib/remoteRequestsFlow.js';
 import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { AllowStyleSwitch } from './AllowStyleSwitch.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
+import { useAllowStyle } from './useAllowStyle.js';
 
 type Capability = { available: boolean; machine: { uuid: string; name: string }; note: string };
 
@@ -54,6 +56,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  * @registryTags requests allow hold policy admin machines
  */
 export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
+  const allowStyle = useAllowStyle();
   const [filter, setFilter] = useState(ALL);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -146,6 +149,11 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
         {remote?.available === true && peers.length > 0 && (
           <ButtonAction label={loaded === null ? 'Load the other machines' : 'Reload the other machines'} variant="secondary" onClick={() => void start()} />
         )}
+        {allow?.available === true && (
+          <div className="ml-auto">
+            <AllowStyleSwitch value={allowStyle.style} onChange={allowStyle.choose} problem={allowStyle.problem} />
+          </div>
+        )}
       </div>
       {remote !== undefined && !remote.available && remote.note !== '' && <div className={NOTICE_NEUTRAL}>{remote.note}</div>}
       {remote?.available === true && peers.length === 0 && <div className={NOTICE_NEUTRAL}>This machine trusts no other machine yet: there is nothing to load (see the Machines page).</div>}
@@ -166,7 +174,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
         </div>
       ))}
 
-      <HeldRequests rows={rows} allow={allow} reachability={reachability} {...(onRefresh !== undefined ? { onRefresh } : {})} />
+      <HeldRequests rows={rows} allow={allow} reachability={reachability} allowStyle={allowStyle.style} {...(onRefresh !== undefined ? { onRefresh } : {})} />
       {rows.length === 0 && <div className={TEXT_MUTED_SM}>No held request{filter === ALL ? '' : ' for this machine'} ({counts}).</div>}
 
       {showSelf && (
