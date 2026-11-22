@@ -65,6 +65,7 @@ export function RequestProgressCard({ row, record, now, canRetry, warning, onRet
           on <MachineName name={record.machineName} />
         </span>
         <span aria-live="polite" className={`shrink-0 ${TEXT_COLOUR[summary.tone]}`}>{summary.text}</span>
+        {record.signedSummary !== undefined && <span className={`min-w-0 truncate text-xs ${TEXT_MUTED}`} title={record.signedSummary.full}>{`Signed: ${record.signedSummary.short}`}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           <span className={`text-xs tabular-nums ${TEXT_MUTED}`}>{elapsedText(record, now)}</span>
           {summary.retryable && canRetry && <ButtonAction label="Allow again" variant="secondary" size="sm" onClick={onRetry} />}

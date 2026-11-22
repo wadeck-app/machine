@@ -37,6 +37,11 @@ export function AllowProgressDetails({ record }: { record: ProgressRecord }) {
           </p>
         )}
       </div>
+      {record.signedSummary !== undefined && (
+        <p data-testid="signed-summary" className="text-xs">
+          <MachineText text={`Signed: ${record.signedSummary.full}`} names={names} />
+        </p>
+      )}
       {explanation !== undefined && (
         <p className={`text-xs ${TEXT_MUTED}`}>
           <MachineText text={explanation} names={names} />

@@ -16,6 +16,12 @@ describe('steps of the progress', () => {
     expect(percentOf(held())).toBe(0);
   });
 
+  it('the signing summary (what was signed, short and full) is kept on the record, absent when the event has none', () => {
+    const summary = { short: 'allowed once', full: 'sh "ls" on desktop, allowed once' };
+    expect(reduceProgress(held(), { type: 'signed', summary }, T0 + 1000).signedSummary).toEqual(summary);
+    expect(reduceProgress(held(), { type: 'signed' }, T0).signedSummary).toBeUndefined();
+  });
+
   it('signed, delivery not answered yet: the delivery is the active step', () => {
     const r = reduceProgress(held(), { type: 'signed' }, T0 + 1000);
     expect(labels(r, T0 + 1000)).toEqual(['done:Signed', 'active:Delivering', 'pending:thinkcentre installs the policy', 'pending:The held command is released']);

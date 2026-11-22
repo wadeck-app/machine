@@ -108,13 +108,14 @@ describe('the passphrase hint of the load dialog', () => {
 });
 
 describe('the admin key kept in the page (decision 92)', () => {
-  it('after the first load the page shows "Admin key unlocked, locks in ..." with Lock now, and the NEXT load asks no passphrase and signs with the held key', async () => {
+  it('after the first load the page shows the chip "Key unlocked 4:59" with Lock, once, and the NEXT load asks no passphrase and signs with the held key', async () => {
     render(<RequestsOverview {...props()} />);
-    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
     await load();
-    const bar = await screen.findByTestId('unlocked-key-bar');
-    expect(bar).toHaveTextContent(/Admin key unlocked, locks in [45]:[0-9]{2}/);
-    expect(within(bar).getByRole('button', { name: 'Lock now' })).toBeInTheDocument();
+    const bar = await screen.findByTestId('unlocked-key-chip');
+    expect(bar).toHaveTextContent(/Key unlocked [45]:[0-9]{2}/);
+    expect(within(bar).getByRole('button', { name: 'Lock' })).toBeInTheDocument();
+    expect(screen.getAllByTestId('unlocked-key-chip')).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: 'Reload the other machines' }));
     const dialog = await screen.findByRole('dialog');
@@ -129,8 +130,8 @@ describe('the admin key kept in the page (decision 92)', () => {
     }
 
     // Lock now brings the passphrase prompt back.
-    await userEvent.click(within(screen.getByTestId('unlocked-key-bar')).getByRole('button', { name: 'Lock now' }));
-    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    await userEvent.click(within(screen.getByTestId('unlocked-key-chip')).getByRole('button', { name: 'Lock' }));
+    expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Reload the other machines' }));
     expect(await within(await screen.findByRole('dialog')).findByLabelText('Admin passphrase')).toBeInTheDocument();
   }, 120_000);
@@ -234,11 +235,13 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   const notice = (over: Partial<NoticeData> = {}): NoticeData => ({ id: NOTICE_ID, machine: LAPTOP, machineName: 'laptop', peerText: 'thinkcentre', peer: THINK, shell: 'sh', command: 'uptime', commandTruncated: false, state: 'held', secondsLeft: 300, receivedAt: RECEIVED, ...over });
   const NOTE = 'reported by laptop at 14:02; not verified live: use Load the other machines to confirm';
 
-  it('shows a held notice next to the own rows, labelled with the machine that reported it, with the muted note, Allow and Deny', () => {
+  it('shows a held notice next to the own rows, labelled with the machine that reported it, with the short status line (the full note in Details), Allow and Deny', async () => {
     render(<RequestsOverview {...props({ notices: [notice()] })} />);
     const item = screen.getByRole('listitem', { name: 'Held request uptime' });
     expect(item).toHaveAttribute('data-testid', 'notice-row');
     expect(within(item).getByText('laptop')).toBeInTheDocument();
+    expect(within(item).getByTestId('held-status')).toHaveTextContent('Reported, not verified live.');
+    await userEvent.click(within(item).getByRole('button', { name: 'Details' }));
     expect(within(item).getByTestId('notice-note')).toHaveTextContent(NOTE);
     expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
     expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();

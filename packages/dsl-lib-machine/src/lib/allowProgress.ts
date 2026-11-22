@@ -35,6 +35,11 @@ export type HoldPollAnswer =
       message?: string;
     };
 
+export interface SignedSummary {
+  short: string;
+  full: string;
+}
+
 export interface ProgressRecord {
   machineName: string;
   /** A caller waits for the request (steps 3 and 4 follow the hold); false: the request was only listed as refused, nobody waits. */
@@ -42,6 +47,8 @@ export interface ProgressRecord {
   /** Epoch milliseconds of the click on "Allow and sign". */
   startedAt: number;
   signed: boolean;
+  /** What the signature covers, when the Allow came from a card that knows it (the one-click Allow). */
+  signedSummary?: SignedSummary;
   result?: AllowResult;
   /** The post failed: the message of whoever refused. */
   failed?: string;
@@ -54,7 +61,8 @@ export interface ProgressRecord {
 }
 
 export type ProgressEvent =
-  | { type: 'signed' }
+  /** `summary`: what was signed, short (`allowed once`, for the progress line) and full (for the Details). */
+  | { type: 'signed'; summary?: SignedSummary }
   | { type: 'result'; result: AllowResult }
   | { type: 'failed'; message: string }
   | { type: 'hold'; answer: HoldPollAnswer }
@@ -70,7 +78,7 @@ export const noConfirmationMessage = (machine: string): string => `no confirmati
 export function reduceProgress(record: ProgressRecord, event: ProgressEvent, now: number): ProgressRecord {
   switch (event.type) {
     case 'signed':
-      return { ...record, signed: true };
+      return { ...record, signed: true, ...(event.summary !== undefined ? { signedSummary: event.summary } : {}) };
     case 'result':
       // Nobody waits for the request: nothing more can be observed from here.
       return { ...record, result: event.result, ...(record.held ? {} : { finishedAt: now }) };

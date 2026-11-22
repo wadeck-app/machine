@@ -31,10 +31,21 @@ describe('InlineAllowForm', () => {
     expect(screen.queryByTestId('passphrase-hint')).toBeNull();
     expect(screen.getByText('Widens rights')).toBeInTheDocument();
     expect(screen.getByTestId('lifetime-picker')).toBeInTheDocument();
-    expect(screen.getByText(/Admin key unlocked, locks in/)).toBeInTheDocument();
+    // The chip of the page header says it once: the form does not repeat it.
+    expect(screen.queryByText(/unlocked/i)).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect((onSubmit.mock.calls[0]?.[1] as () => string | null)()).toBeNull();
+  });
+
+  it('with a FIXED lifetime (the select of the card): no picker and no warning, the form is only the key; submit passes that lifetime', async () => {
+    const onSubmit = vi.fn();
+    render(<InlineAllowForm {...props} hint="a hint" fixedChoice={{ kind: '1h', customKind: 'duration', customText: '' }} onSubmit={onSubmit} />);
+    expect(screen.queryByTestId('lifetime-picker')).toBeNull();
+    expect(screen.queryByText('Widens rights')).toBeNull();
+    await userEvent.type(screen.getByLabelText('Admin passphrase'), 'abc def{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ ok: true, flags: { for: '1h' } });
   });
 
   it('an empty passphrase is still refused when locked', async () => {

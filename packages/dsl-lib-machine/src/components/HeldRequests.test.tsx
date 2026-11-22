@@ -3,6 +3,7 @@ import { generateSigningKeyPair, encryptAdminKey, keyId, type SignedPolicy } fro
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { signingsSettled } from '../lib/allowFlow.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
 
 // The held requests of the Requests page (`machine run --wait`): a caller waits, the owner reads the command and allows (signed, passphrase) or denies
@@ -73,8 +74,10 @@ beforeEach(() => {
   };
   Object.defineProperty(globalThis, '__APP_CORE_SHELL__', { value: { elevate, fetcher }, configurable: true, writable: true });
 });
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  // The signing of this test may still be running (the dialog closes at the SUBMIT, the unlock takes about a second): its post must land in THIS test's fetcher.
+  await signingsSettled();
   Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -642,9 +645,15 @@ describe('a held request that waits for the RENEWAL of an exhausted or expired e
     renewal: { reason: 'exhausted', entry: 'orch stop', typed: false, own: false, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' },
   };
 
-  it('the card says it is a renewal, why, and which entry the Allow replaces', () => {
+  it('the card says in ONE line that it is a renewal and why, with a warning badge; the entry the Allow replaces is in Details', async () => {
     render(<HeldRequests rows={[RENEW_ROW]} allow={ALLOW} />);
-    const note = within(itemOf('orch stop')).getByTestId('renewal-note');
+    const item = itemOf('orch stop');
+    expect(within(item).getByTestId('renewal-badge')).toHaveTextContent('Renewal');
+    expect(within(item).getByTestId('renewal-badge').className).toMatch(/warning/);
+    expect(within(item).getByTestId('held-status')).toHaveTextContent('Renewal: entry used 3 of 3 call(s)');
+    expect(within(item).queryByTestId('renewal-note')).toBeNull();
+    await userEvent.click(within(item).getByRole('button', { name: 'Details' }));
+    const note = within(item).getByTestId('renewal-note');
     expect(note).toHaveTextContent('Renewal: entry used 3 of 3 call(s)');
     expect(note).toHaveTextContent('replaces sh "orch stop"');
   });
@@ -682,25 +691,31 @@ describe('what the caller asked for (decision 96)', () => {
     ask,
   });
 
-  it('the card says what the CALLER requested, apart from the owner, as plain text (never markup), and says nothing is applied', () => {
+  it('the card says what the CALLER requested, apart from the owner, as plain text (never markup); Details says nothing is applied', async () => {
     render(<HeldRequests rows={[ASKED({ times: 3, why: 'rerun <b>after</b> the fix' })]} allow={ALLOW} />);
-    const note = within(itemOf('orch deploy')).getByTestId('caller-ask');
+    const item = itemOf('orch deploy');
+    const status = within(item).getByTestId('held-status');
+    expect(status).toHaveTextContent('Caller asked: 3 calls; reason given: rerun <b>after</b> the fix');
+    expect(status.querySelector('b')).toBeNull();
+    expect(within(item).queryByTestId('caller-ask-warning')).toBeNull();
+    await userEvent.click(within(item).getByRole('button', { name: 'Details' }));
+    const note = within(item).getByTestId('caller-ask');
     expect(note).toHaveTextContent('Requested by the caller (not your decision): 3 calls; reason given: rerun <b>after</b> the fix');
     expect(note.querySelector('b')).toBeNull();
     expect(note).toHaveTextContent('Allow starts from it and you can change it');
-    expect(within(itemOf('orch deploy')).queryByTestId('caller-ask-warning')).toBeNull();
   });
 
   it.each([
     ['permanent', { for: 'permanent' } as const, /permanent \(no limit\)/],
     ['a large number of calls', { times: 500 } as const, /a large number of calls \(500\)/],
     ['a long duration', { for: '90d' } as const, /a long duration \(90d\)/],
-  ])('%s is flagged with a warning colour and one line saying the caller asked, not the owner', (_name, ask, text) => {
+  ])('%s is flagged BEFORE the click with a short warning badge saying the caller asked', (_name, ask, text) => {
     render(<HeldRequests rows={[ASKED(ask)]} allow={ALLOW} />);
     const warning = within(itemOf('orch deploy')).getByTestId('caller-ask-warning');
     expect(warning).toHaveTextContent(text);
-    expect(warning).toHaveTextContent('asked by the caller, not decided by you');
+    expect(warning).toHaveTextContent('Caller asks');
     expect(warning.className).toMatch(/warning/);
+    expect((warning.textContent ?? '').length).toBeLessThan(60);
   });
 
   it('a request that asked nothing shows no such block', () => {
@@ -717,8 +732,12 @@ describe('what the caller asked for (decision 96)', () => {
     expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument();
     expect(dialog).toHaveTextContent('allowed 3 times');
     expect(dialog).toHaveTextContent('3 calls; reason given: rerun');
-    // On failure the vitest diff lists every call this test received, which names who posted before the owner confirmed.
-    expect(calls.map((c) => c.url)).not.toContain('POST /api/modules/machine/allow');
+    // On failure the message lists EVERY call this test received (url and the first 120 characters of the body), which names what posted before the owner confirmed.
+    const received = calls.map((c) => `${c.url} ${(JSON.stringify(c.body) ?? '').slice(0, 120)}`);
+    expect(
+      received.filter((line) => line.startsWith('POST /api/modules/machine/allow')),
+      `the owner never confirmed, but the page received these calls:\n${received.join('\n')}`,
+    ).toEqual([]);
   });
 
   it('a permanent ask pre-fills Permanent and the dialog flags it', async () => {

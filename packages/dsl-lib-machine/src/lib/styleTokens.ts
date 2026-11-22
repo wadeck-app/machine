@@ -66,6 +66,9 @@ export const OUTCOME_WARNING = 'inline-block whitespace-nowrap rounded border bo
 export const OUTCOME_DANGER = 'inline-block whitespace-nowrap rounded border border-danger bg-danger-bg px-2 py-0.5 text-xs text-danger-text';
 export const OUTCOME_NEUTRAL = 'inline-block whitespace-nowrap rounded border border-border px-2 py-0.5 text-xs text-muted';
 
+/** A chip that holds a control (the unlocked-key chip of the page header): one row, same pair as OUTCOME_SUCCESS. */
+export const CHIP_SUCCESS = 'inline-flex items-center gap-2 self-start whitespace-nowrap rounded border border-success bg-success-bg px-2 py-0.5 text-xs text-success-text';
+
 /** Activity page (activity-paging): the exit code cell, green for 0, red for any other code, a timeout or a kill, muted when no command ran. */
 export const EXIT_OK = 'whitespace-nowrap font-medium tabular-nums text-success-text';
 export const EXIT_FAIL = 'whitespace-nowrap font-medium tabular-nums text-danger-text';

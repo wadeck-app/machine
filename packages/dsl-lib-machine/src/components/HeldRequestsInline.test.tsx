@@ -3,6 +3,9 @@ import { generateSigningKeyPair, encryptAdminKey, keyId, type SignedPolicy } fro
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { unlockAdminKey } from '@wadeck-app/machine-webcrypto';
+import { adminKeyHolder } from '../lib/adminKeyHolder.js';
+import { signingsSettled } from '../lib/allowFlow.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
 
 // The INLINE Allow of the held requests (no modal): a form in the card, and a batch bar that signs ONE policy per machine in ONE unlock. The app-core
@@ -69,8 +72,10 @@ beforeEach(() => {
   };
   Object.defineProperty(globalThis, '__APP_CORE_SHELL__', { value: { elevate, fetcher }, configurable: true, writable: true });
 });
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  // The signing of this test may still be running (the dialog closes at the SUBMIT, the unlock takes about a second): its post must land in THIS test's fetcher.
+  await signingsSettled();
   Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -95,7 +100,7 @@ const expectNoPassphrase = () => {
 };
 
 describe('inline Allow of one request', () => {
-  it('Allow expands a compact form INSIDE the card (no dialog): lifetime (Once), the key hint, one warning line, the passphrase, Allow and sign, Cancel', async () => {
+  it('LOCKED: Allow expands a compact form INSIDE the card (no dialog): the key hint, Keep unlocked for, the passphrase, Allow and sign, Cancel; the lifetime stays the select of the row', async () => {
     keyFileText = hintedKeyFile;
     render_([LS, DF]);
     await userEvent.click(allowBtn('df -h'));
@@ -105,12 +110,12 @@ describe('inline Allow of one request', () => {
     expect(item).toContainElement(passphrase);
     expect(passphrase).toHaveAttribute('type', 'password');
     expect(passphrase).toHaveAttribute('autocomplete', 'current-password');
-    expect(within(item).getByLabelText('How long is it allowed?')).toHaveValue('once');
+    expect(within(item).getByLabelText('Lifetime')).toHaveValue('once');
+    expect(within(item).queryByLabelText('How long is it allowed?')).toBeNull();
+    expect(within(item).getByLabelText('Keep unlocked for')).toBeInTheDocument();
     expect(within(item).getByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
-    // The widening warning is ONE short line, with the lifetime in words.
-    const warning = within(item).getByText(/Widens rights/);
-    expect(warning).toHaveTextContent(/every trusted peer.*allowed once/);
-    expect(warning.textContent?.length).toBeLessThan(160);
+    // The widening sentence is not in the way: it is in Details.
+    expect(within(item).queryByText(/Widens rights/)).toBeNull();
     expect(within(item).getByRole('button', { name: 'Allow and sign' })).toBeEnabled();
     expect(within(item).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     // The other card is untouched.
@@ -123,9 +128,9 @@ describe('inline Allow of one request', () => {
     await userEvent.click(allowBtn('ls'));
     await screen.findByLabelText('Admin passphrase');
     const item = itemOf('ls');
-    expect(within(item).getByLabelText('How long is it allowed?')).toHaveValue('custom');
+    expect(within(item).getByLabelText('Lifetime')).toHaveValue('custom');
     expect(within(item).getByLabelText('Number of calls (1 to 10000)')).toHaveValue('3');
-    expect(within(item).getByTestId('caller-ask')).toHaveTextContent('Requested by the caller (not your decision): 3 calls; reason given: rerun');
+    expect(within(item).getByTestId('held-status')).toHaveTextContent('Caller asked: 3 calls; reason given: rerun');
     expect(posts()).toEqual([]);
   });
 
@@ -375,5 +380,239 @@ describe('dialog style is unchanged', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(itemOf('ls')).queryByLabelText('Admin passphrase')).toBeNull();
     expect(within(dialog).getByLabelText('Admin passphrase')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+// ONE-CLICK Allow (user feedback 2026-11-22): with the admin key unlocked in the page, Allow on a card signs at once with the lifetime of the select next to
+// it; a flagged lifetime needs a second click; locked, Allow expands a compact passphrase field and Enter signs.
+
+const unlock = async () => {
+  adminKeyHolder.hold(await unlockAdminKey(keyFile, PASSPHRASE, { extractable: false }));
+};
+const lifetimeSelect = (command: string) => within(itemOf(command)).getByLabelText('Lifetime');
+const detailsOf = (command: string) => within(itemOf(command)).getByRole('button', { name: 'Details' });
+const asked = (extra: Partial<HeldRequestRow>): HeldRequestRow => ({ ...row('ab12cd34', 'orch deploy'), ...extra });
+
+describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
+  it('the card shows the lifetime select next to Allow (default Once) and ONE click on Allow signs and posts at once: no second button, no passphrase, no key file read', async () => {
+    await unlock();
+    const onRefresh = vi.fn(async () => undefined);
+    render_([LS, DF], onRefresh);
+    expect(lifetimeSelect('ls')).toHaveValue('once');
+    await userEvent.click(allowBtn('ls'));
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Allow and sign' })).toBeNull();
+    expect(keyReads()).toBe(0);
+    expect(await within(itemOf('ls')).findByRole('progressbar')).toBeInTheDocument();
+    // What was signed stays visible: one line in the progress line, the full summary in Details.
+    expect(within(itemOf('ls')).getByText('Signed: allowed once')).toBeInTheDocument();
+    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Details' }));
+    expect(within(itemOf('ls')).getByTestId('signed-summary')).toHaveTextContent('sh "ls" on desktop, allowed once');
+    expect(onRefresh).toHaveBeenCalledWith('requests');
+    // The other card is untouched.
+    expect(within(itemOf('df -h')).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+  }, 120_000);
+
+  it('the lifetime of the select next to Allow is the one signed (1 hour: an expiry, no call limit), and it becomes the default of the next card, in memory only', async () => {
+    await unlock();
+    render_([LS, DF]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), '1h');
+    await userEvent.click(allowBtn('ls'));
+    await posted(1);
+    const limits = posts()[0]?.policy.body.defaults[0]?.limits as { maxCalls?: number; expiresAt?: number };
+    expect(limits.maxCalls).toBeUndefined();
+    expect(limits.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000) + 3000);
+    expect(lifetimeSelect('df -h')).toHaveValue('1h');
+    expect(JSON.stringify({ ...window.localStorage, ...window.sessionStorage })).not.toContain('1h');
+  }, 120_000);
+
+  it('a custom lifetime is typed next to the select (3 calls)', async () => {
+    await unlock();
+    render_([LS]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), 'custom');
+    await userEvent.selectOptions(within(itemOf('ls')).getByLabelText('Limit by'), 'calls');
+    await userEvent.type(within(itemOf('ls')).getByLabelText('Number of calls (1 to 10000)'), '3');
+    await userEvent.click(allowBtn('ls'));
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults[0]?.limits).toEqual({ maxCalls: 3 });
+  }, 120_000);
+
+  it('an invalid custom lifetime signs nothing and says what to write', async () => {
+    await unlock();
+    render_([LS]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), 'custom');
+    await userEvent.click(allowBtn('ls'));
+    expect(await within(itemOf('ls')).findByRole('alert')).toHaveTextContent(/Enter a duration/);
+    expect(posts()).toEqual([]);
+  });
+
+  it('a caller ask that is small pre-fills the select and still signs in one click (2 calls)', async () => {
+    await unlock();
+    render_([asked({ ask: { times: 2, why: 'rerun' } })]);
+    expect(lifetimeSelect('orch deploy')).toHaveValue('custom');
+    await userEvent.click(allowBtn('orch deploy'));
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults[0]?.limits).toEqual({ maxCalls: 2 });
+  }, 120_000);
+
+  it('a RENEWAL is flagged by a warning badge before the click and one click renews with the limits the entry had', async () => {
+    await unlock();
+    const renewal = { reason: 'exhausted' as const, entry: 'orch stop', typed: false, own: false, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' };
+    render_([asked({ id: 'rn000001', command: 'orch stop', renewal })]);
+    const item = itemOf('orch stop');
+    expect(within(item).getByTestId('renewal-badge').className).toMatch(/warning/);
+    expect(within(item).getByLabelText('Lifetime')).toHaveValue('custom');
+    await userEvent.click(allowBtn('orch stop'));
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults[0]?.limits).toEqual({ maxCalls: 3 });
+  }, 120_000);
+
+  it('after Lock now the same Allow asks the passphrase again', async () => {
+    await unlock();
+    render_([LS]);
+    adminKeyHolder.lock();
+    await userEvent.click(allowBtn('ls'));
+    expect(await screen.findByLabelText('Admin passphrase')).toBeInTheDocument();
+    expect(posts()).toEqual([]);
+  });
+});
+
+describe('a FLAGGED lifetime never signs in one click (the safety exception)', () => {
+  it.each([
+    ['a permanent ask', { for: 'permanent' } as const, /permanent \(no limit\)/, undefined],
+    ['a large ask (50 calls)', { times: 50 } as const, /a large number of calls \(50\)/, { maxCalls: 50 }],
+    ['a long ask (8d)', { for: '8d' } as const, /a long duration \(8d\)/, 'expires'],
+  ])('%s: the badge is there BEFORE the click, the first click signs nothing and asks to confirm, the second signs', async (_name, askOf, badge, limits) => {
+    await unlock();
+    render_([asked({ ask: askOf })]);
+    const item = itemOf('orch deploy');
+    expect(within(item).getByTestId('caller-ask-warning')).toHaveTextContent(badge);
+    // The design-system button has no title: the tooltip is on the wrapper of the button.
+    expect(within(item).getByRole('button', { name: 'Allow' }).closest('[title]')).toHaveAttribute('title', expect.stringMatching(/second click/));
+    await userEvent.click(allowBtn('orch deploy'));
+    const confirm = await within(item).findByRole('button', { name: 'Confirm allow' });
+    expect(posts()).toEqual([]);
+    expect(within(item).getByTestId('flagged-line')).toHaveTextContent(/second click/);
+    await userEvent.click(confirm);
+    await posted(1);
+    const signed = posts()[0]?.policy.body.defaults[0]?.limits;
+    if (limits === 'expires') {
+      expect((signed as { expiresAt?: number }).expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000) + 7 * 86400);
+    } else {
+      expect(signed).toEqual(limits);
+    }
+  }, 120_000);
+
+  it('picking Permanent in the select flags it too, and Cancel after the first click goes back with nothing signed', async () => {
+    await unlock();
+    render_([LS]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
+    await userEvent.click(allowBtn('ls'));
+    expect(await within(itemOf('ls')).findByRole('button', { name: 'Confirm allow' })).toBeInTheDocument();
+    await userEvent.click(within(itemOf('ls')).getByRole('button', { name: 'Cancel' }));
+    expect(allowBtn('ls')).toBeInTheDocument();
+    expect(posts()).toEqual([]);
+  });
+
+  it('a flagged lifetime is not remembered for the next card', async () => {
+    await unlock();
+    render_([LS, DF]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), 'permanent');
+    expect(lifetimeSelect('df -h')).toHaveValue('once');
+  });
+
+  it('LOCKED: the expanded passphrase form is itself the explicit step (no Confirm button), and nothing is posted before Enter', async () => {
+    render_([asked({ ask: { for: 'permanent' } })]);
+    await userEvent.click(allowBtn('orch deploy'));
+    expect(await screen.findByLabelText('Admin passphrase')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm allow' })).toBeNull();
+    expect(posts()).toEqual([]);
+  });
+});
+
+describe('LOCKED: Allow expands a compact passphrase field, Enter signs', () => {
+  it('Enter in the field signs with the lifetime of the row; the key is then kept and the NEXT Allow is one click', async () => {
+    render_([LS, DF]);
+    await userEvent.click(allowBtn('ls'));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), `${PASSPHRASE}{Enter}`);
+    await posted(1);
+    expect(posts()[0]?.policy.body.defaults).toEqual([{ shell: 'sh', command: 'ls', limits: { maxCalls: 1 } }]);
+    expect(adminKeyHolder.current()).not.toBeNull();
+    await userEvent.click(allowBtn('df -h'));
+    await posted(2);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+    expect(keyReads()).toBe(2);
+    expectNoPassphrase();
+  }, 120_000);
+});
+
+describe('ONE-CLICK Allow in dialog style', () => {
+  const dialogRender = (rows: HeldRequestRow[]) => render(<HeldRequests rows={rows} allow={ALLOW} allowStyle="dialog" />);
+
+  it('unlocked: the select is on the card, ONE click signs straight from it and no dialog opens', async () => {
+    await unlock();
+    dialogRender([LS]);
+    await userEvent.selectOptions(lifetimeSelect('ls'), '15m');
+    await userEvent.click(allowBtn('ls'));
+    await posted(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((posts()[0]?.policy.body.defaults[0]?.limits as { expiresAt?: number }).expiresAt).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('locked: the dialog is kept (no select on the card)', async () => {
+    dialogRender([LS]);
+    expect(within(itemOf('ls')).queryByLabelText('Lifetime')).toBeNull();
+    await userEvent.click(allowBtn('ls'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+describe('the card is short', () => {
+  const FULL = asked({
+    id: 'ff000001',
+    command: 'orch stop',
+    ask: { times: 3, why: 'rerun' },
+    renewal: { reason: 'exhausted', entry: 'orch stop', typed: false, own: false, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' },
+    machine: { uuid: LAPTOP, name: 'laptop' },
+    canAllow: true,
+  });
+
+  it('a renewal with a caller ask fits one status line: header, command, ONE status line, ONE row of controls; the long sentences are in Details', async () => {
+    await unlock();
+    render_([FULL]);
+    const item = itemOf('orch stop');
+    expect(within(item).getAllByTestId('held-status')).toHaveLength(1);
+    expect((item.textContent ?? '').length).toBeLessThan(330);
+    for (const gone of [/Allow and sign/, /How long is it allowed/, /Renews /, /Admin key unlocked/, /Widens rights/, /nothing is applied until you sign/, /The command runs once/]) {
+      expect(item.textContent).not.toMatch(gone);
+    }
+    // The controls are ONE row: the select, Allow and Deny share a parent.
+    const controls = within(item).getByRole('group', { name: 'Answer orch stop' });
+    expect(controls).toContainElement(within(item).getByLabelText('Lifetime'));
+    expect(controls).toContainElement(within(item).getByRole('button', { name: 'Allow' }));
+    expect(controls).toContainElement(within(item).getByRole('button', { name: 'Deny' }));
+    // Every fact is still there, one click away.
+    expect(within(item).queryByTestId('renewal-note')).toBeNull();
+    await userEvent.click(detailsOf('orch stop'));
+    expect(within(item).getByTestId('renewal-note')).toHaveTextContent('replaces sh "orch stop"');
+    expect(within(item).getByTestId('caller-ask')).toHaveTextContent('Requested by the caller (not your decision): 3 calls; reason given: rerun');
+    expect(within(item).getByTestId('held-widening')).toHaveTextContent(/Renews sh "orch stop" on laptop/);
+  });
+
+  it('the reachability chip is on the header line, with the countdown', () => {
+    render(<HeldRequests rows={[FULL]} allow={ALLOW} allowStyle="inline" reachability={{ [LAPTOP]: { state: 'direct', text: 'direct' } }} />);
+    const chip = within(itemOf('orch stop')).getByTestId('reachable-badge');
+    expect(chip.closest('[data-testid="held-header"]')).not.toBeNull();
+  });
+
+  it('the unlocked-key bar is NOT repeated in a card or in the batch bar', async () => {
+    await unlock();
+    render_([LS, DF]);
+    await select('ls');
+    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    expect(screen.queryByText(/Admin key unlocked/)).toBeNull();
   });
 });

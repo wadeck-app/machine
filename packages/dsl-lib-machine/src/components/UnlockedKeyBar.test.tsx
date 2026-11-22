@@ -114,3 +114,19 @@ describe('KeepUnlockedSelect', () => {
     expect(key.lockCalls).toBe(1);
   });
 });
+
+describe('UnlockedKeyBar as a chip (the header of the Requests page)', () => {
+  it('is one small chip "Key unlocked 4:32" with a Lock button, nothing while locked', () => {
+    const { container } = render(<UnlockedKeyBar variant="chip" />);
+    expect(container).toBeEmptyDOMElement();
+    act(() => void adminKeyHolder.hold(fakeKey()));
+    const chip = screen.getByTestId('unlocked-key-chip');
+    expect(chip).toHaveTextContent('Key unlocked 5:00');
+    advance(28_000);
+    expect(chip).toHaveTextContent('Key unlocked 4:32');
+    expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Lock' }));
+    expect(adminKeyHolder.current()).toBeNull();
+    expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
+  });
+});

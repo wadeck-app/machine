@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
+import { lifetimeInput, lifetimeWords, type LifetimeChoice } from '../lib/lifetimeChoice.js';
+import { cardFlags, lifetimeMemory, startChoiceOf } from '../lib/quickAllow.js';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowStyle } from '../lib/allowStyle.js';
 import { AllowDialog } from './AllowDialog.js';
 import { BatchAllowBar, type BatchItem } from './BatchAllowBar.js';
-import { CallerAskNote } from './CallerAskNote.js';
 import { DenyForm, NO_REASON_TEXT } from './DenyForm.js';
-import { InlineAllow } from './InlineAllow.js';
+import { HeldAnswer } from './HeldAnswer.js';
+import { HeldDetails } from './HeldDetails.js';
+import { HeldStatusRow } from './HeldStatusRow.js';
 import { MachineName } from './MachineName.js';
 import { RequestProgressCard } from './RequestProgressCard.js';
 import { useAllowProgress } from './useAllowProgress.js';
@@ -90,9 +93,12 @@ function leftText(seconds: number): string {
 export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, allowStyle = 'dialog' }: HeldRequestsProps) {
   const inline = allowStyle === 'inline';
   const [selected, setSelected] = useState<HeldRequestRow | null>(null);
-  // Inline style: the card whose form is open, and the cards ticked for one batch.
-  const [inlineOpen, setInlineOpen] = useState<string | null>(null);
+  // Inline style: the cards ticked for one batch.
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
+  // The lifetime the owner picked on a card (a card not touched starts from `startChoiceOf`), and the cards whose Details are open.
+  const [choices, setChoices] = useState<Readonly<Record<string, LifetimeChoice>>>({});
+  const [detailsOpen, setDetailsOpen] = useState<ReadonlySet<string>>(new Set());
+  const panelBase = useId();
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   // The one short line of a Deny (nothing else shows it). An Allow has none: its card says everything.
@@ -125,7 +131,6 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
   const leave = (row: HeldRequestRow) => {
     setAnswered((prev) => new Set(prev).add(row.id));
     setSelected(null);
-    setInlineOpen(null);
     setDenying(null);
     // The page's own data catches up (the request leaves the held list); a failure is reported by the page's notifier.
     void onRefresh?.('requests');
@@ -169,6 +174,24 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
         .filter((r) => ticked.has(r.id) && progress.entries[r.id] === undefined && (r.canAllow ?? canAllow) && r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt) > 0)
         .map((r) => ({ row: r, machine: machineOf(r), machineRef: r.machine?.uuid ?? 'self' }))
     : [];
+  const wordsOf = (choice: LifetimeChoice): string => {
+    const lifetime = lifetimeInput(choice);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return lifetime.ok ? lifetimeWords(lifetime.limits(nowSeconds), nowSeconds) : 'for the lifetime you enter';
+  };
+  const choiceOf = (r: HeldRequestRow): LifetimeChoice => choices[r.id] ?? startChoiceOf(r);
+  const choose = (r: HeldRequestRow, choice: LifetimeChoice) => {
+    lifetimeMemory.remember(choice);
+    setChoices((prev) => ({ ...prev, [r.id]: choice }));
+  };
+  const toggleDetails = (id: string) =>
+    setDetailsOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
   const tick = (id: string, on: boolean) =>
     setTicked((prev) => {
       const next = new Set(prev);
@@ -195,6 +218,8 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
           const rowCanAllow = r.canAllow ?? canAllow;
           const progressOf = progress.entries[r.id]?.record;
           const reach = r.machine !== undefined ? reachability?.[r.machine.uuid] : undefined;
+          // The machine Allow signs for (absent when Allow is not offered for this row).
+          const target = rowCanAllow ? r.machine ?? allow?.machine : undefined;
           if (progressOf !== undefined) {
             const warning = warnings[r.id];
             return (
@@ -207,9 +232,8 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                 {...(warning !== undefined ? { warning } : {})}
                 onRetry={() => {
                   if (inline) {
-                    // The card goes back to the held request with its form open: a failure before the signature stays in the form.
+                    // The card goes back to the held request with its Allow row (one click again when the key is unlocked).
                     progress.dismiss(r.id);
-                    setInlineOpen(r.id);
                     return;
                   }
                   setSelected(r);
@@ -226,49 +250,49 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
           }
           return (
             <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-              <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-                {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
-                <span className={`text-sm ${TEXT_MUTED_SM}`}>
-                  From <MachineName name={r.peerText} />
-                  {r.machine !== undefined && (
-                    <>
-                      {' '}
-                      on <MachineName name={r.machine.name} />
-                    </>
-                  )}{' '}
-                  in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
-                  {r.note === undefined && <>, asked {r.askedText}</>}
+              <div data-testid="held-header" className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <span className="flex flex-wrap items-baseline gap-x-2">
+                  {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
+                  <span className={`text-sm ${TEXT_MUTED_SM}`}>
+                    From <MachineName name={r.peerText} />
+                    {r.machine !== undefined && (
+                      <>
+                        {' '}
+                        on <MachineName name={r.machine.name} />
+                      </>
+                    )}{' '}
+                    in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
+                    {r.note === undefined && <>, asked {r.askedText}</>}
+                  </span>
+                  {reach !== undefined && (
+                    <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>
+                      Reachability: {reach.text}
+                    </span>
+                  )}
                 </span>
                 <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
               </div>
               {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
               <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
-              {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED}`}>Truncated: only the first part of the command was reported.</div>}
-              {r.renewal !== undefined && (
-                <div data-testid="renewal-note" className={`text-xs ${TEXT_MUTED}`}>
-                  Renewal: {r.renewal.note}. Allowing it replaces {r.shell} {JSON.stringify(r.renewal.entry)} (its counter starts again), it does not add a command.
-                </div>
-              )}
-              {r.ask !== undefined && <CallerAskNote ask={r.ask} where="card" />}
-              {r.note !== undefined && (
-                <div data-testid="notice-note" className={`text-xs ${TEXT_MUTED}`}>
-                  {r.note}
-                </div>
-              )}
-              {reach !== undefined && (
-                <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>
-                  Reachability: {reach.text}
-                </span>
-              )}
-              {left > 0 && denying !== r.id && !(inline && inlineOpen === r.id) && (
-                // The buttons say "Allow" and "Deny": the group tells which request they answer (the design-system button has no aria-label).
-                <div role="group" aria-label={`Answer ${r.command}`} className="flex flex-wrap items-center gap-2">
-                  {rowCanAllow ? <ButtonAction label="Allow" variant="primary" size="sm" onClick={() => (inline ? setInlineOpen(r.id) : setSelected(r))} /> : <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>}
-                  <ButtonAction label="Deny" variant="danger-outline" size="sm" onClick={() => setDenying(r.id)} />
-                </div>
-              )}
-              {left > 0 && inline && inlineOpen === r.id && rowCanAllow && api.current !== null && (
-                <InlineAllow key={r.id} row={r} machine={machineOf(r)} api={api.current} onEvent={progressFor(r)} onClose={() => setInlineOpen(null)} onDone={(answer) => allowed(r, answer)} />
+              <HeldStatusRow row={r} choiceFlags={rowCanAllow ? cardFlags(choiceOf(r), undefined) : []} open={detailsOpen.has(r.id)} panelId={`${panelBase}-${r.id}`} onToggle={() => toggleDetails(r.id)} />
+              <div id={`${panelBase}-${r.id}`}>
+                {detailsOpen.has(r.id) && <HeldDetails row={r} machine={target} words={wordsOf(choiceOf(r))} />}
+              </div>
+              {left > 0 && denying !== r.id && api.current !== null && (
+                <HeldAnswer
+                  key={r.id}
+                  row={r}
+                  machine={machineOf(r)}
+                  canAllow={rowCanAllow}
+                  inline={inline}
+                  api={api.current}
+                  choice={choiceOf(r)}
+                  onChoice={(c) => choose(r, c)}
+                  onEvent={progressFor(r)}
+                  onDone={(answer) => allowed(r, answer)}
+                  onOpenDialog={() => setSelected(r)}
+                  onDeny={() => setDenying(r.id)}
+                />
               )}
               {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={(reason) => denied(r, reason)} />}
             </li>

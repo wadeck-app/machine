@@ -6,7 +6,6 @@ import { LifetimePicker } from './LifetimePicker.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { PassphraseHint } from './PassphraseHint.js';
-import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
 
 // The form of an Allow made in place (no modal): the lifetime, the key hint, the admin passphrase, one warning line, Allow and sign / Cancel. It is NOT a
@@ -18,8 +17,10 @@ import { useAdminKey } from './useAdminKey.js';
 export interface InlineAllowFormProps {
   /** Names the form for a screen reader (the group of requests it signs). */
   label: string;
-  /** The one line that says what widens, given the lifetime in words (`lifetimeWords`). */
-  warning: (words: string) => React.ReactNode;
+  /** The one line that says what widens, given the lifetime in words (`lifetimeWords`). Absent with `fixedChoice` (the card says it in its Details). */
+  warning?: (words: string) => React.ReactNode;
+  /** The lifetime is decided OUTSIDE the form (the select of the card): no picker, no warning, the form is only the key. */
+  fixedChoice?: LifetimeChoice;
   /** The hint of the admin key (readable without the passphrase), shown above the field. Absent: none is stored. */
   hint?: string | null | undefined;
   /** The lifetime preselected (a held request runs once). */
@@ -37,7 +38,7 @@ export interface InlineAllowFormProps {
   cancelLabel?: string;
 }
 
-export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', defaultChoice, busy = false, error = null, onSubmit, onCancel, cancelLabel = 'Cancel' }: InlineAllowFormProps) {
+export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', defaultChoice, fixedChoice, busy = false, error = null, onSubmit, onCancel, cancelLabel = 'Cancel' }: InlineAllowFormProps) {
   const [choice, setChoice] = useState<LifetimeChoice>(defaultChoice ?? { kind: defaultKind, customKind: 'duration', customText: '' });
   const [localError, setLocalError] = useState<string | null>(null);
   const passphrase = useRef<HTMLInputElement>(null);
@@ -48,7 +49,7 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
     passphrase.current?.focus();
   }, []);
 
-  const resolution = lifetimeInput(choice);
+  const resolution = lifetimeInput(fixedChoice ?? choice);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const words = resolution.ok ? lifetimeWords(resolution.limits(nowSeconds), nowSeconds) : 'for the lifetime you enter';
 
@@ -93,9 +94,8 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
         }
       }}
     >
-      <LifetimePicker choice={choice} onChange={setChoice} busy={busy} />
-      <p className={NOTICE_WARNING}>{warning(words)}</p>
-      {unlocked && <UnlockedKeyBar />}
+      {fixedChoice === undefined && <LifetimePicker choice={choice} onChange={setChoice} busy={busy} />}
+      {fixedChoice === undefined && warning !== undefined && <p className={NOTICE_WARNING}>{warning(words)}</p>}
       {!unlocked && (
         <>
           {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}

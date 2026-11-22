@@ -146,3 +146,21 @@ describe('what the card tells next to the line', () => {
     expect(container.innerHTML).not.toMatch(/#[0-9a-f]{3,6}\b/i);
   });
 });
+
+describe('what was signed (one-click Allow)', () => {
+  const SUMMARY = { short: 'allowed once', full: 'sh "ls" on thinkcentre, allowed once' };
+  const signedWith = (): ProgressRecord => reduceProgress(start(), { type: 'signed', summary: SUMMARY }, T0);
+
+  it('the progress line says "Signed: <short summary>", and Details has the full summary', async () => {
+    render(<RequestProgressCard {...props(signedWith())} />);
+    expect(within(card()).getByText('Signed: allowed once')).toBeInTheDocument();
+    expect(within(card()).queryByTestId('signed-summary')).toBeNull();
+    await userEvent.click(within(card()).getByRole('button', { name: 'Details' }));
+    expect(within(card()).getByTestId('signed-summary')).toHaveTextContent('Signed: sh "ls" on thinkcentre, allowed once');
+  });
+
+  it('no summary (an Allow from the dialog or the table): no such line', () => {
+    render(<RequestProgressCard {...props(stored())} />);
+    expect(within(card()).queryByText(/^Signed:/)).toBeNull();
+  });
+});

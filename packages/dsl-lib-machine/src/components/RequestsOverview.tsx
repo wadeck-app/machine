@@ -143,8 +143,8 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
 
   return (
     <div className="flex flex-col gap-4">
-      {/* The admin key kept in this page (decision 92): the countdown and Lock now, on every Allow path of the page. Nothing while the key is locked. */}
-      <UnlockedKeyBar />
+      {/* The admin key kept in this page (decision 92): ONE chip for the page (the countdown and Lock), not repeated in the cards. Nothing while the key is locked. */}
+      <UnlockedKeyBar variant="chip" />
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-48">
           <FieldSelect label="Machine" value={filter} onChange={setFilter} options={options} />
