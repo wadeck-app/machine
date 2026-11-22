@@ -179,7 +179,11 @@ const ROWS: Row[] = [
 let base: string;
 const cleanup: string[] = [];
 
+// The generated script is for a Linux box (`machine install idle-suspend` is Linux only) and needs GNU date. A macOS runner has BSD date (`date: illegal option -- d`, CI of cbeb183): the golden test is skipped there ON PURPOSE, never on Linux or Windows (Git Bash), where a missing tool stays an error.
+const SKIPPED_ON_PURPOSE = process.platform === 'darwin';
+
 beforeAll(() => {
+  if (SKIPPED_ON_PURPOSE) return;
   const probe = spawnSync('sh', ['-c', 'date -u -d 2026-11-22T10:00:00.000Z +%s && sed -n -E "s/(a)/\\1/p" /dev/null && grep -Eq a /dev/null; tail -n 1 /dev/null'], { encoding: 'utf8' });
   if (probe.error !== undefined || probe.stdout.trim() !== String(Date.parse('2026-11-22T10:00:00.000Z') / 1000)) {
     throw new Error(`the golden test needs a POSIX sh with GNU date, sed -E, grep -E and tail on the PATH (a Linux box or Git Bash): ${probe.error?.message ?? `got ${JSON.stringify(probe.stdout)} ${probe.stderr}`}`);
@@ -187,6 +191,7 @@ beforeAll(() => {
   base = mkdtempSync(join(tmpdir(), 'machine-idle-golden-'));
 });
 afterAll(() => {
+  if (SKIPPED_ON_PURPOSE) return;
   rmSync(base, { recursive: true, force: true });
 });
 
@@ -226,7 +231,7 @@ function build(dir: string, w: Required<World>): void {
   writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
 }
 
-describe('idleSuspendScript on a fake root decides like idleDecision', () => {
+describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides like idleDecision', () => {
   it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
     const world: Required<World> = { ...DEFAULT_WORLD, ...row.world };
     const facts: IdleFacts = { ...DEFAULT_FACTS, ...row.facts };
