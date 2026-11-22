@@ -183,6 +183,13 @@ describe('shellQuote and allowCommand', () => {
     expect(allowCommand({ shell: 'sh', command: 'df -h' }, { name: 'laptop', policyMode: 'admin' })).toBe('machine admin allow laptop --shell sh -- "df -h"');
     expect(allowCommand({ shell: 'sh', command: 'ls' }, { name: 'laptop', policyMode: 'local' })).toBe('machine policy allow --shell sh -- ls');
   });
+
+  it('puts the ask of the caller in the command as a SUGGESTION to edit: --times n, --for d, nothing for permanent', () => {
+    const at = (ask: { times?: number; for?: string }) => allowCommand({ shell: 'sh', command: 'ls', ask }, { name: 'laptop', policyMode: 'admin' });
+    expect(at({ times: 3 })).toBe('machine admin allow laptop --shell sh --times 3 -- ls');
+    expect(at({ for: '30m' })).toBe('machine admin allow laptop --shell sh --for 30m -- ls');
+    expect(at({ for: 'permanent' })).toBe('machine admin allow laptop --shell sh -- ls');
+  });
 });
 
 describe('typed entries in the history (typed-parameters.md): the template that matched, the rule that failed', () => {
@@ -213,6 +220,14 @@ describe('summarizeRequests: waiting (held requests, hold-for-approval)', () => 
   it('lists a held request that has no end and whose deadline is ahead, with its countdown data and the peer name', () => {
     const r = summarizeRequests(log([held(0, 'h1')]), base({ now: T0 + 100 }));
     expect(r.waiting).toEqual([{ id: 'h1', peer: THINK, peerName: 'thinkcentre', shell: 'sh', command: 'ls', since: T0, deadline: T0 + 600 }]);
+  });
+
+  it('keeps the ask of the caller from the held line (strictly parsed: an invalid one is dropped, the request is still listed)', () => {
+    const ok = summarizeRequests(log([held(0, 'h1', { ask: { times: 3, why: 'rerun' } })]), base({ now: T0 + 100 }));
+    expect(ok.waiting[0]?.ask).toEqual({ times: 3, why: 'rerun' });
+    const bad = summarizeRequests(log([held(0, 'h2', { ask: { times: 99999 } })]), base({ now: T0 + 100 }));
+    expect(bad.waiting).toHaveLength(1);
+    expect(bad.waiting[0]?.ask).toBeUndefined();
   });
 
   it('does not list a hold that ended (allowed, denied, deadline, disconnected)', () => {

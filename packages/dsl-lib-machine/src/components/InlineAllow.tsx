@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
+import { choiceFromAsk, type CallerAsk } from '../lib/callerAsk.js';
 import { choiceFromLimits } from '../lib/lifetimeChoice.js';
 import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
@@ -16,7 +17,7 @@ type Phase =
   | { kind: 'failed'; message: string };
 
 export interface InlineAllowProps {
-  row: { shell: string; command: string; peer?: string; renewal?: WaitingRenewal };
+  row: { shell: string; command: string; peer?: string; renewal?: WaitingRenewal; ask?: CallerAsk };
   machine: { uuid: string; name: string };
   api: AllowApi;
   /** The progress of the owner (decision 86): `start` and `signed` when the signature is made, then `result`, or `failed` when the post did not go through. */
@@ -80,13 +81,16 @@ export function InlineAllow({ row, machine, api, onEvent, onClose, onDone }: Inl
     );
   }
   const { context, hint } = phase;
+  // What the CALLER asked for is the starting point (the card above says so); a renewal starts from the limits the entry had; the owner edits it before signing.
+  const askChoice = row.ask !== undefined ? choiceFromAsk(row.ask) : undefined;
+  const startChoice = askChoice ?? (row.renewal !== undefined ? choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) : undefined);
   return (
     <InlineAllowForm
       label={`Allow ${row.command}`}
       hint={hint}
       busy={busy}
       error={error}
-      {...(row.renewal !== undefined ? { defaultChoice: choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) } : {})}
+      {...(startChoice !== undefined ? { defaultChoice: startChoice } : {})}
       warning={(words) =>
         renewal === undefined ? (
           <>

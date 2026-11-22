@@ -1,6 +1,7 @@
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { PendingRequestRow } from '../components/AllowRequestsTable.js';
 import type { HeldRequestRow } from '../components/HeldRequests.js';
+import { askAllowFlags, type CallerAsk } from './callerAsk.js';
 
 // Request notices on the Requests page (request-notices.md, phase 2): what OTHER machines reported (a held or refused request) shown without a
 // passphrase, as information. No React, no I/O. A notice never grants anything: Allow still signs the exact command for the machine of the row.
@@ -23,6 +24,8 @@ export interface NoticeData {
   receivedAt: number;
   /** The request waits for the renewal of an exhausted or expired entry on that machine. */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (held notices): its wish, never applied by itself. */
+  ask?: CallerAsk;
 }
 
 export interface RefusedSection {
@@ -51,8 +54,8 @@ const nextFor = (n: NoticeData): string => {
     return TRUNCATED_NEXT;
   }
   return n.renewal === undefined
-    ? `machine admin allow ${n.machineName} --shell ${n.shell} -- ${quote(n.command)}`
-    : `machine admin allow ${n.machineName} --renew --shell ${n.shell}${limitsFlag(n.renewal)} -- ${quote(n.renewal.entry)}`;
+    ? `machine admin allow ${n.machineName} --shell ${n.shell}${askAllowFlags(n.ask)} -- ${quote(n.command)}`
+    : `machine admin allow ${n.machineName} --renew --shell ${n.shell}${askAllowFlags(n.ask) !== '' ? askAllowFlags(n.ask) : limitsFlag(n.renewal)} -- ${quote(n.renewal.entry)}`;
 };
 
 /**
@@ -93,6 +96,7 @@ export function mergeNotices(input: { notices: NoticeData[]; selfUuid: string | 
         note,
         commandTruncated: n.commandTruncated,
         ...(n.renewal !== undefined ? { renewal: n.renewal } : {}),
+        ...(n.ask !== undefined ? { ask: n.ask } : {}),
       });
       continue;
     }

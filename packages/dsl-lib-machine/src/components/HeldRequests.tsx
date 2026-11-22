@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
+import type { CallerAsk } from '../lib/callerAsk.js';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowStyle } from '../lib/allowStyle.js';
 import { AllowDialog } from './AllowDialog.js';
 import { BatchAllowBar, type BatchItem } from './BatchAllowBar.js';
+import { CallerAskNote } from './CallerAskNote.js';
 import { DenyForm, NO_REASON_TEXT } from './DenyForm.js';
 import { InlineAllow } from './InlineAllow.js';
 import { MachineName } from './MachineName.js';
@@ -39,6 +41,8 @@ export interface HeldRequestRow {
   commandTruncated?: boolean;
   /** The request waits for the renewal of an exhausted or expired entry (hold-for-approval.md, "Renewal"): the Allow replaces that entry. */
   renewal?: WaitingRenewal;
+  /** What the CALLER asked the owner for (`machine run --times/--for/--why`, decision 96): its wish, untrusted text, only pre-fills the Allow. */
+  ask?: CallerAsk;
 }
 
 export interface HeldRequestsProps {
@@ -245,6 +249,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                   Renewal: {r.renewal.note}. Allowing it replaces {r.shell} {JSON.stringify(r.renewal.entry)} (its counter starts again), it does not add a command.
                 </div>
               )}
+              {r.ask !== undefined && <CallerAskNote ask={r.ask} where="card" />}
               {r.note !== undefined && (
                 <div data-testid="notice-note" className={`text-xs ${TEXT_MUTED}`}>
                   {r.note}

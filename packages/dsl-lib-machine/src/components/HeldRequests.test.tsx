@@ -664,3 +664,77 @@ describe('a held request that waits for the RENEWAL of an exhausted or expired e
     expect(dialog).not.toHaveTextContent('This widens what peers may run');
   });
 });
+
+describe('what the caller asked for (decision 96)', () => {
+  const ASKED = (ask: NonNullable<HeldRequestRow['ask']>, command = 'orch deploy'): HeldRequestRow => ({
+    id: 'dddd4444',
+    peerText: 'thinkcentre',
+    peer: PEER,
+    shell: 'sh',
+    command,
+    secondsLeft: 300,
+    askedText: '5 s ago',
+    countText: 'waiting now',
+    nextCommand: 'machine admin allow desktop --shell sh --times 3 -- "orch deploy"',
+    nextWhere: '',
+    ask,
+  });
+
+  it('the card says what the CALLER requested, apart from the owner, as plain text (never markup), and says nothing is applied', () => {
+    render(<HeldRequests rows={[ASKED({ times: 3, why: 'rerun <b>after</b> the fix' })]} allow={ALLOW} />);
+    const note = within(itemOf('orch deploy')).getByTestId('caller-ask');
+    expect(note).toHaveTextContent('Requested by the caller (not your decision): 3 calls; reason given: rerun <b>after</b> the fix');
+    expect(note.querySelector('b')).toBeNull();
+    expect(note).toHaveTextContent('Allow starts from it and you can change it');
+    expect(within(itemOf('orch deploy')).queryByTestId('caller-ask-warning')).toBeNull();
+  });
+
+  it.each([
+    ['permanent', { for: 'permanent' } as const, /permanent \(no limit\)/],
+    ['a large number of calls', { times: 500 } as const, /a large number of calls \(500\)/],
+    ['a long duration', { for: '90d' } as const, /a long duration \(90d\)/],
+  ])('%s is flagged with a warning colour and one line saying the caller asked, not the owner', (_name, ask, text) => {
+    render(<HeldRequests rows={[ASKED(ask)]} allow={ALLOW} />);
+    const warning = within(itemOf('orch deploy')).getByTestId('caller-ask-warning');
+    expect(warning).toHaveTextContent(text);
+    expect(warning).toHaveTextContent('asked by the caller, not decided by you');
+    expect(warning.className).toMatch(/warning/);
+  });
+
+  it('a request that asked nothing shows no such block', () => {
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    expect(screen.queryByTestId('caller-ask')).toBeNull();
+  });
+
+  it('the Allow dialog PRE-FILLS the lifetime with the ask, shows it again, and signs nothing until the owner confirms', async () => {
+    const user = userEvent.setup();
+    render(<HeldRequests rows={[ASKED({ times: 3, why: 'rerun' })]} allow={ALLOW} />);
+    await user.click(allowBtn('orch deploy'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('Number of calls (1 to 10000)')).toHaveValue('3'));
+    expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('allowed 3 times');
+    expect(dialog).toHaveTextContent('3 calls; reason given: rerun');
+    expect(calls.some((c) => c.url === 'POST /api/modules/machine/allow')).toBe(false);
+  });
+
+  it('a permanent ask pre-fills Permanent and the dialog flags it', async () => {
+    const user = userEvent.setup();
+    render(<HeldRequests rows={[ASKED({ for: 'permanent' })]} allow={ALLOW} />);
+    await user.click(allowBtn('orch deploy'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument());
+    expect(dialog).toHaveTextContent('permanent, until you remove it');
+    expect(within(dialog).getByTestId('caller-ask-warning')).toHaveTextContent('asked by the caller, not decided by you');
+  });
+
+  it('a request without an ask keeps the default lifetime of the page', async () => {
+    const user = userEvent.setup();
+    render(<HeldRequests rows={ROWS} allow={ALLOW} />);
+    await user.click(allowBtn('ls'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByText('Lifetime')).toBeInTheDocument());
+    expect(within(dialog).queryByText('Requested by the caller')).toBeNull();
+    expect(dialog).toHaveTextContent('allowed once');
+  });
+});

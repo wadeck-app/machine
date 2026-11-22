@@ -27,6 +27,52 @@ describe('newRequest', () => {
 });
 
 describe('verifyRequest', () => {
+  // The caller's ask (decision 96): an optional key of the SIGNED body, like the planned detach of detached-jobs.md; an older target refuses a 10-key body as malformed (fail closed).
+  const askSigned = (ask: unknown) => {
+    const source = generateSigningKeyPair();
+    const body = { ...newRequest({ source: SOURCE, target: TARGET, shell: 'cmd', command: 'ipconfig', now: NOW }), ask } as unknown as RequestBody;
+    return { source, signed: signRequest(body, source.privateKeyPkcs8) };
+  };
+
+  it('carries the ask of the caller in the signed body (10 keys) and returns it', () => {
+    const source = generateSigningKeyPair();
+    const body = newRequest({ source: SOURCE, target: TARGET, shell: 'cmd', command: 'ipconfig', now: NOW, ask: { times: 3, why: 'rerun' } });
+    expect(Object.keys(body)).toHaveLength(10);
+    const r = verifyRequest(signRequest(body, source.privateKeyPkcs8), ctx(source.publicKey));
+    expect(r).toMatchObject({ ok: true, body: { ask: { times: 3, why: 'rerun' } } });
+  });
+
+  it('a body without an ask keeps its 9 keys (an older target still reads it)', () => {
+    expect(Object.keys(setup().body)).toHaveLength(9);
+  });
+
+  it('an ask edited after signing is a bad signature', () => {
+    const source = generateSigningKeyPair();
+    const signed = signRequest(newRequest({ source: SOURCE, target: TARGET, shell: 'cmd', command: 'ipconfig', now: NOW, ask: { times: 1 } }), source.privateKeyPkcs8);
+    const edited = { ...signed, body: { ...signed.body, ask: { for: 'permanent' } } };
+    expect(verifyRequest(edited, ctx(source.publicKey))).toMatchObject({ ok: false, reason: 'bad-signature' });
+  });
+
+  it.each([
+    ['times above the maximum', { times: 10001 }, /times.*1 to 10000/],
+    ['a duration above 365 days', { for: '999d' }, /365 days/],
+    ['times and for together', { times: 2, for: '1h' }, /only one of times and for/],
+    ['a why with a control character', { why: 'a\u001b[2Jb' }, /printable ASCII/],
+    ['an unknown key', { times: 1, extra: true }, /extra/],
+    ['an empty ask', {}, /nothing/],
+  ])('refuses at once, signed correctly, an ask with %s, naming the fix (never clamped)', (_name, ask, message) => {
+    const { source, signed } = askSigned(ask);
+    const r = verifyRequest(signed, ctx(source.publicKey));
+    expect(r).toMatchObject({ ok: false, reason: 'bad-ask' });
+    expect((r as { message: string }).message).toMatch(message);
+    expect((r as { message: string }).message).toMatch(/machine run/);
+  });
+
+  it('an ask that is not an object is malformed', () => {
+    const { source, signed } = askSigned('please');
+    expect(verifyRequest(signed, ctx(source.publicKey))).toMatchObject({ ok: false, reason: 'malformed' });
+  });
+
   it('accepts a request signed by the source key for this target', () => {
     const { source, signed } = setup();
     const r = verifyRequest(signed, ctx(source.publicKey));

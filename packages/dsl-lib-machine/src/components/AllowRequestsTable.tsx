@@ -5,6 +5,7 @@ import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
+import type { CallerAsk } from '../lib/callerAsk.js';
 
 export interface PendingRequestRow {
   peerText: string;
@@ -25,6 +26,8 @@ export interface PendingRequestRow {
   commandTruncated?: boolean;
   /** The request waits for the renewal of an exhausted or expired entry: the Allow replaces that entry. */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (a held request only): pre-fills the lifetime of the Allow, never applied by itself. */
+  ask?: CallerAsk;
 }
 
 export interface AllowRequestsTableProps {

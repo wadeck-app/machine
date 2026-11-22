@@ -90,6 +90,14 @@ describe('deniedMessage', () => {
 });
 
 describe('HoldTable.admit', () => {
+  it('keeps the ask of the caller on the hold, and none when there is none', () => {
+    const table = new HoldTable();
+    const withAsk = table.admit({ id: 'aaaaaaaa-1', peer: 'p', shell: 'sh', command: 'ls', now: 100, requestedSeconds: 600, capSeconds: 1800, ask: { times: 2, why: 'rerun' } });
+    expect(withAsk.ok && withAsk.hold.ask).toEqual({ times: 2, why: 'rerun' });
+    const without = table.admit({ id: 'bbbbbbbb-2', peer: 'p', shell: 'sh', command: 'pwd', now: 100, requestedSeconds: 600, capSeconds: 1800 });
+    expect(without.ok && 'ask' in without.hold).toBe(false);
+  });
+
   it('admits a hold with its deadline', () => {
     const table = new HoldTable();
     const r = admit(table, 'a');

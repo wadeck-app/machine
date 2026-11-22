@@ -325,3 +325,36 @@ describe('requestsPage: the renewal of a held request (exhausted or expired entr
     expect(remoteRequestsPage(answer as never, NOW).waiting[0]?.renewal).toEqual(renewal);
   });
 });
+
+describe('requestsPage: what the caller asked for (decision 96)', () => {
+  const ask = { times: 3, why: 'rerun after the fix' };
+  const heldAsk = (extra: Record<string, Json> = {}): Record<string, Json> => ({ ts: iso(-20), event: 'held', source: PEER, id: 'k1', shell: 'sh', command: 'orch deploy', deadline: NOW + 100, ask, ...extra });
+
+  it('a waiting row carries the ask and its allow command suggests --times 3 (the owner edits it)', () => {
+    const page = requestsPage(daemonAnswer(lines([heldAsk()])), NOW);
+    expect(page.waiting[0]?.ask).toEqual(ask);
+    expect(page.waiting[0]?.nextCommand).toBe('machine admin allow target --shell sh --times 3 -- "orch deploy"');
+  });
+
+  it('a held request that asked nothing has no ask key', () => {
+    const page = requestsPage(daemonAnswer(lines([{ ts: iso(-20), event: 'held', source: PEER, id: 'k2', shell: 'sh', command: 'ls', deadline: NOW + 100 }])), NOW);
+    expect(page.waiting[0]).not.toHaveProperty('ask');
+  });
+
+  const REPORTER = '33333333-3333-4333-8333-333333333333';
+  const stored = (over: Record<string, unknown> = {}) => ({ machine: REPORTER, machineName: 'laptop', receivedAt: NOW - 20, id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, peerName: 'thinkcentre', shell: 'sh', command: 'orch deploy', commandTruncated: false, state: 'held', deadline: NOW + 580, ts: NOW - 30, ...over });
+
+  it('a notice row carries a valid ask; a malformed one is not shown and is counted (loud, never shown as a plain request)', () => {
+    expect(requestsPage(daemonAnswer([], { notices: [stored({ ask })] }), NOW).notices[0]?.ask).toEqual(ask);
+    const bad = requestsPage(daemonAnswer([], { notices: [stored({ ask: { times: 99999 } })] }), NOW);
+    expect(bad.notices).toEqual([]);
+    expect(bad.noticesError).toMatch(/1 request notice.*not shown/);
+  });
+
+  it('a remote waiting row (requests-list answer) carries the ask too', () => {
+    const answer = { type: 'requests-list' as const, id: 'x', machine: { uuid: SELF, name: 'laptop' }, policyMode: 'admin' as const, now: NOW, chain: { ok: true as const }, pendingTotal: 0, allowedNow: 0, truncated: false, waiting: [{ id: 'aaaa1111-0000-4000-8000-000000000000', peer: PEER, shell: 'sh', command: 'orch deploy', since: NOW - 5, deadline: NOW + 100, ask }], pending: [] };
+    const row = remoteRequestsPage(answer as never, NOW).waiting[0];
+    expect(row?.ask).toEqual(ask);
+    expect(row?.nextCommand).toBe('machine admin allow laptop --shell sh --times 3 -- "orch deploy"');
+  });
+});

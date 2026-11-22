@@ -1,3 +1,4 @@
+import { askRisk, askSummary, type CallerAsk } from './callerAsk.js';
 import type { StoredNotice } from './requestNotice.js';
 import { allowCommand, describeHistory, type HistoryEntry, type PendingGroup, type WaitingRequest } from './requests.js';
 import type { PolicyMode } from './policy.js';
@@ -116,6 +117,7 @@ function noticeBlock(kind: 'held' | 'refused', rows: StoredNotice[], input: Requ
           { title: 'Command', cells: rows.map((n) => n.command + (n.commandTruncated ? ' [...]' : '')) },
         ];
   const lines = ['  reported by the other machines:', ...table(columns, full)];
+  lines.push(...askLines(rows.map((n) => ({ id: n.id, ask: n.ask, where: n.machineName }))));
   for (const n of rows) {
     if (n.renewal !== undefined) {
       lines.push(fit(`  renew: ${n.renewal.note} (${n.id.slice(0, 8)} on ${n.machineName}); the Allow replaces ${n.shell} "${n.renewal.entry}" and its counter starts again`));
@@ -146,7 +148,27 @@ function allowTemplate(machine: { name: string; policyMode: PolicyMode }): strin
 }
 
 /** ONE line of actions under a section: the exact command when the section has one row (and it fits), else the template. */
-function allowLines(rows: Array<{ shell: string; command: string }>, input: RequestsLayoutInput): string[] {
+/**
+ * What the CALLER asked for each held request (decision 96), apart from the owner's choice: one line, text escaped (T-42), and a warning line when the ask is
+ * permanent or large. Nothing is applied: the `allow` command that follows only suggests it.
+ */
+function askLines(rows: Array<{ id: string; ask: CallerAsk | undefined; where?: string }>): string[] {
+  const lines: string[] = [];
+  for (const row of rows) {
+    if (row.ask === undefined) {
+      continue;
+    }
+    const at = `${row.id.slice(0, 8)}${row.where !== undefined ? ` on ${row.where}` : ''}`;
+    lines.push(fit(`  asked by the caller (${at}): ${ascii(askSummary(row.ask))}`));
+    const risk = askRisk(row.ask);
+    if (risk !== undefined) {
+      lines.push(fit(`  [warn] ${at}: ${risk} was asked by the caller, not decided by the owner`));
+    }
+  }
+  return lines;
+}
+
+function allowLines(rows: Array<Pick<WaitingRequest, 'shell' | 'command' | 'ask'>>, input: RequestsLayoutInput): string[] {
   const { machine, full } = input;
   if (full) {
     return rows.map((r) => `  allow: ${allowCommand(r, machine)}`);
@@ -247,6 +269,7 @@ export function layoutRequests(raw: RequestsLayoutInput): string[] {
           lines.push(fit(`  renew: ${w.renewal.note} (${w.id.slice(0, 8)}); the Allow replaces ${ascii(w.shell)} "${ascii(w.renewal.entry)}" and its counter starts again`));
         }
       }
+      lines.push(...askLines(waiting.map((w) => ({ id: w.id, ask: w.ask }))));
       lines.push(...allowLines(waiting, input));
     }
     if (heldNotices.length > 0) {

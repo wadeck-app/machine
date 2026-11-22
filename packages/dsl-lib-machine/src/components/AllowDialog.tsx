@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, renewalSummary, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowPrepared, type AllowResult } from '../lib/allowFlow.js';
 import type { ProgressEvent } from '../lib/allowProgress.js';
+import { choiceFromAsk } from '../lib/callerAsk.js';
 import { choiceFromLimits, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { LifetimePicker } from './LifetimePicker.js';
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import type { PendingRequestRow } from './AllowRequestsTable.js';
+import { CallerAskNote } from './CallerAskNote.js';
 
 type Phase =
   | { kind: 'loading' }
@@ -58,7 +60,8 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
   const [error, setError] = useState<string | null>(null);
   const renewal = allowRenewalOf(row);
   // A renewal starts from the limits the entry had (the owner can change them before signing); any other request from the default of its list.
-  const [choice, setChoice] = useState<LifetimeChoice>(row.renewal !== undefined ? choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) : { kind: defaultLifetime, customKind: 'duration', customText: '' });
+  // What the CALLER asked for wins as the starting point (the owner edits it before signing); it is never applied by itself.
+  const [choice, setChoice] = useState<LifetimeChoice>((row.ask !== undefined ? choiceFromAsk(row.ask) : undefined) ?? (row.renewal !== undefined ? choiceFromLimits({ ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) }) : { kind: defaultLifetime, customKind: 'duration', customText: '' }));
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -184,6 +187,7 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
       onConfirm={confirm}
       onCancel={onClose}
     >
+      {row.ask !== undefined && <CallerAskNote ask={row.ask} where="dialog" />}
       <LifetimePicker choice={choice} onChange={setChoice} busy={phase.kind === 'signing'} />
     </ConfirmSignModal>
   );

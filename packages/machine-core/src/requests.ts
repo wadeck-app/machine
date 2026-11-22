@@ -1,4 +1,5 @@
 import { verifyAuditChain } from './audit.js';
+import { askAllowFlags, parseCallerAsk, type CallerAsk } from './callerAsk.js';
 import type { Renewal } from './policy.js';
 
 // Reader of the audit log of a machine (T-07, T-21): what the peers asked and what became of it. Pure: it takes the lines of the
@@ -88,6 +89,8 @@ export interface WaitingRequest {
   deadline: number;
   /** Present when the request waits for the renewal of an exhausted or expired entry (not for a command that is not listed). */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (`machine run --times/--for/--why`): the caller's wish, never a decision. Absent when it asked nothing. */
+  ask?: CallerAsk;
 }
 
 export interface HistoryEntry {
@@ -243,7 +246,9 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
       const deadline = entry['deadline'];
       if (id !== undefined && peer !== undefined && shell !== undefined && command !== undefined && typeof deadline === 'number' && Number.isFinite(deadline)) {
         const renewal = parseWaitingRenewal(entry['renewal']);
-        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline, ...(renewal !== undefined ? { renewal } : {}) });
+        // An ask that is not valid (an edited line) is dropped, the request is still listed: the target wrote only valid ones.
+        const asked = entry['ask'] === undefined ? undefined : parseCallerAsk(entry['ask']);
+        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline, ...(renewal !== undefined ? { renewal } : {}), ...(asked?.ok === true ? { ask: asked.ask } : {}) });
       } else skipped += 1;
     }
     if (verified && event === 'hold-ended' && id !== undefined) {
@@ -357,11 +362,13 @@ export function shellQuote(command: string): string {
  * The command that allows a pending request: `machine admin allow <machine> ...` (mode admin, run on the admin machine) or
  * `machine policy allow ...` (mode local, run ON that machine).
  */
-export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'> & { renewal?: WaitingRenewal }, machine: { name: string; policyMode: 'admin' | 'local' }): string {
+export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'> & { renewal?: WaitingRenewal; ask?: CallerAsk }, machine: { name: string; policyMode: 'admin' | 'local' }): string {
   const { renewal } = group;
   // A renewal replaces the entry that exists: its text (the template of a typed entry), `--renew` (the counter starts again even with the same limits)
   // and the limits it had (an expired entry cannot give its duration back: the owner writes it).
-  const limits = renewal === undefined ? '' : renewal.maxCalls !== undefined && renewal.reason === 'exhausted' ? ` --times ${renewal.maxCalls}` : ' --for <duration>';
+  // The ask of the caller is a SUGGESTION in the command the owner edits and runs (`--times n` / `--for d`; permanent adds nothing); it wins over the previous limits of a renewal.
+  const asked = askAllowFlags(group.ask);
+  const limits = asked !== '' ? asked : renewal === undefined ? '' : renewal.maxCalls !== undefined && renewal.reason === 'exhausted' ? ` --times ${renewal.maxCalls}` : ' --for <duration>';
   const tail = `${renewal === undefined ? '' : '--renew '}--shell ${group.shell}${limits} -- ${shellQuote(renewal === undefined ? group.command : renewal.entry)}`;
   return machine.policyMode === 'local' ? `machine policy allow ${tail}` : `machine admin allow ${machine.name} ${tail}`;
 }

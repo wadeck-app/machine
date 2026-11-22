@@ -118,6 +118,17 @@ describe('inline Allow of one request', () => {
     expect(elevate).toHaveBeenCalledTimes(1);
   });
 
+  it('the inline form starts from what the CALLER asked (3 calls: custom, 3), nothing is signed or posted by it, and the card says it was the caller', async () => {
+    render_([{ ...LS, ask: { times: 3, why: 'rerun' } }, DF]);
+    await userEvent.click(allowBtn('ls'));
+    await screen.findByLabelText('Admin passphrase');
+    const item = itemOf('ls');
+    expect(within(item).getByLabelText('How long is it allowed?')).toHaveValue('custom');
+    expect(within(item).getByLabelText('Number of calls (1 to 10000)')).toHaveValue('3');
+    expect(within(item).getByTestId('caller-ask')).toHaveTextContent('Requested by the caller (not your decision): 3 calls; reason given: rerun');
+    expect(posts()).toEqual([]);
+  });
+
   it('Cancel collapses the form and posts nothing; Escape does the same', async () => {
     render_([LS]);
     await userEvent.click(allowBtn('ls'));

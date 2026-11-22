@@ -85,6 +85,10 @@ export function parseLifetime(input: LifetimeInput, now: number): LifetimeLimits
   if (input.times !== undefined) {
     return { maxCalls: parseTimes(input.times) };
   }
+  // `--for permanent` says explicitly what the absence of a flag means: no limits (still exclusive with the other two).
+  if (input.for === 'permanent') {
+    return undefined;
+  }
   if (input.for !== undefined) {
     return { expiresAt: parseFor(input.for, now) };
   }

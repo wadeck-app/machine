@@ -3,6 +3,7 @@ import { signingInput } from './canonical.js';
 import { decodeBase64urlStrict, verifyBytes } from './keys.js';
 import type { PolicyMode } from './policy.js';
 import { isUuid } from './reference.js';
+import { parseCallerAsk } from './callerAsk.js';
 import { DEFAULT_PENDING_LIMIT, parseWaitingRenewal, printable, type PendingGroup, type WaitingRequest } from './requests.js';
 import { signDocument } from './signed.js';
 
@@ -188,6 +189,11 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
     if (w['renewal'] !== undefined && renewal === undefined) {
       return bad('the renewal of a held request');
     }
+    // The same for the ask of the caller: another shape is another version, said loudly.
+    const asked = w['ask'] === undefined ? undefined : parseCallerAsk(w['ask']);
+    if (asked !== undefined && !asked.ok) {
+      return bad('the ask of a held request');
+    }
     waiting.push({
       id: w['id'],
       peer: w['peer'],
@@ -197,6 +203,7 @@ export function parseRequestsListAnswer(raw: unknown, expectedId: string): Parse
       since: w['since'],
       deadline: w['deadline'],
       ...(renewal !== undefined ? { renewal } : {}),
+      ...(asked?.ok === true ? { ask: asked.ask } : {}),
     });
   }
   const serial = a['noticeRecipientsSerial'];

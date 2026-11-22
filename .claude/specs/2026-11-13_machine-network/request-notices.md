@@ -50,6 +50,8 @@ Notice spam by a compromised peer; notice spoofing (revoked or unknown peer, ano
 
 ## As built
 
+The held notice may carry `ask` (what the caller asked the owner for, decision 96, hold-for-approval.md "Caller's ask"): strict parse (`parseCallerAsk`), shown as the caller's wish; a recipient older than this version refuses the notice (unknown field), so update the recipients.
+
 **Phase 1 (built, 2026-11-21):** machine-core `noticeRecipients.ts` (body, sign, verify, replace-newer), kind `notice-recipients` in `document.ts` and in the mirror of machine-webcrypto `documents.ts`; CLI store `notice-recipients.json` (`noticeRecipientsStore.ts`), installation in `inboxLoop.ts`, sending in `distribute.ts` (approve, renewal, revoke, policy sign and `distribute --policy`; `admin allow` through the same policy path), `machine admin notify-to <machine>... | --list` (`adminNotifyTo.ts`). Tests: machine-core `noticeRecipients.test.ts`, machine-cli `noticeRecipientsStore.test.ts`, `noticeRecipientsDistribute.test.ts`, `inboxLoop.test.ts`, `distribute.test.ts`, webcrypto `documents.test.ts`.
 **Allow button (built 2026-11-21, was not in phase 1):** see "Allow button" below.
 Rollout note: an older target deletes a `notice-recipients` document as `malformed` (unknown kind) and counts it in `documents-unverified`: harmless, update first.

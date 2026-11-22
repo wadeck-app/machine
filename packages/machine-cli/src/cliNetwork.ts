@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
+import { askFromFlags, DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -536,7 +536,7 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
   const fail = ctx.fail;
   const ref = rest[0];
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] -- <command...>', EXIT.peer);
+    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] [--times <n> | --for <duration>|permanent] [--why <text>] -- <command...>', EXIT.peer);
   }
   // What to do when the target does not allow the command yet: flags, then the machine setting, then the built-in default (wait 10m). A bad flag, a contradiction and a damaged setting are refused before anything is read or sent.
   let wait: RunWait;
@@ -546,6 +546,14 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
     return fail((e as Error).message, EXIT.peer);
   }
   const waitSeconds = wait.onRefusal === 'wait' ? wait.seconds : undefined;
+  // What you ask the OWNER for: checked here with the parser of `machine admin allow` before anything is read or sent; the owner decides, the target validates again.
+  const asked = askFromFlags({ times: args.times, for: args.for, why: args.why });
+  if (!asked.ok) {
+    return fail(asked.message, EXIT.peer);
+  }
+  if (asked.ask !== undefined && waitSeconds === undefined) {
+    return fail('--times, --for and --why are what you ask the OWNER of the target, who only sees a request that is HELD: this run does not wait (--no-wait, --on-refusal fail or the machine setting `machine run-defaults`), so nobody would read them; remove them, or run with the wait (default) or --wait <10s..60m>', EXIT.peer);
+  }
   // An unknown --shell is refused before anything is read or sent; the shell itself is chosen below, once the connections.json of the peer is read.
   if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
   if (args.address !== undefined && !parseAddress(args.address)) {
@@ -609,6 +617,7 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
       shell: shell as Shell,
       command,
       now: epochSeconds(),
+      ...(asked.ask !== undefined ? { ask: asked.ask } : {}),
       ...(waitSeconds !== undefined
         ? {
             waitSeconds,
@@ -642,11 +651,13 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
     const listed = answer.reason === 'not-listed' ? refusalListLine(configDir, { uuid: peer.peerId, name: peer.name }, self.uuid, (w) => io.stderr(`[warn] ${w}\n`)) : undefined;
     const notHeldText = notHeld ? notHeldWarning(peer.name, wait) : undefined;
     const heldNote = notHeldText !== undefined ? `\n[warn] ${notHeldText}` : '';
+    // A target older than the ask refuses the 10-key body as malformed (fail closed): say what to do, not just that it is malformed.
+    const askAdvice = asked.ask !== undefined && answer.reason === 'malformed' ? `\n[warn] ${peer.name} may be too old to read what you ask (--times, --for and --why travel in the signed request): run \`machine cli update\` ON ${peer.name}, or run without them` : '';
     // The hold limits of the target now apply to every default run: say what to do.
     const limitAdvice = waitSeconds !== undefined ? holdLimitAdvice(answer.reason, peer.name) : undefined;
     // A Deny: the text is the owner's (a peer's text reaches this terminal: control characters become `?`, T-42), and the fixed no-reason sentence already says "denied".
     const why = answer.reason === 'denied' ? (answer.message === NO_DENY_REASON_MESSAGE ? answer.message : `denied: ${printable(answer.message, MAX_DENY_REASON_LENGTH + 3)}`) : `${answer.reason}: ${answer.message}`;
-    return fail(`refused by ${peer.name}: ${why}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
+    return fail(`refused by ${peer.name}: ${why}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${askAdvice}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
   }
   if (args.json) {
     io.stdout(`${JSON.stringify(answer, null, 2)}\n`);

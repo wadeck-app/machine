@@ -137,6 +137,15 @@ describe('parseRequestsListAnswer (what the admin machine reads from a peer: unt
     expect(parseRequestsListAnswer(many, 'a1b2c3d4-0000-4000-8000-000000000000')).toMatchObject({ ok: false });
   });
 
+  it('reads the ask of a held request, and refuses a peer whose ask is not one (an incompatible version, said loudly)', () => {
+    const v = valid();
+    v['waiting'] = [{ ...held(1), peerName: 'laptop', ask: { for: 'permanent', why: 'rerun' } }];
+    const r = parseRequestsListAnswer(v, 'a1b2c3d4-0000-4000-8000-000000000000');
+    expect(r.ok && r.answer.waiting[0]?.ask).toEqual({ for: 'permanent', why: 'rerun' });
+    v['waiting'] = [{ ...held(1), peerName: 'laptop', ask: { times: -1 } }];
+    expect(parseRequestsListAnswer(v, 'a1b2c3d4-0000-4000-8000-000000000000')).toMatchObject({ ok: false });
+  });
+
   it('reads the held requests, with every text reduced to bounded printable ASCII', () => {
     const v = valid();
     v['waiting'] = [{ ...held(1, 'ls[2J'), peerName: 'laptop' }];

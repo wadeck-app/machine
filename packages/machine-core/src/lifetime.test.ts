@@ -8,6 +8,12 @@ describe('parseLifetime: --times, --for, --until (permanent by default)', () => 
     expect(parseLifetime({}, NOW)).toBeUndefined();
   });
 
+  it('--for permanent is the explicit way to say no limits, and still excludes --times and --until', () => {
+    expect(parseLifetime({ for: 'permanent' }, NOW)).toBeUndefined();
+    expect(() => parseLifetime({ for: 'permanent', times: '3' }, NOW)).toThrow(/only one of/);
+    expect(() => parseLifetime({ for: 'Permanent' }, NOW)).toThrow(/--for/);
+  });
+
   it('--times N is maxCalls', () => {
     expect(parseLifetime({ times: '5' }, NOW)).toEqual({ maxCalls: 5 });
     expect(parseLifetime({ times: '1' }, NOW)).toEqual({ maxCalls: 1 });

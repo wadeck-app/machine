@@ -47,6 +47,20 @@ An entry whose `--times` calls are used, or whose `--for`/`--until` date passed,
 | Counter | The key of the counter is entry + limits (+ `limits.renewals`). A renewal writes `limits.renewals` = previous + 1 (only when the entry keeps limits), so the replaced entry starts at 0 even with identical limits, and a list edit that leaves an entry alone keeps its count. A body with `renewals` is version 2: an older target refuses it with `unsupported version 2` and the update hint |
 | Release | The 1 s poll (or the delivery wake-up) runs the same `authorize`: the held run proceeds as for any Allow; at the deadline the refusal keeps the cause (`exhausted`, `expired`) plus `waited 10m, nobody answered` |
 
+## Caller's ask (decision 96)
+
+`machine run <machine> [--times <n> | --for <duration>|permanent] [--why <text>] -- <command>` tells the OWNER of a held request what the caller would like. It is a wish: it pre-fills the Allow and is shown as the caller's, nothing is applied without the owner's signature (T-66).
+
+| Point | Rule |
+|---|---|
+| Wire | Optional `ask: { times?, for?, why? }` inside the SIGNED request body (10 keys instead of 9), same choice as the planned `detach` (detached-jobs.md, C3): bound to the caller signature, not editable in transit. Older target: refuses the shape as malformed, fail closed, nothing runs; the caller adds `<m> may be too old to read what you ask: run machine cli update ON <m>, or run without them` |
+| Ranges | `times` 1 to 10000; `for` `permanent` or a duration of at most 365 days (the parser of `machine admin allow`, `--for permanent` added to it); `times` and `for` never together (an entry has one lifetime); `why` printable ASCII, 1 to 200 characters. The CLI checks before any connection; the target checks again and refuses a value out of range AT ONCE (`bad-ask`, names the field and the fix), never clamps |
+| Only a held request | `--no-wait` (or a setting that does not wait) with an ask is refused by the CLI: nobody would read it. A command that is already allowed runs and the ask is ignored (it must still be valid) |
+| Where it goes | The hold, the `held` audit line (`ask`), the notices to the recipients (field `ask`; a recipient older than this version refuses the notice as an unknown field: update it), the `requests-list` rows, `machine requests` (`asked by the caller (<id>): 3 calls; reason given: ...`), the page card (`Requested by the caller (not your decision)`). Never in an answer to the caller |
+| Pre-fill | The lifetime selector of the Allow dialog and of the inline form starts from it (1 call: once; 15m, 1h, 1d: that preset; another duration or n calls: custom; permanent), and the CLI hint becomes `machine admin allow ... --times n` or `--for d` (nothing for permanent). A reason alone pre-fills nothing. The batch Allow keeps its own default |
+| Flag | permanent, 50 calls or more, or more than 7 days: a warning colour on the page and `[warn]` in the terminal, one line saying it was `asked by the caller, not decided by you` |
+| Text | Untrusted: text nodes only on the page, `?` for any non printable character in the terminal (T-42); strict parse of every carrier, an invalid ask in an audit line is dropped, in a notice or a `requests-list` answer it is refused loudly |
+
 ## Limits (the wait is chosen by the caller, so the target bounds it)
 
 | Input | Limit |

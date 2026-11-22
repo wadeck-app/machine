@@ -1,4 +1,4 @@
-import { buildRequestNotice, buildRequestNoticeEnd, type Json, type NoticeOutcome, type Shell, type WaitingRenewal } from '@wadeck-app/machine-core';
+import { buildRequestNotice, buildRequestNoticeEnd, type Json, type NoticeOutcome, type Shell, type CallerAsk, type WaitingRenewal } from '@wadeck-app/machine-core';
 import type { PeerToReach } from './peerConnect.js';
 
 // The sender side of request notices (request-notices.md, decision 83): when this machine HOLDS a request, refuses one that no Allow can be
@@ -25,6 +25,8 @@ export interface NoticeRequest {
   deadline?: number;
   /** The request waits for the renewal of an exhausted or expired entry (held notices only). */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (held notices only): its wish, shown as such. */
+  ask?: CallerAsk;
 }
 
 export interface RequestNotifier {
@@ -301,7 +303,7 @@ export function createRequestNotifier(deps: RequestNotifierDeps): RequestNotifie
             uuid,
             'request-notice',
             request.id,
-            () => buildRequestNotice({ id: request.id, peer: request.peer, peerName: request.peerName, shell: request.shell, command: request.command, state: 'held', deadline: request.deadline, now: deps.now(), ...(request.renewal !== undefined ? { renewal: request.renewal } : {}) }),
+            () => buildRequestNotice({ id: request.id, peer: request.peer, peerName: request.peerName, shell: request.shell, command: request.command, state: 'held', deadline: request.deadline, now: deps.now(), ...(request.renewal !== undefined ? { renewal: request.renewal } : {}), ...(request.ask !== undefined ? { ask: request.ask } : {}) }),
             () => !ended.has(request.id),
           );
         }

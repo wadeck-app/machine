@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -112,6 +112,58 @@ describe('machine run --wait', () => {
     expect(sent.out).toContain('denied (not today)');
     const received = await cli(b, ['log', '--received', '--outcome', 'denied']);
     expect(received.out).toContain('denied (not today)');
+  });
+
+  it('what the caller asks (--times, --why) is stored with the hold and shown to the owner as the CALLER request, with the allow command pre-filled; nothing is applied', async () => {
+    const pending = runWaiting('10s', ['echo', 'asked'], ['--times', '3', '--why', 'rerun after the fix']);
+    const id = await waitingId();
+    const json = JSON.parse((await cli(b, ['requests', '--json'])).out) as { summary: { waiting: Array<{ ask?: unknown }> } };
+    expect(json.summary.waiting[0]?.ask).toEqual({ times: 3, why: 'rerun after the fix' });
+    const text = (await cli(b, ['requests'])).out;
+    expect(text).toContain('asked by the caller');
+    expect(text).toContain('3 calls; reason given: rerun after the fix');
+    expect(text).toMatch(/allow: machine admin allow laptop --shell \S+ --times 3 -- "echo asked"/);
+    // The audit line of the hold carries it (the daemon reads the pending list from it).
+    expect(readFileSync(join(b, 'audit.log'), 'utf8')).toContain('"ask":{"times":3,"why":"rerun after the fix"}');
+    // Nothing was allowed by asking: the request is still waiting, and the policy has only its original entry.
+    expect((await cli(b, ['allowed'])).out).not.toContain('echo asked');
+    await cli(b, ['requests', '--deny', id.slice(0, 8)]);
+    await pending;
+  });
+
+  it('a permanent ask is flagged as the caller wish, not the owner decision', async () => {
+    const pending = runWaiting('10s', ['echo', 'forever'], ['--for', 'permanent']);
+    const id = await waitingId();
+    const text = (await cli(b, ['requests'])).out;
+    expect(text).toMatch(/\[warn\].*permanent.*asked by the caller, not decided by the owner/);
+    await cli(b, ['requests', '--deny', id.slice(0, 8)]);
+    await pending;
+  });
+
+  it.each([
+    [['--times', '0'], /--times/],
+    [['--times', '5', '--for', '1h'], /only one of --times and --for/],
+    [['--for', '999d'], /--for/],
+    [['--why', 'café'], /--why must be printable ASCII/],
+  ])('refuses %j before any connection, naming the flag and the fix', async (flags, message) => {
+    const r = await runWaiting('10s', ['echo', 'x'], flags);
+    expect(r.code).toBe(255);
+    expect(r.err).toMatch(message);
+    const none = await cli(b, ['requests', '--json']);
+    expect((JSON.parse(none.out) as { summary: { waiting: unknown[] } }).summary.waiting).toEqual([]);
+  });
+
+  it('refuses the ask without a wait: nobody would read it', async () => {
+    const r = await cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--no-wait', '--times', '2', '--', 'echo', 'x'], undefined, { allowLoopbackPeers: true });
+    expect(r.code).toBe(255);
+    expect(r.err).toMatch(/HELD/);
+    expect(r.err).toMatch(/--no-wait|does not wait/);
+  });
+
+  it('--why only applies to machine run', async () => {
+    const r = await cli(a, ['peers', '--why', 'x']);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toMatch(/--why only applies to `machine run`/);
   });
 
   it('refuses a wait outside 10 s to 60 min before any connection, naming the limits', async () => {

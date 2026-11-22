@@ -1,4 +1,4 @@
-import { allowCommand, clockSkewProblem, describeHistory, parseWaitingRenewal, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type WaitingRenewal, type WaitingRequest } from '@wadeck-app/machine-core';
+import { allowCommand, clockSkewProblem, describeHistory, parseCallerAsk, parseWaitingRenewal, type HistoryEntry, type PendingGroup, type RequestsListAnswer, type RequestsSummary, type CallerAsk, type WaitingRenewal, type WaitingRequest } from '@wadeck-app/machine-core';
 import { ageText } from './candidacies.js';
 
 // The Requests page (decision 73): what the peers asked THIS machine to run and what became of it. The data is the answer of the daemon
@@ -50,6 +50,8 @@ export interface NoticeRow {
   receivedAt: number;
   /** The request waits for the renewal of an exhausted or expired entry (the Allow replaces that entry). */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (`machine run --times/--for/--why`): its wish, untrusted text, only pre-fills the Allow. */
+  ask?: CallerAsk;
 }
 
 export interface PendingRow {
@@ -81,6 +83,8 @@ export interface WaitingRow {
   nextWhere: string;
   /** Present when the request waits for the renewal of an exhausted or expired entry: the Allow replaces that entry (hold-for-approval.md, "Renewal"). */
   renewal?: WaitingRenewal;
+  /** What the caller asked the owner for (decision 96): its wish, untrusted text, only pre-fills the Allow. */
+  ask?: CallerAsk;
 }
 
 export interface HistoryRow {
@@ -166,6 +170,7 @@ function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'adm
     nextCommand: allowCommand(w, machine),
     nextWhere: nextWhere(machine),
     ...(w.renewal !== undefined ? { renewal: w.renewal } : {}),
+    ...(w.ask !== undefined ? { ask: w.ask } : {}),
   };
 }
 
@@ -200,9 +205,14 @@ function noticeRow(n: unknown, now: number): NoticeRow | undefined {
   if (n['renewal' as never] !== undefined && renewal === undefined) {
     return undefined;
   }
+  // The same for the ask of the caller: a notice whose ask is not valid is not shown (counted), never shown as a request that asked nothing.
+  const asked = n['ask' as never] === undefined ? undefined : parseCallerAsk(n['ask' as never]);
+  if (asked !== undefined && !asked.ok) {
+    return undefined;
+  }
   // The hold length is deadline - ts (both the target's clock); the time since it arrived is on this clock: no clock of the target is compared with this one.
   const secondsLeft = state === 'held' ? Math.max(0, (deadline as number) - ts - Math.max(0, now - receivedAt)) : null;
-  return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt, ...(renewal !== undefined ? { renewal } : {}) };
+  return { id, machine, machineName, peerText: typeof peerName === 'string' && peerName !== '' ? peerName : peer.slice(0, 8), peer, shell, command, commandTruncated, state, secondsLeft, receivedAt, ...(renewal !== undefined ? { renewal } : {}), ...(asked?.ok === true ? { ask: asked.ask } : {}) };
 }
 
 function noticesOf(answer: RequestsAnswerLike, now: number): { notices: NoticeRow[]; noticesError: string } {

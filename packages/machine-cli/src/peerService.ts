@@ -22,6 +22,7 @@ import {
   type RequestsListData,
   authorize,
   renewalNote,
+  type CallerAsk,
   type WaitingRenewal,
   newRequest,
   signRequest,
@@ -483,12 +484,12 @@ class PeerService {
    * request once an entry signed under hard rule 4 matches, or the final refusal. The caller sends nothing meanwhile: the pending read of
    * the session tells a disconnect, and is handed back to the serve loop afterwards.
    */
-  private async hold(session: PeerSession, carrier: Carrier, request: { id: string; shell: string; command: string }, waitSeconds: number, holds: HoldDeps, check: () => Step, first: Extract<Step, { ok: false }>): Promise<HoldOutcome> {
+  private async hold(session: PeerSession, carrier: Carrier, request: { id: string; shell: string; command: string; ask?: CallerAsk }, waitSeconds: number, holds: HoldDeps, check: () => Step, first: Extract<Step, { ok: false }>): Promise<HoldOutcome> {
     const { deps } = this;
     const { table } = holds;
-    const { id, shell, command } = request;
+    const { id, shell, command, ask } = request;
     const { renewal } = first;
-    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS, ...(renewal !== undefined ? { renewal } : {}) });
+    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS, ...(renewal !== undefined ? { renewal } : {}), ...(ask !== undefined ? { ask } : {}) });
     if (!admitted.ok) {
       return { kind: 'answer', answer: this.refuse(session, id, admitted.reason, admitted.message, { shell, command }) };
     }
@@ -500,7 +501,7 @@ class PeerService {
     const info: HeldInfo = { waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped };
     // No audit, no hold: `machine requests` lists the waiting requests from this entry.
     try {
-      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped, ...(renewal !== undefined ? { renewal: renewal as unknown as Json } : {}) });
+      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped, ...(renewal !== undefined ? { renewal: renewal as unknown as Json } : {}), ...(ask !== undefined ? { ask: ask as unknown as Json } : {}) });
     } catch (e) {
       table.end(id);
       this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
@@ -508,7 +509,7 @@ class PeerService {
     }
     this.holdChanged(holds);
     // Best effort and never awaited: the recipients are told once the request is safely held.
-    this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline, ...(renewal !== undefined ? { renewal } : {}) }));
+    this.notify((n) => n.held({ id, peer: session.peerId, peerName: this.nameOf(session), shell: shell as Shell, command, deadline: hold.deadline, ...(renewal !== undefined ? { renewal } : {}), ...(ask !== undefined ? { ask } : {}) }));
     // The page and the recipients are told by `announce`. For an Allow it is the caller of the run that calls it, once the command started (or could not): "released" is only true then.
     const announce: Announce = (outcome, failure) => {
       this.notify((n) => n.ended(id, outcome));
@@ -935,7 +936,7 @@ class PeerService {
     let announce: Announce | undefined;
     // The same command is allowed under another shell: the caller used the wrong one, and no Allow of this one is expected: not held.
     if (!step.ok && waitSeconds !== undefined && deps.holds !== undefined && HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
-      const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command }, waitSeconds, deps.holds, check, step);
+      const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command, ...(body.ask !== undefined ? { ask: body.ask } : {}) }, waitSeconds, deps.holds, check, step);
       if (outcome.kind === 'dropped') {
         return undefined;
       }
@@ -1051,6 +1052,8 @@ export interface RunOnPeerInput {
   command: string;
   /** Epoch seconds. */
   now: number;
+  /** What the caller asks the OWNER for (`--times`, `--for`, `--why`): inside the signed body, needs `waitSeconds` (only a held request has an owner to ask). */
+  ask?: CallerAsk;
   /** How long to wait for the answer; defaults to the wait (if any) plus the server's command timeout plus a margin. */
   timeoutMs?: number;
   /** Ask the target to HOLD the request up to this many seconds when it is not allowed yet (`--wait`). The target may cap it. */
@@ -1064,7 +1067,7 @@ export interface RunOnPeerInput {
 /** Ask a connected peer to run one command and return its answer, which may be a refusal with its cause. */
 export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Promise<PeerAnswer> {
   const timeoutMs = input.timeoutMs ?? holdAnswerTimeoutMs(input.waitSeconds ?? 0, DEFAULT_TIMEOUT_MS);
-  const body = newRequest({ source: input.source, target: input.target, shell: input.shell, command: input.command, now: input.now });
+  const body = newRequest({ source: input.source, target: input.target, shell: input.shell, command: input.command, now: input.now, ...(input.ask !== undefined ? { ask: input.ask } : {}) });
   session.send({ type: 'run', request: signRequest(body, input.identity.privateKeyPkcs8), ...(input.waitSeconds !== undefined ? { waitSeconds: input.waitSeconds } : {}) });
   const startedAt = Date.now();
   let ticker: NodeJS.Timeout | undefined;

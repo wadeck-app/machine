@@ -135,3 +135,17 @@ describe('mergeNotices: a notice that waits for a renewal', () => {
     expect(merge([notice()]).held[0]).not.toHaveProperty('renewal');
   });
 });
+
+describe('mergeNotices: a notice that carries what the caller asked for (decision 96)', () => {
+  it('the held row carries the ask and its exact command suggests --times n / --for d (nothing for permanent); the owner edits it', () => {
+    const at = (ask: NonNullable<NoticeData['ask']>) => merge([notice({ command: 'orch deploy', ask })]).held[0];
+    expect(at({ times: 3, why: 'rerun' })?.ask).toEqual({ times: 3, why: 'rerun' });
+    expect(at({ times: 3 })?.nextCommand).toBe('machine admin allow laptop --shell sh --times 3 -- "orch deploy"');
+    expect(at({ for: '30m' })?.nextCommand).toBe('machine admin allow laptop --shell sh --for 30m -- "orch deploy"');
+    expect(at({ for: 'permanent' })?.nextCommand).toBe('machine admin allow laptop --shell sh -- "orch deploy"');
+  });
+
+  it('a notice without an ask has no ask key', () => {
+    expect(merge([notice({ command: 'ls' })]).held[0]).not.toHaveProperty('ask');
+  });
+});

@@ -28,6 +28,24 @@ const input = (over: Partial<RequestsLayoutInput> = {}): RequestsLayoutInput => 
 const widest = (lines: string[]): number => Math.max(...lines.map((l) => l.length));
 const ascii = (lines: string[]): boolean => lines.every((l) => /^[\x20-\x7e]*$/.test(l));
 
+describe('layoutRequests: the ask of the caller', () => {
+  it('says what the CALLER asked, apart from the owner (one line per held request), and flags permanent or a large number of calls', () => {
+    const lines = layoutRequests(input({ waiting: [{ ...held(1, 'hostname'), ask: { times: 3, why: 'rerun after the fix' } }, { ...held(2, 'uptime'), ask: { for: 'permanent' } }] }));
+    const text = lines.join('\n');
+    expect(text).toMatch(/asked by the caller \(abcdef1\d\): 3 calls; reason given: rerun after the fix/);
+    expect(text).toMatch(/asked by the caller \(abcdef1\d\): permanent/);
+    expect(text).toMatch(/\[warn\].*permanent.*asked by the caller, not decided by the owner/);
+    expect(ascii(lines)).toBe(true);
+    expect(widest(lines)).toBeLessThanOrEqual(120);
+  });
+
+  it('shows the text of the caller escaped: a control character never reaches the terminal', () => {
+    const lines = layoutRequests(input({ waiting: [{ ...held(1, 'hostname'), ask: { why: 'x\u001b[2Jy' } }] }));
+    expect(ascii(lines)).toBe(true);
+    expect(lines.join('\n')).toContain('x?[2Jy');
+  });
+});
+
 describe('layoutRequests: structure', () => {
   it('a header with the machine and the counts, WAITING NOW first, then REFUSED, one aligned table row per request', () => {
     const lines = layoutRequests(input({ waiting: [held(1, 'hostname')], pending: [group('ls'), group('df -h', { count: 1 })], pendingTotal: 2 }));

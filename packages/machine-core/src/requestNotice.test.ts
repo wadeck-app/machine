@@ -27,6 +27,13 @@ describe('request-notice frame', () => {
     expect(parseRequestNotice(frame)).toEqual({ ok: true, notice: frame });
   });
 
+  it('carries the ask of the caller (held notices) and refuses an invalid one, naming the field', () => {
+    const frame = buildRequestNotice({ id: ID, peer: PEER, peerName: 'agent-box', shell: 'sh', command: 'ls', state: 'held', deadline: NOW + 600, now: NOW, ask: { times: 2, why: 'rerun' } });
+    expect(parseRequestNotice(frame)).toEqual({ ok: true, notice: frame });
+    expect(parseRequestNotice({ ...frame, ask: { times: 0 } })).toMatchObject({ ok: false, message: expect.stringContaining('ask') });
+    expect(parseRequestNotice({ ...frame, ask: { colour: 'red' } })).toMatchObject({ ok: false });
+  });
+
   it('a refused request has no deadline', () => {
     const frame = buildRequestNotice({ id: ID, peer: PEER, peerName: 'agent-box', shell: 'sh', command: 'ls', state: 'refused', deadline: null, now: NOW });
     expect(parseRequestNotice(frame)).toMatchObject({ ok: true });

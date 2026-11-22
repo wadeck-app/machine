@@ -83,6 +83,8 @@ export interface Parsed {
   times?: string;
   for?: string;
   until?: string;
+  /** `run --why <text>`: why the caller asks, shown to the owner as the caller's words (validated by machine-core askFromFlags). */
+  why?: string;
   /** `admin allow --remove` / `policy allow --remove`: the number shown by `machine allowed` instead of the command. Text, validated by the command. */
   index?: string;
   out?: string;

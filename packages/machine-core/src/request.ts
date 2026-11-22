@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { decodeBase64urlStrict, verifyBytes } from './keys.js';
 import { signingInput } from './canonical.js';
+import { parseCallerAsk, type CallerAsk } from './callerAsk.js';
 import { SHELLS, commandTextProblem, type Shell } from './policy.js';
 import { isUuid } from './reference.js';
 import { signDocument } from './signed.js';
@@ -24,6 +25,11 @@ export interface RequestBody {
   command: string;
   issuedAt: number;
   expiresAt: number;
+  /**
+   * What the caller asks the OWNER for (`machine run --times/--for/--why`, decision 96): inside the signed body, present only when asked (10 keys instead of 9).
+   * An older target refuses the shape as malformed: nothing runs (fail closed). It only pre-fills the owner's Allow, it grants nothing.
+   */
+  ask?: CallerAsk;
 }
 
 export interface SignedRequest {
@@ -31,7 +37,7 @@ export interface SignedRequest {
   signature: string;
 }
 
-export function newRequest(input: { source: string; target: string; shell: Shell; command: string; now: number; lifetimeSeconds?: number }): RequestBody {
+export function newRequest(input: { source: string; target: string; shell: Shell; command: string; now: number; lifetimeSeconds?: number; ask?: CallerAsk }): RequestBody {
   return {
     v: 1,
     id: randomUUID(),
@@ -42,6 +48,7 @@ export function newRequest(input: { source: string; target: string; shell: Shell
     command: input.command,
     issuedAt: input.now,
     expiresAt: input.now + (input.lifetimeSeconds ?? DEFAULT_REQUEST_LIFETIME_SECONDS),
+    ...(input.ask !== undefined ? { ask: input.ask } : {}),
   };
 }
 
@@ -49,7 +56,7 @@ export function signRequest(body: RequestBody, privateKeyPkcs8: Uint8Array): Sig
   return { body, signature: signDocument(REQUEST_DOMAIN, body as never, privateKeyPkcs8) };
 }
 
-export type RequestFailure = 'malformed' | 'bad-signature' | 'wrong-target' | 'lifetime-too-long' | 'not-yet-valid' | 'expired';
+export type RequestFailure = 'malformed' | 'bad-signature' | 'wrong-target' | 'bad-ask' | 'lifetime-too-long' | 'not-yet-valid' | 'expired';
 export type RequestResult = { ok: true; body: RequestBody } | { ok: false; reason: RequestFailure; message: string };
 
 export interface VerifyRequestContext {
@@ -81,6 +88,10 @@ function wellFormed(signed: unknown): signed is SignedRequest {
   if (typeof b.shell !== 'string' || !(SHELLS as readonly string[]).includes(b.shell)) return false;
   if (typeof b.command !== 'string' || commandTextProblem(b.command) !== undefined) return false;
   if (!Number.isSafeInteger(b.issuedAt) || !Number.isSafeInteger(b.expiresAt) || (b.expiresAt as number) <= (b.issuedAt as number)) return false;
+  // The ask is a tenth key, only when the caller asked something; its content is checked after the signature (a refusal with the fix, not a generic malformed).
+  if ('ask' in b) {
+    return Object.keys(b).length === 10 && typeof b.ask === 'object' && b.ask !== null && !Array.isArray(b.ask);
+  }
   return Object.keys(b).length === 9;
 }
 
@@ -95,6 +106,12 @@ export function verifyRequest(signed: unknown, ctx: VerifyRequestContext): Reque
   }
   if (!verifyBytes(ctx.sourcePublicKey, input, signature)) {
     return { ok: false, reason: 'bad-signature', message: 'request refused: the signature does not match the registered key of the source machine' };
+  }
+  if (body.ask !== undefined) {
+    const asked = parseCallerAsk(body.ask);
+    if (!asked.ok) {
+      return { ok: false, reason: 'bad-ask', message: `request refused: ${asked.message}; fix the --times, --for or --why of \`machine run\` (nothing was held, nothing ran; the target never clamps what a caller asks)` };
+    }
   }
   if (body.target !== ctx.selfUuid) {
     return { ok: false, reason: 'wrong-target', message: 'request refused: it is addressed to another machine' };
