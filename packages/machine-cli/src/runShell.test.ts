@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startMachineDaemon } from './daemonEntry.js';
 import { connectionsFile } from './connectionsStore.js';
 import { readMachine } from './identity.js';
@@ -13,6 +14,21 @@ import { cli, provision, type PolicyDraftEntry } from './testing.js';
 
 const SHELL = process.platform === 'win32' ? 'cmd' : 'sh';
 const ALT = process.platform === 'win32' ? 'ps' : 'bash';
+
+// The first real PowerShell of a fresh Windows CI runner timed out the test '--shell wins' (60 s) in the runs of 7b4ae48 and 3b45748 while the same test passed
+// in other runs: its cause was never established. This warm-up starts PowerShell once, alone, with its own limit and a message that names the measured time, so a
+// slow cold start fails HERE with that fact instead of as an anonymous timeout of a machine run.
+beforeAll(() => {
+  if (process.platform !== 'win32') return;
+  const started = Date.now();
+  const done = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { timeout: 110_000, windowsHide: true });
+  const seconds = Math.round((Date.now() - started) / 100) / 10;
+  if (done.error !== undefined || done.status !== 0) {
+    throw new Error(`the PowerShell warm-up of this test file failed after ${seconds} s (${done.error?.message ?? `exit ${String(done.status)}`}): powershell does not start on this host, the machine run tests of the ps shell cannot run`);
+  }
+  // Said on purpose in the CI log: the slowest cold start seen is then known.
+  console.info(`PowerShell warm-up: ${seconds} s`);
+}, 120_000);
 
 let root: string;
 let a: string;
