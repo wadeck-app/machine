@@ -56,7 +56,7 @@ describe('onboarding with the real relay', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('[ok] admin key created');
     expect(r.out).toContain('MACHINE ADMIN: can approve machines, cannot manage tokens');
-    expect(r.out).toMatch(/Compare this code with the one in the relay console \(the Tokens page lists the request "desktop", marked MACHINE ADMIN\), check that the source address is this computer, then approve\. If the console shows several codes, click this one\./);
+    expect(r.out).toMatch(/Compare this code with the one in the relay console \(the Tokens page lists the request "desktop", marked MACHINE ADMIN\), check that the source address is this computer, then approve./);
     expect(r.out).toContain('[ok] machine admin access approved');
     expect(r.out).toMatch(/\[ok\] relay token "desktop" saved for \S+: it is the token of this machine and its admin token/);
     expect(r.out).toContain('[ok] enrolled "desktop"');

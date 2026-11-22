@@ -39,7 +39,7 @@ export function assertRevocationBody(value: unknown): asserts value is Revocatio
   for (const key of Object.keys(record)) {
     if (!['v', 'adminKeyId', 'issuedAt', 'entries'].includes(key)) throw new Error(`revocation: unknown field "${key}"`);
   }
-  if (record.v !== 1) throw new Error(`revocation: unsupported version ${String(record.v)} (this build reads version 1)`);
+  if (record.v !== 1) throw new Error(`revocation: unsupported version ${String(record.v)} (this build reads version 1): run \`machine cli update\` on this machine`);
   if (typeof record.adminKeyId !== 'string' || !KEY_ID.test(record.adminKeyId)) throw new Error('revocation: adminKeyId must be 32 lowercase hex characters');
   if (typeof record.issuedAt !== 'number' || !Number.isSafeInteger(record.issuedAt) || record.issuedAt < 0) throw new Error('revocation: issuedAt must be epoch seconds');
   if (!Array.isArray(record.entries)) throw new Error('revocation: entries must be a list');

@@ -173,7 +173,7 @@ export async function joinWithDeviceLogin(configDir: string, options: DeviceLogi
 ` +
       `Relay page: ${printable(verificationUrl)}
 ` +
-      `Compare this code with the one in the relay console (the Tokens page lists the request "${deviceLabel(info.name)}", marked machine), check that the source address is this computer, then approve. If the console shows several codes, click this one.
+      `Compare this code with the one in the relay console (the Tokens page lists the request "${deviceLabel(info.name)}", marked machine), check that the source address is this computer, then approve.
 
 ` +
       `Waiting for the approval in the relay console (up to ${Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60))} min, Ctrl-C stops it and nothing is stored).

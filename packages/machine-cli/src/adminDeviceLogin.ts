@@ -106,7 +106,7 @@ export async function adminLoginByConsole(configDir: string, o: AdminConsoleLogi
       `  ${printable(started.userCode)}\n\n` +
       (access === 'full'
         ? `In the relay console open Tokens: the request "${label}" is listed there, marked ${marked}. Type this code there, then approve (a full-access request has no codes to click).\n`
-        : `Compare this code with the one in the relay console (the Tokens page lists the request "${label}", marked ${marked}), check that the source address is this computer, then approve. If the console shows several codes, click this one.\n`) +
+        : `Compare this code with the one in the relay console (the Tokens page lists the request "${label}", marked ${marked}), check that the source address is this computer, then approve.\n`) +
       `Relay page: ${printable(started.verificationUrl)}\n` +
       (access === 'full' ? `Check that the address and the label match this machine before you approve.\n` : '') +
       `\n` +

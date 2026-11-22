@@ -107,7 +107,8 @@ describe('machine join by device login', () => {
     expect(lines).toContain('  BCDF-GH23');
     expect(r.out).toMatch(/Relay login code for "laptop" on [\s\S]*Compare this code with the one in the relay console/);
     expect(lines).toContain('Relay page: https://relay.example/device?code=BCDF-GH23');
-    expect(r.out).toContain("check that the source address is this computer, then approve. If the console shows several codes, click this one.");
+    expect(r.out).toContain("check that the source address is this computer, then approve.");
+    expect(r.out).not.toContain("several codes");
     expect(timing.sleeps).toHaveLength(3);
     for (const ms of timing.sleeps) expect(ms).toBeGreaterThanOrEqual(MIN_DEVICE_POLL_MS);
 

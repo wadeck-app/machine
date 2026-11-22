@@ -51,7 +51,7 @@ export function assertRegistrationBody(value: unknown): asserts value is Registr
   for (const key of REGISTRATION_FIELDS) {
     if (!(key in record)) throw new Error(`registration: missing field "${key}"`);
   }
-  if (record.v !== 1) throw new Error(`registration: unsupported version ${String(record.v)} (this build reads version 1)`);
+  if (record.v !== 1) throw new Error(`registration: unsupported version ${String(record.v)} (this build reads version 1): run \`machine cli update\` on this machine`);
   if (typeof record.uuid !== 'string' || !UUID_V4.test(record.uuid)) throw new Error('registration: uuid must be a lowercase version 4 UUID');
   if (typeof record.name !== 'string' || !NAME.test(record.name)) {
     throw new Error('registration: name must be 1 to 32 characters (letters, digits, "_" or "-"), starting with a letter or a digit');
@@ -83,7 +83,7 @@ export function assertRevocationBody(value: unknown): asserts value is Revocatio
   for (const key of Object.keys(record)) {
     if (!['v', 'adminKeyId', 'issuedAt', 'entries'].includes(key)) throw new Error(`revocation: unknown field "${key}"`);
   }
-  if (record.v !== 1) throw new Error(`revocation: unsupported version ${String(record.v)} (this build reads version 1)`);
+  if (record.v !== 1) throw new Error(`revocation: unsupported version ${String(record.v)} (this build reads version 1): run \`machine cli update\` on this machine`);
   if (typeof record.adminKeyId !== 'string' || !KEY_ID.test(record.adminKeyId)) throw new Error('revocation: adminKeyId must be 32 lowercase hex characters');
   if (typeof record.issuedAt !== 'number' || !Number.isSafeInteger(record.issuedAt) || record.issuedAt < 0) throw new Error('revocation: issuedAt must be epoch seconds');
   if (!Array.isArray(record.entries)) throw new Error('revocation: entries must be a list');

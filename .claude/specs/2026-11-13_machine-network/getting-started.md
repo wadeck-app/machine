@@ -22,8 +22,8 @@ The relay is named once (`<relay>` is a host or URL), then stored. A machine tha
 
 | Code | Looks like | Where it comes from | What you do with it |
 |---|---|---|---|
-| Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | compare it with the code the relay console shows (Tokens page lists the request "<name>" or "<name> admin"), check the source address is this computer, then approve; if the console shows several codes, click this one (a different code denies the request and you run the command again): nothing to copy |
-| Relay login code (machine) | `X35M-M87M` | printed by `join` | compare it with the code the relay console shows (source address too), then approve; if the console shows several codes, click this one: it only gives this machine access to the relay |
+| Relay login code (admin) | `X35M-M87M` | printed by `setup` and `machine admin login` with MACHINE ADMIN (can approve machines, cannot manage tokens) | compare it with the code the relay console shows (Tokens page lists the request "<name>" or "<name> admin"), check the source address is this computer, then approve (one click; in the relay's opt-in strict mode a different code denies the request and you run the command again): nothing to copy |
+| Relay login code (machine) | `X35M-M87M` | printed by `join` | compare it with the code the relay console shows (source address too), then approve (one click): it only gives this machine access to the relay |
 | Pairing code | 8 digits | relay console, Tokens, Add token, "Limited to scopes", machine-admin | only for scripts (`machine admin login <code>`); with `--full-access` on a relay that predates the full-access login (`[warn]` line, then it is asked, WITHOUT "Limited to scopes") |
 | Security code | `31447 56532 70010 53274 49389` | printed on the admin machine after it signs, and on the new machine | compare the two: it must read exactly the same on both. If not, `machine admin revoke <name>` |
 
@@ -41,7 +41,7 @@ Relay login code for "laptop" on <relay> (it only gives this machine access to t
   TH9B-3MHH
 
 Relay page: <relay page>
-Compare this code with the one in the relay console (the Tokens page lists the request "laptop", marked machine), check that the source address is this computer, then approve. If the console shows several codes, click this one.
+Compare this code with the one in the relay console (the Tokens page lists the request "laptop", marked machine), check that the source address is this computer, then approve.
 ...
 Candidacy LLADk3BpEqJkNFQuHZT_cA posted: it expires in 15 min (16:07).
 On the admin machine run: machine admin approve

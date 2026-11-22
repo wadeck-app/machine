@@ -55,8 +55,9 @@ describe('machine admin login (no code): a token of the machine-admin scope', ()
     expect(r.out).toContain('Admin login on ');
     expect(r.out).toContain('(MACHINE ADMIN: can approve machines, cannot manage tokens).');
     expect(lines).toContain('  ADMN-7K42');
-    expect(r.out).toContain("Compare this code with the one in the relay console (the Tokens page lists the request \"desk admin\", marked MACHINE ADMIN), check that the source address is this computer, then approve. If the console shows several codes, click this one.");
-    // Clicking, not typing: the console shows six codes.
+    expect(r.out).toContain("Compare this code with the one in the relay console (the Tokens page lists the request \"desk admin\", marked MACHINE ADMIN), check that the source address is this computer, then approve.");
+    expect(r.out).not.toContain("several codes");
+    // One click on the real code, nothing typed (decision 60).
     expect(r.out).not.toMatch(/[Tt]ype (the|it)/);
     expect(r.out).toMatch(/Waiting for the approval in the relay console \(up to 5 min, Ctrl-C stops it and nothing is stored\)\./);
     expect(r.out).toContain('[ok] machine admin access approved');

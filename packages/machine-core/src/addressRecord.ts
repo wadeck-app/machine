@@ -138,7 +138,7 @@ function assertKeys(o: Record<string, unknown>, allowed: string[], where: string
 export function assertAddressRecordBody(value: unknown): asserts value is AddressRecordBody {
   if (!isObject(value)) throw new Error('address record: the body must be an object');
   assertKeys(value, ['v', 'uuid', 'addresses', 'seq', 'issuedAt'], 'address record');
-  if (value.v !== 1) throw new Error(`address record: unsupported version ${String(value.v)} (this build reads version 1)`);
+  if (value.v !== 1) throw new Error(`address record: unsupported version ${String(value.v)} (this build reads version 1): run \`machine cli update\` on this machine`);
   if (typeof value.uuid !== 'string' || !UUID_V4.test(value.uuid)) throw new Error('address record: uuid must be a lowercase version 4 UUID');
   if (typeof value.seq !== 'number' || !Number.isSafeInteger(value.seq) || value.seq < 1) throw new Error('address record: seq must be a positive integer');
   if (typeof value.issuedAt !== 'number' || !Number.isSafeInteger(value.issuedAt) || value.issuedAt < 1) throw new Error('address record: issuedAt must be epoch seconds');

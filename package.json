@@ -11,6 +11,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:relay": "npm run test:relay --workspace machine-cli",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "violations": "violations check",
     "bundle": "npm run bundle --workspace machine-cli",
     "bundle:all": "npm run bundle --workspace machine-cli && npm run bundle:app-module --workspace machine-cli"
   },

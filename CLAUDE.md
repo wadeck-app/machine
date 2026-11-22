@@ -28,6 +28,7 @@ Private network between the user's machines: a CLI and daemon (`machine`) that r
 ```
 npm test            # all workspaces
 npm run typecheck
+npm run violations  # violations check (global binary, not in CI: backlog of 2196)
 MACHINE_TEST_RELAY_MODULE=<poc-node>/tests/helpers/test-relay.mjs npm run test:relay   # init, onboarding, offboarding against the REAL relay (needs the poc-node checkout, `npm ci` done there; not part of `npm test`)
 ```
 
