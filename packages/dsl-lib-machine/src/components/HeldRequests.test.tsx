@@ -717,7 +717,8 @@ describe('what the caller asked for (decision 96)', () => {
     expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument();
     expect(dialog).toHaveTextContent('allowed 3 times');
     expect(dialog).toHaveTextContent('3 calls; reason given: rerun');
-    expect(calls.some((c) => c.url === 'POST /api/modules/machine/allow')).toBe(false);
+    // On failure the vitest diff lists every call this test received, which names who posted before the owner confirmed.
+    expect(calls.map((c) => c.url)).not.toContain('POST /api/modules/machine/allow');
   });
 
   it('a permanent ask pre-fills Permanent and the dialog flags it', async () => {
