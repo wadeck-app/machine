@@ -37,11 +37,11 @@ export const WAKE_COOLDOWN_SECONDS = 60;
  * storm (at most 8 packets per method) or a wait of hours. UNVERIFIED on real hardware: the defaults are a starting point to tune with
  * `machine wake`, which prints the measured time.
  */
-export const WAKE_TUNING_FIELDS = ['probeSeconds', 'waitSeconds', 'maxUnicast', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds'] as const;
+export const WAKE_TUNING_FIELDS = ['probeSeconds', 'waitSeconds', 'maxUnicast', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds', 'hedgeMs'] as const;
 export type WakeTuningField = (typeof WAKE_TUNING_FIELDS)[number];
 export type WakeTuning = Record<WakeTuningField, number>;
 
-export const WAKE_TUNING_DEFAULTS: Readonly<WakeTuning> = { probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 };
+export const WAKE_TUNING_DEFAULTS: Readonly<WakeTuning> = { probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0, hedgeMs: 500 };
 export const WAKE_TUNING_LIMITS: Readonly<Record<WakeTuningField, { min: number; max: number; unit: string; meaning: string }>> = {
   probeSeconds: { min: 1, max: 60, unit: 's', meaning: 'how long the connection is probed after each packet before the next one' },
   waitSeconds: { min: 10, max: 600, unit: 's', meaning: 'total time to wait for the peer to answer' },
@@ -49,6 +49,7 @@ export const WAKE_TUNING_LIMITS: Readonly<Record<WakeTuningField, { min: number;
   maxBroadcast: { min: 0, max: 8, unit: '', meaning: 'broadcast packets at most (0 = none)' },
   connectTimeoutMs: { min: 200, max: 10_000, unit: 'ms', meaning: 'limit of one probe attempt (connect and handshake; a host that just resumed answers TCP late and TLS later)' },
   settleSeconds: { min: 0, max: 120, unit: 's', meaning: 'pause after the peer answered, before the command (a host whose network answers before its daemon is ready)' },
+  hedgeMs: { min: 0, max: 5000, unit: 'ms', meaning: 'the first magic packet is sent when the first connection attempt has not answered after this long, while it continues (0 = off: the packet waits for the attempt to fail)' },
 };
 
 export type TuningValue = { ok: true; value: number } | { ok: false; message: string };

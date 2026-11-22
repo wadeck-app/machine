@@ -93,6 +93,17 @@ export interface WakeEnvOptions {
   onAttempt?: ((address: AddressEntry) => void) | undefined;
 }
 
+/** A timer that a signal cancels: the timer is cleared and the promise resolves (no handle left on the event loop). */
+function realSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 /** What `connectWithWake` needs from this process: the real clock, interfaces and UDP sender, or the test ones. */
 export function makeWakeEnv(ctx: CommandContext, trusted: TrustedPeer, options: WakeEnvOptions): WakeEnv {
   const { io, args, configDir } = ctx;
@@ -106,7 +117,7 @@ export function makeWakeEnv(ctx: CommandContext, trusted: TrustedPeer, options: 
     bypassCooldown: options.requestedBy === 'wake',
     epochSeconds: () => epochSecondsOf(ctx),
     nowMs: io.wake?.nowMs ?? (() => performance.now()),
-    sleep: io.wake?.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+    sleep: io.wake?.sleep ?? realSleep,
     interfaces: io.wake?.interfaces ?? realInterfaces,
     sender: io.wake?.sender ?? createWakeSender(),
     ...options.sinks,
@@ -154,6 +165,7 @@ const LABELS: Record<WakeTuningField, { label: string; flag: string; unit: strin
   maxBroadcast: { label: 'max broadcast', flag: '--wake-max-broadcast', unit: '' },
   connectTimeoutMs: { label: 'connect timeout', flag: '--wake-connect-timeout', unit: ' ms' },
   settleSeconds: { label: 'settle', flag: '--wake-settle', unit: ' s' },
+  hedgeMs: { label: 'hedge', flag: '--wake-hedge', unit: ' ms' },
 };
 
 const valueText = (field: WakeTuningField, value: number | undefined): string => (value === undefined ? 'default' : `${value}${LABELS[field].unit}`);
@@ -200,7 +212,7 @@ function showDocument(name: string, uuid: string, connection: PeerConnection | u
 export async function runPeerConnect(ctx: CommandContext): Promise<number> {
   const { args, rest, io, configDir, fail, emit } = ctx;
   const ref = rest[1];
-  const usage = 'usage: machine peer connect <machine> [--shell cmd|ps|bash|sh | --no-shell] [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]... [--wake-mac <mac>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>] [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>] | machine peer connect <machine> --show | --remove';
+  const usage = 'usage: machine peer connect <machine> [--shell cmd|ps|bash|sh | --no-shell] [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]... [--wake-mac <mac>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>] [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>] [--wake-hedge <ms>] | machine peer connect <machine> --show | --remove';
   if (ref === undefined || rest.length > 2) return fail(usage, EXIT.usage);
 
   const wakeFlags: Array<[WakeTuningField, string | undefined]> = [
@@ -210,13 +222,14 @@ export async function runPeerConnect(ctx: CommandContext): Promise<number> {
     ['maxBroadcast', args.wakeMaxBroadcast],
     ['connectTimeoutMs', args.wakeConnectTimeout],
     ['settleSeconds', args.wakeSettle],
+    ['hedgeMs', args.wakeHedge],
   ];
   const settingFlags = [args.type, args.wakeMac, args.wakeBroadcast, args.shell, ...(args.noShell ? ['x'] : []), ...wakeFlags.map(([, v]) => v), ...(args.addressList.length > 0 ? ['x'] : [])].filter((v) => v !== undefined);
   if (args.shell !== undefined && args.noShell) return fail('--shell and --no-shell cannot be combined: --shell sets the default shell of that peer, --no-shell forgets it', EXIT.usage);
   if (args.show && args.remove) return fail('--show and --remove cannot be combined: --show only reads, --remove deletes the settings of the peer', EXIT.usage);
   if ((args.show || args.remove) && settingFlags.length > 0) return fail(`${args.show ? '--show' : '--remove'} takes no setting: give the settings in one command, then \`machine peer connect ${ref} --show\``, EXIT.usage);
   if (!args.show && !args.remove && settingFlags.length === 0) {
-    return fail(`nothing to set: give --shell, --address, --type, --wake-mac or a timing flag (--wake-probe, --wake-wait, --wake-max-unicast, --wake-max-broadcast, --wake-connect-timeout, --wake-settle), or --show / --remove. ${usage}`, EXIT.usage);
+    return fail(`nothing to set: give --shell, --address, --type, --wake-mac or a timing flag (--wake-probe, --wake-wait, --wake-max-unicast, --wake-max-broadcast, --wake-connect-timeout, --wake-settle, --wake-hedge), or --show / --remove. ${usage}`, EXIT.usage);
   }
 
   // The flags are validated before anything is read or written: a typo costs nothing.
@@ -399,6 +412,7 @@ export function runWakeInfo(ctx: CommandContext): number {
         pinned: (read.connection?.addresses ?? []).map(describeAddress),
         remembered: remembered.map(describeAddress),
         mac: read.connection?.wake?.mac,
+        ...(read.connection?.wake !== undefined ? { hedgeMs: read.connection.wake.hedgeMs ?? WAKE_TUNING_DEFAULTS.hedgeMs, hedgeIsDefault: read.connection.wake.hedgeMs === undefined } : {}),
       }),
     );
     return EXIT.ok;

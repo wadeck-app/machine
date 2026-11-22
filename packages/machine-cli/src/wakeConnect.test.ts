@@ -59,6 +59,33 @@ function world(options: Options = {}) {
     sleeps: [] as number[],
     resolved: 0,
   };
+  // Virtual time: a sleep is a timer that fires, earliest first, once every other promise has settled (no real waiting). An aborted sleep never fires.
+  const timers: Array<{ at: number; resolve: () => void }> = [];
+  let draining = false;
+  const drain = (): void => {
+    if (draining) return;
+    draining = true;
+    setImmediate(() => {
+      draining = false;
+      timers.sort((a, b) => a.at - b.at);
+      const next = timers.shift();
+      if (next === undefined) return;
+      t = Math.max(t, next.at);
+      next.resolve();
+      if (timers.length > 0) drain();
+    });
+  };
+  const sleepVirtual = (ms: number, signal?: AbortSignal): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const timer = { at: t + ms, resolve };
+      timers.push(timer);
+      signal?.addEventListener('abort', () => {
+        const i = timers.indexOf(timer);
+        if (i >= 0) timers.splice(i, 1);
+        resolve();
+      });
+      drain();
+    });
   const sender: WakeSender = {
     send: async (method, packet, routes): Promise<SendReport> => {
       if (options.sendFails) throw new Error('could not send the packet: ENETUNREACH');
@@ -75,9 +102,9 @@ function world(options: Options = {}) {
     requestedBy: 'run',
     epochSeconds: () => EPOCH0 + Math.floor(t / 1000),
     nowMs: () => t,
-    sleep: async (ms) => {
+    sleep: async (ms, signal) => {
       log.sleeps.push(ms);
-      t += ms;
+      await sleepVirtual(ms, signal);
     },
     interfaces: () => options.interfaces ?? [lan],
     sender,

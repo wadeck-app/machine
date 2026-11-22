@@ -51,7 +51,7 @@ export interface CliIo {
 export interface WakeIo {
   sender: WakeSender;
   interfaces: () => LocalInterface[];
-  sleep: (ms: number) => Promise<void>;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   nowMs: () => number;
   /**
    * Tests only: a sleeping peer. Called before each real connection attempt; a kind makes the attempt fail with it (a `ConnectError`, as a real
@@ -107,6 +107,7 @@ export interface Parsed {
   wakeMaxBroadcast?: string;
   wakeConnectTimeout?: string;
   wakeSettle?: string;
+  wakeHedge?: string;
   /** `machine ping <machine> --count <n>`: rounds, 1 to 10 (validated by `parsePingCount`). */
   count?: string;
   /** `machine run`, `admin allow`, `policy allow`: the shell of the command. `machine peer connect`: the default shell of that peer. */

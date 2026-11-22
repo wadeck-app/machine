@@ -10,6 +10,9 @@ export interface WakeInfoData {
   remembered: string[];
   /** The MAC configured on this machine, normalised. */
   mac: string | undefined;
+  /** Effective hedge (ms, 0 = off) and whether nobody set it. Absent without a MAC. */
+  hedgeMs?: number;
+  hedgeIsDefault?: boolean;
 }
 
 const DEFAULT_PEER_PORT = 47921;
@@ -18,7 +21,7 @@ const list = (values: string[]): string => (values.length === 0 ? 'none' : value
 
 /** The checklist, plain text with blank lines. Linux commands are the usual ones; every macOS and Windows line says UNVERIFIED. */
 export function wakeInfoText(data: WakeInfoData): string {
-  const { name, uuid, pinned, remembered, mac } = data;
+  const { name, uuid, pinned, remembered, mac, hedgeMs, hedgeIsDefault } = data;
   const address = pinned[0] ?? `<ip>:${DEFAULT_PEER_PORT}`;
   const macArgument = mac ?? '<aa:bb:cc:dd:ee:ff>';
   const lines: string[] = [];
@@ -35,6 +38,11 @@ export function wakeInfoText(data: WakeInfoData): string {
     `  pinned address   ${list(pinned)}${pinned.length === 0 ? '  (pin one with: machine peer connect ' + name + ' --address <ip>:<port>)' : ''}`,
     `  relay record     ${list(remembered)}${remembered.length > 0 ? '  (last record seen; a pinned address wins over it)' : ''}`,
     `  wake MAC         ${mac ?? 'not configured  (see "Find the MAC address" below)'}`,
+    ...(mac !== undefined && hedgeMs !== undefined
+      ? [
+          `  first packet     ${hedgeMs === 0 ? 'after the first attempt failed (hedge off, --wake-hedge 0)' : `hedged after ${hedgeMs} ms${hedgeIsDefault === true ? ' (default)' : ''}: sent while the first attempt is still pending`}  (change: machine peer connect ${name} --wake-hedge <ms>, 0 = off)`,
+        ]
+      : []),
     '',
     'Set Wake-on-LAN on the target',
     '',

@@ -61,9 +61,9 @@ describe('parseConnections', () => {
   });
 
   it('accepts every timing at its bounds and keeps the others absent (the defaults apply at use)', () => {
-    const lo = parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 1, waitSeconds: 10, maxUnicast: 0, maxBroadcast: 8, connectTimeoutMs: 200, settleSeconds: 0 } } } });
-    expect(lo.peers[UUID]?.wake).toEqual({ mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 1, waitSeconds: 10, maxUnicast: 0, maxBroadcast: 8, connectTimeoutMs: 200, settleSeconds: 0 });
-    const hi = parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 60, waitSeconds: 600, maxUnicast: 8, maxBroadcast: 0, connectTimeoutMs: 10000, settleSeconds: 120 } } } });
+    const lo = parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 1, waitSeconds: 10, maxUnicast: 0, maxBroadcast: 8, connectTimeoutMs: 200, settleSeconds: 0, hedgeMs: 0 } } } });
+    expect(lo.peers[UUID]?.wake).toEqual({ mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 1, waitSeconds: 10, maxUnicast: 0, maxBroadcast: 8, connectTimeoutMs: 200, settleSeconds: 0, hedgeMs: 0 });
+    const hi = parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 60, waitSeconds: 600, maxUnicast: 8, maxBroadcast: 0, connectTimeoutMs: 10000, settleSeconds: 120, hedgeMs: 5000 } } } });
     expect(hi.peers[UUID]?.wake?.maxBroadcast).toBe(0);
     expect(parseConnections({ v: 1, peers: { [UUID]: { type: 'direct', wake: { mac: 'aa:bb:cc:dd:ee:01' } } } }).peers[UUID]?.wake).toEqual({ mac: 'aa:bb:cc:dd:ee:01' });
   });
@@ -100,6 +100,7 @@ describe('parseConnections', () => {
     ['maxBroadcast 9', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.maxBroadcast = 9)), /wake\.maxBroadcast.*from 0 to 8/],
     ['maxBroadcast fractional', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.maxBroadcast = 2.5)), /wake\.maxBroadcast/],
     ['connect timeout 50 ms', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.connectTimeoutMs = 50)), /wake\.connectTimeoutMs.*from 200 to 10000/],
+    ['hedge too large', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.hedgeMs = 5001)), /wake.hedgeMs.*from 0 to 5000/],
     ['settle negative', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.settleSeconds = -1)), /wake\.settleSeconds.*from 0 to 120/],
     ['both maxima 0', mutate((o) => Object.assign((o.peers[UUID] as { wake: Record<string, unknown> }).wake, { maxUnicast: 0, maxBroadcast: 0 })), /no packet would ever be sent/],
     ['wait not a number', mutate((o) => ((o.peers[UUID] as { wake: Record<string, unknown> }).wake.waitSeconds = '90')), /wake\.waitSeconds/],

@@ -146,7 +146,7 @@ const GROUPS: GroupHelp[] = [
           '--shell cmd|ps|bash|sh   default shell of `machine run <machine>` here (used when run has no --shell, else the platform of this machine); --no-shell forgets it',
           '--address <host:port>   pin an address (repeatable, up to 8); wins over the relay record',
           '--wake-mac <aa:bb:cc:dd:ee:ff>   the MAC to wake (typed by you, never taken from the relay)',
-          '--wake-broadcast <ipv4>, --wake-probe <s>, --wake-wait <s>, --wake-max-unicast <n>, --wake-max-broadcast <n>, --wake-connect-timeout <ms>, --wake-settle <s>   wake tuning (see `machine --help`)',
+          '--wake-broadcast <ipv4>, --wake-probe <s>, --wake-wait <s>, --wake-max-unicast <n>, --wake-max-broadcast <n>, --wake-connect-timeout <ms>, --wake-settle <s>, --wake-hedge <ms>   wake tuning (see `machine --help`)',
           '--show   the effective values; --remove   forget the settings of that peer',
         ],
         examples: ['machine peer connect laptop --shell sh', 'machine peer connect laptop --address 192.168.1.20:47921 --wake-mac aa:bb:cc:dd:ee:ff', 'machine peer connect laptop --show'],

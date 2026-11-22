@@ -216,4 +216,27 @@ describe('runWakeSequence', () => {
     const r = await runWakeSequence(h.deps, options());
     expect(r.outcome).toBe('no-answer');
   });
+
+
+  it('packet 1 already sent by the caller (hedge): it is counted, not sent again, and the probe window of packet 2 counts from the moment packet 1 left', async () => {
+    const h = harness({ upAtMs: 9000, connectCostMs: 500 });
+    // The caller sent packet 1 at fake time 0 and its first attempt failed at 500 ms: the sequence starts at 500 ms, packet 1 left at 0.
+    await h.deps.sleep(500);
+    const r = await runWakeSequence(h.deps, options({ firstSent: { atMs: 0 } }));
+    // Packet 2 is due 5000 ms after packet 1 (t = 5000), not 5000 ms after the call.
+    expect(h.log.sends.map((s) => `${s.n}:${s.method}@${s.at}`)).toEqual(['2:unicast@5000']);
+    expect(h.log.events.map((e) => e.n)).toEqual([2]);
+    expect(r.outcome).toBe('answered');
+    if (r.outcome === 'answered') {
+      expect(r.packets).toBe(2);
+      expect(r.lastStep).toMatchObject({ n: 2, method: 'unicast' });
+    }
+  });
+
+  it('packet 1 already sent: the limits still apply (never more packets than planned)', async () => {
+    const h = harness({ connectCostMs: 1000 });
+    const r = await runWakeSequence(h.deps, options({ firstSent: { atMs: 0 }, steps: plan({ maxUnicast: 0, maxBroadcast: 2 }) }));
+    expect(h.log.sends.length).toBe(1);
+    expect(r.packets).toBe(2);
+  });
 });

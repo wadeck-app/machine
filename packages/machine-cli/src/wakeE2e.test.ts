@@ -57,7 +57,7 @@ async function startDaemon(dir: string, peerPort: number, advertise: Array<{ hos
 
 interface Wakeable {
   sent: WakeMethod[];
-  io: { wake: { sender: WakeSender; interfaces: () => LocalInterface[]; sleep: (ms: number) => Promise<void>; nowMs: () => number; simulateFailure: () => 'timeout' | undefined }; allowLoopbackPeers: true };
+  io: { wake: { sender: WakeSender; interfaces: () => LocalInterface[]; sleep: (ms: number, signal?: AbortSignal) => Promise<void>; nowMs: () => number; simulateFailure: () => 'timeout' | undefined }; allowLoopbackPeers: true };
   /** Fake time, in ms. */
   now: () => number;
 }
@@ -90,7 +90,13 @@ function wakeWorld(options: { wakeAt?: number; start?: () => Promise<unknown>; a
       wake: {
         sender,
         interfaces: () => [FAKE_LAN],
-        sleep: async (ms) => {
+        // The fake clock cannot race a REAL network attempt: the hedge timer (the only sleep that carries a signal) never fires here, it only ends when
+        // it is cancelled. The hedge is covered with a virtual clock in wakeHedge.test.ts.
+        sleep: async (ms, signal) => {
+          if (signal !== undefined) {
+            await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+            return;
+          }
           t += ms;
         },
         nowMs: () => t,

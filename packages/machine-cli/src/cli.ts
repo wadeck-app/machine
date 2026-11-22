@@ -291,14 +291,16 @@ Administration (enrollment through the relay, or by files):
   peer import <bundle.json>          trust a peer from an admin-signed bundle
   peer connect <machine> [--type direct|ping-if-not-reachable-magic-packet] [--address <host:port>]...
                 [--wake-mac <aa:bb:cc:dd:ee:ff>] [--wake-broadcast <ipv4>] [--wake-probe <s>] [--wake-wait <s>]
-                [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>]
+                [--wake-max-unicast <n>] [--wake-max-broadcast <n>] [--wake-connect-timeout <ms>] [--wake-settle <s>] [--wake-hedge <ms>]
                                      how THIS machine reaches a peer (stored in connections.json, no secret). --address pins
                                      addresses (up to 8) that win over the relay record. A MAC turns on the wake: a directed
                                      broadcast, a probe window, unicast to the peer address, a probe window, alternating, never more
                                      than --wake-max-unicast and --wake-max-broadcast (default 4 each, at most 8 each), the
                                      whole wait <= --wake-wait (default 90, 10 to 600), each probe window --wake-probe (default 5,
                                      1 to 60), each probe attempt (connect and handshake) --wake-connect-timeout (default 3000 ms, 200 to 10000), --wake-settle seconds of
-                                     pause after the answer (default 0). Only toward the subnet this machine shares with the peer.
+                                     pause after the answer (default 0), --wake-hedge ms (default 500, 0 to 5000, 0 = off): the first
+                                     packet leaves when the first attempt has not answered by then, while it goes on. Only toward the
+                                     subnet this machine shares with the peer.
                                      A flag changes that value and keeps the others. UNVERIFIED on real hardware: tune per peer
   peer connect <machine> --shell cmd|ps|bash|sh | --no-shell
                                      the default shell of \`machine run <machine>\` on this machine (strict, shown by --show, removed by
@@ -490,6 +492,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--wake-max-broadcast') out.wakeMaxBroadcast = valueOf('--wake-max-broadcast');
     else if (a === '--wake-connect-timeout') out.wakeConnectTimeout = valueOf('--wake-connect-timeout');
     else if (a === '--wake-settle') out.wakeSettle = valueOf('--wake-settle');
+    else if (a === '--wake-hedge') out.wakeHedge = valueOf('--wake-hedge');
     else if (a === '--count') out.count = valueOf('--count');
     else if (a === '--shell') out.shell = valueOf('--shell');
     else if (a === '--days') out.days = valueOf('--days');
@@ -663,7 +666,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     return fail(`${args.wake ? '--wake' : '--no-wake'} only applies to \`machine run\` and \`machine ping\` (it wakes the peer when it cannot be reached; \`machine wake <machine>\` wakes it now)`, EXIT.usage);
   }
   if (!peerConnect) {
-    const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--no-shell', args.noShell || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle]];
+    const settings: Array<[string, unknown]> = [['--show', args.show || undefined], ['--no-shell', args.noShell || undefined], ['--type', args.type], ['--wake-mac', args.wakeMac], ['--wake-broadcast', args.wakeBroadcast], ['--wake-probe', args.wakeProbe], ['--wake-wait', args.wakeWait], ['--wake-max-unicast', args.wakeMaxUnicast], ['--wake-max-broadcast', args.wakeMaxBroadcast], ['--wake-connect-timeout', args.wakeConnectTimeout], ['--wake-settle', args.wakeSettle], ['--wake-hedge', args.wakeHedge]];
     const used = settings.find(([, v]) => v !== undefined);
     if (used) return fail(`${used[0]} only applies to \`machine peer connect\` (\`machine peer connect <machine> ...\` sets how this machine reaches a peer: pinned addresses, Wake-on-LAN)`, EXIT.usage);
     if (args.addressList.length > 1) return fail('--address can be given only once here (the several-address form is `machine peer connect <machine> --address <host:port> --address <host:port>`)', EXIT.usage);

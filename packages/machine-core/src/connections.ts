@@ -22,6 +22,7 @@ export interface WakeConfig {
   maxBroadcast?: number;
   connectTimeoutMs?: number;
   settleSeconds?: number;
+  hedgeMs?: number;
 }
 
 export interface PeerConnection {

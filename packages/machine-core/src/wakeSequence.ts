@@ -36,6 +36,11 @@ export interface WakeSequenceOptions {
   /** A failed attempt is followed by a pause so that attempts start about this far apart. */
   attemptIntervalMs: number;
   refreshEveryMs: number;
+  /**
+   * Packet 1 (`steps[0]`) was already sent by the caller (hedged first packet, decision 97) at `atMs` on the `nowMs` clock. The sequence counts it,
+   * does not send it again, and measures its probe windows and its budget from that instant instead of from the call.
+   */
+  firstSent?: { atMs: number };
 }
 
 export type WakeOutcome<T> =
@@ -49,10 +54,11 @@ export type WakeOutcome<T> =
   | { outcome: 'send-failed'; error: Error; packets: number; elapsedMs: number };
 
 export async function runWakeSequence<T>(deps: WakeSequenceDeps<T>, options: WakeSequenceOptions): Promise<WakeOutcome<T>> {
-  const start = deps.nowMs();
+  const start = options.firstSent?.atMs ?? deps.nowMs();
   const total = options.steps.length;
-  let sent = 0;
-  let lastStep: SentStep | undefined;
+  if (options.firstSent !== undefined && options.steps.length === 0) throw new Error('firstSent needs at least one planned step: packet 1 cannot have been sent from an empty plan');
+  let sent = options.firstSent !== undefined ? 1 : 0;
+  let lastStep: SentStep | undefined = options.firstSent !== undefined ? { ...(options.steps[0] as WakeStep), n: 1 } : undefined;
   let lastRefresh = start;
   let lastError: unknown;
   // Set at the first refused probe: from then on no packet is sent (the host is awake), the probes go on.

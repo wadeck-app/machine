@@ -183,7 +183,7 @@ describe('selectWakeRoutes', () => {
 
 describe('tuning', () => {
   it('has the documented defaults', () => {
-    expect(WAKE_TUNING_DEFAULTS).toEqual({ probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 });
+    expect(WAKE_TUNING_DEFAULTS).toEqual({ probeSeconds: 5, waitSeconds: 90, maxUnicast: 4, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0, hedgeMs: 500 });
     expect(WAKE_COOLDOWN_SECONDS).toBe(60);
     expect(WAKE_PORT).toBe(9);
   });
@@ -195,6 +195,8 @@ describe('tuning', () => {
     expect(WAKE_TUNING_LIMITS.maxBroadcast).toMatchObject({ min: 0, max: 8 });
     expect(WAKE_TUNING_LIMITS.connectTimeoutMs).toMatchObject({ min: 200, max: 10_000 });
     expect(WAKE_TUNING_LIMITS.settleSeconds).toMatchObject({ min: 0, max: 120 });
+    // 0 disables the hedge: the first packet then waits for the first attempt to fail (decision 97).
+    expect(WAKE_TUNING_LIMITS.hedgeMs).toMatchObject({ min: 0, max: 5000 });
   });
 
   it.each(WAKE_TUNING_FIELDS)('%s: the bounds are accepted, one beyond each is refused with the field name and the range', (field) => {
@@ -214,8 +216,8 @@ describe('tuning', () => {
 
   it('resolveTuning applies the configured values over the defaults and says which fields are defaulted', () => {
     const r = resolveTuning({ probeSeconds: 12, maxUnicast: 0 });
-    expect(r.values).toEqual({ probeSeconds: 12, waitSeconds: 90, maxUnicast: 0, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0 });
-    expect(r.defaulted).toEqual(['waitSeconds', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds']);
+    expect(r.values).toEqual({ probeSeconds: 12, waitSeconds: 90, maxUnicast: 0, maxBroadcast: 4, connectTimeoutMs: 3000, settleSeconds: 0, hedgeMs: 500 });
+    expect(r.defaulted).toEqual(['waitSeconds', 'maxBroadcast', 'connectTimeoutMs', 'settleSeconds', 'hedgeMs']);
     expect(resolveTuning({}).defaulted).toEqual([...WAKE_TUNING_FIELDS]);
   });
 

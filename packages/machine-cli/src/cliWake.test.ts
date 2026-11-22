@@ -57,6 +57,7 @@ describe('machine peer connect <machine> --show', () => {
         '  max broadcast     4 (default)  --wake-max-broadcast: broadcast packets at most (0 = none)',
         '  connect timeout   3000 ms (default)  --wake-connect-timeout: limit of one probe attempt (connect and handshake; a host that just resumed answers TCP late and TLS later)',
         '  settle            0 s (default)  --wake-settle: pause after the peer answered, before the command (a host whose network answers before its daemon is ready)',
+        '  hedge             500 ms (default)  --wake-hedge: the first magic packet is sent when the first connection attempt has not answered after this long, while it continues (0 = off: the packet waits for the attempt to fail)',
         '',
       ].join('\n'),
     );
@@ -96,15 +97,16 @@ describe('machine peer connect <machine> (set)', () => {
 
   it('a flag overrides the stored value and keeps every other: the file is not rewritten from scratch', async () => {
     await connect(['laptop', '--address', '192.168.1.40:47921', '--wake-mac', 'aa:bb:cc:dd:ee:01', '--wake-probe', '8', '--wake-wait', '120']);
-    const r = await connect(['laptop', '--wake-probe', '12', '--wake-settle', '3']);
+    const r = await connect(['laptop', '--wake-probe', '12', '--wake-settle', '3', '--wake-hedge', '0']);
     expect(r.code).toBe(0);
     expect(fileOf().peers[laptop]).toEqual({
       type: 'ping-if-not-reachable-magic-packet',
       addresses: [{ host: '192.168.1.40', port: 47921 }],
-      wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 12, waitSeconds: 120, settleSeconds: 3 },
+      wake: { mac: 'aa:bb:cc:dd:ee:01', probeSeconds: 12, waitSeconds: 120, settleSeconds: 3, hedgeMs: 0 },
     });
     expect(r.err).toMatch(/probe window: 8 s -> 12 s/);
     expect(r.err).toMatch(/settle: default -> 3 s/);
+    expect(r.err).toMatch(/hedge: default -> 0 ms/);
   });
 
   it('--type direct keeps the settings but stops the automatic wake', async () => {
@@ -131,6 +133,7 @@ describe('machine peer connect <machine> (set)', () => {
       [['--wake-max-broadcast', '-1'], /needs a value|maxBroadcast must be/],
       [['--wake-connect-timeout', '50'], /connectTimeoutMs must be a whole number from 200 to 10000/],
       [['--wake-settle', '121'], /settleSeconds must be a whole number from 0 to 120/],
+      [['--wake-hedge', '5001'], /hedgeMs must be a whole number from 0 to 5000 ms/],
       [['--wake-probe', 'abc'], /probeSeconds must be a whole number/],
       [['--wake-probe', '2.5'], /probeSeconds must be a whole number/],
       [['--wake-max-unicast', '0', '--wake-max-broadcast', '0'], /no packet would ever be sent/],

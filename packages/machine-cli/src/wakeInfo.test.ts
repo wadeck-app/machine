@@ -20,6 +20,15 @@ describe('wakeInfoText', () => {
     expect(unknown).toMatch(/pinned address\s+none/);
     expect(unknown).toMatch(/relay record\s+none/);
     expect(unknown).toMatch(/wake MAC\s+not configured/);
+    // No MAC: no wake, so no hedge line.
+    expect(unknown).not.toMatch(/first packet/);
+  });
+
+  it('says when the first packet leaves while the first attempt is pending (hedge), the default, and how to change or switch it off', () => {
+    const dflt = wakeInfoText({ ...base, mac: 'aa:bb:cc:dd:ee:01', hedgeMs: 500, hedgeIsDefault: true });
+    expect(dflt).toMatch(/first packet\s+hedged after 500 ms \(default\)/);
+    expect(dflt).toContain('machine peer connect laptop --wake-hedge <ms>');
+    expect(wakeInfoText({ ...base, mac: 'aa:bb:cc:dd:ee:01', hedgeMs: 0, hedgeIsDefault: false })).toMatch(/first packet\s+after the first attempt failed \(hedge off, --wake-hedge 0\)/);
   });
 
   it('gives the Linux commands without any UNVERIFIED mark on them, and marks every Apple and Windows statement UNVERIFIED', () => {
