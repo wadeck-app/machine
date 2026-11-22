@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildActivity, type RunLogEntry } from '@wadeck-app/machine-core';
+import { buildActivity, type ActivityFilter, type RunLogEntry } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activityPage, activityQueryOf } from './activity.js';
 import register from './index.js';
@@ -84,19 +84,20 @@ function sent(minutesAgo: number, over: Partial<RunLogEntry> = {}): RunLogEntry 
   return { v: 1, ts: new Date((NOW - minutesAgo * 60) * 1000).toISOString(), runId: `run-${minutesAgo}`, from: SELF, to: PEER, shell: 'sh', command: 'ls -l', truncated: false, waitMode: 'default', onRefusal: 'wait', waitSeconds: 600, waitedSeconds: 0, outcome: 'ran', exitCode: 0, durationMs: 1500, ...over };
 }
 
-/** What the daemon answers: the real reader of machine-core over a few sent runs. */
-function daemonAnswer(entries: RunLogEntry[], filter = {}): unknown {
-  const page = buildActivity({ self: SELF, sent: entries, auditLines: [], nameOf: () => undefined, filter });
-  return { initialized: true, ok: true, self: SELF, now: NOW, page, runLog: { dir: '/x/run-log', files: 1, damagedLines: 0 }, auditLogFile: '/x/audit.log', auditLogPresent: false, machines: ['laptop'] };
+/** What the daemon answers: the real reader of machine-core over a few sent runs (the run log, newest line first). */
+function daemonAnswer(entries: RunLogEntry[], filter: ActivityFilter = {}): unknown {
+  const lines = [...entries].sort((a, b) => Date.parse(a.ts) + a.durationMs - (Date.parse(b.ts) + b.durationMs)).map((e) => JSON.stringify(e)).reverse();
+  const page = buildActivity({ self: SELF, sources: { sentLines: () => lines, auditLines: () => [] }, nameOf: () => undefined, filter });
+  return { initialized: true, ok: true, self: SELF, now: NOW, page, runLog: { dir: '/x/run-log', files: 1, damagedLines: 0, recounted: [] }, auditDamagedLines: 0, auditLogFile: '/x/audit.log', auditLogPresent: false, machines: ['laptop'] };
 }
 
 describe('activityQueryOf', () => {
   it('keeps the known text fields and drops the empty ones', () => {
-    expect(activityQueryOf({ direction: 'sent', machine: '', outcome: 'ran', since: '7d', text: 'ls', limit: '25', offset: '50' })).toEqual({ direction: 'sent', outcome: 'ran', since: '7d', text: 'ls', limit: '25', offset: '50' });
+    expect(activityQueryOf({ direction: 'sent', machine: '', outcome: 'ran', since: '7d', text: 'ls', limit: '25', offset: '50', page: '2', pageSize: '50' })).toEqual({ direction: 'sent', outcome: 'ran', since: '7d', text: 'ls', limit: '25', offset: '50', page: '2', pageSize: '50' });
   });
 
   it('refuses a field it does not know, naming it (a typo in a filter is not ignored)', () => {
-    expect(() => activityQueryOf({ directon: 'sent' })).toThrow(/"directon".*direction, machine, outcome, since, text, limit, offset/);
+    expect(() => activityQueryOf({ directon: 'sent' })).toThrow(/"directon".*direction, machine, outcome, since, text, limit, offset, page, pageSize/);
   });
 
   it('refuses a repeated field (an array)', () => {
@@ -105,30 +106,64 @@ describe('activityQueryOf', () => {
 });
 
 describe('activityPage', () => {
-  it('turns the timeline into rows a page can show: who to whom, ages, outcome with its tone', () => {
+  it('turns the timeline into rows a page can show: who to whom, ages, result with its tone', () => {
     const page = activityPage(daemonAnswer([sent(5), sent(10, { outcome: 'refused', reason: 'not-listed' }), sent(20, { outcome: 'ran', exitCode: 3 })]), NOW);
-    expect(page.rows.map((r) => [r.fromText, r.toText, r.directionText, r.outcomeText, r.tone])).toEqual([
-      ['desktop', 'laptop', 'Sent', 'ran (exit 0)', 'success'],
+    expect(page.rows.map((r) => [r.fromText, r.toText, r.directionText, r.resultText, r.tone])).toEqual([
+      ['desktop', 'laptop', 'Sent', 'ran', 'success'],
       ['desktop', 'laptop', 'Sent', 'refused (not-listed)', 'warning'],
-      ['desktop', 'laptop', 'Sent', 'ran (exit 3)', 'warning'],
+      ['desktop', 'laptop', 'Sent', 'ran', 'warning'],
     ]);
-    expect(page.rows[0]).toMatchObject({ whenText: '5 min ago', shell: 'sh', command: 'ls -l', detailText: expect.stringContaining('1.5 s') });
-    expect(page).toMatchObject({ total: 3, offset: 0, hasMore: false, counts: { sent: 3, received: 0 }, machines: ['laptop'], machine: SELF });
+    expect(page.rows[0]).toMatchObject({ whenText: '5 min ago', shell: 'sh', command: 'ls -l' });
+    expect(page).toMatchObject({ total: 3, totalExact: true, page: 1, pageSize: 50, pageCount: 1, counts: { sent: 3, received: 0 }, machines: ['laptop'], machine: SELF });
   });
 
-  it('gives the previous and next offsets of a window', () => {
+  it('gives the exit code its own cell: green for 0, red for any other code, a timeout or a kill, a dash when nothing ran', () => {
+    const page = activityPage(daemonAnswer([
+      sent(1, { exitCode: 0 }),
+      sent(2, { exitCode: 127 }),
+      sent(3, { exitCode: null, timedOut: true }),
+      sent(4, { exitCode: null }),
+      sent(5, { outcome: 'denied', reason: 'denied', exitCode: undefined }),
+    ]), NOW);
+    expect(page.rows.map((r) => [r.exitText, r.exitTone])).toEqual([['0', 'ok'], ['127', 'fail'], ['timed out', 'fail'], ['killed', 'fail'], ['-', 'none']]);
+  });
+
+  it('shows the run time of the command apart from the wait, and marks an estimate', () => {
+    const page = activityPage(daemonAnswer([
+      sent(1, { durationMs: 107_300, waitedSeconds: 107, execMs: 312 }),
+      sent(2, { durationMs: 107_300, waitedSeconds: 107 }),
+      sent(3, { durationMs: 1_500 }),
+      sent(4, { outcome: 'refused', reason: 'not-listed', exitCode: undefined, durationMs: 90_000, waitedSeconds: 90 }),
+    ]), NOW);
+    const [recorded, derived, quick, refused] = page.rows;
+    expect(recorded).toMatchObject({ ranText: '312 ms', ranDerived: false, waitedText: '1 min 47 s' });
+    expect(recorded?.ranTitle).toMatch(/Run time of the command.*whole run 1 min 47 s/);
+    expect(derived).toMatchObject({ ranText: '~300 ms', ranDerived: true, waitedText: '1 min 47 s' });
+    expect(derived?.ranTitle).toMatch(/Estimated.*whole run minus the wait/);
+    expect(quick).toMatchObject({ ranText: '~1.5 s', waitedText: '-' });
+    expect(refused).toMatchObject({ ranText: '-', waitedText: '1 min 30 s' });
+  });
+
+  it('gives the page, the page size and the page count, and says when the total is a lower bound', () => {
     const many = Array.from({ length: 12 }, (_, i) => sent(i + 1));
-    const page = activityPage(daemonAnswer(many, { limit: 5, offset: 5 }), NOW);
-    expect(page).toMatchObject({ total: 12, offset: 5, limit: 5, hasMore: true, nextOffset: 10, prevOffset: 0 });
+    const page = activityPage(daemonAnswer(many, { limit: 5, offset: 5, page: 2 }), NOW);
+    expect(page).toMatchObject({ total: 12, totalExact: true, page: 2, pageSize: 5, pageCount: 3, pageSizes: [25, 50, 100] });
+    const answer = daemonAnswer(many, { limit: 5 }) as { page: { totalExact: boolean } };
+    answer.page.totalExact = false;
+    expect(activityPage(answer, NOW).totalExact).toBe(false);
   });
 
-  it('notes a damaged run log and a broken audit chain', () => {
-    const answer = daemonAnswer([sent(1)]) as { runLog: { damagedLines: number }; page: { chain: unknown } };
+  it('notes a damaged run log, damaged audit lines, a recount and a broken audit chain', () => {
+    const answer = daemonAnswer([sent(1)]) as { runLog: { damagedLines: number; recounted: string[] }; auditDamagedLines: number; page: { chain: unknown } };
     answer.runLog.damagedLines = 2;
-    answer.page.chain = { ok: false, line: 4, message: 'line 4 was modified', trustedEntries: 3, unverifiedEntries: 5, unreadableLines: 0 };
+    answer.runLog.recounted = ['the run log file /x changed other than by appending: its entries were recounted from the start'];
+    answer.auditDamagedLines = 1;
+    answer.page.chain = { scope: 'window', ok: false, line: 4, message: 'audit log line 4 was modified', checkedLines: 9 };
     const page = activityPage(answer, NOW);
     expect(page.notes.join(' ')).toMatch(/2 damaged line\(s\).*skipped/);
-    expect(page.chainText).toMatch(/broken at line 4/);
+    expect(page.notes.join(' ')).toMatch(/1 damaged line\(s\) of the audit log/);
+    expect(page.notes.join(' ')).toMatch(/recounted/);
+    expect(page.chainText).toMatch(/broken at line 4.*9 lines read for this page/);
   });
 
   it('says what is empty and why', () => {
@@ -152,10 +187,24 @@ describe('GET /activity', () => {
 
   it('forwards the query to the daemon as text and answers the page', async () => {
     const seen = await withDaemon(daemonAnswer([sent(5)]));
-    const r = await call({ direction: 'sent', outcome: 'ran', since: '24h', limit: '25', machine: '' });
+    const r = await call({ direction: 'sent', outcome: 'ran', since: '24h', page: '2', pageSize: '50', machine: '' });
     expect(r.status).toBe(200);
-    expect(seen).toEqual([{ command: 'activity', body: { direction: 'sent', outcome: 'ran', since: '24h', limit: '25' } }]);
+    expect(seen).toEqual([{ command: 'activity', body: { direction: 'sent', outcome: 'ran', since: '24h', page: '2', pageSize: '50' } }]);
     expect(r.body.rows).toHaveLength(1);
+    expect(r.body).toMatchObject({ total: 1, totalExact: true, page: 1, pageSize: 50 });
+  });
+
+  it('asks for pages of 25 when the query names no size, so a page never depends on the daemon default', async () => {
+    const seen = await withDaemon(daemonAnswer([sent(5)]));
+    await call({ outcome: 'ran' });
+    expect(seen).toEqual([{ command: 'activity', body: { outcome: 'ran', pageSize: '25' } }]);
+  });
+
+  it('answers 400 naming the last page when a page past the end is asked', async () => {
+    await withDaemon({ initialized: true, ok: false, reason: 'bad-query', message: 'page 9 is beyond the last page (2): 30 entries match at 25 per page. Ask for a page from 1 to 2' });
+    const r = await call({ page: '9', pageSize: '25' });
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ kind: 'bad_query', error: expect.stringContaining('beyond the last page (2)') });
   });
 
   it('answers 400 with the daemon sentence when the query is wrong', async () => {

@@ -1,4 +1,4 @@
-import { ACTIVITY_MAX_LIMIT, type ActivityEvent, type ActivityQueryText } from '@wadeck-app/machine-core';
+import { ACTIVITY_MAX_LIMIT, formatRunTime, type ActivityEvent, type ActivityQueryText } from '@wadeck-app/machine-core';
 import { activityAnswer, type ActivityView } from './activityView.js';
 import { EXIT, type CommandContext, type Parsed } from './cliTypes.js';
 
@@ -8,10 +8,10 @@ import { EXIT, type CommandContext, type Parsed } from './cliTypes.js';
 const LINE_WIDTH = 100;
 const pad = (n: number): string => String(n).padStart(2, '0');
 
-/** "2026-11-21 10:00", local time. */
-function clock(atMs: number): string {
+/** "2026-11-21 10:00", local time; "11-21 10:00" (no year) when every entry of the page is from the current year. */
+function clock(atMs: number, withYear: boolean): string {
   const d = new Date(atMs);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${withYear ? `${d.getFullYear()}-` : ''}${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** `text` cut to `max` characters, ending with `...` when it was cut. */
@@ -24,31 +24,46 @@ function fit(text: string, max: number): string {
 
 const nameOf = (m: { name?: string | undefined; uuid?: string | undefined }): string => m.name ?? (m.uuid === undefined ? '?' : m.uuid.slice(0, 8));
 
-function outcomeText(e: ActivityEvent): string {
-  let text: string;
-  switch (e.outcome) {
-    case 'ran':
-      text = `ran (exit ${e.exitCode === null || e.exitCode === undefined ? 'none' : e.exitCode}${e.timedOut === true ? ', timed out' : ''})`;
-      break;
-    case 'refused':
-      text = `refused (${e.reason ?? 'unknown'})`;
-      break;
-    case 'error':
-      text = `error${e.cause !== undefined ? ` (${e.cause})` : ''}`;
-      break;
-    default:
-      text = e.outcome;
+/** The RESULT column: what became of the request. The exit code, the run time and the wait have their own columns. */
+function resultText(e: ActivityEvent): string {
+  if (e.outcome === 'refused') {
+    return `refused (${e.reason ?? 'unknown'})`;
   }
-  const shown = fit(text, 20);
-  return e.verified ? shown : `${shown} [UNVERIFIED]`;
+  if (e.outcome === 'error' && e.cause !== undefined) {
+    return `error (${e.cause})`;
+  }
+  return e.outcome;
 }
+
+/** The EXIT column: the number, or why there is none; a dash when no command ran. */
+function exitText(e: ActivityEvent): string {
+  if (e.outcome !== 'ran') {
+    return '-';
+  }
+  if (e.timedOut === true) {
+    return 'timed out';
+  }
+  return e.exitCode === null || e.exitCode === undefined ? 'killed' : String(e.exitCode);
+}
+
+/** The RAN column: the run time of the command on the target; ~ marks an estimate (the whole run minus the wait, for an older entry). */
+const ranText = (e: ActivityEvent): string => (e.execMs === undefined ? '-' : `${e.execDerived === true ? '~' : ''}${formatRunTime(e.execMs)}`);
+
+/** The WAITED column: how long the request was held waiting for the owner; a dash when it was not. */
+const waitedText = (e: ActivityEvent): string => (e.waitedSeconds === undefined || e.waitedSeconds <= 0 ? '-' : formatRunTime(e.waitedSeconds * 1000));
+
+/** Widest first: the caps of the route and result columns are lowered until the command keeps at least 14 characters (8 as a last resort). */
+const WIDTH_STEPS = [{ route: 21, result: 20 }, { route: 19, result: 18 }, { route: 19, result: 16 }, { route: 15, result: 16 }, { route: 11, result: 14 }] as const;
+// time(16 or 11) arrow(2) route shell command result exit ran waited: six gaps of one space and two of two spaces around the command
+const GAPS = 10;
 
 /** The human text of a view, one string per line, none longer than LINE_WIDTH. Times are the local time of each entry. */
 export function activityText(view: ActivityView, filterNote: string): string[] {
   const { page } = view;
   const lines: string[] = [];
   const first = page.total === 0 ? 0 : page.offset + 1;
-  lines.push(`Activity of ${view.self.name}: ${page.total} entr${page.total === 1 ? 'y' : 'ies'} (${page.counts.sent} sent, ${page.counts.received} received), newest first${page.total > 0 ? `, showing ${first}-${page.offset + page.items.length}` : ''}`);
+  const total = `${page.totalExact ? '' : 'at least '}${page.total}`;
+  lines.push(`Activity of ${view.self.name}: ${total} entr${page.total === 1 && page.totalExact ? 'y' : 'ies'} (${page.counts.sent} sent, ${page.counts.received} received), newest first${page.total > 0 ? `, showing ${first}-${page.offset + page.items.length}` : ''}`);
   if (filterNote.length > 0) {
     lines.push(`filters: ${filterNote}`);
   }
@@ -56,29 +71,53 @@ export function activityText(view: ActivityView, filterNote: string): string[] {
     lines.push(filterNote.length > 0 ? 'no entry matches these filters' : 'no activity yet: no `machine run` was sent from this machine and no request reached it');
     return lines;
   }
+  const thisYear = new Date(view.now * 1000).getFullYear();
+  const withYear = page.items.some((e) => new Date(e.atMs).getFullYear() !== thisYear);
+  const timeWidth = withYear ? 16 : 11;
   const arrowOf = (e: ActivityEvent): string => (e.direction === 'sent' ? '=>' : '<=');
-  const routes = page.items.map((e) => ({ from: nameOf(e.from), to: nameOf(e.to) }));
-  const routeText = (r: { from: string; to: string }, max: number): string => {
+  const step = WIDTH_STEPS.find((s) => {
+    const natural = fixedWidth(page.items, s.route, s.result, timeWidth);
+    return LINE_WIDTH - natural >= 14;
+  }) ?? (WIDTH_STEPS[WIDTH_STEPS.length - 1] as (typeof WIDTH_STEPS)[number]);
+  const routeOf = (e: ActivityEvent, max: number): string => {
     const half = Math.max(3, Math.floor((max - 4) / 2));
-    return `${fit(r.from, half)} -> ${fit(r.to, half)}`;
+    return `${fit(nameOf(e.from), half)} -> ${fit(nameOf(e.to), half)}`;
   };
-  const routeTexts = routes.map((r) => routeText(r, 21));
-  const routeWidth = Math.max(10, ...routeTexts.map((t) => t.length));
-  const shellWidth = Math.max(5, ...page.items.map((e) => Math.min(6, e.shell.length)));
-  const outcomes = page.items.map((e) => outcomeText(e));
-  const outcomeWidth = Math.max(7, ...outcomes.map((t) => t.length));
-  // time(16) arrow(2) route shell command outcome, five gaps of two spaces
-  const commandWidth = Math.max(12, LINE_WIDTH - (16 + 2 + routeWidth + shellWidth + outcomeWidth + 10));
-  const row = (time: string, arrow: string, route: string, shell: string, command: string, outcome: string): string => `${time.padEnd(16)}  ${arrow}  ${route.padEnd(routeWidth)}  ${shell.padEnd(shellWidth)}  ${command.padEnd(commandWidth)}  ${outcome}`.trimEnd();
-  lines.push(row('TIME', '  ', 'FROM -> TO', 'SHELL', 'COMMAND', 'OUTCOME'));
-  page.items.forEach((e, i) => {
-    lines.push(row(clock(e.atMs), arrowOf(e), routeTexts[i] as string, e.shell === '' ? '-' : fit(e.shell, 6), e.command === '' ? '-' : fit(e.command, commandWidth), outcomes[i] as string));
-  });
+  const cells = page.items.map((e) => ({ e, route: routeOf(e, step.route), shell: e.shell === '' ? '-' : fit(e.shell, 6), result: fit(resultText(e), step.result), exit: exitText(e), ran: ranText(e), waited: waitedText(e) }));
+  const widthOf = (header: string, pick: (c: (typeof cells)[number]) => string): number => Math.max(header.length, ...cells.map((c) => pick(c).length));
+  const w = { route: widthOf('FROM -> TO', (c) => c.route), shell: widthOf('SHELL', (c) => c.shell), result: widthOf('RESULT', (c) => c.result), exit: widthOf('EXIT', (c) => c.exit), ran: widthOf('RAN', (c) => c.ran), waited: widthOf('WAITED', (c) => c.waited) };
+  const commandWidth = Math.max(8, LINE_WIDTH - (timeWidth + 2 + w.route + w.shell + w.result + w.exit + w.ran + w.waited + GAPS));
+  const row = (time: string, arrow: string, route: string, shell: string, command: string, result: string, exit: string, ran: string, waited: string): string =>
+    `${time.padEnd(timeWidth)} ${arrow} ${route.padEnd(w.route)} ${shell.padEnd(w.shell)}  ${command.padEnd(commandWidth)}  ${result.padEnd(w.result)} ${exit.padStart(w.exit)} ${ran.padStart(w.ran)} ${waited.padStart(w.waited)}`.trimEnd();
+  lines.push(row('TIME', '  ', 'FROM -> TO', 'SHELL', 'COMMAND', 'RESULT', 'EXIT', 'RAN', 'WAITED'));
+  for (const c of cells) {
+    lines.push(row(clock(c.e.atMs, withYear), arrowOf(c.e), c.route, c.shell, c.e.command === '' ? '-' : fit(c.e.command, commandWidth), c.result, c.exit, c.ran, c.waited));
+    if (!c.e.verified) {
+      lines.push('  [UNVERIFIED] the audit log is broken before this entry: it cannot be trusted');
+    }
+  }
   lines.push('=> sent from this machine, <= received by this machine');
+  lines.push('RAN: run time of the command on the target. WAITED: time the request was held for its owner');
+  if (cells.some((c) => c.e.execDerived === true)) {
+    lines.push('~ estimated: the whole run minus the wait (the entry was written before the run time was recorded)');
+  }
   if (page.hasMore) {
-    lines.push(`[info] ${page.total - page.offset - page.items.length} more: --offset ${page.nextOffset as number} shows the next page (--limit up to ${ACTIVITY_MAX_LIMIT})`);
+    lines.push(page.totalExact ? `[info] ${page.total - page.offset - page.items.length} more: --offset ${page.nextOffset as number} shows the next page (--limit up to ${ACTIVITY_MAX_LIMIT})` : `[info] more follow: --offset ${page.nextOffset as number} shows the next page (--limit up to ${ACTIVITY_MAX_LIMIT})`);
   }
   return lines;
+}
+
+/** Width of everything but the command, for the caps of a step. */
+function fixedWidth(items: ActivityEvent[], routeCap: number, resultCap: number, timeWidth: number): number {
+  const half = Math.max(3, Math.floor((routeCap - 4) / 2));
+  const max = (header: string, texts: string[]): number => Math.max(header.length, ...texts.map((t) => t.length));
+  const route = max('FROM -> TO', items.map((e) => `${fit(nameOf(e.from), half)} -> ${fit(nameOf(e.to), half)}`));
+  const shell = max('SHELL', items.map((e) => (e.shell === '' ? '-' : fit(e.shell, 6))));
+  const result = max('RESULT', items.map((e) => fit(resultText(e), resultCap)));
+  const exit = max('EXIT', items.map(exitText));
+  const ran = max('RAN', items.map(ranText));
+  const waited = max('WAITED', items.map(waitedText));
+  return timeWidth + 2 + route + shell + result + exit + ran + waited + GAPS;
 }
 
 function describeFilters(query: ActivityQueryText): string {
@@ -119,19 +158,25 @@ export function runActivityLog(ctx: CommandContext): number {
     return fail(answer.reason === 'bad-query' ? `${answer.message}. ${usage}` : answer.message, answer.reason === 'bad-query' ? EXIT.usage : EXIT.failure);
   }
 
+  for (const note of answer.runLog.recounted) {
+    io.stderr(`[warn] ${note}\n`);
+  }
+  if (answer.auditDamagedLines > 0) {
+    io.stderr(`[warn] ${answer.auditDamagedLines} damaged line(s) of the audit log were skipped: see ${answer.auditLogFile}; the other entries are shown. Keep a copy of the file for the investigation\n`);
+  }
   if (answer.runLog.damagedLines > 0) {
     io.stderr(`[warn] ${answer.runLog.damagedLines} damaged line(s) of the run log were skipped (a crash cut them, or the file was edited): see ${answer.runLog.dir}; the other entries are shown\n`);
   }
   const { chain } = answer.page;
   if (chain !== undefined && !chain.ok) {
-    io.stderr(`[warn] the audit log is broken at line ${chain.line}: ${chain.message}. The ${chain.trustedEntries} entries before it are verified; the received entries after it are shown as [UNVERIFIED]. Keep a copy of ${answer.auditLogFile} for the investigation, then move it away to start a new log (the daemon refuses to start on a broken log)\n`);
+    io.stderr(`[warn] the audit log is broken at line ${chain.line}: ${chain.message}. Checked on the ${chain.checkedLines} lines read for this page (the daemon checks the whole log at start); the received entries from that line on are shown as [UNVERIFIED]. Keep a copy of ${answer.auditLogFile} for the investigation, then move it away to start a new log (the daemon refuses to start on a broken log)\n`);
   }
   if (args.machine !== undefined && args.machine !== '' && answer.page.total === 0 && !answer.machines.some((m) => m.toLowerCase() === (args.machine as string).toLowerCase())) {
     io.stderr(`[warn] no machine named "${args.machine}" is known here${answer.machines.length > 0 ? ` (known: ${answer.machines.join(', ')})` : ''}: check the spelling, \`machine list\` shows the machines of the network\n`);
   }
 
   const text = `${activityText(answer, describeFilters(query)).join('\n')}\n`;
-  emit({ machine: answer.self, total: answer.page.total, offset: answer.page.offset, limit: answer.page.limit, hasMore: answer.page.hasMore, ...(answer.page.nextOffset !== undefined ? { nextOffset: answer.page.nextOffset } : {}), counts: answer.page.counts, items: answer.page.items, warnings: { damagedRunLogLines: answer.runLog.damagedLines, auditChainOk: chain?.ok !== false } }, text);
+  emit({ machine: answer.self, total: answer.page.total, totalExact: answer.page.totalExact, page: answer.page.page, pageSize: answer.page.pageSize, pageCount: answer.page.pageCount, offset: answer.page.offset, limit: answer.page.limit, hasMore: answer.page.hasMore, ...(answer.page.nextOffset !== undefined ? { nextOffset: answer.page.nextOffset } : {}), counts: answer.page.counts, items: answer.page.items, warnings: { damagedRunLogLines: answer.runLog.damagedLines, damagedAuditLines: answer.auditDamagedLines, auditChainOk: chain?.ok !== false } }, text);
   return EXIT.ok;
 }
 

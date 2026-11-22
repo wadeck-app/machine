@@ -306,6 +306,20 @@ export {
   type ActivityQueryText,
   type ActivityPage,
 } from './activity.js';
+// activity-paging: newest-first reading with a total, the run time column (run-log.md)
+export {
+  ACTIVITY_DEFAULT_PAGE_SIZE,
+  ACTIVITY_MAX_COUNT_LINES,
+  ACTIVITY_PAGE_SIZES,
+  ActivityRangeError,
+  classifyAuditLine,
+  formatCount,
+  formatRunTime,
+  type ActivityChain,
+  type ActivityPhase,
+  type ActivitySources,
+} from './activity.js';
+export { parseRunLogLine } from './runLog.js';
 export {
   MAX_NOTICES,
   MAX_NOTICES_PER_MINUTE,

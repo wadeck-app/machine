@@ -63,6 +63,10 @@ describe('the outgoing run log of machine run', () => {
     });
     expect(Date.now() - Date.parse(e.ts)).toBeLessThan(60_000);
     expect(e.durationMs).toBeGreaterThanOrEqual(0);
+    // The run time of the command is the target's own measure, apart from the whole run.
+    expect(typeof e.execMs).toBe('number');
+    expect(e.execMs).toBeGreaterThanOrEqual(0);
+    expect(e.execMs as number).toBeLessThanOrEqual(e.durationMs);
     expect(e.runId).toMatch(/^[0-9a-f-]{36}$/);
     // The output of the command is never stored.
     expect(readFileSync(join(runLogDir(a), RUN_LOG_FILE), 'utf8')).not.toMatch(/stdout|stderr/);
@@ -72,6 +76,7 @@ describe('the outgoing run log of machine run', () => {
     const r = await run(['--no-wait'], ['echo', 'unlisted']);
     expect(r.code).toBe(255);
     expect(entries()[0]).toMatchObject({ outcome: 'refused', reason: 'not-listed', waitMode: 'flag', onRefusal: 'fail', command: 'echo unlisted' });
+    expect(entries()[0]?.execMs).toBeUndefined();
   });
 
   it('records an owner Deny as `denied`, with the time waited', async () => {

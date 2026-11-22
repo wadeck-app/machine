@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RUN_LOG_MAX_COMMAND, RUN_LOG_MAX_LINE, buildRunLogLine, outcomeOfAnswer, outcomeOfFailure, parseRunLogLines, waitModeOf, type RunLogEntry, type RunLogInput } from './runLog.js';
+import { RUN_LOG_MAX_COMMAND, RUN_LOG_MAX_LINE, buildRunLogLine, outcomeOfAnswer, outcomeOfFailure, parseRunLogLine, parseRunLogLines, waitModeOf, type RunLogEntry, type RunLogInput } from './runLog.js';
 
 // The OUTGOING run log (run-log.md): one JSON line per `machine run`, written by the machine that sends it. Pure: it builds and reads lines, no file.
 
@@ -64,7 +64,7 @@ describe('buildRunLogLine', () => {
   });
 
   it('records no field that could hold a secret: only the listed keys are written', () => {
-    const allowed = ['v', 'ts', 'runId', 'from', 'to', 'shell', 'command', 'truncated', 'waitMode', 'onRefusal', 'waitSeconds', 'waitedSeconds', 'outcome', 'exitCode', 'timedOut', 'reason', 'cause', 'durationMs'];
+    const allowed = ['v', 'ts', 'runId', 'from', 'to', 'shell', 'command', 'truncated', 'waitMode', 'onRefusal', 'waitSeconds', 'waitedSeconds', 'outcome', 'exitCode', 'timedOut', 'reason', 'cause', 'durationMs', 'execMs'];
     const sneaky = { ...input(), env: { TOKEN: 'secret' }, passphrase: 'p', stdout: 'out' } as unknown as RunLogInput;
     const entry = JSON.parse(buildRunLogLine(sneaky)) as RunLogEntry;
     expect(Object.keys(entry).filter((k) => !allowed.includes(k))).toEqual([]);
@@ -134,6 +134,31 @@ describe('parseRunLogLines', () => {
     expect(parseRunLogLines(`${JSON.stringify({ ...bad, outcome: 'weird' })}\n`).damaged).toBe(1);
     expect(parseRunLogLines(`${JSON.stringify({ ...bad, durationMs: 'x' })}\n`).damaged).toBe(1);
     expect(parseRunLogLines(`${JSON.stringify({ ...bad, from: 'laptop' })}\n`).damaged).toBe(1);
+  });
+
+  it('keeps execMs (the run time of the command on the target) apart from durationMs (the whole run, wait included)', () => {
+    const line = buildRunLogLine(input({ durationMs: 107_300, waitedSeconds: 107, execMs: 312 }));
+    expect(JSON.parse(line)).toMatchObject({ durationMs: 107_300, execMs: 312 });
+    expect(parseRunLogLines(line).entries[0]).toMatchObject({ durationMs: 107_300, execMs: 312 });
+  });
+
+  it('writes no execMs when the command did not run, and reads an old line (no execMs) without a fuss', () => {
+    expect('execMs' in JSON.parse(buildRunLogLine(input({ outcome: { outcome: 'refused', reason: 'denied' } })))).toBe(false);
+    const old = JSON.parse(good) as RunLogEntry;
+    const read = parseRunLogLines(`${JSON.stringify(old)}\n`);
+    expect(read.damaged).toBe(0);
+    expect(read.entries[0]?.execMs).toBeUndefined();
+  });
+
+  it('counts an execMs that is not a number of milliseconds as a damaged line', () => {
+    const bad = JSON.parse(good) as RunLogEntry;
+    expect(parseRunLogLines(`${JSON.stringify({ ...bad, execMs: 'fast' })}\n`).damaged).toBe(1);
+    expect(parseRunLogLines(`${JSON.stringify({ ...bad, execMs: -5 })}\n`).damaged).toBe(1);
+  });
+
+  it('parses one line at a time: an entry, or damaged', () => {
+    expect(parseRunLogLine(good.trimEnd())).toMatchObject({ runId: input().runId });
+    expect(parseRunLogLine('{oops')).toBe('damaged');
   });
 
   it('ignores a line of a newer format version instead of misreading it', () => {

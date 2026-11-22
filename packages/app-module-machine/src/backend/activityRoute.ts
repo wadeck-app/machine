@@ -1,3 +1,4 @@
+import { ACTIVITY_DEFAULT_PAGE_SIZE } from '@wadeck-app/machine-core';
 import { activityPage, activityQueryOf, ActivityAnswerError, ActivityQueryError } from './activity.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 
@@ -46,6 +47,10 @@ export function registerActivityRoute(ctx: RouteContext, configDir: () => string
   ctx.registerRoute('GET', '/activity', async (req, reply) => {
     try {
       const query = activityQueryOf(typeof req === 'object' && req !== null ? (req as { query?: unknown }).query : undefined);
+      // A page never depends on the default of the daemon (50, the one of `machine log`): the size is always one of the page's choices.
+      if (query['pageSize'] === undefined && query['limit'] === undefined) {
+        query['pageSize'] = String(ACTIVITY_DEFAULT_PAGE_SIZE);
+      }
       const answer = (await callDaemon(configDir(), 'activity', undefined, query)) as { initialized?: unknown; ok?: unknown; reason?: unknown; message?: unknown };
       if (typeof answer === 'object' && answer !== null && answer.initialized === false) {
         return reply.code(409).send({ status: 409, kind: 'not_initialized', error: String(answer.message ?? 'this machine is not initialized: run `machine setup <relay>`') });

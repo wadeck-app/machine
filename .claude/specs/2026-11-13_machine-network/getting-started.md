@@ -218,7 +218,9 @@ requests waiting for approval on laptop (2 commands refused because not allowed,
 
 - `machine run` records every run it sends in `<config dir>/run-log/` (when, to whom, the command as typed, how it ended). 5 MiB per file, the newest 5 files are kept. Never put a secret in a command: it is stored.
 - `machine log` lists what this machine sent and received, newest first: `machine log --sent --since 2h`, `machine log --machine nas --outcome refused`, `machine log --text df --limit 100 --offset 100`, `--json` for scripts.
-- The module page Activity shows the same list with direction, machine, outcome and period filters.
+- Columns: RESULT (ran, refused, denied...), EXIT (the code; green 0 and red otherwise on the page, `timed out`, `killed`, `-` when nothing ran), RAN (run time of the command on the target; `~` = estimate for an entry written before it was recorded), WAITED (time held for the owner).
+- The module page Activity shows the same list with direction, machine, outcome and period filters, 25/50/100 rows per page, first/previous/next/last, and the exact count (`1-25 of 1,234`). Filters and page are in the address: copy it to share the view.
+- `page N is beyond the last page`: ask a lower page. `recounted from the start`: a log file was changed other than by appending, the totals were recomputed.
 - `[warn] this run is NOT recorded in the run log`: the run itself went through; fix the permissions or free the disk of the folder named. See run-log.md.
 
 ## Setting up the target: `machine install` (decision 87)
@@ -229,15 +231,16 @@ Run in a terminal ON the target (a local command, never remote). First item: `su
 machine install                      list what can be installed, where, and its state here (alias: machine install status; --json)
 machine install suspend --dry-run    every file and command, nothing changed (no terminal needed)
 machine install suspend              the same, then y/N, then sudo (your own password) installs the script and the sudo rule
-machine install suspend --check      installed / not installed / outdated, no password
-machine install suspend --remove     remove exactly what it installed
+machine install suspend --check      the state of this item, no password; exit 0 only when installed and up to date
+machine install suspend --refresh    write both files again even when up to date (repairs a script or a rule changed by hand)
+machine install suspend --remove     remove exactly what it installed, then check that the state reads "not installed"
 ```
+
+States: `not installed`, `installed` ("installed, up to date"), `outdated`, `partial` (names the missing part), `foreign` (a file machine did not write: never touched), `unsupported here`. `machine status` prints one line for the installed items (`installed: suspend (up to date)` or a `[warn]` with `--refresh`), nothing when none is installed. See `install.md`, "Lifecycle".
 
 It then prints the line for the admin machine (`machine admin allow <machine> --shell sh -- /usr/local/bin/machine-suspend`), how to run it and how to wake the machine (`machine wake <machine>`). Once allowed in the default list, every trusted peer can suspend the machine; a per-peer list restricts that. Windows and macOS: `not supported on <platform> yet (supported: linux)`.
 
 ## Rules a user meets
-States: `not installed`, `installed` ("installed, up to date"), `outdated`, `partial` (names the missing part), `foreign` (a file machine did not write: never touched), `unsupported here`. `machine status` prints one line for the installed items (`installed: suspend (up to date)` or a `[warn]` with `--refresh`), nothing when none is installed. See `install.md`, "Lifecycle".
-
 
 - Command groups (decision 66): `machine <group>` alone shows the current state, read-only: `admin` the candidacies waiting for approval (never asks, never approves; `machine admin approve [<id>]` does), `peer` the peers, `startup` the job status, `cli` the versions, `alias` the aliases, `policy` its help. `machine <group> --help` (or `machine <group> help`, `machine help <group>`) is the help of the group, `machine <group> <subcommand> --help` of one subcommand. An unknown subcommand is a usage error (exit 2) with the list.
 

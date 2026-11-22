@@ -16,6 +16,15 @@ export function appendAudit(input: { prevHash: string; seq: number; entry: Json 
   return { line: JSON.stringify({ seq: input.seq, prev: input.prevHash, entry: input.entry, hash }), hash };
 }
 
+/** Does this line's `hash` match its own content (seq, prev, entry)? One line only, no chain: the reader of a page uses it on the lines it read. */
+export function auditLineHashOk(seq: number, prev: string, entry: unknown, hash: string): boolean {
+  try {
+    return hashOf(prev, seq, entry as Json) === hash;
+  } catch {
+    return false;
+  }
+}
+
 export type AuditVerification = { ok: true; entries: number; lastHash: string } | { ok: false; line: number; message: string };
 
 export function verifyAuditChain(lines: readonly string[]): AuditVerification {

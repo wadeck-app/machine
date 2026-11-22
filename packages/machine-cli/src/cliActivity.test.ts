@@ -57,10 +57,13 @@ describe('machine log', () => {
     expect(r.code, r.err).toBe(0);
     const lines = r.out.split('\n');
     expect(lines[0]).toMatch(/^Activity of desktop: 2 entries \(2 sent, 0 received\), newest first, showing 1-2$/);
-    expect(lines[1]).toMatch(/^TIME\s+FROM -> TO\s+SHELL\s+COMMAND\s+OUTCOME$/);
+    expect(lines[1]).toMatch(/^TIME\s+FROM -> TO\s+SHELL\s+COMMAND\s+RESULT\s+EXIT\s+RAN\s+WAITED$/);
     // Newest first.
-    expect(lines[2]).toMatch(/=>\s+desktop -> laptop\s+sh\s+df -h\s+refused \(not-listed\)$/);
-    expect(lines[3]).toMatch(/=>\s+desktop -> laptop\s+sh\s+ls -l\s+ran \(exit 0\)$/);
+    // No command ran: dashes for the exit code, the run time and the wait.
+    expect(lines[2]).toMatch(/=>\s+desktop -> laptop\s+sh\s+df -h\s+refused \(not-listed\)\s+-\s+-\s+-$/);
+    // An old-format line (no execMs): the run time is the whole run minus the wait, marked with ~.
+    expect(lines[3]).toMatch(/=>\s+desktop -> laptop\s+sh\s+ls -l\s+ran\s+0\s+~20 ms\s+-$/);
+    expect(r.out).toMatch(/~ estimated: the whole run minus the wait/);
     // The columns line up: every row has its command at the same offset.
     expect(lines[2]?.indexOf('df -h')).toBe(lines[3]?.indexOf('ls -l'));
   });
@@ -70,7 +73,27 @@ describe('machine log', () => {
     receive(5, [{ event: 'accepted', id: 'r1', shell: 'sh', command: 'whoami' }, { event: 'completed', id: 'r1', exitCode: 2, timedOut: false, truncated: false, durationMs: 5 }]);
     const r = await cli(b, ['log']);
     expect(r.out).toMatch(/Activity of laptop: 1 entry \(0 sent, 1 received\)/);
-    expect(r.out).toMatch(/<=\s+desktop -> laptop\s+sh\s+whoami\s+ran \(exit 2\)/);
+    expect(r.out).toMatch(/<=\s+desktop -> laptop\s+sh\s+whoami\s+ran\s+2\s+5 ms\s+-/);
+  });
+
+  it('separates the exit code, the run time of the command and the time waited for the owner', async () => {
+    send(3, { durationMs: 107_300, waitedSeconds: 107, execMs: 312 });
+    send(2, { outcome: { outcome: 'ran', exitCode: 127 }, durationMs: 3_000, execMs: 2_900 });
+    send(1, { outcome: { outcome: 'ran', exitCode: null, timedOut: true }, durationMs: 60_500, execMs: 60_000 });
+    send(0, { outcome: { outcome: 'ran', exitCode: null }, durationMs: 40, execMs: 10 });
+    const rows = (await cli(a, ['log'])).out.split('\n').filter((l) => /^(\d{4}-)?\d\d-\d\d \d\d:\d\d /.test(l));
+    expect(rows[0]).toMatch(/ran\s+killed\s+10 ms\s+-$/);
+    expect(rows[1]).toMatch(/ran\s+timed out\s+1 min\s+-$/);
+    expect(rows[2]).toMatch(/ran\s+127\s+2\.9 s\s+-$/);
+    expect(rows[3]).toMatch(/ran\s+0\s+312 ms\s+1 min 47 s$/);
+    expect(rows.join('\n')).not.toMatch(/~/);
+    expect(rows.every((l) => l.length <= 100)).toBe(true);
+  });
+
+  it('shows the exit code and the run time of a received command, and a dash where the audit has no wait', async () => {
+    receive(5, [{ event: 'accepted', id: 'r1', shell: 'sh', command: 'false' }, { event: 'completed', id: 'r1', exitCode: 1, timedOut: false, truncated: false, durationMs: 1234 }]);
+    const r = await cli(b, ['log']);
+    expect(r.out).toMatch(/<=\s+desktop -> laptop\s+sh\s+false\s+ran\s+1\s+1\.2 s\s+-$/m);
   });
 
   it('keeps every line under 100 characters, ASCII only, cutting a long command with ...', async () => {
@@ -122,8 +145,9 @@ describe('machine log', () => {
   it('--json is one document with the items as the page builds them', async () => {
     send(5);
     const r = await cli(a, ['log', '--json']);
-    const doc = JSON.parse(r.out) as { total: number; counts: { sent: number }; items: Array<{ direction: string; from: { name: string }; to: { name: string }; command: string; outcome: string; ts: string }> };
-    expect(doc.total).toBe(1);
+    const doc = JSON.parse(r.out) as { total: number; totalExact: boolean; page: number; pageCount: number; counts: { sent: number }; items: Array<{ direction: string; from: { name: string }; to: { name: string }; command: string; outcome: string; ts: string; durationMs: number; execMs?: number; execDerived?: boolean; waitedSeconds: number; exitCode: number }> };
+    expect(doc).toMatchObject({ total: 1, totalExact: true, page: 1, pageCount: 1 });
+    expect(doc.items[0]).toMatchObject({ durationMs: 20, execMs: 20, execDerived: true, waitedSeconds: 0, exitCode: 0 });
     expect(doc.items[0]).toMatchObject({ direction: 'sent', from: { name: 'desktop' }, to: { name: 'laptop' }, command: 'ls -l', outcome: 'ran' });
     expect(Date.parse(doc.items[0]?.ts as string)).not.toBeNaN();
   });
@@ -169,6 +193,7 @@ describe('machine log', () => {
     const r = await cli(b, ['log']);
     expect(r.code).toBe(0);
     expect(r.err).toMatch(/\[warn\] the audit log is broken at line 2/);
+    expect(r.err).toMatch(/lines read for this page/);
     expect(r.out).toMatch(/\[UNVERIFIED\]/);
   });
 

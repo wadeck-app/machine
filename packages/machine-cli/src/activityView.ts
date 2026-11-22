@@ -1,13 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { buildActivity, parseActivityQuery, type ActivityPage, type ActivityQueryText } from '@wadeck-app/machine-core';
+import { ActivityRangeError, buildActivity, parseActivityQuery, type ActivityPage, type ActivityQueryText } from '@wadeck-app/machine-core';
+import { ActivityReadError, createCountCache, openActivityLogs, type ActivityBytes, type CountCache } from './activityLogs.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { auditLogFile } from './requestsView.js';
-import { readRunLog, runLogDir } from './runLogStore.js';
+import { runLogDir } from './runLogStore.js';
 
 // `machine log` and the Activity page of the module: the commands THIS machine sent (its outgoing run log) and received (its audit log) in one
-// timeline (machine-core buildActivity). Read-only: nothing is written, no daemon is needed, nothing is sent to a peer.
+// timeline (machine-core buildActivity). Read-only: nothing is written, no daemon is needed, nothing is sent to a peer. The logs are read from their
+// end, a page at a time (activityLogs.ts): a log of tens of thousands of lines costs a few chunks, not a whole read.
+
+/** The counts of the rows of each file, kept while the process lives: the daemon answers the next page without counting again. */
+const sharedCountCache = createCountCache();
 
 export interface ActivityView {
   initialized: true;
@@ -17,7 +21,11 @@ export interface ActivityView {
   now: number;
   page: ActivityPage;
   /** Where the sent runs are, and what was found there. */
-  runLog: { dir: string; files: number; damagedLines: number };
+  runLog: { dir: string; files: number; damagedLines: number; /** Files whose count was redone because they changed other than by appending. */ recounted: string[] };
+  /** Damaged lines skipped in the audit log. */
+  auditDamagedLines: number;
+  /** Bytes read from disk for this answer, by why: the lines of the page, the pass that counts a filter, the totals cache. */
+  readBytes: ActivityBytes;
   auditLogFile: string;
   auditLogPresent: boolean;
   /** The machines of the network and those seen in the logs, by name: the choices of a machine filter. */
@@ -29,7 +37,7 @@ export type ActivityAnswer =
   | { initialized: true; ok: false; reason: 'bad-query' | 'run-log-unreadable' | 'audit-log-unreadable'; message: string }
   | ActivityView;
 
-export function activityAnswer(configDir: string, query: ActivityQueryText, nowSeconds: number): ActivityAnswer {
+export function activityAnswer(configDir: string, query: ActivityQueryText, nowSeconds: number, cache: CountCache = sharedCountCache): ActivityAnswer {
   let self;
   try {
     self = readMachine(configDir);
@@ -50,39 +58,39 @@ export function activityAnswer(configDir: string, query: ActivityQueryText, nowS
   const directory = network.directory.machines();
   const names = new Map(directory.map((m) => [m.uuid, m.name]));
 
-  let sent;
-  try {
-    sent = readRunLog(configDir);
-  } catch (e) {
-    return { initialized: true, ok: false, reason: 'run-log-unreadable', message: (e as Error).message };
-  }
   const auditFile = auditLogFile(configDir);
-  const auditLogPresent = existsSync(auditFile);
-  let auditLines: string[] = [];
-  if (auditLogPresent) {
-    try {
-      const text = readFileSync(auditFile, 'utf8');
-      auditLines = text.length === 0 ? [] : text.replace(/\n$/, '').split('\n');
-    } catch (e) {
-      return { initialized: true, ok: false, reason: 'audit-log-unreadable', message: `cannot read the audit log ${auditFile}: ${(e as Error).message}. Fix its permissions, then run the command again` };
+  let logs;
+  let page: ActivityPage;
+  try {
+    logs = openActivityLogs(configDir, cache, auditFile);
+    page = buildActivity({ self: { uuid: self.uuid, name: self.name }, sources: logs.sources, nameOf: (uuid) => names.get(uuid), filter });
+  } catch (e) {
+    if (e instanceof ActivityRangeError) {
+      const { message } = e;
+      return { initialized: true, ok: false, reason: 'bad-query', message };
     }
+    if (e instanceof ActivityReadError) {
+      const { message, reason } = e;
+      return { initialized: true, ok: false, reason, message };
+    }
+    throw e;
   }
-
-  const page = buildActivity({ self: { uuid: self.uuid, name: self.name }, sent: sent.entries, auditLines, nameOf: (uuid) => names.get(uuid), filter });
   return {
     initialized: true,
     ok: true,
     self: { uuid: self.uuid, name: self.name },
     now: nowSeconds,
     page,
-    runLog: { dir: runLogDir(configDir), files: sent.files, damagedLines: sent.damaged },
+    runLog: { dir: runLogDir(configDir), files: logs.runLogFiles, damagedLines: page.damaged.sent, recounted: logs.notes },
+    auditDamagedLines: page.damaged.received,
+    readBytes: logs.bytes,
     auditLogFile: auditFile,
-    auditLogPresent,
+    auditLogPresent: logs.auditPresent,
     machines: [...new Set([...page.machines, ...directory.map((m) => m.name)])].sort((a, b) => a.localeCompare(b)),
   };
 }
 
-const QUERY_FIELDS = ['direction', 'machine', 'outcome', 'since', 'text', 'limit', 'offset'] as const;
+const QUERY_FIELDS = ['direction', 'machine', 'outcome', 'since', 'text', 'limit', 'offset', 'page', 'pageSize'] as const;
 
 /** The payload of the daemon command: an object of text fields, nothing else. A wrong shape is a `bad-query` with the fix, not a guess. */
 export function activityFromPayload(configDir: string, payload: unknown, nowSeconds: number): ActivityAnswer {

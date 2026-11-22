@@ -80,6 +80,8 @@ export async function recordRun(env: RunRecordEnv, body: (recorder: RunRecorder)
       waitedSeconds: asked ? Math.max(0, Math.round((elapsedMs - ranMs) / 1000)) : 0,
       outcome,
       durationMs: Math.max(0, finishedAt - startedAt),
+      // The run time of the command as the target measured it, apart from the wait: the Activity page shows both.
+      ...(answer?.value.type === 'result' ? { execMs: answer.value.durationMs } : {}),
     });
     const result = appendRunLog(env.configDir, line);
     for (const warning of result.warnings) {

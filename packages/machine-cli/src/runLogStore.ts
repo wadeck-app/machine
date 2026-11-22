@@ -107,6 +107,33 @@ export function appendRunLog(configDir: string, line: string, options: RunLogSto
   }
 }
 
+/**
+ * The files of the run log that exist, NEWEST FIRST (the current file, then the rotated ones from the latest rotation back): the order a reader
+ * of the newest entries goes through them. No folder yet is no file; a folder that cannot be read is an error with its fix.
+ */
+export function runLogFilesNewestFirst(configDir: string): string[] {
+  const dir = runLogDir(configDir);
+  let rotated: string[];
+  try {
+    rotated = rotatedFiles(dir).map((f) => f.name).reverse();
+  } catch (e) {
+    if (codeOf(e) === 'ENOENT') {
+      return [];
+    }
+    throw new Error(`cannot read the run log folder ${dir}: ${(e as Error).message}. Fix its permissions, or move it away if it is not a folder (a new log starts at the next run)`);
+  }
+  const files = rotated.map((name) => join(dir, name));
+  try {
+    statSync(join(dir, RUN_LOG_FILE));
+    files.unshift(join(dir, RUN_LOG_FILE));
+  } catch (e) {
+    if (codeOf(e) !== 'ENOENT') {
+      throw new Error(`cannot read the run log ${join(dir, RUN_LOG_FILE)}: ${(e as Error).message}. Fix its permissions, or move it away (a new log starts at the next run)`);
+    }
+  }
+  return files;
+}
+
 export interface RunLogRead {
   /** Oldest file first, file order inside each: roughly oldest first (the reader of the timeline sorts by time). */
   entries: RunLogEntry[];

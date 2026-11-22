@@ -48,7 +48,10 @@ export interface RunLogInput {
   /** Time before the answer, the run time of the command itself excluded; 0 when no wait was asked. */
   waitedSeconds: number;
   outcome: RunLogOutcome;
+  /** The whole run, connection and wait included. */
   durationMs: number;
+  /** `ran` only: the run time of the command on the target, as the target measured it (the `durationMs` of its result). */
+  execMs?: number;
 }
 
 export interface RunLogEntry {
@@ -71,6 +74,8 @@ export interface RunLogEntry {
   reason?: string;
   cause?: string;
   durationMs: number;
+  /** Absent in a line written before this field existed, and when no command ran: a reader never invents it (activity.ts derives, and says so). */
+  execMs?: number;
 }
 
 /** Printable ASCII, bounded: anything else becomes `?` (a cause comes from an error message or from a peer). */
@@ -111,6 +116,7 @@ function toEntry(input: RunLogInput, command: string, truncated: boolean): RunLo
     ...(o.reason !== undefined ? { reason: printableText(o.reason, 64) } : {}),
     ...(o.cause !== undefined ? { cause: printableText(o.cause, MAX_CAUSE) } : {}),
     durationMs: input.durationMs,
+    ...(o.outcome === 'ran' && input.execMs !== undefined ? { execMs: Math.max(0, Math.round(input.execMs)) } : {}),
   };
 }
 
@@ -213,6 +219,10 @@ function asEntry(raw: unknown): RunLogEntry | undefined {
   if (exitCode !== undefined && exitCode !== null && typeof exitCode !== 'number') {
     return undefined;
   }
+  const execMs = raw['execMs'];
+  if (execMs !== undefined && (typeof execMs !== 'number' || !Number.isFinite(execMs) || execMs < 0)) {
+    return undefined;
+  }
   return {
     v: 1,
     ts: raw['ts'],
@@ -232,10 +242,22 @@ function asEntry(raw: unknown): RunLogEntry | undefined {
     ...(typeof raw['reason'] === 'string' ? { reason: printableText(raw['reason'], 64) } : {}),
     ...(typeof raw['cause'] === 'string' ? { cause: printableText(raw['cause'], MAX_CAUSE) } : {}),
     durationMs: raw['durationMs'],
+    ...(execMs !== undefined ? { execMs } : {}),
   };
 }
 
-/** The entries of one log file, in file order. A line that is not a valid entry (cut by a crash, edited, newer format) is counted, never thrown. */
+/** One line of a log file: an entry, or `damaged` (cut by a crash, edited, newer format). Never throws. */
+export function parseRunLogLine(line: string): RunLogEntry | 'damaged' {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return 'damaged';
+  }
+  return asEntry(raw) ?? 'damaged';
+}
+
+/** The entries of one log file, in file order. A line that is not a valid entry is counted, never thrown. */
 export function parseRunLogLines(text: string): { entries: RunLogEntry[]; damaged: number } {
   const entries: RunLogEntry[] = [];
   let damaged = 0;
@@ -243,18 +265,12 @@ export function parseRunLogLines(text: string): { entries: RunLogEntry[]; damage
     if (line.trim().length === 0) {
       continue;
     }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(line);
-    } catch {
+    const entry = parseRunLogLine(line);
+    if (entry === 'damaged') {
       damaged += 1;
-      continue;
+    } else {
+      entries.push(entry);
     }
-    const entry = asEntry(raw);
-    if (entry === undefined) {
-      damaged += 1;
-    }
-    else entries.push(entry);
   }
   return { entries, damaged };
 }

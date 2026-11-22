@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { appFetcher } from '../lib/shellApi.js';
-import { COMMAND_TEXT, INPUT, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, PAGE_BUTTON, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { COMMAND_TEXT, EXIT_FAIL, EXIT_NONE, EXIT_OK, INPUT, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, PAGE_BUTTON, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { MachineName } from './MachineName.js';
 
 export interface ActivityRowData {
   key: string;
@@ -14,8 +15,19 @@ export interface ActivityRowData {
   shell: string;
   command: string;
   outcome: string;
-  outcomeText: string;
+  /** The Result column: ran, refused (reason), denied, deadline, timeout, connection-lost, error (cause), unfinished. */
+  resultText: string;
   tone: 'success' | 'warning' | 'danger' | 'neutral';
+  /** The Exit column: the code, `timed out`, `killed`, or `-` when no command ran. */
+  exitText: string;
+  exitTone: 'ok' | 'fail' | 'none';
+  exitTitle: string;
+  /** The Ran for column: the run time of the command on the target; a leading ~ marks an estimate. */
+  ranText: string;
+  ranDerived: boolean;
+  ranTitle: string;
+  /** The Waited column: how long the request was held waiting for approval. */
+  waitedText: string;
   detailText: string;
   verified: boolean;
 }
@@ -25,11 +37,13 @@ export interface ActivityPageData {
   machine: { uuid: string; name: string };
   rows: ActivityRowData[];
   total: number;
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-  nextOffset?: number;
-  prevOffset?: number;
+  /** False: the total is a lower bound (counting stopped at its budget). */
+  totalExact: boolean;
+  /** 1-based. */
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  pageSizes: number[];
   counts: { sent: number; received: number };
   machines: string[];
   outcomes: string[];
@@ -39,7 +53,7 @@ export interface ActivityPageData {
 }
 
 export interface ActivityLogProps {
-  /** Entries per page, 1 to 100 (default 25). */
+  /** Rows per page when the address does not say (25, 50 or 100; default 25). */
   pageSize?: number;
 }
 
@@ -58,10 +72,13 @@ const DIRECTIONS: Array<{ label: string; value: string }> = [
 ];
 
 const TONES: Record<ActivityRowData['tone'], string> = { success: OUTCOME_SUCCESS, warning: OUTCOME_WARNING, danger: OUTCOME_DANGER, neutral: OUTCOME_NEUTRAL };
+const EXIT_TONES: Record<ActivityRowData['exitTone'], string> = { ok: EXIT_OK, fail: EXIT_FAIL, none: EXIT_NONE };
 
 /** The page is re-read this often while its first page is shown: a command sent from a terminal shows up without a click. */
 const REFRESH_MS = 15_000;
 const SEARCH_DELAY_MS = 300;
+/** The sizes the backend accepts (machine-core ACTIVITY_PAGE_SIZES). */
+const PAGE_SIZES = [25, 50, 100];
 const DEFAULT_PAGE_SIZE = 25;
 
 interface Filters {
@@ -73,33 +90,85 @@ interface Filters {
 }
 
 const NO_FILTERS: Filters = { direction: '', machine: '', outcome: '', since: '', text: '' };
+const FILTER_KEYS = Object.keys(NO_FILTERS) as Array<keyof Filters>;
 
-function urlOf(filters: Filters, offset: number, limit: number): string {
+/** What the address says; anything that is not a choice of the page (a hand-edited link) is dropped for its default. */
+function stateFromAddress(defaultSize: number): { filters: Filters; page: number; pageSize: number } {
+  const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
+  const filters = { ...NO_FILTERS };
+  for (const key of FILTER_KEYS) {
+    filters[key] = (params.get(key) ?? '').slice(0, 100);
+  }
+  const size = Number(params.get('pageSize'));
+  const page = Number(params.get('page'));
+  return { filters, page: Number.isSafeInteger(page) && page >= 1 ? page : 1, pageSize: PAGE_SIZES.includes(size) ? size : defaultSize };
+}
+
+/** The address of the page for a state: only what differs from the defaults, so a plain page keeps a plain address. */
+function addressOf(filters: Filters, page: number, pageSize: number, defaultSize: number): string {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(filters)) {
-    if (value !== '') {
-      params.set(key, value);
+  for (const key of FILTER_KEYS) {
+    if (filters[key] !== '') {
+      params.set(key, filters[key]);
     }
   }
-  params.set('limit', String(limit));
-  params.set('offset', String(offset));
+  if (pageSize !== defaultSize) {
+    params.set('pageSize', String(pageSize));
+  }
+  if (page > 1) {
+    params.set('page', String(page));
+  }
+  const search = params.toString();
+  return `${window.location.pathname}${search === '' ? '' : `?${search}`}${window.location.hash}`;
+}
+
+function urlOf(filters: Filters, page: number, pageSize: number): string {
+  const params = new URLSearchParams();
+  for (const key of FILTER_KEYS) {
+    if (filters[key] !== '') {
+      params.set(key, filters[key]);
+    }
+  }
+  params.set('page', String(page));
+  params.set('pageSize', String(pageSize));
   return `GET /api/modules/machine/activity?${params.toString()}`;
 }
 
+/** 1234567 -> "1,234,567". */
+const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/** The header cells stay in view while the table scrolls (the column of the numbers is on the right, its width fixed so the pages do not jump). */
+const HEAD = 'sticky top-0 z-10 border-b border-border bg-surface py-1 font-medium';
+const COLUMNS: Array<{ label: string; className: string }> = [
+  { label: 'When', className: `${HEAD} whitespace-nowrap pr-3` },
+  { label: 'Direction', className: `${HEAD} whitespace-nowrap pr-3` },
+  { label: 'From \u2192 To', className: `${HEAD} whitespace-nowrap pr-3` },
+  { label: 'Shell', className: `${HEAD} whitespace-nowrap pr-3` },
+  { label: 'Command', className: `${HEAD} pr-3` },
+  { label: 'Result', className: `${HEAD} whitespace-nowrap pr-3` },
+  { label: 'Exit', className: `${HEAD} w-24 whitespace-nowrap pr-3 text-right` },
+  { label: 'Ran for', className: `${HEAD} w-24 whitespace-nowrap pr-3 text-right` },
+  { label: 'Waited', className: `${HEAD} w-28 whitespace-nowrap text-right` },
+];
+
 /**
  * The Activity page: every command this machine sent with `machine run` and every command it received, newest first. Filters (direction,
- * machine, outcome, period, a word of the command), pages, and a refresh by itself while the first page is shown. Read-only: it asks one route
- * of the module and shows what that route says, errors included (they name the fix).
+ * machine, outcome, period, a word of the command) and pages cut on the server (a log holds thousands of commands), a column for the result, the
+ * exit code (green for 0, red otherwise), the run time of the command and the time it waited for approval. The filters, the page and the page size
+ * are in the address, so a page can be shared and reloaded. Read-only: it asks one route of the module and shows what that route says, errors
+ * included (they name the fix).
  *
  * @registryCategory composite
  * @registryTags activity log run audit sent received history
  */
 export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) {
-  const limit = Math.min(100, Math.max(1, Math.floor(pageSize)));
-  const ids = { direction: useId(), machine: useId(), outcome: useId(), period: useId(), search: useId() };
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  const [searchText, setSearchText] = useState('');
-  const [offset, setOffset] = useState(0);
+  const defaultSize = PAGE_SIZES.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE;
+  const ids = { direction: useId(), machine: useId(), outcome: useId(), period: useId(), search: useId(), size: useId() };
+  const [initial] = useState(() => stateFromAddress(defaultSize));
+  const [filters, setFilters] = useState<Filters>(initial.filters);
+  const [searchText, setSearchText] = useState(initial.filters.text);
+  const [page, setPage] = useState(initial.page);
+  const [size, setSize] = useState(initial.pageSize);
   const [data, setData] = useState<ActivityPageData | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -113,22 +182,23 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
     }
     const timer = setTimeout(() => {
       setFilters((f) => ({ ...f, text: searchText }));
-      setOffset(0);
+      setPage(1);
     }, SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
   }, [searchText, filters.text]);
 
+  // The address follows the state (replace, not push: the Back button leaves the page, it does not replay every click).
+  useEffect(() => {
+    const next = addressOf(filters, page, size, defaultSize);
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, '', next);
+    }
+  }, [filters, page, size, defaultSize]);
+
   useEffect(() => {
     const mine = ++latest.current;
     setLoading(true);
-    let url: string;
-    try {
-      url = urlOf(filters, offset, limit);
-    } catch (e) {
-      setError((e as Error).message);
-      setLoading(false);
-      return;
-    }
+    const url = urlOf(filters, page, size);
     // appFetcher throws at once (not a rejected promise) when the shell offers none: the same path as a failed request.
     Promise.resolve()
       .then(() => appFetcher(url))
@@ -149,24 +219,28 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
           setLoading(false);
         }
       });
-  }, [filters, offset, limit, reload]);
+  }, [filters, page, size, reload]);
 
   useEffect(() => {
-    if (offset !== 0) {
+    if (page !== 1) {
       return undefined;
     }
     const timer = setInterval(() => setReload((n) => n + 1), REFRESH_MS);
     return () => clearInterval(timer);
-  }, [offset]);
+  }, [page]);
 
   const change = useCallback((key: keyof Filters, value: string) => {
     setFilters((f) => ({ ...f, [key]: value }));
-    setOffset(0);
+    setPage(1);
   }, []);
 
   const rows = data?.rows ?? [];
-  const from = data === undefined || data.total === 0 ? 0 : data.offset + 1;
-  const to = data === undefined ? 0 : data.offset + rows.length;
+  const pageCount = data?.pageCount ?? page;
+  const known = data !== undefined && error === undefined;
+  const from = known && data.total > 0 ? (data.page - 1) * data.pageSize + 1 : 0;
+  const to = known ? (data.page - 1) * data.pageSize + rows.length : 0;
+  const atLast = !known || data.page >= data.pageCount;
+  const goTo = (n: number): void => setPage(Math.max(1, n));
 
   return (
     <section className="flex flex-col gap-3" aria-label="Activity">
@@ -183,8 +257,9 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
           Machine
           <select id={ids.machine} className={INPUT} value={filters.machine} onChange={(e) => change('machine', e.target.value)}>
             <option value="">All machines</option>
+            {filters.machine !== '' && !(data?.machines ?? []).includes(filters.machine) ? <option value={filters.machine} style={MONO_STYLE}>{filters.machine}</option> : null}
             {(data?.machines ?? []).map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m} value={m} style={MONO_STYLE}>{m}</option>
             ))}
           </select>
         </label>
@@ -195,6 +270,7 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
             {(data?.outcomes ?? []).map((o) => (
               <option key={o} value={o}>{o}</option>
             ))}
+            {filters.outcome !== '' && !(data?.outcomes ?? []).includes(filters.outcome) ? <option value={filters.outcome}>{filters.outcome}</option> : null}
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted" htmlFor={ids.period}>
@@ -227,27 +303,24 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         <p key={note} className={NOTICE_NEUTRAL}>{note}</p>
       ))}
 
-      {data !== undefined ? (
+      {known ? (
         <p className={TEXT_MUTED_SM} aria-live="polite">
-          {data.total} {data.total === 1 ? 'entry' : 'entries'}: {data.counts.sent} sent, {data.counts.received} received
-          {data.total > 0 ? `, showing ${from}-${to} of ${data.total}` : ''}
+          {data.total === 0 ? '0 entries' : `${from}-${to} of ${data.totalExact ? '' : 'at least '}${grouped(data.total)}`}
+          {data.total > 0 ? <span>{`  (${grouped(data.counts.sent)} sent, ${grouped(data.counts.received)} received)`}</span> : null}
         </p>
-      ) : loading ? (
-        <p className={TEXT_MUTED_SM}>Loading...</p>
+      ) : loading && error === undefined ? (
+        <p className={TEXT_MUTED_SM} aria-live="polite">Loading...</p>
       ) : null}
 
-      {data !== undefined && rows.length === 0 ? <p className={TEXT_MUTED_SM}>{data.emptyMessage}</p> : null}
+      {known && rows.length === 0 ? <p className={TEXT_MUTED_SM}>{data.emptyMessage}</p> : null}
       {rows.length > 0 ? (
-        <div className="overflow-x-auto">
+        <div className="max-h-[70vh] overflow-auto">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className={TABLE_HEAD_ROW}>
-                <th className="py-1 pr-3 font-medium">When</th>
-                <th className="py-1 pr-3 font-medium">Direction</th>
-                <th className="py-1 pr-3 font-medium">From &rarr; To</th>
-                <th className="py-1 pr-3 font-medium">Shell</th>
-                <th className="py-1 pr-3 font-medium">Command</th>
-                <th className="py-1 font-medium">Outcome</th>
+                {COLUMNS.map((c) => (
+                  <th key={c.label} className={c.className}>{c.label}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -256,14 +329,17 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
                   <td className="whitespace-nowrap py-1 pr-3 text-muted"><span title={r.ts}>{r.whenText}</span></td>
                   <td className="whitespace-nowrap py-1 pr-3">{r.directionText}</td>
                   <td className="whitespace-nowrap py-1 pr-3">
-                    <span>{r.fromText}</span> <span className="text-muted">&rarr;</span> <span>{r.toText}</span>
+                    <MachineName name={r.fromText} /> <span className="text-muted">&rarr;</span> <MachineName name={r.toText} />
                   </td>
                   <td className="whitespace-nowrap py-1 pr-3 text-muted">{r.shell === '' ? '-' : r.shell}</td>
-                  <td className="py-1 pr-3"><span className={COMMAND_TEXT}>{r.command === '' ? '-' : r.command}</span></td>
-                  <td className="py-1">
-                    <span className={TONES[r.tone]} title={r.detailText === '' ? undefined : r.detailText}>{r.outcomeText}</span>
+                  <td className="py-1 pr-3"><span className={COMMAND_TEXT} style={MONO_STYLE}>{r.command === '' ? '-' : r.command}</span></td>
+                  <td className="py-1 pr-3">
+                    <span className={TONES[r.tone]} title={r.detailText === '' ? undefined : r.detailText}>{r.resultText}</span>
                     {r.detailText !== '' ? <div className="text-xs text-muted">{r.detailText}</div> : null}
                   </td>
+                  <td className="whitespace-nowrap py-1 pr-3 text-right"><span data-exit="" className={EXIT_TONES[r.exitTone]} title={r.exitTitle}>{r.exitText}</span></td>
+                  <td className={`whitespace-nowrap py-1 pr-3 text-right tabular-nums ${r.ranText === '-' ? 'text-muted' : ''}`}><span title={r.ranTitle}>{r.ranText}</span></td>
+                  <td className={`whitespace-nowrap py-1 text-right tabular-nums ${r.waitedText === '-' ? 'text-muted' : ''}`}>{r.waitedText}</td>
                 </tr>
               ))}
             </tbody>
@@ -271,16 +347,29 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         </div>
       ) : null}
 
-      {data !== undefined && (offset > 0 || data.hasMore) ? (
-        <div className="flex items-center gap-2">
-          <button type="button" className={PAGE_BUTTON} disabled={data.prevOffset === undefined || loading} onClick={() => setOffset(data.prevOffset ?? 0)}>
-            Previous page
-          </button>
-          <button type="button" className={PAGE_BUTTON} disabled={data.nextOffset === undefined || loading} onClick={() => setOffset(data.nextOffset ?? 0)}>
-            Next page
-          </button>
-        </div>
-      ) : null}
+      <nav aria-label="Pages of the activity" className="flex flex-wrap items-center gap-2">
+        <button type="button" className={PAGE_BUTTON} aria-label="First page" disabled={page <= 1} onClick={() => goTo(1)}>
+          First
+        </button>
+        <button type="button" className={PAGE_BUTTON} aria-label="Previous page" disabled={page <= 1} onClick={() => goTo(page - 1)}>
+          Previous
+        </button>
+        <span className={TEXT_MUTED_SM}>{known ? `Page ${data.page} of ${grouped(pageCount)}${data.totalExact ? '' : '+'}` : `Page ${page}`}</span>
+        <button type="button" className={PAGE_BUTTON} aria-label="Next page" disabled={atLast} onClick={() => goTo(page + 1)}>
+          Next
+        </button>
+        <button type="button" className={PAGE_BUTTON} aria-label="Last page" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)}>
+          Last
+        </button>
+        <label className="ml-auto flex items-center gap-2 text-xs text-muted" htmlFor={ids.size}>
+          Rows per page
+          <select id={ids.size} className={INPUT} value={size} onChange={(e) => { setSize(Number(e.target.value)); setPage(1); }}>
+            {(data?.pageSizes ?? PAGE_SIZES).map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+      </nav>
     </section>
   );
 }

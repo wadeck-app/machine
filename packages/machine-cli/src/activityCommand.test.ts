@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildRunLogLine } from '@wadeck-app/machine-core';
@@ -48,6 +48,29 @@ describe('daemon command activity', () => {
     expect(all).toMatchObject({ initialized: true, ok: true, page: { total: 3, counts: { sent: 3, received: 0 } }, machines: ['laptop'] });
     const some = await commands.activity({ outcome: 'ran', limit: '1', offset: '1' });
     expect(some).toMatchObject({ ok: true, page: { total: 2, offset: 1, limit: 1, hasMore: false } });
+  });
+
+  it('pages by page and pageSize, says the total is exact, and refuses a page past the last one with the last page', async () => {
+    for (let n = 1; n <= 30; n++) {
+      send(n, n % 2 === 0 ? 'ran' : 'denied');
+    }
+    const commands = makeCommands(dir, 'test');
+    const second = await commands.activity({ page: '2', pageSize: '25' });
+    expect(second).toMatchObject({ ok: true, page: { total: 30, totalExact: true, page: 2, pageSize: 25, pageCount: 2, hasMore: false } });
+    expect((second as { page: { items: unknown[] } }).page.items).toHaveLength(5);
+    const filtered = await commands.activity({ outcome: 'ran', page: '1', pageSize: '25' });
+    expect(filtered).toMatchObject({ ok: true, page: { total: 15, totalExact: true, pageCount: 1 } });
+    expect(await commands.activity({ page: '3', pageSize: '25' })).toMatchObject({ ok: false, reason: 'bad-query', message: expect.stringContaining('page 3 is beyond the last page (2)') });
+    expect(await commands.activity({ pageSize: '30' })).toMatchObject({ ok: false, reason: 'bad-query', message: expect.stringContaining('pageSize') });
+  });
+
+  it('keeps the count of damaged lines of the whole log, and says when a file was recounted after a change that was not an append', async () => {
+    send(1, 'ran');
+    const commands = makeCommands(dir, 'test');
+    expect(await commands.activity({})).toMatchObject({ ok: true, runLog: { damagedLines: 0, recounted: [] } });
+    // A damaged line appended: counted from where the cache stopped, the total stays exact.
+    appendFileSync(join(dir, 'run-log', 'runs.ndjson'), '{"v":1,"ts":\n');
+    expect(await commands.activity({})).toMatchObject({ ok: true, page: { total: 1, totalExact: true }, runLog: { damagedLines: 1, recounted: [] } });
   });
 
   it('refuses a bad query with a reason and the fix, never a guess', async () => {

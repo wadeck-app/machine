@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { appendAudit, GENESIS_HASH } from './audit.js';
 import type { Json } from './canonical.js';
-import { ACTIVITY_DEFAULT_LIMIT, ACTIVITY_MAX_LIMIT, buildActivity, parseActivityQuery, type ActivityFilter } from './activity.js';
+import { ACTIVITY_DEFAULT_LIMIT, ACTIVITY_MAX_LIMIT, ActivityRangeError, buildActivity, parseActivityQuery, type ActivityFilter } from './activity.js';
 import type { RunLogEntry } from './runLog.js';
 
 // The Activity timeline: the outgoing run log and the audit log of THIS machine in one list, newest first, filtered and paginated. Pure.
@@ -32,8 +32,15 @@ const completed = (at: number, id: string, exitCode: number | null = 0): Record<
 const refusedEntry = (at: number, source: string, reason = 'not-listed', command = 'rm x'): Record<string, Json> => ({ ts: iso(at), event: 'refused', source, reason, id: `r-${at}`, shell: 'sh', command });
 
 const names: Record<string, string> = { [DESK.uuid]: 'desk', [NAS.uuid]: 'nas' };
+/** The run log as the reader hands it over: lines in the order they were appended (end of the run), newest first. */
+const sentLinesOf = (entries: RunLogEntry[]): string[] =>
+  [...entries].sort((a, b) => Date.parse(a.ts) + a.durationMs - (Date.parse(b.ts) + b.durationMs)).map((e) => JSON.stringify(e)).reverse();
+const sourcesOf = (input: { sent?: RunLogEntry[]; audit?: Array<Record<string, Json>>; auditLines?: string[] }) => ({
+  sentLines: () => sentLinesOf(input.sent ?? []),
+  auditLines: () => [...(input.auditLines ?? auditLog(input.audit ?? []))].reverse(),
+});
 const run = (input: { sent?: RunLogEntry[]; audit?: Array<Record<string, Json>> }, filter: ActivityFilter = {}) =>
-  buildActivity({ self: SELF, sent: input.sent ?? [], auditLines: auditLog(input.audit ?? []), nameOf: (uuid) => names[uuid], filter });
+  buildActivity({ self: SELF, sources: sourcesOf(input), nameOf: (uuid) => names[uuid], filter });
 
 describe('the merged timeline', () => {
   it('puts sent and received runs in one list, newest first, with from and to on every row', () => {
@@ -70,8 +77,8 @@ describe('the merged timeline', () => {
   it('reports a broken audit chain and still lists what is readable, flagged unverified', () => {
     const lines = auditLog([accepted(1, DESK.uuid, 'a'), completed(2, 'a'), accepted(3, DESK.uuid, 'b'), completed(4, 'b')]);
     lines[1] = lines[1]?.replace('"exitCode":0', '"exitCode":9') as string;
-    const page = buildActivity({ self: SELF, sent: [], auditLines: lines, nameOf: () => undefined, filter: {} });
-    expect(page.chain).toMatchObject({ ok: false, line: 2 });
+    const page = buildActivity({ self: SELF, sources: sourcesOf({ auditLines: lines }), nameOf: () => undefined, filter: {} });
+    expect(page.chain).toMatchObject({ ok: false, line: 2, scope: 'window' });
     expect(page.items.some((e) => !e.verified)).toBe(true);
     expect(page.items.some((e) => e.verified)).toBe(true);
   });
@@ -143,8 +150,10 @@ describe('pagination', () => {
     expect(last.nextOffset).toBeUndefined();
   });
 
-  it('an offset past the end is an empty page, not an error', () => {
-    expect(run({ sent: many }, { offset: 99 }).items).toEqual([]);
+  it('refuses an offset past the last entry, naming the last page (nothing is guessed)', () => {
+    expect(() => run({ sent: many }, { offset: 99 })).toThrow(ActivityRangeError);
+    expect(() => run({ sent: many }, { limit: 10, offset: 30, page: 4 })).toThrow(/page 4 is beyond the last page \(3\)/);
+    expect(run({}, { offset: 0 }).items).toEqual([]);
   });
 
   it('refuses a limit or offset that is not a whole number in range, naming the bound', () => {
@@ -165,9 +174,15 @@ describe('what is shown', () => {
 describe('parseActivityQuery (the flags of `machine log` and the query of the Activity page)', () => {
   const NOW = Date.UTC(2026, 10, 21, 12, 0, 0);
 
+  it('turns page and pageSize (25, 50, 100) into a limit and an offset', () => {
+    expect(parseActivityQuery({ page: '3', pageSize: '50' }, NOW)).toEqual({ limit: 50, offset: 100, page: 3 });
+    expect(parseActivityQuery({ page: '2' }, NOW)).toEqual({ limit: 25, offset: 25, page: 2 });
+    expect(parseActivityQuery({ pageSize: '100' }, NOW)).toEqual({ limit: 100, offset: 0, page: 1 });
+  });
+
   it('reads every field, and treats an empty text as not set (a page sends empty fields)', () => {
     expect(parseActivityQuery({ direction: 'sent', machine: 'desk', outcome: 'refused', since: '2h', text: 'ls', limit: '20', offset: '40' }, NOW)).toEqual({ direction: 'sent', machine: 'desk', outcome: 'refused', sinceMs: NOW - 2 * 3_600_000, text: 'ls', limit: 20, offset: 40 });
-    expect(parseActivityQuery({ direction: '', machine: '', outcome: '', since: '', text: '', limit: '', offset: '' }, NOW)).toEqual({});
+    expect(parseActivityQuery({ direction: '', machine: '', outcome: '', since: '', text: '', limit: '', offset: '', page: '', pageSize: '' }, NOW)).toEqual({});
   });
 
   it('reads a duration in minutes, hours or days, and a local date or date and time', () => {
@@ -187,6 +202,12 @@ describe('parseActivityQuery (the flags of `machine log` and the query of the Ac
     [{ limit: 'ten' }, /limit/],
     [{ offset: '-1' }, /offset/],
     [{ machine: 'x'.repeat(101) }, /machine.*100/],
+    [{ pageSize: '30' }, /pageSize.*25, 50 or 100/],
+    [{ pageSize: '500' }, /pageSize.*25, 50 or 100/],
+    [{ page: '0' }, /page.*at least 1/],
+    [{ page: 'two' }, /page/],
+    [{ page: '2', offset: '10' }, /page.*offset.*contradict/],
+    [{ pageSize: '25', limit: '10' }, /pageSize.*limit.*contradict/],
   ])('refuses %j naming the field and what is accepted', (query, message) => {
     expect(() => parseActivityQuery(query, NOW)).toThrow(message);
   });
