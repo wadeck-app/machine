@@ -44,6 +44,9 @@ let expiresAt: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let keep: KeepChoice = DEFAULT_KEEP;
 let pageHideRegistered = false;
+// Counts the locks from outside (Lock now, idle timeout, pagehide, "Ask every time", reset). An unlock that is still deriving its key when one happens must not
+// store the key afterwards: the caller reads the epoch BEFORE the unlock and hands it to hold().
+let lockEpoch = 0;
 let snap: HolderSnapshot = { unlocked: false, expiresAt: null, keep };
 const listeners = new Set<() => void>();
 
@@ -77,10 +80,15 @@ export const adminKeyHolder = {
   },
 
   /**
-   * Keeps `key` for the chosen duration (or `options.ms`). Returns false when nothing is to be kept ("ask every time"): the key is LOCKED here, the caller
-   * must not use it afterwards. A previously held key is locked.
+   * Keeps `key` for the chosen duration (or `options.ms`). Returns false when nothing is to be kept ("ask every time", or the holder was locked since
+   * `options.since`, the `epoch()` read before the unlock started): the key is LOCKED here, the caller must not use it afterwards. A previously held key is locked.
    */
-  hold(key: UnlockedAdminKey, options: { ms?: number } = {}): boolean {
+  hold(key: UnlockedAdminKey, options: { ms?: number; since?: number } = {}): boolean {
+    // Locked from outside while this key was being derived: it is dropped without touching what the holder has now (another unlock may have stored its own key).
+    if (options.since !== undefined && options.since !== lockEpoch) {
+      key.lock();
+      return false;
+    }
     const ms = options.ms ?? msOf(keep);
     if (held !== null && held !== key) {
       held.lock();
@@ -115,12 +123,18 @@ export const adminKeyHolder = {
 
   /** Wipes and locks the key (the Lock now button, the idle timeout, pagehide). */
   lock(): void {
+    lockEpoch++;
     const key = held;
     held = null;
     expiresAt = null;
     clearTimer();
     key?.lock();
     publish();
+  },
+
+  /** The number of locks from outside so far: read it before an unlock, give it back to `hold({ since })`. */
+  epoch(): number {
+    return lockEpoch;
   },
 
   keepChoice(): KeepChoice {

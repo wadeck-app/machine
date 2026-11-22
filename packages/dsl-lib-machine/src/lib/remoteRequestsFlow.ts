@@ -1,5 +1,5 @@
 import { newRequestsListBody, signRequestsList } from '@wadeck-app/machine-webcrypto';
-import { withAdminKey, type AllowApi } from './allowFlow.js';
+import { trackSigning, withAdminKey, type AllowApi } from './allowFlow.js';
 
 // The requests of the OTHER machines on the Requests page (decision 74), without React. Only the admin machine can ask a peer: the request is signed with
 // the ADMIN key, here, in the browser, one document per peer (each names its target). The passphrase is a parameter of `fetchRemoteRequests` only: never
@@ -49,7 +49,11 @@ export function elevateForRemote(api: AllowApi): Promise<void> {
   return api.elevate();
 }
 
-export async function fetchRemoteRequests(api: AllowApi, input: { selfUuid: string; peers: RemotePeer[]; passphrase: string | null; now: number }): Promise<RemoteOutcome[]> {
+export function fetchRemoteRequests(api: AllowApi, input: { selfUuid: string; peers: RemotePeer[]; passphrase: string | null; now: number }): Promise<RemoteOutcome[]> {
+  return trackSigning(() => fetchRemoteRequestsNow(api, input));
+}
+
+async function fetchRemoteRequestsNow(api: AllowApi, input: { selfUuid: string; peers: RemotePeer[]; passphrase: string | null; now: number }): Promise<RemoteOutcome[]> {
   if (input.peers.length === 0) {
     throw new Error('there is no other trusted machine to ask: see the Machines page, or `machine list`');
   }

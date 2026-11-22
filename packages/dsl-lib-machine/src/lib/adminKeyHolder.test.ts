@@ -176,3 +176,46 @@ describe('formatCountdown', () => {
     expect(formatCountdown(-5)).toBe('0:00');
   });
 });
+
+describe('an unlock that is still running when the key is locked from outside', () => {
+  it('is not kept: the caller reads epoch() before the unlock, hold() with that epoch locks the key when lock() or reset() ran meanwhile', () => {
+    for (const interrupt of [() => adminKeyHolder.lock(), () => adminKeyHolder.reset()]) {
+      const since = adminKeyHolder.epoch();
+      interrupt();
+      const key = fakeKey();
+      expect(adminKeyHolder.hold(key, { since })).toBe(false);
+      expect(key.isLocked()).toBe(true);
+      expect(adminKeyHolder.current()).toBeNull();
+      expect(adminKeyHolder.snapshot().unlocked).toBe(false);
+    }
+  });
+
+  it('is kept when nothing locked the holder meanwhile', () => {
+    const since = adminKeyHolder.epoch();
+    const key = fakeKey();
+    expect(adminKeyHolder.hold(key, { since })).toBe(true);
+    expect(adminKeyHolder.current()).toBe(key);
+  });
+
+  it('a second unlock that replaces the first one does not make the first one stale for itself', () => {
+    const since = adminKeyHolder.epoch();
+    expect(adminKeyHolder.hold(fakeKey())).toBe(true);
+    const second = fakeKey();
+    expect(adminKeyHolder.hold(second, { since })).toBe(true);
+    expect(adminKeyHolder.current()).toBe(second);
+  });
+});
+
+describe('a stale unlock never locks a key another unlock stored meanwhile', () => {
+  it('the newer key stays held', () => {
+    const since = adminKeyHolder.epoch();
+    adminKeyHolder.lock();
+    const newer = fakeKey();
+    adminKeyHolder.hold(newer);
+    const stale = fakeKey();
+    expect(adminKeyHolder.hold(stale, { since })).toBe(false);
+    expect(stale.isLocked()).toBe(true);
+    expect(newer.isLocked()).toBe(false);
+    expect(adminKeyHolder.current()).toBe(newer);
+  });
+});

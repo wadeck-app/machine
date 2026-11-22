@@ -298,6 +298,29 @@ export async function readKeyFile(api: AllowApi): Promise<string> {
   return answer['file'];
 }
 
+// The signings that are running (unlock, signature, post). A page never needs this; a test does: a signing that outlives its test posts through the
+// fetcher the shell has by then (the shell is read at call time), which is the one of the NEXT test.
+let signingsInFlight = 0;
+let settleWaiters: Array<() => void> = [];
+
+/** Runs `work` and counts it as a signing in flight until it settles. */
+export function trackSigning<T>(work: () => Promise<T>): Promise<T> {
+  signingsInFlight++;
+  return work().finally(() => {
+    signingsInFlight--;
+    if (signingsInFlight === 0) {
+      const waiters = settleWaiters;
+      settleWaiters = [];
+      waiters.forEach((w) => w());
+    }
+  });
+}
+
+/** Resolves when no signing is in flight (at once when none is). */
+export function signingsSettled(): Promise<void> {
+  return signingsInFlight === 0 ? Promise.resolve() : new Promise<void>((resolve) => settleWaiters.push(resolve));
+}
+
 export const LOCKED_MESSAGE = 'The admin key is locked (it locked itself after its idle time, or Lock now was pressed): type the admin passphrase to unlock it again. Nothing was signed';
 
 /**
@@ -317,6 +340,8 @@ export async function withAdminKey<T>(api: AllowApi, passphrase: string | null, 
     return out;
   }
   const file = await readKeyFile(api);
+  // A Lock now (or a reset) while the key is being derived must win: the key is then used for this signature only and never kept.
+  const since = adminKeyHolder.epoch();
   const key = await unlockAdminKey(file, passphrase, { extractable: false });
   let done = false;
   try {
@@ -325,7 +350,7 @@ export async function withAdminKey<T>(api: AllowApi, passphrase: string | null, 
     return out;
   } finally {
     // Kept for the idle time, or locked: before anything goes to the network, whatever happened.
-    if (!done || !adminKeyHolder.hold(key)) {
+    if (!done || !adminKeyHolder.hold(key, { since })) {
       key.lock();
     }
   }
@@ -370,7 +395,11 @@ function assertPinnedKey(key: { keyId: string; publicKey: string }, context: All
  * Unlock the admin key with `passphrase`, sign the policy (and its inbox document for another machine), lock the key, and post the signed documents.
  * Throws with the actionable sentence of whoever refused: wrong passphrase, another key than the pinned one, the daemon (stale base, mode local ...).
  */
-export async function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string | null, now: number, onSigned?: () => void): Promise<AllowResult> {
+export function signAndSubmitAllow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string | null, now: number, onSigned?: () => void): Promise<AllowResult> {
+  return trackSigning(() => signAndSubmitAllowNow(api, context, change, passphrase, now, onSigned));
+}
+
+async function signAndSubmitAllowNow(api: AllowApi, context: AllowContext, change: AllowChange, passphrase: string | null, now: number, onSigned?: () => void): Promise<AllowResult> {
   const prepared = await prepareAllow(context, change, now);
   if (!prepared.changed) {
     throw new Error(`${change.shell} ${JSON.stringify(change.command)} is ${prepared.reason === 'already-allowed' ? 'already allowed' : 'not allowed'} on "${context.target.name}": nothing to sign`);
@@ -492,7 +521,11 @@ export async function prepareBatch(groups: BatchGroupInput[], lifetime: Lifetime
  * told, and the policies are posted. A machine whose post fails is reported as `failed` and does not hide the others. A machine whose entries were
  * all allowed already is `unchanged` (nothing signed for it). Throws when nothing at all is to be signed, or on a wrong passphrase.
  */
-export async function signAndSubmitBatch(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string | null, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
+export function signAndSubmitBatch(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string | null, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
+  return trackSigning(() => signAndSubmitBatchNow(api, groups, lifetime, passphrase, now, onSigned));
+}
+
+async function signAndSubmitBatchNow(api: AllowApi, groups: BatchGroupInput[], lifetime: LifetimeInput, passphrase: string | null, now: number, onSigned?: () => void): Promise<BatchOutcome[]> {
   const plans = await planBatch(groups, lifetime, now);
   const changed = plans.filter((p) => p.body !== undefined);
   if (changed.length === 0) {

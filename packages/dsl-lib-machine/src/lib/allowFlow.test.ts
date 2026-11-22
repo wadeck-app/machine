@@ -1,7 +1,7 @@
 import { applyPolicy, encryptAdminKey, generateSigningKeyPair, keyId, nextPolicyBody as coreNext, signNoticeRecipients as coreSignList, signPolicy as coreSignPolicy, verifyInboxDocument, verifyNoticeRecipients as coreVerifyList, type SignedNoticeRecipients, type PolicyBody, type SignedPolicy } from '@wadeck-app/machine-core';
 import { describe, expect, it, vi } from 'vitest';
 import { adminKeyHolder } from './adminKeyHolder.js';
-import { deliveryNotice, loadContext, loadContexts, prepareAllow, prepareBatch, readAdminKeyHint, signAndSubmitAllow, signAndSubmitBatch, type AllowApi, type AllowContext } from './allowFlow.js';
+import { deliveryNotice, signingsSettled, trackSigning, loadContext, loadContexts, prepareAllow, prepareBatch, readAdminKeyHint, signAndSubmitAllow, signAndSubmitBatch, type AllowApi, type AllowContext } from './allowFlow.js';
 
 // The flow of the Allow button without React: context, preview, unlock, signature, post. Real crypto (each unlock derives 600 000 PBKDF2 rounds:
 // a few in this file, not more). The server side is a recording stub, so the tests can read EVERY byte that leaves the page.
@@ -671,4 +671,22 @@ describe('the Allow of a renewal (an exhausted or expired entry): one signed pol
     ]);
     expect(applyPolicy({ version: 4, highestSeen: 4 }, policy, { mode: 'admin', adminPublicKey: admin.publicKey, now: NOW, targetUuid: SELF }).ok).toBe(true);
   }, 120_000);
+});
+
+describe('signingsSettled: nothing is in flight when it resolves', () => {
+  it('resolves at once when no signing runs, and waits for the end of a tracked one (done or failed)', async () => {
+    await signingsSettled();
+    let release: () => void = () => undefined;
+    const running = trackSigning(() => new Promise<void>((resolve) => { release = resolve; }));
+    let settled = false;
+    void signingsSettled().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await running;
+    await signingsSettled();
+    expect(settled).toBe(true);
+    await expect(trackSigning(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    await signingsSettled();
+  });
 });
