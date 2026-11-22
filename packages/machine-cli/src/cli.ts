@@ -328,11 +328,12 @@ Administration (enrollment through the relay, or by files):
                                      RECEIVED (its audit log), as one list, newest first, 50 per page (--limit up to 500, --offset for the
                                      next page). Read-only, no daemon needed. The sent runs are kept in <config dir>/run-log/ (5 MiB per
                                      file, the newest 5 files); the output of a command and its environment are never stored
-  log --follow | -f [--sent | --received] [--since <30m|2h|3d|date> [--limit <n>]] [--json]
+  log --follow | -f [--sent | --received] [--since <30m|2h|3d|date> [--limit <n>]] [--all] [--width <40-300>] [--json]
                                      like \`tail -f\`: prints each new entry of this machine's audit log (accepted and run with exit code and
-                                     time, refused with its reason, held, sessions, documents, notices) and run log as it happens, one line
-                                     each in the columns of \`machine log\`; --received only the audit log, --sent only the run log; --since
-                                     shows the history first. Starts from now; Ctrl+C stops (exit 0). Read-only, no daemon needed
+                                     time, refused with its reason, held) and run log as it happens, ONE line each, never wider than the
+                                     terminal (100 columns when the output is not a terminal; --width <n> forces it); --received only the
+                                     audit log, --sent only the run log; --since shows the history first. Documents, sessions and notices are
+                                     hidden unless --all. Starts from now; Ctrl+C stops (exit 0). Read-only, no daemon needed
   peer forget-record <peer>          forget the highest address record seq seen for ONE peer (y/N). Only after confirming
                                      out of band that the peer was reinstalled: it lifts the rollback check for that peer once
   policy install <signed.json>       install a policy for this machine: signed by the admin (mode admin, the default) or by the local policy key (mode local)
@@ -420,6 +421,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--force-register') out.forceRegister = true;
     else if (a === '--history') out.history = true;
     else if (a === '--all') out.all = true;
+    else if (a === '--width') out.width = valueOf('--width');
     else if (a === '--since') out.since = valueOf('--since');
     else if (a === '--event') out.event = valueOf('--event');
     else if (a === '--limit') out.limit = valueOf('--limit');
@@ -657,6 +659,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   }
   if (args.quiet && command !== 'cli') return fail('--quiet only applies to `machine cli self-check`', EXIT.usage);
   if (args.forceRegister && command !== 'cli') return fail('--force-register only applies to `machine cli register`', EXIT.usage);
+  if (args.width !== undefined && !(command === 'log' && args.follow)) {
+    return fail('--width only applies to `machine log --follow` (the columns the rows are fitted to, 40 to 300)', EXIT.usage);
+  }
   if (args.follow && command !== 'cli' && command !== 'log') return fail('--follow only applies to `machine log` (the live stream of the activity of this machine) and `machine cli logs` (the updater and daemon log)', EXIT.usage);
   if (args.fullAccess && !(command === 'admin' && rest[0] === 'login')) {
     return fail('--full-access only applies to `machine admin login` (a FULL-ACCESS token, which can also manage tokens; without it the admin token is limited to machine rights)', EXIT.usage);

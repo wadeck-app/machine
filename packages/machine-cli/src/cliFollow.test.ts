@@ -93,17 +93,17 @@ describe('machine log --follow', () => {
     expect(r.out).not.toContain('before-the-follow');
     const rows = r.out.split('\n').filter((l) => l.includes('<='));
     expect(rows).toHaveLength(3);
-    expect(rows[0]).toMatch(/<= desktop -> laptop\s+sh\s+ls -l\s+running/);
-    expect(rows[1]).toMatch(/<= desktop -> laptop\s+sh\s+ls -l\s+ran\s+3\s+1\.5 s/);
-    expect(rows[2]).toMatch(/<= desktop -> laptop\s+sh\s+rm -rf x\s+refused \(not-listed\)/);
-    expect(r.out).toMatch(/Following the activity of laptop \(received\)/);
-    expect(r.out).toMatch(/TIME\s+FROM -> TO\s+SHELL\s+COMMAND\s+RESULT\s+EXIT\s+RAN\s+WAITED/);
+    expect(rows[0]).toMatch(/<= sh\s+ls -l\s+running/);
+    expect(rows[1]).toMatch(/<= sh\s+ls -l\s+ran\s+3\s+1\.5 s/);
+    expect(rows[2]).toMatch(/<= sh\s+rm -rf x\s+refused \(not-listed\)/);
+    expect(r.out).toMatch(/Following laptop <-> desktop \(received\), 100 columns/);
+    expect(r.out).toMatch(/TIME\s+SHELL\s+COMMAND\s+RESULT\s+EXIT\s+RAN/);
     // 500 ms between two looks
     expect(new Set(r.sleeps)).toEqual(new Set([500]));
   });
 
-  it('shows holds, sessions and documents with no row of their own as one line each', async () => {
-    const r = await follow(b, ['--received'], [
+  it('shows holds always, and sessions and documents (one short line each) only with --all', async () => {
+    const r = await follow(b, ['--received', '--all'], [
       () => audit({ event: 'held', id: 'h1', shell: 'sh', command: 'df', waitSeconds: 600 }),
       () => audit({ event: 'hold-ended', id: 'h1', shell: 'sh', command: 'df', outcome: 'allowed' }),
       () => audit({ event: 'session-closed', reason: 'peer-revoked' }),
@@ -112,17 +112,27 @@ describe('machine log --follow', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out).toMatch(/df\s+held\b/);
     expect(r.out).toMatch(/df\s+hold-ended \(allowed\)/);
-    expect(r.out).toMatch(/session-closed \(peer-revoked\)/);
-    expect(r.out).toMatch(/document-accepted \(policy\)/);
+    expect(r.out).toMatch(/session closed\s+peer-revoked/);
+    expect(r.out).toMatch(/doc accepted\s+policy/);
+    const quiet = await follow(b, ['--received'], [
+      () => audit({ event: 'held', id: 'h1', shell: 'sh', command: 'df', waitSeconds: 600 }),
+      () => audit({ event: 'session-closed', reason: 'peer-revoked' }),
+      () => audit({ event: 'document-delivered', kind: 'policy', id: 'd1', outcome: 'already-installed' }),
+    ]);
+    expect(quiet.out).toMatch(/df\s+held\b/);
+    expect(quiet.out.split('\n').filter((l) => l.includes('<=')).join('\n')).not.toMatch(/session|doc /);
+    expect(quiet.out).toContain('--all shows them');
+    const all = await follow(b, ['--received', '--all'], [() => audit({ event: 'document-delivered', kind: 'policy', id: 'd1', outcome: 'already-installed' })]);
+    expect(all.out).toMatch(/doc already there/);
   });
 
   it('follows both the audit log and the run log without --received, and only one of them with --sent / --received', async () => {
     const steps = [() => auditAt(a, b, { event: 'accepted', id: 'r1', shell: 'sh', command: 'from-peer' }), () => sent({ command: 'to-peer' })];
     const both = await follow(a, [], steps);
     expect(both.err).not.toContain('[warn]');
-    expect(both.out).toMatch(/Following the activity of desktop \(sent and received\)/);
-    expect(both.out).toMatch(/<= laptop -> desktop\s+sh\s+from-peer\s+running/);
-    expect(both.out).toMatch(/=> desktop -> laptop\s+sh\s+to-peer\s+ran\s+0\s+12 ms/);
+    expect(both.out).toMatch(/Following desktop <-> laptop \(sent and received\)/);
+    expect(both.out).toMatch(/<= sh\s+from-peer\s+running/);
+    expect(both.out).toMatch(/=> sh\s+to-peer\s+ran\s+0\s+12 ms/);
     const onlySent = await follow(a, ['--sent'], [() => sent({ command: 'only-sent-seen' }), () => auditAt(a, b, { event: 'accepted', id: 'r9', shell: 'sh', command: 'audit-not-seen' })]);
     expect(onlySent.out).toContain('only-sent-seen');
     expect(onlySent.out).not.toContain('audit-not-seen');
@@ -215,12 +225,12 @@ describe('machine log --follow', () => {
   });
 
   it('never prints an environment, an output, or a free message of an entry', async () => {
-    const r = await follow(b, ['--received'], [() => audit({ event: 'session-error', error: 'boom', env: 'TOKEN=hunter2', stdout: 'TOPSECRET-OUTPUT', message: 'FREE-MESSAGE', passphrase: 'pp-secret' })]);
+    const r = await follow(b, ['--received', '--all'], [() => audit({ event: 'session-error', error: 'boom', env: 'TOKEN=hunter2', stdout: 'TOPSECRET-OUTPUT', message: 'FREE-MESSAGE', passphrase: 'pp-secret' })]);
     const all = r.out + r.err;
     for (const secret of ['hunter2', 'TOPSECRET-OUTPUT', 'FREE-MESSAGE', 'pp-secret']) {
       expect(all).not.toContain(secret);
     }
-    expect(r.out).toMatch(/session-error \(boom\)/);
+    expect(r.out).toMatch(/session error\s+boom/);
   });
 
   it('prints one JSON object per line with --json', async () => {
@@ -254,10 +264,70 @@ describe('machine log --follow', () => {
     const timing = { sleep: (): Promise<void> => Promise.resolve(), nowMs: (): number => Date.now(), pollIntervalMs: 500, signal: controller.signal };
     const r = await cli(b, ['log', '-f', '--received'], undefined, { timing });
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toMatch(/Following the activity of laptop/);
+    expect(r.out).toMatch(/Following laptop/);
     const other = await cli(b, ['list', '--follow']);
     expect(other.code).toBe(2);
     expect(other.err).toMatch(/--follow only applies to `machine log`.*`machine cli logs`/);
+  });
+
+  it('never prints a line longer than the terminal, at 40 to 300 columns, with --width (validated 40..300)', async () => {
+    const steps = [
+      () => audit({ event: 'accepted', id: 'r1', shell: 'sh', command: 'git -C /srv/app pull --ff-only origin main && npm ci && npm run build' }),
+      () => audit({ event: 'completed', id: 'r1', exitCode: 0, timedOut: false, truncated: false, durationMs: 1500 }),
+      () => audit({ event: 'refused', id: 'r2', reason: 'not-listed', shell: 'sh', command: 'rm -rf /srv/app/data' }),
+    ];
+    for (const width of [40, 80, 100, 120, 160, 300]) {
+      const r = await follow(b, ['--received', '--width', String(width)], steps);
+      expect(r.code, r.err).toBe(0);
+      const lines = r.out.split('\n');
+      expect(lines.length).toBeGreaterThan(5);
+      for (const line of lines) {
+        expect(line.length, `${width}: ${line}`).toBeLessThanOrEqual(width);
+      }
+    }
+    for (const bad of ['39', '301', 'wide', '1e2', '']) {
+      const r = await follow(b, ['--width', bad]);
+      expect(r.code, bad).toBe(2);
+      expect(r.err).toMatch(/--width needs a number of columns from 40 to 300/);
+    }
+    const elsewhere = await cli(b, ['log', '--width', '80']);
+    expect(elsewhere.code).toBe(2);
+    expect(elsewhere.err).toMatch(/--width only applies to .machine log --follow/);
+    const notFollow = await cli(b, ['log', '--all']);
+    expect(notFollow.code).toBe(2);
+    expect(notFollow.err).toMatch(/--all/);
+  });
+
+  it('asks the terminal width again at each row: a resize between two rows applies to the second', async () => {
+    let columns = 160;
+    const controller = new AbortController();
+    const sleeps: number[] = [];
+    const steps = [
+      () => audit({ event: 'accepted', id: 'r1', shell: 'sh', command: 'git -C /srv/app pull --ff-only origin main && npm ci && npm run build' }),
+      () => {
+        columns = 80;
+        audit({ event: 'accepted', id: 'r2', shell: 'sh', command: 'git -C /srv/app pull --ff-only origin main && npm ci && npm run build' });
+      },
+    ];
+    const timing = {
+      sleep: (ms: number): Promise<void> => {
+        sleeps.push(ms);
+        steps[sleeps.length - 1]?.();
+        if (sleeps.length > steps.length) {
+          controller.abort();
+        }
+        return Promise.resolve();
+      },
+      nowMs: (): number => Date.now(),
+      pollIntervalMs: 500,
+      signal: controller.signal,
+    };
+    const r = await cli(b, ['log', '--follow', '--received'], undefined, { timing, columns: () => columns });
+    const rows = r.out.split('\n').filter((l) => l.includes('<='));
+    expect(rows).toHaveLength(2);
+    expect((rows[0] as string).length).toBeGreaterThan(80);
+    expect((rows[0] as string).length).toBeLessThanOrEqual(160);
+    expect((rows[1] as string).length).toBeLessThanOrEqual(80);
   });
 });
 

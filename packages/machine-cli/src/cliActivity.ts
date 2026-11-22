@@ -22,10 +22,10 @@ export function fit(text: string, max: number): string {
   return max <= 3 ? text.slice(0, Math.max(0, max)) : `${text.slice(0, max - 3)}...`;
 }
 
-const nameOf = (m: { name?: string | undefined; uuid?: string | undefined }): string => m.name ?? (m.uuid === undefined ? '?' : m.uuid.slice(0, 8));
+export const nameOf = (m: { name?: string | undefined; uuid?: string | undefined }): string => m.name ?? (m.uuid === undefined ? '?' : m.uuid.slice(0, 8));
 
 /** The RESULT column: what became of the request. The exit code, the run time and the wait have their own columns. */
-function resultText(e: ActivityEvent): string {
+export function resultText(e: ActivityEvent): string {
   if (e.outcome === 'refused') {
     return `refused (${e.reason ?? 'unknown'})`;
   }
@@ -40,7 +40,7 @@ function resultText(e: ActivityEvent): string {
 }
 
 /** The EXIT column: the number, or why there is none; a dash when no command ran. */
-function exitText(e: ActivityEvent): string {
+export function exitText(e: ActivityEvent): string {
   if (e.outcome !== 'ran') {
     return '-';
   }
@@ -51,10 +51,10 @@ function exitText(e: ActivityEvent): string {
 }
 
 /** The RAN column: the run time of the command on the target; ~ marks an estimate (the whole run minus the wait, for an older entry). */
-const ranText = (e: ActivityEvent): string => (e.execMs === undefined ? '-' : `${e.execDerived === true ? '~' : ''}${formatRunTime(e.execMs)}`);
+export const ranText = (e: ActivityEvent): string => (e.execMs === undefined ? '-' : `${e.execDerived === true ? '~' : ''}${formatRunTime(e.execMs)}`);
 
 /** The WAITED column: how long the request was held waiting for the owner; a dash when it was not. */
-const waitedText = (e: ActivityEvent): string => (e.waitedSeconds === undefined || e.waitedSeconds <= 0 ? '-' : formatRunTime(e.waitedSeconds * 1000));
+export const waitedText = (e: ActivityEvent): string => (e.waitedSeconds === undefined || e.waitedSeconds <= 0 ? '-' : formatRunTime(e.waitedSeconds * 1000));
 
 export const arrowOf = (e: ActivityEvent): string => (e.direction === 'sent' ? '=>' : '<=');
 
@@ -217,13 +217,13 @@ export function runActivityLog(ctx: CommandContext): number {
  * Flags are never silently ignored: the filters of `machine log` are refused on another command, and the options of `machine requests` are
  * refused on `machine log` (`--since` and `--limit` are shared and checked by cli.ts). Returns the message, or undefined.
  */
-export function logOnlyFlagProblem(command: string, args: Pick<Parsed, 'sent' | 'received' | 'machine' | 'outcome' | 'text' | 'offset' | 'history' | 'all' | 'event' | 'full' | 'peer'>): string | undefined {
+export function logOnlyFlagProblem(command: string, args: Pick<Parsed, 'sent' | 'received' | 'machine' | 'outcome' | 'text' | 'offset' | 'history' | 'all' | 'event' | 'full' | 'peer' | 'follow'>): string | undefined {
   const logFlags: Array<[string, unknown]> = [['--sent', args.sent], ['--received', args.received], ['--machine', args.machine], ['--outcome', args.outcome], ['--text', args.text], ['--offset', args.offset]];
   if (command !== 'log') {
     const given = logFlags.find(([, v]) => v !== undefined);
     return given === undefined ? undefined : `${given[0]} only applies to \`machine log\` (the commands this machine sent and received)`;
   }
-  const requestsFlags: Array<[string, unknown]> = [['--history', args.history], ['--all', args.all], ['--event', args.event], ['--full', args.full], ['--peer', args.peer]];
+  const requestsFlags: Array<[string, unknown]> = [['--history', args.history], ['--all', args.follow ? undefined : args.all], ['--event', args.event], ['--full', args.full], ['--peer', args.peer]];
   const given = requestsFlags.find(([, v]) => v !== undefined);
   return given === undefined ? undefined : `${given[0]} does not apply to \`machine log\`: it takes --sent, --received, --machine, --since, --outcome, --text, --limit, --offset and --json (\`machine requests --history\` is the history of the requests refused by this machine)`;
 }

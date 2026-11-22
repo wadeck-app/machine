@@ -1,7 +1,8 @@
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
 import { createAuditFollower, createSentFollower, createTailer, FOLLOW_HEAD_BYTES, FOLLOW_POLL_MS, type ActivityEvent, type AuditFollower, type LogObservation, type FollowItem, type SentFollower, type Tailer } from '@wadeck-app/machine-core';
 import { activityAnswer } from './activityView.js';
-import { activityCells, arrowOf, clock, fit, formatActivityRow, type RowLayout } from './cliActivity.js';
+import { fit } from './cliActivity.js';
+import { createFollowRows, DEFAULT_COLUMNS, MAX_COLUMNS, MIN_COLUMNS } from './followRows.js';
 import { EXIT, type CommandContext, type Timing } from './cliTypes.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
@@ -16,24 +17,8 @@ import { join } from 'node:path';
 // no daemon needed; the output of a command, its environment and every secret are not in these logs, and the rows show only the fields `machine log`
 // shows. The tailing and the rows are machine-core's (activityFollow.ts, activity.ts); this file is stat, read, print and Ctrl-C.
 
-/** Wider than the 100 columns of the table: a live stream has no page to fit, and the command is the column that matters. */
-const FOLLOW_LINE_WIDTH = 140;
-const GAPS = 10;
-const LAYOUT: RowLayout = (() => {
-  const base = { time: 14, route: 28, shell: 6, result: 30, exit: 9, ran: 8, waited: 6 };
-  return { ...base, command: FOLLOW_LINE_WIDTH - (base.time + 2 + base.route + base.shell + base.result + base.exit + base.ran + base.waited + GAPS) };
-})();
-const CAPS = { route: 29, result: 30 } as const;
 /** The last audit line is looked for in at most this many bytes before the start of the follow. */
 const SEED_BYTES = 64 * 1024;
-
-const HEADER = formatActivityRow(LAYOUT, { time: 'TIME', arrow: '  ', route: 'FROM -> TO', shell: 'SHELL', command: 'COMMAND', result: 'RESULT', exit: 'EXIT', ran: 'RAN', waited: 'WAITED' });
-
-/** One row of the stream: the cells of `machine log`, at the fixed widths of the follow mode. */
-export function followRowText(e: ActivityEvent): string {
-  const cells = activityCells(e, CAPS);
-  return formatActivityRow(LAYOUT, { time: clock(e.atMs, false, true), arrow: arrowOf(e), ...cells, command: e.command === '' ? '-' : fit(e.command, LAYOUT.command) });
-}
 
 const codeOf = (e: unknown): string | undefined => (e as NodeJS.ErrnoException).code;
 
@@ -117,7 +102,7 @@ interface Source {
 
 export async function runActivityFollow(ctx: CommandContext): Promise<number> {
   const { args, rest, io, configDir, fail } = ctx;
-  const usage = 'usage: machine log --follow [--sent | --received] [--since <30m|2h|3d|date>] [--limit <n>] [--json]';
+  const usage = 'usage: machine log --follow [--sent | --received] [--since <30m|2h|3d|date>] [--limit <n>] [--all] [--width <40-300>] [--json]';
   if (rest.length > 0) {
     return fail(`unexpected argument "${rest[0] as string}" for \`machine log --follow\`. ${usage}`, EXIT.usage);
   }
@@ -130,6 +115,14 @@ export async function runActivityFollow(ctx: CommandContext): Promise<number> {
   }
   if (args.limit !== undefined && args.since === undefined) {
     return fail(`--limit only applies to the history shown first, which --since asks for: add --since <30m|2h|3d|date>, or remove --limit. ${usage}`, EXIT.usage);
+  }
+
+  let width: number | undefined;
+  if (args.width !== undefined) {
+    width = /^\d+$/.test(args.width) ? Number(args.width) : Number.NaN;
+    if (!(width >= MIN_COLUMNS && width <= MAX_COLUMNS)) {
+      return fail(`--width needs a number of columns from ${MIN_COLUMNS} to ${MAX_COLUMNS}, got "${args.width}": give the width of your terminal, or leave it out to use the terminal's own. ${usage}`, EXIT.usage);
+    }
   }
 
   let self;
@@ -179,14 +172,23 @@ export async function runActivityFollow(ctx: CommandContext): Promise<number> {
 
   const direction = wantSent && wantReceived ? undefined : wantSent ? 'sent' : 'received';
   const json = args.json;
+  // The width of the terminal is asked again at each row (a resize applies to the next one); unknown or not a terminal: DEFAULT_COLUMNS.
+  const columns = (): number => width ?? io.columns?.() ?? (io.columns === undefined && process.stdout.isTTY ? process.stdout.columns : undefined) ?? DEFAULT_COLUMNS;
+  const fitLine = (text: string): string => fit(text, Math.max(MIN_COLUMNS, columns()) - 1);
+  const others = [...names].filter(([uuid]) => uuid !== self.uuid).map(([, name]) => name);
+  const rows = createFollowRows({ columns, all: args.all === true, ...(others.length === 1 ? { peer: others[0] as string } : {}) });
   const printEvent = (e: ActivityEvent): void => {
     if (json) {
       io.stdout(`${JSON.stringify(e)}\n`);
       return;
     }
-    io.stdout(`${followRowText(e)}\n`);
+    const row = rows.row(e);
+    if (row === undefined) {
+      return;
+    }
+    io.stdout(`${row}\n`);
     if (!e.verified) {
-      io.stdout('  [UNVERIFIED] the audit log is broken before this entry: it cannot be trusted\n');
+      io.stdout(`${fitLine('  [UNVERIFIED] the audit log is broken before this entry: it cannot be trusted')}\n`);
     }
   };
   const printItem = (item: FollowItem): void => {
@@ -198,8 +200,11 @@ export async function runActivityFollow(ctx: CommandContext): Promise<number> {
   };
 
   if (!json) {
-    io.stdout(`Following the activity of ${self.name} (${direction === undefined ? 'sent and received' : direction}): new entries appear as they happen, Ctrl+C stops\n`);
-    io.stdout(`${HEADER}\n`);
+    io.stdout(`${fitLine(`Following ${self.name}${others.length === 1 ? ` <-> ${others[0] as string}` : ''} (${direction === undefined ? 'sent and received' : direction}), ${columns()} columns, Ctrl+C stops`)}\n`);
+    if (args.all !== true) {
+      io.stdout(`${fitLine('documents, sessions and notices are hidden: --all shows them')}\n`);
+    }
+    io.stdout(`${rows.header()}\n`);
   }
   if (args.since !== undefined) {
     const answer = activityAnswer(configDir, { ...(direction !== undefined ? { direction } : {}), since: args.since, ...(args.limit !== undefined ? { limit: args.limit } : {}) }, Math.floor(nowMs() / 1000));

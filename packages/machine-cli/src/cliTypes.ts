@@ -24,6 +24,8 @@ export interface CliIo {
   ask?: (label: string) => Promise<string>;
   /** Defaults to the real clock and Ctrl-C; tests inject a fake one. */
   timing?: Timing;
+  /** Tests only: the width of the terminal in columns, or undefined when unknown (the default reads process.stdout when it is a terminal). */
+  columns?: () => number | undefined;
   /** Limit timer of the prompts; tests inject a fake one. */
   promptTimer?: PromptTimer;
   /** Tests only: the orch stub and the daemon source for `machine startup` (no command line option exists for it). */
@@ -128,6 +130,8 @@ export interface Parsed {
   /** `machine requests`: `--history` (the log instead of the pending list), `--all` (every peer, remote), `--since`, `--event`, `--limit`. Set only when given. */
   history?: true;
   all?: true;
+  /** `machine log --follow --width <n>`: the columns the rows are fitted to (40 to 300); checked by the command. */
+  width?: string;
   since?: string;
   event?: string;
   limit?: string;
