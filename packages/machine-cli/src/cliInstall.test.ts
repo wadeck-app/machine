@@ -48,7 +48,7 @@ describe('machine install (list)', () => {
     expect(r.out).toContain('suspend');
     expect(r.out).toMatch(/platforms: linux/);
     expect(r.out).toMatch(/supported on this machine \(linux\)/);
-    expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--json]');
+    expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--json]');
     // The only sudo call of the list is the listing that never prompts.
     expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual(['/usr/bin/sudo -n -l /usr/bin/systemctl suspend']);
     expect(r.fake.staged.size).toBe(0);
@@ -151,7 +151,7 @@ describe('machine install: usage errors (exit 2)', () => {
   it('an unknown id lists the known ones', async () => {
     const r = await run(['nothing']);
     expect(r.code).toBe(2);
-    expect(r.err).toBe('[fail] unknown installable "nothing": `machine install` lists them (suspend)\n');
+    expect(r.err).toBe('[fail] unknown installable "nothing": `machine install` lists them (suspend, idle-suspend)\n');
     expect(r.fake.calls).toEqual([]);
   });
 

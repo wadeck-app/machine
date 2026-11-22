@@ -238,7 +238,7 @@ requests waiting for approval on laptop (2 commands refused because not allowed,
 
 ## Setting up the target: `machine install` (decision 87)
 
-Run in a terminal ON the target (a local command, never remote). First item: `suspend`, Linux only; see `install.md`.
+Run in a terminal ON the target (a local command, never remote). Items, Linux only: `suspend` (see `install.md`) and `idle-suspend` (the box suspends by itself when really idle, see `idle-suspend.md`).
 
 ```
 machine install                      list what can be installed, where, and its state here (alias: machine install status; --json)
@@ -247,6 +247,10 @@ machine install suspend              the same, then y/N, then sudo (your own pas
 machine install suspend --check      the state of this item, no password; exit 0 only when installed and up to date
 machine install suspend --refresh    write both files again even when up to date (repairs a script or a rule changed by hand)
 machine install suspend --remove     remove exactly what it installed, then check that the state reads "not installed"
+machine install idle-suspend --dry-run             the three files (script, systemd service and timer) and every command, nothing changed
+machine install idle-suspend --minutes 30          install; the box suspends after 30 min of real idleness (5..1440, default 30)
+machine install idle-suspend --minutes 5 --refresh change the idle time (5 min to test), restarts the timer
+journalctl -t machine-idle-suspend -n 20           every decision with its reason; keep awake: touch /run/machine-keep-awake
 ```
 
 States: `not installed`, `installed` ("installed, up to date"), `outdated`, `partial` (names the missing part), `foreign` (a file machine did not write: never touched), `unsupported here`. `machine status` prints one line for the installed items (`installed: suspend (up to date)` or a `[warn]` with `--refresh`), nothing when none is installed. See `install.md`, "Lifecycle".

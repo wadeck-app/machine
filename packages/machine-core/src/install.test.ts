@@ -17,7 +17,14 @@ import {
   type InstallFacts,
 } from './install.js';
 
-const FACTS: InstallFacts = { platform: 'linux', userName: 'alice', systemctlPath: '/usr/bin/systemctl', sudoPath: '/usr/bin/sudo' };
+const FACTS: InstallFacts = {
+  platform: 'linux',
+  userName: 'alice',
+  systemctlPath: '/usr/bin/systemctl',
+  sudoPath: '/usr/bin/sudo',
+  configDir: '/home/alice/.config/machine',
+  tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', journalctl: '/usr/bin/journalctl' },
+};
 const suspend = (): NonNullable<ReturnType<typeof findInstallable>> => {
   const def = findInstallable('suspend');
   if (def === undefined) {
@@ -28,7 +35,7 @@ const suspend = (): NonNullable<ReturnType<typeof findInstallable>> => {
 
 describe('registry', () => {
   it('lists suspend, for linux only, with a description and the consequence of allowing it', () => {
-    expect(INSTALLABLES.map((d) => d.id)).toEqual(['suspend']);
+    expect(INSTALLABLES.map((d) => d.id)).toEqual(['suspend', 'idle-suspend']);
     const def = suspend();
     expect(def.platforms).toEqual(['linux']);
     expect(def.description.length).toBeGreaterThan(10);
@@ -209,8 +216,8 @@ describe('lifecycle contract: every installable of the registry', () => {
       expect(plan.steps.some((s) => s.kind === 'run' && s.purpose === 'install' && s.file === f.id), `${f.path} is installed`).toBe(true);
       // remove: every file has a removal step, with the fix to apply by hand.
       const removal = plan.removeSteps.filter((s) => s.file === f.id);
-      expect(removal, `${f.path} is removed`).toHaveLength(1);
-      expect(removal[0]?.fix.length).toBeGreaterThan(5);
+      expect(removal.length, `${f.path} is removed`).toBeGreaterThanOrEqual(1);
+      expect(removal.every((r) => r.fix.length > 5)).toBe(true);
     }
     expect(plan.removeSteps.every((s) => plan.files.some((f) => f.id === s.file))).toBe(true);
     // status: a probe that never prompts (sudo -n) when a file is root-only, and the lines of the three outcomes.

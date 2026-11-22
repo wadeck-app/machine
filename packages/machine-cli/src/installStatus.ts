@@ -1,8 +1,10 @@
 import {
+  IDLE_SUSPEND_SCRIPT_PATH,
   INSTALLABLES,
   InstallError,
   classifyInstalled,
   deriveInstallState,
+  idleSuspendInstalledMinutes,
   platformName,
   stateLabel,
   stateNextSteps,
@@ -50,11 +52,42 @@ async function toolPath(env: InstallEnv, tool: string, missing: string): Promise
   return found;
 }
 
+/** An optional tool: its absolute path, undefined when it is not there (the plan that needs it says so). */
+async function optionalToolPath(env: InstallEnv, tool: string): Promise<string | undefined> {
+  const r = await env.exec(['sh', '-c', `command -v ${tool}`]);
+  const found = r.code === 0 ? r.stdout.trim() : '';
+  return found.startsWith('/') ? found : undefined;
+}
+
 /** The facts of this machine that the plans are built from. Throws `InstallError` (cause and fix) when a tool is missing. */
 export async function measure(env: InstallEnv): Promise<InstallFacts> {
   const systemctlPath = await toolPath(env, 'systemctl', 'systemctl was not found on this machine (`command -v systemctl` found nothing): `machine install suspend` needs systemd, because suspending is `systemctl suspend`. Nothing was changed');
   const sudoPath = await toolPath(env, 'sudo', 'sudo was not found on this machine (`command -v sudo` found nothing): machine installs root-owned files through sudo, with your own password. Install sudo (as root, with your package manager) and run the command again. Nothing was changed');
-  return { platform: env.platform, userName: env.userName(), systemctlPath, sudoPath };
+  const base: InstallFacts = { platform: env.platform, userName: env.userName(), systemctlPath, sudoPath };
+  if (env.platform !== 'linux') {
+    return base;
+  }
+  // What idle-suspend needs besides systemctl and sudo; a missing one is reported by that plan only (suspend does not need them).
+  const [date, ss, systemdInhibit, logger, journalctl] = await Promise.all(['date', 'ss', 'systemd-inhibit', 'logger', 'journalctl'].map((t) => optionalToolPath(env, t)));
+  const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }) };
+  // Without --minutes the script keeps the minutes it was installed with (so that a status does not call it outdated).
+  let installedMinutes: number | undefined;
+  if (env.context?.minutes === undefined) {
+    try {
+      const text = env.fs.readText(IDLE_SUSPEND_SCRIPT_PATH);
+      installedMinutes = text === undefined ? undefined : idleSuspendInstalledMinutes(text);
+    } catch {
+      // Unreadable: the status of the item reports it, with its cause.
+      installedMinutes = undefined;
+    }
+  }
+  return {
+    ...base,
+    tools,
+    ...(env.context === undefined ? {} : { configDir: env.context.configDir }),
+    ...(env.context?.minutes === undefined ? {} : { minutes: env.context.minutes }),
+    ...(installedMinutes === undefined ? {} : { installedMinutes }),
+  };
 }
 
 /** Reads the user-readable files; a root-only file is `unread` here. */
@@ -98,6 +131,10 @@ export interface ItemStatus {
   /** The answer of the non-prompting probe; undefined when it was not asked. */
   sudoAllowsCommand?: boolean;
   nextSteps: string[];
+  /** What is configured and the last decision of the item (`suspends after 30 min idle`, `last decision: ...`). */
+  details?: string[];
+  /** The last decision line of the journal, when it was read. */
+  lastDecision?: string;
 }
 
 export const LISTED_BY_SUDO = 'listed by sudo';
@@ -130,18 +167,46 @@ export async function readStatus(def: Installable, plan: InstallPlan, env: Insta
     sudoAllows,
   );
   const foreign = seen.filter((s) => s.cls?.state === 'foreign').map((s) => s.file.path);
+  let state: InstallState = verdict.state;
+  let missing = verdict.missing;
+  let nextSteps = stateNextSteps(def.id, verdict.state, foreign);
+  // An item that runs as a systemd unit is installed only when the unit runs (a timer disabled by hand leaves every file current).
+  if (state === 'installed' && plan.service !== undefined && (await env.exec(plan.probe)).code !== 0) {
+    state = 'partial';
+    missing = [`${plan.service.unit} is not running (systemctl is-active)`];
+    nextSteps = [`machine install ${def.id} --refresh`];
+  }
+  const details: string[] = plan.summary === undefined ? [] : [plan.summary];
+  let lastDecision: string | undefined;
+  if (plan.lastDecisionArgv !== undefined && state !== 'not installed' && state !== 'foreign') {
+    lastDecision = await readLastDecision(env, plan.lastDecisionArgv);
+    details.push(lastDecision === undefined ? `last decision: not readable by your user (try: sudo ${plan.lastDecisionArgv.join(' ')})` : `last decision: ${lastDecision}`);
+  }
   const status: ItemStatus = {
     id: def.id,
     description: def.description,
     platforms: def.platforms,
     supportedHere: true,
-    state: verdict.state,
+    state,
     files: fileStatuses(seen, sudoAllows),
-    missing: verdict.missing,
+    missing,
     ...(sudoAllows === undefined ? {} : { sudoAllowsCommand: sudoAllows }),
-    nextSteps: stateNextSteps(def.id, verdict.state, foreign),
+    nextSteps,
+    ...(details.length === 0 ? {} : { details }),
+    ...(lastDecision === undefined ? {} : { lastDecision }),
   };
   return { status, plan, seen };
+}
+
+/** The last line the item wrote to the journal; undefined when it cannot be read or there is none. A failure is never an error of the status. */
+async function readLastDecision(env: InstallEnv, argv: string[]): Promise<string | undefined> {
+  try {
+    const r = await env.exec(argv);
+    const line = r.code === 0 ? (r.stdout.trim().split('\n').pop() ?? '').trim() : '';
+    return line === '' || line.startsWith('--') ? undefined : visible(line, 300);
+  } catch {
+    return undefined;
+  }
 }
 
 const unsupported = (def: Installable, reason: string, supportedHere: boolean): ItemStatus => ({
@@ -192,6 +257,9 @@ export function statusBlock(s: ItemStatus, platform: string): string[] {
   if (s.missing.length > 0 && s.state === 'partial') {
     lines.push(`      missing: ${s.missing.join(', ')}`);
   }
+  for (const detail of s.details ?? []) {
+    lines.push(`      ${detail}`);
+  }
   if (s.nextSteps.length > 0) {
     lines.push(`      next: ${s.nextSteps.join(' ; ')}`);
   }
@@ -221,10 +289,13 @@ export async function installedStatusLines(env: InstallEnv): Promise<{ lines: st
     try {
       const { status } = await readStatus(def, plan, env, false);
       if (status.state === 'installed') {
-        lines.push(`installed: ${def.id} (up to date)`);
+        lines.push(`installed: ${def.id} (up to date${(status.details ?? []).map((d) => `; ${d}`).join('')})`);
         items.push({ id: def.id, state: status.state });
       } else if (status.state === 'outdated') {
         lines.push(`[warn] installed: ${def.id} is outdated: run machine install ${def.id} --refresh`);
+        items.push({ id: def.id, state: status.state });
+      } else if (status.state === 'partial') {
+        lines.push(`[warn] installed: ${def.id} is incomplete (${status.missing.join(', ')}): run ${status.nextSteps[0] ?? `machine install ${def.id}`}`);
         items.push({ id: def.id, state: status.state });
       }
     } catch (e) {

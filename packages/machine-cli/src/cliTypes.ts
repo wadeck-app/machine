@@ -183,6 +183,8 @@ export interface Parsed {
   /** `machine cli register --force-register`: register even when the config dir is under the OS temporary folder. */
   forceRegister: boolean;
   timeout?: string;
+  /** `machine install idle-suspend --minutes <5..1440>`: the idle time before the box suspends (validated by the install command). */
+  minutes?: string;
   promptTimeout?: string;
   policy?: string;
   yesFinalCode?: string;

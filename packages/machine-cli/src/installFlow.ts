@@ -67,7 +67,7 @@ async function readRootOnly(env: InstallEnv, plan: InstallPlan, file: PlannedFil
 
 async function inspect(env: InstallEnv, plan: InstallPlan, io: FlowIo, readRoot: boolean): Promise<Seen[]> {
   const out: Seen[] = [];
-  const sudoPath = plan.probe[0] ?? 'sudo';
+  const sudoPath = plan.tools.sudo;
   let announced = false;
   for (const file of plan.files) {
     if (file.rootOnly && !readRoot) {
@@ -165,6 +165,9 @@ async function checkFlow(def: Installable, plan: InstallPlan, env: InstallEnv, i
   const allowed = status.sudoAllowsCommand === true;
   const command = plan.probe.join(' ');
   io.say(`${def.id} on ${env.platform}: ${stateLabel(status.state)}\n`);
+  for (const detail of status.details ?? []) {
+    io.say(`${detail}\n`);
+  }
   for (const s of seen) {
     if (s.read) {
       io.say(`${stateLine(s, false)}\n`);
@@ -182,7 +185,7 @@ async function checkFlow(def: Installable, plan: InstallPlan, env: InstallEnv, i
     io.say(`replace it with: machine install ${def.id} --refresh\n`);
   }
   if (status.state === 'partial') {
-    io.say(`finish it with: machine install ${def.id}  (it writes what is missing)\n`);
+    io.say(`finish it with: ${status.nextSteps[0] ?? `machine install ${def.id}`}  (it writes what is missing)\n`);
   }
   if (status.state === 'foreign') {
     const foreign = seen.find((s) => s.cls?.state === 'foreign') as Seen;
@@ -191,7 +194,7 @@ async function checkFlow(def: Installable, plan: InstallPlan, env: InstallEnv, i
   if (status.state === 'installed') {
     io.say(`to repair a file or a rule changed by hand (this status cannot see the content of a root-only file): machine install ${def.id} --refresh\n`);
   }
-  return { exit: status.state === 'installed' ? 0 : 1, document: { id: def.id, action: 'check', platform: env.platform, state: status.state, supportedHere: true, files: status.files, missing: status.missing, sudoAllowsCommand: allowed, nextSteps: status.nextSteps } };
+  return { exit: status.state === 'installed' ? 0 : 1, document: { id: def.id, action: 'check', platform: env.platform, state: status.state, supportedHere: true, files: status.files, missing: status.missing, sudoAllowsCommand: allowed, nextSteps: status.nextSteps, ...(status.details === undefined ? {} : { details: status.details }) } };
 }
 
 // ---------------------------------------------------------------- install and refresh
@@ -205,17 +208,22 @@ function selectSteps(plan: InstallPlan, todo: PlannedFile[]): InstallPlan['steps
 async function installFlow(def: Installable, plan: InstallPlan, env: InstallEnv, io: FlowIo, options: FlowOptions): Promise<FlowResult> {
   const refresh = options.mode === 'refresh';
   const action = refresh ? 'refresh' : 'install';
-  const facts = `this machine: ${env.platform}, user ${env.userName()}, systemctl ${plan.probe[3] ?? '?'}, sudo ${plan.probe[0] ?? '?'}\n\n`;
+  const facts = `this machine: ${env.platform}, user ${env.userName()}, systemctl ${plan.tools.systemctl}, sudo ${plan.tools.sudo}\n\n`;
   io.say(refresh ? `machine install ${def.id} --refresh: write every file of the plan again and verify again, even when the status says up to date\n${facts}` : `machine install ${def.id}: ${def.description}\n${facts}`);
   const seen = await inspect(env, plan, io, !options.dryRun);
   refuseForeign(def, seen);
-  const todo = refresh ? plan.files : seen.filter((s) => !s.read || (s.cls as InstalledClass).state !== 'current').map((s) => s.file);
+  let todo = refresh ? plan.files : seen.filter((s) => !s.read || (s.cls as InstalledClass).state !== 'current').map((s) => s.file);
   const base = { id: def.id, action, platform: env.platform, supportedHere: true, dryRun: options.dryRun, files: documentFiles(seen) };
   io.say(`state:\n${seen.map((s) => stateLine(s, options.dryRun)).join('\n')}\n`);
   const nextLines = (): void => {
     io.say(`\n${def.next(plan, nameOf(options)).join('\n')}\n`);
     for (const w of missingNameWarning(options)) io.warn(`${w}\n`);
   };
+  // Every file is current but the unit does not run (stopped by hand): the files that start it are written again.
+  if (todo.length === 0 && plan.service !== undefined && !options.dryRun && (await env.exec(plan.probe)).code !== 0) {
+    todo = plan.files.filter((file) => plan.steps.some((s) => s.kind === 'run' && s.purpose === 'activate' && s.file === file.id));
+    io.say(`\n[warn] every file is up to date but ${plan.service.unit} is not running: the units are written again and the timer is enabled and started\n`);
+  }
   if (todo.length === 0) {
     io.say(`\n[ok] ${def.id} is already installed, up to date: nothing to do (\`machine install ${def.id} --refresh\` writes it again)\n`);
     nextLines();
@@ -270,11 +278,15 @@ async function installFlow(def: Installable, plan: InstallPlan, env: InstallEnv,
     env.fs.removeDir(dir);
   }
   const probe = await env.exec(plan.probe);
+  if (probe.code !== 0 && plan.service !== undefined) {
+    io.say(`\n[fail] ${refresh ? 'refreshed' : 'installed'}, but ${plan.service.unit} is not running: \`${plan.probe.join(' ')}\` exited ${probe.code ?? 'abnormally'}${probe.stderr.trim() === '' ? '' : ` (${visible(probe.stderr, 300)})`}. See why with: ${plan.tools.systemctl} status ${plan.service.unit}\n`);
+    return { exit: 1, document: { ...base, state: 'installed, not verified', applied: true, nextSteps: [] } };
+  }
   if (probe.code !== 0) {
     io.say(`\n[fail] ${refresh ? 'refreshed' : 'installed'}, but sudo does not list the command without a password: \`${plan.probe.join(' ')}\` exited ${probe.code ?? 'abnormally'}${probe.stderr.trim() === '' ? '' : ` (${visible(probe.stderr, 300)})`}. Another sudoers rule may override the new one (the LAST matching rule wins; list them with \`sudo -l\`), or sudo does not read /etc/sudoers.d here\n`);
     return { exit: 1, document: { ...base, state: 'installed, not verified', applied: true, nextSteps: [] } };
   }
-  io.say(`\n[ok] ${def.id} ${refresh ? 'refreshed' : 'installed'} and verified (sudo lists the command without a password)\n`);
+  io.say(`\n[ok] ${def.id} ${refresh ? 'refreshed' : 'installed'} and verified (${plan.service === undefined ? 'sudo lists the command without a password' : `${plan.service.unit} is running`})\n`);
   nextLines();
   return { exit: 0, document: { ...base, state: 'installed', applied: true, nextSteps: def.next(plan, nameOf(options)) } };
 }
@@ -313,7 +325,10 @@ async function removeFlow(def: Installable, plan: InstallPlan, env: InstallEnv, 
       const state = removed.length === 0 ? 'nothing was removed.' : `${removed.join(' and ')} ${removed.length === 1 ? 'was' : 'were'} removed (the rest is still there): run the command again.`;
       throw new InstallError(`${failureText(`step failed: ${step.describe}`, display(step.argv, undefined), r)}\n  state: ${state}\n  fix: ${step.fix}`);
     }
-    removed.push((plan.files.find((f) => f.id === step.file) as PlannedFile).path);
+    const removedPath = (plan.files.find((f) => f.id === step.file) as PlannedFile).path;
+    if (step.purpose === 'remove' && step.argv.includes('rm') && !removed.includes(removedPath)) {
+      removed.push(removedPath);
+    }
   }
   // The post-check: a removal that answered 0 must leave the status at `not installed`; the files are read again (the root-only one through sudo, whose password is already typed).
   const after = await inspect(env, plan, { ...io, say: () => undefined }, true);
@@ -324,7 +339,10 @@ async function removeFlow(def: Installable, plan: InstallPlan, env: InstallEnv, 
     );
   }
   io.say(`\n[ok] ${def.id} removed: ${removed.join(', ')}\nstatus after the removal: not installed\n`);
-  if ((await env.exec(plan.probe)).code === 0) {
+  const probeStillPasses = (await env.exec(plan.probe)).code === 0;
+  if (probeStillPasses && plan.service !== undefined) {
+    io.say(`[warn] ${plan.service.unit} is still active although its files are gone: stop it with: sudo ${plan.tools.systemctl} disable --now ${plan.service.unit}\n`);
+  } else if (probeStillPasses) {
     io.say(`[info] sudo still lists the command without a password: another sudoers rule (not written by machine) allows it; list the rules with \`sudo -l\`\n`);
   }
   const advice = def.afterRemove(plan, nameOf(options));

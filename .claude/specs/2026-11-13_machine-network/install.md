@@ -1,6 +1,6 @@
 # `machine install`
 
-Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the facts of this machine. First item: `suspend`, Linux only.
+Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the facts of this machine. Items, both Linux only: `suspend` (below) and `idle-suspend` (decision 101, `idle-suspend.md`).
 
 ## Scope
 
@@ -19,7 +19,7 @@ Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the
 | `--refresh` | Force: the whole plan again (both files, visudo, verification) even when `installed`; same plan display, y/N, terminal and foreign-file refusal as install. |
 | `--remove` | Shows then removes exactly the managed files (rule first, script second). Refuses everything if one file is foreign. Post-check: the files are read again; anything left fails with path, owner and the sudo command to remove it. |
 
-`--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
+`--minutes <n>` (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 5..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 
 Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit 1, nothing run. Unknown id: exit 2.
 
@@ -30,7 +30,8 @@ Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit
 - Facts: platform, user name, absolute tool paths, measured by the executor.
 - `plan(facts)` returns data and throws `InstallError` on an unsupported platform or an unsafe fact: `files` (path, mode, owner, content, sha256, `rootOnly`), `steps` (`stage` a temporary file, `run` a command: validate, install), `removeSteps`, `probe` (a never-prompting command that exits 0 when installed).
 - A file carries `# managed by machine install <id>, version <n>`. Present without it: foreign, never touched. Same marker, other sha256: outdated.
-- Executor (`installFlow.ts`) takes an injected fs and exec (`installEnv.ts`); tests use `installTesting.ts`.
+- Executor (`installFlow.ts`) takes an injected fs and exec (`installEnv.ts`); tests use `installTesting.ts`. `env.context` carries what the command line gives the plans (config folder, `--minutes`); optional tools (`date`, `ss`, `systemd-inhibit`, `logger`, `journalctl`) are measured on Linux and a plan that needs one refuses by name when it is absent.
+- A plan whose item runs as a systemd unit sets `service` (the probe is then `systemctl is-active --quiet <unit>`, no sudo): a status `installed` is confirmed by it, else it reads `partial` (`<unit> is not running`, next step `--refresh`), and an install of current files starts the unit again. It may also set `summary` and `lastDecisionArgv` (read-only lines of the status; a failure of that command is never an error). A file may have several removal steps (`disable --now` before its `rm`).
 
 ## Lifecycle
 
@@ -41,7 +42,7 @@ Contract for every installable (`INSTALLABLES`); the tests in `install.test.ts` 
 | status | `files`, `probe` | Read-only, no password: user-readable files are classified, a root-only file is only asked through the `probe` (`sudo -n`). |
 | install | `steps` | Stage, validate, install; skips files already current. |
 | refresh | `steps` | Same steps for every file, whatever the status. |
-| remove | `removeSteps` | One step per file, with its `fix`; then the post-check. |
+| remove | `removeSteps` | At least one step per file, each with its `fix`; then the post-check. |
 
 - Every file carries the marker; the id is not `status` and not an option.
 - States (stable names, also in `--json`): `not installed`, `installed`, `outdated`, `partial`, `foreign`, `unsupported here` (platform, missing tool, unsafe user name; `reason` says which). `foreign` wins over `outdated` over `partial`.

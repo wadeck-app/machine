@@ -418,3 +418,4 @@ export {
   type RunStep,
   type StageStep,
 } from './install.js';
+export { IDLE_DEFAULT_MINUTES, IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, IDLE_SUSPEND_SCRIPT_PATH, idleDecision, idleSuspendInstalledMinutes, idleSuspendScript, parseIdleMinutes, parseLoadHundredths, type IdleDecision, type IdleFacts, type IdleScriptOptions } from './idleSuspend.js';

@@ -22,6 +22,12 @@ export interface FakeInstallOptions {
   probeAllowsWithoutRule?: boolean;
   /** `sudo rm -- <path>` answers 0 for these paths but leaves the file there (a removal that did not take). */
   rmLeaves?: string[];
+  /** The timer of idle-suspend runs from the start (an installed fixture). */
+  timerRunning?: boolean;
+  /** What `journalctl -t machine-idle-suspend` prints (default: nothing, like a journal the user cannot read). */
+  journal?: string;
+  /** `sudo systemctl <verb> ...` for these verbs fails with exit 1 and this message. */
+  systemctlFails?: Record<string, string>;
 }
 
 export interface FakeInstall {
@@ -36,6 +42,8 @@ export interface FakeInstall {
   staged: Map<string, { content: string; mode: number }>;
   removedDirs: string[];
   tempDirs: string[];
+  /** The state of the timer unit of idle-suspend. */
+  timer: { enabled: boolean; running: boolean };
 }
 
 const ok = (stdout = ''): ExecResult => ({ code: 0, stdout, stderr: '' });
@@ -44,22 +52,30 @@ const fail = (stderr: string, code = 1): ExecResult => ({ code, stdout: '', stde
 export function fakeInstall(o: FakeInstallOptions = {}): FakeInstall {
   const userFiles = new Map(Object.entries(o.userFiles ?? {}));
   const rootFiles = new Map(Object.entries(o.rootFiles ?? {}));
-  const tools = o.tools ?? { systemctl: '/usr/bin/systemctl', sudo: '/usr/bin/sudo' };
+  const tools = o.tools ?? { systemctl: '/usr/bin/systemctl', sudo: '/usr/bin/sudo', date: '/usr/bin/date', ss: '/usr/bin/ss', 'systemd-inhibit': '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', journalctl: '/usr/bin/journalctl' };
+  const timer = { enabled: o.timerRunning === true, running: o.timerRunning === true };
   const calls: string[] = [];
   const modes = new Map<string, string>();
   const staged = new Map<string, { content: string; mode: number }>();
   const removedDirs: string[] = [];
   const tempDirs: string[] = [];
-  const isRootPath = (p: string): boolean => p.startsWith('/etc/');
+  // The units of /etc/systemd/system are world-readable: the owner reads them like the script.
+  const isRootPath = (p: string): boolean => p.startsWith('/etc/') && !p.startsWith('/etc/systemd/');
   const store = (p: string): Map<string, string> => (isRootPath(p) ? rootFiles : userFiles);
 
   const exec = async (argv: string[]): Promise<ExecResult> => {
     calls.push(argv.join(' '));
     const [program, ...rest] = argv;
     if (program === 'sh' && rest[0] === '-c') {
-      const tool = /^command -v (\w+)$/.exec(rest[1] ?? '')?.[1];
+      const tool = /^command -v ([\w-]+)$/.exec(rest[1] ?? '')?.[1];
       const found = tool === undefined ? undefined : tools[tool];
       return found === undefined ? fail('', 127) : ok(`${found}\n`);
+    }
+    if (program === '/usr/bin/systemctl' && rest[0] === 'is-active') {
+      return timer.running ? ok() : { code: 3, stdout: '', stderr: '' };
+    }
+    if (program === '/usr/bin/journalctl') {
+      return ok(o.journal ?? '');
     }
     if (program !== '/usr/bin/sudo') {
       return fail(`unexpected program ${program ?? ''}`, 127);
@@ -95,6 +111,24 @@ export function fakeInstall(o: FakeInstallOptions = {}): FakeInstall {
       modes.set(target, args[args.indexOf('-m') + 1] ?? '');
       return ok();
     }
+    if (verb === '/usr/bin/systemctl') {
+      const [action, ...more] = args;
+      if (o.systemctlFails?.[action ?? ''] !== undefined) {
+        return fail(o.systemctlFails[action ?? ''] as string);
+      }
+      if (action === 'enable' || action === 'restart') {
+        if (!userFiles.has('/etc/systemd/system/machine-idle-suspend.timer')) {
+          return fail(`Failed to ${action} machine-idle-suspend.timer: Unit file machine-idle-suspend.timer does not exist.`);
+        }
+        timer.enabled = timer.enabled || action === 'enable';
+        timer.running = timer.running || action === 'restart';
+      }
+      if (action === 'disable' && more.includes('--now')) {
+        timer.enabled = false;
+        timer.running = false;
+      }
+      return ok();
+    }
     if (verb === 'rm') {
       const target = args[args.length - 1] ?? '';
       if (o.rmLeaves?.includes(target) === true) {
@@ -127,6 +161,7 @@ export function fakeInstall(o: FakeInstallOptions = {}): FakeInstall {
       removeDir: (path) => void removedDirs.push(path),
     },
     exec,
+    context: { configDir: '/home/alice/.config/machine' },
   };
-  return { env, userFiles, rootFiles, calls, modes, staged, removedDirs, tempDirs };
+  return { env, userFiles, rootFiles, calls, modes, staged, removedDirs, tempDirs, timer };
 }

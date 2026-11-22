@@ -32,6 +32,8 @@ export interface InstallEnv {
   fs: InstallFs;
   /** Runs one program (never a shell string). The terminal stays the one of the owner: the password is typed to sudo itself. */
   exec: (argv: string[]) => Promise<ExecResult>;
+  /** What the command line says that the plans need (the configuration folder of machine, `--minutes`): set by `machine install`, never by the environment. */
+  context?: { configDir: string; minutes?: number };
 }
 
 const realFs: InstallFs = {

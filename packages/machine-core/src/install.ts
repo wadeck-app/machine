@@ -1,4 +1,20 @@
 import { createHash } from 'node:crypto';
+import {
+  IDLE_DEFAULT_MINUTES,
+  IDLE_KEEP_AWAKE_RUN,
+  IDLE_LOG_TAG,
+  IDLE_MAX_MINUTES,
+  IDLE_MIN_MINUTES,
+  IDLE_SUSPEND_SCRIPT_PATH,
+  IDLE_SUSPEND_SERVICE_PATH,
+  IDLE_SUSPEND_TIMER_PATH,
+  IDLE_SUSPEND_TIMER_UNIT,
+  IDLE_SUSPEND_VERSION,
+  idleSuspendScript,
+  idleSuspendServiceUnit,
+  idleSuspendTimerUnit,
+  isSafeAbsolutePath,
+} from './idleSuspend.js';
 
 // `machine install <id>` (install.md): the registry of what `machine` can install on the machine it runs on, and for each item a PLAN function.
 // Pure: no file, no process, no prompt. A plan is DATA (the files to write with their exact content, the commands to run, what the owner does
@@ -18,6 +34,14 @@ export interface InstallFacts {
   systemctlPath: string;
   /** Absolute path of sudo (`command -v sudo`). */
   sudoPath: string;
+  /** The configuration folder of machine of this owner (for the items that read it: idle-suspend). */
+  configDir?: string;
+  /** `--minutes` of `machine install idle-suspend`. */
+  minutes?: number;
+  /** The minutes written in the script already installed (so that a status does not call a script with other minutes outdated). */
+  installedMinutes?: number;
+  /** Absolute paths of optional tools (`command -v`), absent when not found. */
+  tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string };
 }
 
 /** The only user names written into a root-owned file: lowercase letters, digits, `_` and `-`, at most 32, never starting with a digit or `-`. */
@@ -56,7 +80,7 @@ export interface StageStep {
 
 export interface RunStep {
   kind: 'run';
-  purpose: 'validate' | 'install' | 'remove';
+  purpose: 'validate' | 'install' | 'remove' | 'activate';
   /** The planned file this step is about: a step is skipped when that file is already up to date. */
   file: string;
   argv: PlanArg[];
@@ -75,8 +99,18 @@ export interface InstallPlan {
   files: PlannedFile[];
   steps: PlanStep[];
   removeSteps: RunStep[];
-  /** A command that exits 0 when the machine behaves as installed (`sudo -n -l ...`): it never prompts. */
+  /** A command that exits 0 when the machine behaves as installed (`sudo -n -l ...`, `systemctl is-active ...`): it never prompts. */
   probe: string[];
+  /** The tools the plan runs through sudo, for the lines that name them. */
+  tools: { sudo: string; systemctl: string };
+  /** Set when the probe asks a systemd unit (no sudo): a status of `installed` is then confirmed by it, and the messages speak of the unit. */
+  service?: { unit: string };
+  /** The configuration folder the item reads (idle-suspend), for the lines that name it. */
+  configDir?: string;
+  /** One short line of what is configured (`suspends after 30 min idle`), for the status. */
+  summary?: string;
+  /** A command that prints the last decision of the item (journal): read by the status, its failure is never an error. */
+  lastDecisionArgv?: string[];
 }
 
 export interface Installable {
@@ -256,6 +290,7 @@ function suspendPlan(facts: InstallFacts): InstallPlan {
       { kind: 'run', purpose: 'remove', file: 'script', argv: [sudo, 'rm', '--', SUSPEND_SCRIPT], describe: `remove the script ${SUSPEND_SCRIPT}`, fix: `remove it by hand: sudo rm -- ${SUSPEND_SCRIPT}` },
     ],
     probe: [sudo, '-n', '-l', facts.systemctlPath, 'suspend'],
+    tools: { sudo, systemctl: facts.systemctlPath },
   };
 }
 
@@ -294,7 +329,103 @@ const SUSPEND: Installable = {
   ],
 };
 
+// ---------------------------------------------------------------- idle-suspend (linux)
+
+const missingTool = (what: string, pkg: string): InstallError =>
+  new InstallError(`${what} was not found on this machine (\`command -v ${what}\` found nothing): \`machine install idle-suspend\` needs it to take its decision (it is part of ${pkg}). Install it with your package manager and run the command again. Nothing was changed`);
+
+function idleSuspendPlan(facts: InstallFacts): InstallPlan {
+  if (!IDLE_SUSPEND.platforms.includes(facts.platform)) {
+    throw new InstallError(unsupportedMessage(IDLE_SUSPEND, facts.platform));
+  }
+  for (const [what, value] of [['systemctl', facts.systemctlPath], ['sudo', facts.sudoPath]] as const) {
+    if (!isSafeAbsolutePath(value)) {
+      throw new InstallError(`the path of ${what} ${JSON.stringify(value.slice(0, 80))} cannot be written into a script and a command (it must be absolute, with letters, digits and . _ + - / only): check \`command -v ${what}\``);
+    }
+  }
+  const t = facts.tools ?? {};
+  const date = t.date ?? (() => { throw missingTool('date', 'coreutils'); })();
+  const ss = t.ss ?? (() => { throw missingTool('ss', 'iproute2'); })();
+  const systemdInhibit = t.systemdInhibit ?? (() => { throw missingTool('systemd-inhibit', 'systemd'); })();
+  const logger = t.logger ?? (() => { throw missingTool('logger', 'util-linux'); })();
+  if (facts.configDir === undefined) {
+    throw new InstallError('internal: the configuration folder of machine is unknown to `machine install idle-suspend` (the script reads the audit log there)');
+  }
+  const minutes = facts.minutes ?? facts.installedMinutes ?? IDLE_DEFAULT_MINUTES;
+  const script = idleSuspendScript({ minutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath } });
+  const service = idleSuspendServiceUnit();
+  const timer = idleSuspendTimerUnit();
+  const file = (id: string, path: string, mode: string, content: string, describe: string): PlannedFile => ({ id, installable: 'idle-suspend', path, mode, owner: 'root', group: 'root', content, sha256: sha256Hex(content), describe, rootOnly: false });
+  const sudo = facts.sudoPath;
+  const systemctl = facts.systemctlPath;
+  const installArgv = (mode: string, id: string, path: string): PlanArg[] => [sudo, 'install', '-m', mode, '-o', 'root', '-g', 'root', { stage: id }, path];
+  const fixInstall = (dir: string): string => `check that ${dir} exists and is writable by root, then run the command again`;
+  return {
+    id: 'idle-suspend',
+    version: IDLE_SUSPEND_VERSION,
+    platform: facts.platform,
+    files: [
+      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no RDP/ssh/peer connection, no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
+      file('service', IDLE_SUSPEND_SERVICE_PATH, '0644', service, 'the systemd service that runs the script once (as root)'),
+      file('timer', IDLE_SUSPEND_TIMER_PATH, '0644', timer, 'the systemd timer that starts the service 2 minutes after boot and every 2 minutes after'),
+    ],
+    steps: [
+      { kind: 'stage', file: 'script', describe: 'write the script to a temporary file (nothing is changed yet)' },
+      { kind: 'stage', file: 'service', describe: 'write the service unit to a temporary file (nothing is changed yet)' },
+      { kind: 'stage', file: 'timer', describe: 'write the timer unit to a temporary file (nothing is changed yet)' },
+      { kind: 'run', purpose: 'install', file: 'script', argv: installArgv('0755', 'script', IDLE_SUSPEND_SCRIPT_PATH), describe: `install the script as ${IDLE_SUSPEND_SCRIPT_PATH} (root-owned, mode 0755)`, fix: fixInstall('/usr/local/bin') },
+      { kind: 'run', purpose: 'install', file: 'service', argv: installArgv('0644', 'service', IDLE_SUSPEND_SERVICE_PATH), describe: `install the service as ${IDLE_SUSPEND_SERVICE_PATH} (root-owned, mode 0644)`, fix: fixInstall('/etc/systemd/system') },
+      { kind: 'run', purpose: 'install', file: 'timer', argv: installArgv('0644', 'timer', IDLE_SUSPEND_TIMER_PATH), describe: `install the timer as ${IDLE_SUSPEND_TIMER_PATH} (root-owned, mode 0644)`, fix: fixInstall('/etc/systemd/system') },
+      { kind: 'run', purpose: 'activate', file: 'service', argv: [sudo, systemctl, 'daemon-reload'], describe: 'tell systemd to read the new units', fix: `run it by hand: sudo ${systemctl} daemon-reload; the files are already in place` },
+      { kind: 'run', purpose: 'activate', file: 'timer', argv: [sudo, systemctl, 'enable', IDLE_SUSPEND_TIMER_UNIT], describe: 'enable the timer (it starts at every boot)', fix: `run it by hand: sudo ${systemctl} enable ${IDLE_SUSPEND_TIMER_UNIT}; the files are already in place` },
+      { kind: 'run', purpose: 'activate', file: 'timer', argv: [sudo, systemctl, 'restart', IDLE_SUSPEND_TIMER_UNIT], describe: 'start the timer now (the idle counter starts from zero)', fix: `run it by hand: sudo ${systemctl} restart ${IDLE_SUSPEND_TIMER_UNIT}; see why with: ${systemctl} status ${IDLE_SUSPEND_TIMER_UNIT}` },
+    ],
+    removeSteps: [
+      { kind: 'run', purpose: 'remove', file: 'timer', argv: [sudo, systemctl, 'disable', '--now', IDLE_SUSPEND_TIMER_UNIT], describe: 'stop and disable the timer', fix: `run it by hand: sudo ${systemctl} disable --now ${IDLE_SUSPEND_TIMER_UNIT}` },
+      { kind: 'run', purpose: 'remove', file: 'timer', argv: [sudo, 'rm', '--', IDLE_SUSPEND_TIMER_PATH], describe: `remove the timer ${IDLE_SUSPEND_TIMER_PATH}`, fix: `remove it by hand: sudo rm -- ${IDLE_SUSPEND_TIMER_PATH}` },
+      { kind: 'run', purpose: 'remove', file: 'service', argv: [sudo, 'rm', '--', IDLE_SUSPEND_SERVICE_PATH], describe: `remove the service ${IDLE_SUSPEND_SERVICE_PATH}`, fix: `remove it by hand: sudo rm -- ${IDLE_SUSPEND_SERVICE_PATH}` },
+      { kind: 'run', purpose: 'remove', file: 'script', argv: [sudo, 'rm', '--', IDLE_SUSPEND_SCRIPT_PATH], describe: `remove the script ${IDLE_SUSPEND_SCRIPT_PATH}`, fix: `remove it by hand: sudo rm -- ${IDLE_SUSPEND_SCRIPT_PATH}` },
+      { kind: 'run', purpose: 'remove', file: 'script', argv: [sudo, systemctl, 'daemon-reload'], describe: 'tell systemd the units are gone', fix: `run it by hand: sudo ${systemctl} daemon-reload` },
+    ],
+    probe: [systemctl, 'is-active', '--quiet', IDLE_SUSPEND_TIMER_UNIT],
+    tools: { sudo, systemctl },
+    service: { unit: IDLE_SUSPEND_TIMER_UNIT },
+    configDir: facts.configDir,
+    summary: `suspends after ${minutes} min idle`,
+    ...(t.journalctl === undefined ? {} : { lastDecisionArgv: [t.journalctl, '-t', IDLE_LOG_TAG, '-n', '1', '--no-pager', '-q', '-o', 'short-iso'] }),
+  };
+}
+
+const IDLE_SUSPEND: Installable = {
+  id: 'idle-suspend',
+  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no RDP/ssh/peer connection, no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
+  platforms: ['linux'],
+  consequence:
+    'This only RESTRICTS uptime: the box suspends itself when idle. It adds no network surface and no right for any peer (a peer keeps the box awake only by sending commands, as before). To keep it awake on purpose: touch /run/machine-keep-awake or <config dir>/keep-awake (content "keep awake until <epoch>" for a limited time); remove the file to release it.',
+  plan: idleSuspendPlan,
+  next: (plan) => {
+    const configDir = plan.configDir ?? '<config dir>';
+    return [
+      'installed:',
+      ...plan.files.map((f) => `  ${f.path}   (root-owned, mode ${f.mode})`),
+      '',
+      `${plan.summary ?? 'idle-suspend'}: checked every 2 minutes; every decision is written to the journal:`,
+      `  journalctl -t ${IDLE_LOG_TAG} -n 20      (sudo journalctl ... when your user cannot read the journal)`,
+      '',
+      'keep the box awake on purpose (a local control of the owner, an orchestrator job can touch it too):',
+      `  touch ${IDLE_KEEP_AWAKE_RUN}   or   touch ${configDir}/keep-awake    (remove it to release)`,
+      `  echo "keep awake until $(( $(date +%s) + 3600 ))" > ${configDir}/keep-awake    (one more hour, then it is ignored)`,
+      '',
+      'a disconnected desktop session (xrdp) is NOT counted as activity; an established RDP, ssh or machine peer connection is.',
+      `to test quickly: machine install idle-suspend --minutes ${IDLE_MIN_MINUTES} --refresh, then leave the box alone for ${IDLE_MIN_MINUTES}-${IDLE_MIN_MINUTES + 2} minutes; wake it with machine wake.`,
+      '',
+      `[warn] ${IDLE_SUSPEND.consequence}`,
+    ];
+  },
+  afterRemove: () => ['nothing to withdraw on the ADMIN machine: this item has no command for peers. The box no longer suspends by itself.'],
+};
+
 /** Every installable of this build. */
-export const INSTALLABLES: Installable[] = [SUSPEND];
+export const INSTALLABLES: Installable[] = [SUSPEND, IDLE_SUSPEND];
 
 export const findInstallable = (id: string): Installable | undefined => INSTALLABLES.find((d) => d.id === id);
