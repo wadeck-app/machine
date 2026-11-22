@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InstallError, findInstallable, markerLine, unsupportedMessage, type InstallFacts, type PlanArg } from './install.js';
+import { InstallError, classifyInstalled, findInstallable, markerLine, unsupportedMessage, type InstallFacts, type PlanArg } from './install.js';
 import { idleSuspendInstalledMinutes } from './idleSuspend.js';
 
 const FACTS: InstallFacts = {
@@ -113,7 +113,32 @@ describe('idle-suspend: the plan', () => {
     expect(text).toContain('/home/alice/.config/machine/keep-awake');
     expect(text).toContain('keep awake until');
     expect(text).toMatch(/disconnected desktop session \(xrdp\) is NOT counted/);
+    expect(text).toMatch(/established RDP connection counts only while the X input of the session is more recent than the idle time/);
     expect(def().afterRemove(def().plan(FACTS), 'desktop').join('\n')).toMatch(/nothing to withdraw/);
+  });
+
+  it('decision 102: xprintidle found on this machine: its path is in the script and the plan says what it is used for', () => {
+    const plan = def().plan({ ...FACTS, tools: { ...FACTS.tools, xprintidle: '/opt/bin/xprintidle', runuser: '/sbin/runuser', stat: '/bin/stat' } });
+    const script = plan.files[0]?.content ?? '';
+    expect(script).toMatch(/^XPRINTIDLE='\/opt\/bin\/xprintidle'$/m);
+    expect(script).toMatch(/^RUNUSER='\/sbin\/runuser'$/m);
+    expect(script).toMatch(/^STAT='\/bin\/stat'$/m);
+    expect(plan.notes).toEqual(['xprintidle found at /opt/bin/xprintidle: an RDP connection counts as activity only while the X input of the session is recent']);
+  });
+
+  it('decision 102: xprintidle absent: the plan still builds (it never installs it), the note says what to do, the script keeps the default path', () => {
+    const plan = def().plan(FACTS);
+    expect(plan.notes).toEqual(['rdp counts as activity until xprintidle is installed: sudo apt install xprintidle']);
+    expect(plan.files[0]?.content).toMatch(/^XPRINTIDLE='\/usr\/bin\/xprintidle'$/m);
+    expect(plan.steps.map((s) => (s.kind === 'run' ? argvText(s.argv) : '')).join('\n')).not.toMatch(/apt|xprintidle/);
+  });
+
+  it('decision 102: a script installed by the previous build (marker version 1, no input check) is outdated, not current', () => {
+    const plan = def().plan(FACTS);
+    const file = plan.files[0] as NonNullable<(typeof plan.files)[0]>;
+    const old = file.content.replace('version 2', 'version 1').replace(/^XPRINTIDLE=.*\n/m, '');
+    expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 1 });
+    expect(classifyInstalled(file, file.content).state).toBe('current');
   });
 
   it('refuses another platform with the supported ones', () => {

@@ -69,8 +69,9 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
     return base;
   }
   // What idle-suspend needs besides systemctl and sudo; a missing one is reported by that plan only (suspend does not need them).
-  const [date, ss, systemdInhibit, logger, journalctl] = await Promise.all(['date', 'ss', 'systemd-inhibit', 'logger', 'journalctl'].map((t) => optionalToolPath(env, t)));
-  const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }) };
+  const [date, ss, systemdInhibit, logger, journalctl, xprintidle, runuser, stat] = await Promise.all(['date', 'ss', 'systemd-inhibit', 'logger', 'journalctl', 'xprintidle', 'runuser', 'stat'].map((t) => optionalToolPath(env, t)));
+  // xprintidle, runuser and stat only serve the RDP input check: absent, the plan keeps the default path and says so (read-only, never installed here).
+  const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }), ...(xprintidle === undefined ? {} : { xprintidle }), ...(runuser === undefined ? {} : { runuser }), ...(stat === undefined ? {} : { stat }) };
   // Without --minutes the script keeps the minutes it was installed with (so that a status does not call it outdated).
   let installedMinutes: number | undefined;
   if (env.context?.minutes === undefined) {
@@ -177,7 +178,7 @@ export async function readStatus(def: Installable, plan: InstallPlan, env: Insta
     missing = [`${plan.service.unit} is not running (systemctl is-active)`];
     nextSteps = [`machine install ${def.id} --refresh`];
   }
-  const details: string[] = plan.summary === undefined ? [] : [plan.summary];
+  const details: string[] = [...(plan.summary === undefined ? [] : [plan.summary]), ...(plan.notes ?? []).map((n) => `${NOTE_PREFIX}${n}`)];
   let lastDecision: string | undefined;
   if (plan.lastDecisionArgv !== undefined && state !== 'not installed' && state !== 'foreign') {
     lastDecision = await readLastDecision(env, plan.lastDecisionArgv);
@@ -297,6 +298,8 @@ export function decisionText(raw: string, now: number): string {
 }
 
 const LAST_PREFIX = 'last decision: ';
+/** A detail that is not configuration but something this machine lacks (`note: rdp counts as activity until xprintidle is installed: ...`). */
+const NOTE_PREFIX = 'note: ';
 
 /** The details of an item for the lines that stay one-liners (`--check`, `machine status`): the last decision parsed. `ItemStatus.details` (the --json) is untouched. */
 export function presentDetails(s: ItemStatus, now: number): string[] {
@@ -337,7 +340,7 @@ export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
     }
     return lines;
   }
-  const config = (s.details ?? []).filter((d) => !d.startsWith(LAST_PREFIX));
+  const config = (s.details ?? []).filter((d) => !d.startsWith(LAST_PREFIX) && !d.startsWith(NOTE_PREFIX));
   const lines = [fit(`${s.id}  ${stateLabel(s.state)}${config.length === 0 ? '' : `  (${config.join('; ')})`}`, width)];
   const def = findInstallable(s.id);
   if (def !== undefined) {
@@ -345,6 +348,9 @@ export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
   }
   if (s.missing.length > 0 && s.state === 'partial') {
     lines.push(`  missing: ${s.missing.join(', ')}`);
+  }
+  for (const note of (s.details ?? []).filter((d) => d.startsWith(NOTE_PREFIX))) {
+    lines.push(...wrap(note, width, '  ').map((l, i) => (i === 0 ? l : `  ${l}`)));
   }
   const unreadable = /^last decision: not readable by your user \(try: (.+)\)$/.exec((s.details ?? []).find((d) => d.startsWith(LAST_PREFIX)) ?? '');
   if (s.lastDecision !== undefined) {

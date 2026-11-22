@@ -74,7 +74,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(r.code, r.err).toBe(0);
     for (const p of [SCRIPT, SERVICE, TIMER]) expect(r.out).toContain(p);
     expect(r.out).toContain('| MINUTES=45');
-    expect(r.out).toContain('| # managed by machine install idle-suspend, version 1');
+    expect(r.out).toContain('| # managed by machine install idle-suspend, version 2');
     expect(r.out).toContain('$ /usr/bin/sudo /usr/bin/systemctl enable machine-idle-suspend.timer');
     expect(r.out).toMatch(/only RESTRICTS uptime/);
     expect(b.sudoCalls()).toEqual([]);
@@ -84,6 +84,62 @@ describe('machine install idle-suspend --dry-run', () => {
   it('without --minutes: 30', async () => {
     const r = await box({ tty: false }).go(['idle-suspend', '--dry-run']);
     expect(r.out).toContain('| MINUTES=30');
+  });
+});
+
+// Decision 102: the RDP input check needs xprintidle; the install only SAYS whether it is there, never installs it.
+describe('machine install idle-suspend: xprintidle (read-only probe)', () => {
+  const NO_XP = 'rdp counts as activity until xprintidle is installed: sudo apt install xprintidle';
+  const base = { systemctl: '/usr/bin/systemctl', sudo: '/usr/bin/sudo', date: '/usr/bin/date', ss: '/usr/bin/ss', 'systemd-inhibit': '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', journalctl: '/usr/bin/journalctl' };
+
+  it('--dry-run without xprintidle says so with the command, and runs nothing that installs it', async () => {
+    const b = box({ tty: false });
+    const r = await b.go(['idle-suspend', '--dry-run']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(NO_XP);
+    expect(b.fake.calls.filter((c) => /apt|xprintidle -|install xprintidle/.test(c))).toEqual([]);
+    expect(b.sudoCalls()).toEqual([]);
+  });
+
+  it('--dry-run with xprintidle names its path (the one written into the script)', async () => {
+    const b = box({ tty: false, tools: { ...base, xprintidle: '/usr/bin/xprintidle' } });
+    const r = await b.go(['idle-suspend', '--dry-run']);
+    expect(r.out).toContain('xprintidle found at /usr/bin/xprintidle');
+    expect(r.out).not.toContain(NO_XP);
+    expect(r.out).toContain("| XPRINTIDLE='/usr/bin/xprintidle'");
+  });
+
+  it('--check and --json carry the note as a detail (installed without xprintidle)', async () => {
+    const b = box();
+    await b.go(['idle-suspend']);
+    const r = await b.go(['idle-suspend', '--check']);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.out).toContain(`note: ${NO_XP}`);
+    const json = JSON.parse((await b.go(['idle-suspend', '--check', '--json'])).out) as { details: string[] };
+    expect(json.details).toContain(`note: ${NO_XP}`);
+  });
+
+  it('the list block shows the note on its own line', async () => {
+    const b = box();
+    await b.go(['idle-suspend']);
+    const r = await b.go(['status']);
+    // The block is wrapped to 80 columns: compare without the line breaks.
+    expect(r.out.replace(/\s+/g, ' ')).toContain(` note: ${NO_XP}`);
+  });
+
+  it('a script of the previous build (version 1, no input check) is outdated: --check says so and names --refresh; --refresh replaces it', async () => {
+    const b = box();
+    await b.go(['idle-suspend']);
+    const current = b.fake.userFiles.get(SCRIPT) as string;
+    b.fake.userFiles.set(SCRIPT, current.replace('version 2', 'version 1').replace(/^(XPRINTIDLE|RUNUSER|STAT)=.*\n/gm, ''));
+    const check = await b.go(['idle-suspend', '--check']);
+    expect(check.code).toBe(1);
+    expect(check.out).toContain('outdated');
+    expect(check.out).toContain('machine install idle-suspend --refresh');
+    const refreshed = await b.go(['idle-suspend', '--refresh']);
+    expect(refreshed.code, refreshed.out + refreshed.err).toBe(0);
+    expect(b.fake.userFiles.get(SCRIPT)).toBe(current);
+    expect((await b.go(['idle-suspend', '--check'])).code).toBe(0);
   });
 });
 
@@ -282,7 +338,7 @@ describe('machine status: the line of the installed items', () => {
     await b.go(['idle-suspend', '--minutes', '15']);
     const mark = b.sudoCalls().length;
     const r = await statusOf(b);
-    expect(r.out).toMatch(/^installed: idle-suspend \(up to date; suspends after 15 min idle; last decision: x machine-idle-suspend\[1\]: not idle: rdp connected\)$/m);
+    expect(r.out).toMatch(/^installed: idle-suspend \(up to date; suspends after 15 min idle; note: rdp counts as activity until xprintidle is installed: sudo apt install xprintidle; last decision: x machine-idle-suspend\[1\]: not idle: rdp connected\)$/m);
     expect(b.sudoCalls().length).toBe(mark);
   });
 

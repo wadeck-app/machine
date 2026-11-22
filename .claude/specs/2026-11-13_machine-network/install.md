@@ -28,8 +28,11 @@ suspend  installed, up to date
   lets `machine run` suspend this box (one sudoers rule); wake: `machine wake`
 idle-suspend  installed, up to date  (suspends after 5 min idle)
   suspends this box by itself when really idle (root timer, every 2 min)
-  last: 18:13:56 not idle: rdp connected (3 min ago)
+  note: rdp counts as activity until xprintidle is installed: sudo apt install xprintidle
+  last: 18:13:56 not idle: rdp connected (input 3 min ago) (3 min ago)
 ```
+
+- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decision 102); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
 
 - `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown cut to 80 characters; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
 - `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.

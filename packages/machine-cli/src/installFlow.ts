@@ -208,7 +208,7 @@ function selectSteps(plan: InstallPlan, todo: PlannedFile[]): InstallPlan['steps
 async function installFlow(def: Installable, plan: InstallPlan, env: InstallEnv, io: FlowIo, options: FlowOptions): Promise<FlowResult> {
   const refresh = options.mode === 'refresh';
   const action = refresh ? 'refresh' : 'install';
-  const facts = `this machine: ${env.platform}, user ${env.userName()}, systemctl ${plan.tools.systemctl}, sudo ${plan.tools.sudo}\n\n`;
+  const facts = `this machine: ${env.platform}, user ${env.userName()}, systemctl ${plan.tools.systemctl}, sudo ${plan.tools.sudo}\n${(plan.notes ?? []).map((n) => `note: ${n}\n`).join('')}\n`;
   io.say(refresh ? `machine install ${def.id} --refresh: write every file of the plan again and verify again, even when the status says up to date\n${facts}` : `machine install ${def.id}: ${def.description}\n${facts}`);
   const seen = await inspect(env, plan, io, !options.dryRun);
   refuseForeign(def, seen);

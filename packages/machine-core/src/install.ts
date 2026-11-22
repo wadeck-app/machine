@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
   IDLE_DEFAULT_MINUTES,
+  IDLE_DEFAULT_RUNUSER,
+  IDLE_DEFAULT_STAT,
+  IDLE_DEFAULT_XPRINTIDLE,
   IDLE_KEEP_AWAKE_RUN,
   IDLE_LOG_TAG,
   IDLE_MAX_MINUTES,
@@ -41,7 +44,7 @@ export interface InstallFacts {
   /** The minutes written in the script already installed (so that a status does not call a script with other minutes outdated). */
   installedMinutes?: number;
   /** Absolute paths of optional tools (`command -v`), absent when not found. */
-  tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string };
+  tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string; xprintidle?: string; runuser?: string; stat?: string };
 }
 
 /** The only user names written into a root-owned file: lowercase letters, digits, `_` and `-`, at most 32, never starting with a digit or `-`. */
@@ -109,6 +112,8 @@ export interface InstallPlan {
   configDir?: string;
   /** One short line of what is configured (`suspends after 30 min idle`), for the status. */
   summary?: string;
+  /** Lines the status and the install show besides the summary (what this machine lacks for the item to work fully). */
+  notes?: string[];
   /** A command that prints the last decision of the item (journal): read by the status, its failure is never an error. */
   lastDecisionArgv?: string[];
 }
@@ -355,7 +360,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     throw new InstallError('internal: the configuration folder of machine is unknown to `machine install idle-suspend` (the script reads the audit log there)');
   }
   const minutes = facts.minutes ?? facts.installedMinutes ?? IDLE_DEFAULT_MINUTES;
-  const script = idleSuspendScript({ minutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath } });
+  const script = idleSuspendScript({ minutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, stat: t.stat ?? IDLE_DEFAULT_STAT, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
   const service = idleSuspendServiceUnit();
   const timer = idleSuspendTimerUnit();
   const file = (id: string, path: string, mode: string, content: string, describe: string): PlannedFile => ({ id, installable: 'idle-suspend', path, mode, owner: 'root', group: 'root', content, sha256: sha256Hex(content), describe, rootOnly: false });
@@ -368,7 +373,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     version: IDLE_SUSPEND_VERSION,
     platform: facts.platform,
     files: [
-      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no RDP/ssh/peer connection, no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
+      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no ssh/peer connection, no RDP connection with recent input, no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
       file('service', IDLE_SUSPEND_SERVICE_PATH, '0644', service, 'the systemd service that runs the script once (as root)'),
       file('timer', IDLE_SUSPEND_TIMER_PATH, '0644', timer, 'the systemd timer that starts the service 2 minutes after boot and every 2 minutes after'),
     ],
@@ -395,13 +400,15 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     service: { unit: IDLE_SUSPEND_TIMER_UNIT },
     configDir: facts.configDir,
     summary: `suspends after ${minutes} min idle`,
+    // Read-only: the install never installs xprintidle (an RDP connection counts as activity until it is there).
+    notes: [t.xprintidle === undefined ? 'rdp counts as activity until xprintidle is installed: sudo apt install xprintidle' : `xprintidle found at ${t.xprintidle}: an RDP connection counts as activity only while the X input of the session is recent`],
     ...(t.journalctl === undefined ? {} : { lastDecisionArgv: [t.journalctl, '-t', IDLE_LOG_TAG, '-n', '1', '--no-pager', '-q', '-o', 'short-iso'] }),
   };
 }
 
 const IDLE_SUSPEND: Installable = {
   id: 'idle-suspend',
-  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no RDP/ssh/peer connection, no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
+  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no ssh/peer connection, no RDP connection with recent keyboard/mouse input (needs xprintidle), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
   summaryLine: 'suspends this box by itself when really idle (root timer, every 2 min)',
   platforms: ['linux'],
   consequence:
@@ -420,7 +427,7 @@ const IDLE_SUSPEND: Installable = {
       `  touch ${IDLE_KEEP_AWAKE_RUN}   or   touch ${configDir}/keep-awake    (remove it to release)`,
       `  echo "keep awake until $(( $(date +%s) + 3600 ))" > ${configDir}/keep-awake    (one more hour, then it is ignored)`,
       '',
-      'a disconnected desktop session (xrdp) is NOT counted as activity; an established RDP, ssh or machine peer connection is.',
+      'a disconnected desktop session (xrdp) is NOT counted as activity; an established ssh or machine peer connection is; an established RDP connection counts only while the X input of the session is more recent than the idle time (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why).',
       `to test quickly: machine install idle-suspend --minutes ${IDLE_MIN_MINUTES} --refresh, then leave the box alone for ${IDLE_MIN_MINUTES}-${IDLE_MIN_MINUTES + 2} minutes; wake it with machine wake.`,
       '',
       `[warn] ${IDLE_SUSPEND.consequence}`,

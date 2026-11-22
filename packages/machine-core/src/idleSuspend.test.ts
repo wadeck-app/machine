@@ -24,6 +24,7 @@ const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
   load5Hundredths: 5,
   inhibitors: 0,
   state: { since: NOW - elapsedMin * 60, last: NOW - 120 },
+  rdpInputIdleSeconds: 'missing',
   ...over,
 });
 
@@ -33,10 +34,9 @@ describe('idleDecision: not idle (each reason, the state is cleared)', () => {
     ['the second keep-awake file', { keepAwake: [{ present: false }, { present: true, untilEpoch: null }] }, 'not idle: keep-awake requested'],
     ['a keep-awake file until the future', { keepAwake: [{ present: true, untilEpoch: NOW + 1 }, { present: false }] }, 'not idle: keep-awake requested'],
     ['unreadable keep-awake files', { keepAwake: null }, 'not idle: cannot read the keep-awake files'],
-    ['an RDP connection', { connections: { rdp: 1, ssh: 0, peer: 0 } }, 'not idle: rdp connected'],
     ['an SSH connection', { connections: { rdp: 0, ssh: 2, peer: 0 } }, 'not idle: ssh connected'],
     ['a machine peer connection', { connections: { rdp: 0, ssh: 0, peer: 1 } }, 'not idle: machine peer connected'],
-    ['rdp and ssh together: rdp is named first', { connections: { rdp: 1, ssh: 1, peer: 1 } }, 'not idle: rdp connected'],
+    ['rdp and ssh together: rdp is named first', { connections: { rdp: 1, ssh: 1, peer: 1 }, rdpInputIdleSeconds: 60 }, 'not idle: rdp connected (input 1 min ago)'],
     ['unreadable connections', { connections: null }, 'not idle: cannot read the connections (ss or the daemon port file)'],
     ['a request in the last N minutes', { audit: { lastActivityEpoch: NOW - 29 * 60, openHolds: 0 } }, 'not idle: machine request in the last 30 min'],
     ['a request 1 s inside the window', { audit: { lastActivityEpoch: NOW - 30 * 60 + 1, openHolds: 0 } }, 'not idle: machine request in the last 30 min'],
@@ -174,14 +174,14 @@ describe('idleSuspendScript (the generated shell)', () => {
     minutes: 30,
     root: '',
     configDir: '/home/alice/.config/machine',
-    tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl' },
+    tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', stat: '/usr/bin/stat', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' },
   };
   const script = (o: Partial<typeof opts> = {}): string => idleSuspendScript({ ...opts, ...o });
 
   it('starts with the shebang, carries the marker and the minutes, ends with a newline', () => {
     const s = script();
     expect(s.split('\n')[0]).toBe('#!/bin/sh');
-    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 1');
+    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 2');
     expect(s).toMatch(/^MINUTES=30$/m);
     expect(s.endsWith('\n')).toBe(true);
     expect(idleSuspendInstalledMinutes(s)).toBe(30);
@@ -226,5 +226,69 @@ describe('idleSuspendScript (the generated shell)', () => {
     expect(idleSuspendInstalledMinutes('#!/bin/sh\necho hi\n')).toBeUndefined();
     expect(idleSuspendInstalledMinutes('MINUTES=9999\n')).toBeUndefined();
     expect(idleSuspendInstalledMinutes('MINUTES=abc\n')).toBeUndefined();
+  });
+
+  it('decision 102: the three tools of the RDP input check are written as absolute paths, and the unsafe ones are refused', () => {
+    const s = script();
+    expect(s).toMatch(/^XPRINTIDLE='\/usr\/bin\/xprintidle'$/m);
+    expect(s).toMatch(/^RUNUSER='\/usr\/sbin\/runuser'$/m);
+    expect(s).toMatch(/^STAT='\/usr\/bin\/stat'$/m);
+    for (const key of ['stat', 'runuser', 'xprintidle'] as const) {
+      expect(() => script({ tools: { ...opts.tools, [key]: "/usr/bin/x'y" } }), key).toThrow(InstallError);
+    }
+  });
+
+  it('decision 102: no user text is spliced into the command run as the display owner', () => {
+    const s = script();
+    expect(s).toMatch(/"\$ROOT\$RUNUSER" -u "\$owner" -- "\$ROOT\$XPRINTIDLE"/);
+    // The owner is checked against the same pattern as the installing user before it is used.
+    expect(s).toContain('^[a-z_][a-z0-9_-]{0,31}$');
+  });
+});
+
+// Decision 102: an established RDP connection is activity only while the X input of the session is recent.
+describe('idleDecision: the RDP connection and the input idle time (decision 102)', () => {
+  const rdp = { rdp: 1, ssh: 0, peer: 0 };
+  const withRdp = (rdpInputIdleSeconds: IdleFacts['rdpInputIdleSeconds'], over: Partial<IdleFacts> = {}, elapsedMin = 40): IdleFacts => idle({ connections: rdp, rdpInputIdleSeconds, ...over }, elapsedMin);
+  const notIdle = (reason: string): { suspend: boolean; reason: string; state: null } => ({ suspend: false, reason, state: null });
+
+  it('xprintidle is not installed: counts as activity and says how to fix it', () => {
+    expect(idleDecision(withRdp('missing'), NOW, MIN)).toEqual(notIdle('not idle: rdp connected (xprintidle is not installed: sudo apt install xprintidle)'));
+  });
+  it('the input idle time cannot be read: counts as activity, with the cause', () => {
+    expect(idleDecision(withRdp({ unreadable: 'xprintidle failed on :10 as alice' }), NOW, MIN)).toEqual(notIdle('not idle: rdp connected (input idle unreadable: xprintidle failed on :10 as alice)'));
+  });
+  it('input 0 s, 3 min, N*60-1 s ago: activity (whole minutes shown)', () => {
+    expect(idleDecision(withRdp(0), NOW, MIN).reason).toBe('not idle: rdp connected (input 0 min ago)');
+    expect(idleDecision(withRdp(180), NOW, MIN).reason).toBe('not idle: rdp connected (input 3 min ago)');
+    expect(idleDecision(withRdp(MIN * 60 - 1), NOW, MIN).reason).toBe('not idle: rdp connected (input 29 min ago)');
+  });
+  it('input exactly N min ago: no longer activity, the timer runs and the reason says so', () => {
+    expect(idleDecision(withRdp(MIN * 60, {}, 12), NOW, MIN)).toEqual({ suspend: false, reason: 'idle 12/30 min (rdp connected but no input for 30 min)', state: { since: NOW - 720, last: NOW } });
+  });
+  it('the boundary follows --minutes (5 min)', () => {
+    expect(idleDecision(withRdp(299, {}, 12), NOW, 5).reason).toBe('not idle: rdp connected (input 4 min ago)');
+    expect(idleDecision(withRdp(300, {}, 12), NOW, 5).suspend).toBe(true);
+  });
+  it('a long input idle time states itself when it lets the box suspend', () => {
+    expect(idleDecision(withRdp(6 * 3600), NOW, MIN)).toEqual({ suspend: true, reason: 'suspending: idle 40 min (rdp connected but no input for 360 min)', state: null });
+  });
+  it('the note is on every timer line (restart too), never on a not-idle line', () => {
+    expect(idleDecision(withRdp(3600, { state: 'absent' }), NOW, MIN).reason).toBe('idle 0/30 min (rdp connected but no input for 60 min)');
+    expect(idleDecision(withRdp(3600, { state: null }), NOW, MIN).reason).toBe('idle 0/30 min (timer restarted: the state file is unreadable) (rdp connected but no input for 60 min)');
+    expect(idleDecision(withRdp(3600, { load5Hundredths: 99 }), NOW, MIN).reason).toBe('not idle: load 0.99 (limit 0.30)');
+  });
+  it('without an RDP connection the input idle fact is ignored (no note)', () => {
+    for (const f of [0, 'missing', { unreadable: 'x' }] as const) {
+      expect(idleDecision(idle({ rdpInputIdleSeconds: f }, 40), NOW, MIN).reason).toBe('suspending: idle 40 min');
+    }
+  });
+  it('ssh and peer connections stay activity whatever the input idle time', () => {
+    expect(idleDecision(idle({ connections: { rdp: 0, ssh: 1, peer: 0 }, rdpInputIdleSeconds: 99999 }), NOW, MIN).reason).toBe('not idle: ssh connected');
+    expect(idleDecision(idle({ connections: { rdp: 1, ssh: 0, peer: 1 }, rdpInputIdleSeconds: 99999 }, 40), NOW, MIN).reason).toBe('not idle: machine peer connected');
+  });
+  it('a negative or fractional input idle time is refused as a programming error', () => {
+    expect(() => idleDecision(withRdp(-1), NOW, MIN)).toThrow(InstallError);
+    expect(() => idleDecision(withRdp(1.5), NOW, MIN)).toThrow(InstallError);
   });
 });

@@ -251,7 +251,11 @@ machine install idle-suspend --dry-run             the three files (script, syst
 machine install idle-suspend --minutes 30          install; the box suspends after 30 min of real idleness (5..1440, default 30)
 machine install idle-suspend --minutes 5 --refresh change the idle time (5 min to test), restarts the timer
 journalctl -t machine-idle-suspend -n 20           every decision with its reason; keep awake: touch /run/machine-keep-awake
+sudo apt install xprintidle                        needed so an open RDP window stops counting as activity once you stop typing (otherwise it always does)
+machine install idle-suspend --refresh             after an update of machine (status says "outdated") or after installing xprintidle
 ```
+
+An established RDP connection keeps the box awake only while the keyboard/mouse input of the session is more recent than the idle time (N min); ssh and machine peer connections always do. Without `xprintidle`, or when it cannot be read, RDP counts as activity and the journal says why (`not idle: rdp connected (xprintidle is not installed: sudo apt install xprintidle)`).
 
 States: `not installed`, `installed` ("installed, up to date"), `outdated`, `partial` (names the missing part), `foreign` (a file machine did not write: never touched), `unsupported here`. `machine status` prints one line for the installed items (`installed: suspend (up to date)` or a `[warn]` with `--refresh`), nothing when none is installed. See `install.md`, "Lifecycle".
 

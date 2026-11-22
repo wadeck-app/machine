@@ -193,7 +193,7 @@ Commands:
                                      --dry-run changes nothing, --check reports the state (exit 0 only when installed and up to date), --refresh writes
                                      everything again (repairs a file changed by hand), --remove removes exactly what it installed and checks it. Once allowed in the default list, every trusted peer can suspend this machine
                                      \`install idle-suspend [--minutes <n>]\` (Linux only): a root systemd timer that suspends this machine by itself after n minutes (default 30) with no
-                                     RDP/ssh/peer connection, no machine request, low load, no sleep inhibitor and no keep-awake file; a disconnected desktop session does not count; decisions in the journal (journalctl -t machine-idle-suspend)
+                                     ssh/peer connection, no RDP connection with recent input (needs xprintidle), no machine request, low load, no sleep inhibitor and no keep-awake file; a disconnected desktop session does not count; decisions in the journal (journalctl -t machine-idle-suspend)
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
                                      candidacy when the previous one expired or was posted without uuid)
