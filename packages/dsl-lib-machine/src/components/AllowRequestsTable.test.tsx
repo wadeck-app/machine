@@ -65,6 +65,19 @@ describe('the table', () => {
     expect(within(rowOf('ls')).getByRole('button', { name: 'Allow ls' })).toBeInTheDocument();
   });
 
+  it('every cell of a row is centred vertically with the same padding above and below, so the button sits on the middle of a two-line row', () => {
+    render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
+    const row = rowOf('df -h');
+    expect(row.className).toContain('align-middle');
+    expect(row.className).not.toContain('align-top');
+    const cells = Array.from(row.querySelectorAll('td'));
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      expect(cell.className).toContain('py-2');
+      expect(cell.className).not.toMatch(/\bp[tb]-/);
+    }
+  });
+
   it('where Allow is not available, no button: the note says why and what to do instead, and the CLI command stays visible', () => {
     render(<AllowRequestsTable rows={ROWS} allow={{ ...ALLOW, available: false, note: 'Only the admin machine can allow a command: run the command shown in each row there.' }} />);
     expect(screen.queryByRole('button', { name: /^Allow/ })).toBeNull();

@@ -36,6 +36,9 @@ export const TEXT_MUTED_SM = 'text-sm text-muted';
 export const TABLE_HEAD_ROW = 'border-b border-border text-muted';
 export const TABLE_BODY_ROW = 'border-b border-border align-top';
 
+/** A body row whose cells are all centred vertically (the Allow table: one-line cells and the button sit on the middle of a two-line row). */
+export const TABLE_ROW_MIDDLE = 'border-b border-border align-middle';
+
 /** The Allow button of a table row: dsl-ui's primary solid fill (same pair as its Badge) with a visible keyboard focus ring. */
 export const ALLOW_BUTTON = 'inline-flex items-center rounded bg-primary px-3 py-1 text-xs font-medium text-on-solid transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1';
 

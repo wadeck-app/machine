@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
@@ -94,10 +94,10 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
             </thead>
             <tbody>
               {visible.map(r => (
-                <tr key={rowKey(r)} className={TABLE_BODY_ROW} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-                  <td className="whitespace-nowrap px-2 py-1"><MachineName name={r.peerText} /></td>
-                  <td className="whitespace-nowrap px-2 py-1">{r.shell}</td>
-                  <td className="break-all px-2 py-1">
+                <tr key={rowKey(r)} className={TABLE_ROW_MIDDLE} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
+                  <td className="whitespace-nowrap px-2 py-2"><MachineName name={r.peerText} /></td>
+                  <td className="whitespace-nowrap px-2 py-2">{r.shell}</td>
+                  <td className="break-all px-2 py-2">
                     {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
                     <span style={MONO_STYLE}>{r.command}</span>
                     {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED_SM}`}>Truncated: only the first part of the command was reported.</div>}
@@ -107,10 +107,10 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
                       </div>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1">{r.countText}</td>
-                  <td className="whitespace-nowrap px-2 py-1">{r.firstSeenText}</td>
-                  <td className="whitespace-nowrap px-2 py-1">{r.lastSeenText}</td>
-                  <td className="px-2 py-1">
+                  <td className="whitespace-nowrap px-2 py-2">{r.countText}</td>
+                  <td className="whitespace-nowrap px-2 py-2">{r.firstSeenText}</td>
+                  <td className="whitespace-nowrap px-2 py-2">{r.lastSeenText}</td>
+                  <td className="px-2 py-2">
                     {rowCanAllow(r) ? (
                       // violations-suppress: react/no-raw-button ButtonAction has no aria-label and dsl-ui's Button is not exported: the name "Allow <command>" tells the rows apart for a screen reader (looks like dsl-ui's primary Button, same tokens as its Badge)
                       <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
