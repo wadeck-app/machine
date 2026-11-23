@@ -57,13 +57,6 @@ All 5 pass: the timer runs on `/run/machine-idle-suspend/since` (`<since> <last 
   | session user not plain, display not `:<n>`, no home | `... unreadable: the name of session c2 is not a plain user name`, `session c2 has an unexpected display`, `no usable home folder for alice in /etc/passwd` |
   | xprintidle errors or prints text | `... unreadable: xprintidle failed on :10 as wadeck`, `xprintidle printed no number on :10` |
 
-
-  | RDP situation | Journal reason |
-  |---|---|
-  | input idle < R min | `not idle: rdp connected (input 3 min ago, needs 20)` (whole minutes) |
-  | input idle >= R min | not activity, and NO N-minute timer: if the other checks passed on the previous check too, `suspending: rdp connected but no input for 25 min (needs 20)`; otherwise (first pass, after a wake, state unusable) `idle: rdp connected but no input for 25 min (needs 20), confirming at the next check` plus the restart cause |
-  | xprintidle missing | `not idle: rdp connected (xprintidle is not installed: sudo apt install xprintidle)` |
-
 - Two thresholds (decision 103), the input is read at every check, with or without an RDP connection:
 
   | Situation | Rule |

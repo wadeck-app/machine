@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { finalCode } from '@wadeck-app/machine-webcrypto';
-import { MONO_STYLE } from '../lib/styleTokens.js';
+import { MONO_STYLE, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 export interface FinalCodeDisplayProps {
   /** Candidate identity public key, unpadded base64url. */
@@ -49,10 +49,10 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
   }, [candidatePublicKey, adminPublicKey, random]);
 
   if (computed.state === 'error') {
-    return <div role="alert" className="text-sm text-red-700">{computed.message}</div>;
+    return <div role="alert" className={TEXT_ERROR}>{computed.message}</div>;
   }
   if (computed.state === 'pending') {
-    return <div className="text-sm text-gray-500">Computing the security code...</div>;
+    return <div className={TEXT_MUTED_SM}>Computing the security code...</div>;
   }
   return (
     <div className="flex flex-col gap-3">
@@ -68,7 +68,7 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
         type="button"
         disabled={!same}
         onClick={() => onConfirm?.()}
-        className="self-start rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+        className="self-start rounded bg-primary px-3 py-1 text-sm text-on-solid disabled:opacity-50"
       >
         Codes match, continue
       </button>

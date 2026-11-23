@@ -263,7 +263,7 @@ describe('remoteRequestsPage', () => {
       NOW,
     );
     expect(page.waiting).toHaveLength(1);
-    expect(page.waiting[0]).toMatchObject({ id: 'aaaa1111-0000-4000-8000-000000000000', peerText: 'thinkcentre', shell: 'cmd', command: 'hostname', secondsLeft: 540, askedText: '60 s ago', nextCommand: 'machine admin allow laptop --shell cmd -- hostname' });
+    expect(page.waiting[0]).toMatchObject({ id: 'aaaa1111-0000-4000-8000-000000000000', peerText: 'thinkcentre', shell: 'cmd', command: 'hostname', secondsLeft: 540, askedText: '60 s ago', askedSecondsAgo: 60, nextCommand: 'machine admin allow laptop --shell cmd -- hostname' });
     expect(page.allow).toEqual({ available: true, machine: { uuid: SELF, name: 'laptop' }, note: '' });
     expect(page.count).toBe(1);
     // The Deny of a request held elsewhere goes through the daemon (decision 85): the note names the CLI form.
@@ -288,7 +288,7 @@ describe('requestsPage (held requests, `machine run --wait`)', () => {
   it('lists the held requests soonest deadline first, with the seconds left computed from the daemon clock', () => {
     const page = requestsPage(daemonAnswer(audit), NOW + 10);
     expect(page.waiting.map((w) => w.command)).toEqual(['ls', 'df -h']);
-    expect(page.waiting[0]).toMatchObject({ id: 'h2', peer: PEER, peerText: 'thinkcentre', shell: 'sh', secondsLeft: 100, askedText: '30 s ago', nextCommand: 'machine admin allow target --shell sh -- ls' });
+    expect(page.waiting[0]).toMatchObject({ id: 'h2', peer: PEER, peerText: 'thinkcentre', shell: 'sh', secondsLeft: 100, askedText: '30 s ago', askedSecondsAgo: 30, nextCommand: 'machine admin allow target --shell sh -- ls' });
     expect(page.waiting[1]).toMatchObject({ id: 'h1', secondsLeft: 540, nextCommand: 'machine admin allow target --shell sh -- "df -h"' });
     expect(page.waiting[0]?.nextWhere).toMatch(/admin machine/);
   });

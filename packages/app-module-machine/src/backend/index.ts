@@ -8,6 +8,7 @@ import { remoteRequestsPage, requestsPage, RequestsAnswerError } from './request
 import { registerActivityRoute } from './activityRoute.js'; // run-log
 import { registerAllowedRoute } from './allowedRoute.js';
 import { checkDenyReason, type RequestsListAnswer } from '@wadeck-app/machine-core';
+import { errorBody } from './errorBody.js';
 
 // Backend of the machine module. Read routes, plus the routes of the Allow button (decision 76: `sensitive`, they carry only the ENCRYPTED admin key
 // and signed documents). No route here signs: signing happens in the browser (decision D25). Local-API limit, stated honestly: app-core checks only Host and
@@ -181,18 +182,19 @@ interface Failure {
   status: number;
   kind: string;
   error: string;
+  message: string;
 }
 
 function failureOf(err: unknown): Failure {
-  if (err instanceof DaemonUnreachableError) return { status: 503, kind: 'daemon_unreachable', error: err.message };
-  if (err instanceof DaemonAuthError) return { status: 502, kind: 'daemon_token_refused', error: err.message };
+  if (err instanceof DaemonUnreachableError) return errorBody(503, 'daemon_unreachable', err.message);
+  if (err instanceof DaemonAuthError) return errorBody(502, 'daemon_token_refused', err.message);
   // An older daemon does not know a command of this module: the fix is the update, not a retry.
-  if (err instanceof DaemonCommandError && /Unknown command/.test(err.message)) return { status: 502, kind: 'daemon_error', error: `${err.message}: the daemon is older than this module, update it with \`machine cli update\` and restart it` };
-  if (err instanceof DaemonCommandError) return { status: 502, kind: 'daemon_error', error: err.message };
-  if (err instanceof RequestsAnswerError) return { status: 502, kind: 'daemon_error', error: err.message };
-  if (err instanceof RelayNotConfiguredError) return { status: 503, kind: 'relay_not_configured', error: err.message };
-  if (err instanceof RelayRequestError) return { status: 502, kind: 'relay_error', error: err.message };
-  return { status: 500, kind: 'internal', error: err instanceof Error ? err.message : String(err) };
+  if (err instanceof DaemonCommandError && /Unknown command/.test(err.message)) return errorBody(502, 'daemon_error', `${err.message}: the daemon is older than this module, update it with \`machine cli update\` and restart it`);
+  if (err instanceof DaemonCommandError) return errorBody(502, 'daemon_error', err.message);
+  if (err instanceof RequestsAnswerError) return errorBody(502, 'daemon_error', err.message);
+  if (err instanceof RelayNotConfiguredError) return errorBody(503, 'relay_not_configured', err.message);
+  if (err instanceof RelayRequestError) return errorBody(502, 'relay_error', err.message);
+  return errorBody(500, 'internal', err instanceof Error ? err.message : String(err));
 }
 
 interface NotInitialized {
@@ -203,7 +205,7 @@ interface NotInitialized {
 const isNotInitialized = (value: unknown): value is NotInitialized =>
   typeof value === 'object' && value !== null && (value as { initialized?: unknown }).initialized === false;
 
-const notInitialized = (value: NotInitialized): Failure => ({ status: 409, kind: 'not_initialized', error: value.message });
+const notInitialized = (value: NotInitialized): Failure => (errorBody(409, 'not_initialized', value.message));
 
 interface ListAnswerLike {
   enrolled?: unknown;
@@ -384,17 +386,17 @@ export default function register(ctx: ModuleContextLike): void {
     const machine = params?.machine;
     const id = params?.id;
     if (typeof id !== 'string' || !/^[0-9a-f-]{6,36}$/.test(id)) {
-      return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'the request id must be 6 to 36 hexadecimal characters and "-" (`machine requests` prints it): /hold-progress/<machine|self>/<request id>' });
+      return reply.code(400).send(errorBody(400, 'bad_request', 'the request id must be 6 to 36 hexadecimal characters and "-" (`machine requests` prints it): /hold-progress/<machine|self>/<request id>'));
     }
     if (typeof machine !== 'string' || machine.length === 0 || machine.length > 64) {
-      return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'the machine must be "self" or the name, alias or uuid of a machine, 1 to 64 characters: /hold-progress/<machine|self>/<request id>' });
+      return reply.code(400).send(errorBody(400, 'bad_request', 'the machine must be "self" or the name, alias or uuid of a machine, 1 to 64 characters: /hold-progress/<machine|self>/<request id>'));
     }
     try {
       const answer = (await callDaemon(configDir(), 'holdProgress', undefined, machine === 'self' ? { id } : { id, machine })) as { ok?: unknown; reason?: unknown; message?: unknown };
       if (answer.ok === false) {
         const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
         const status = reason === 'unknown-peer' ? 404 : reason === 'bad-payload' ? 400 : 502;
-        return reply.code(status).send({ status, kind: reason, error: typeof answer.message === 'string' ? answer.message : 'the daemon refused the holdProgress command' });
+        return reply.code(status).send(errorBody(status, reason, typeof answer.message === 'string' ? answer.message : 'the daemon refused the holdProgress command'));
       }
       return reply.code(200).send(answer);
     } catch (err) {
@@ -411,17 +413,17 @@ export default function register(ctx: ModuleContextLike): void {
     '/requests/remote',
     async (req, reply) => {
       const refusal = checkModuleHeader(req);
-      if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+      if (refusal !== undefined) return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
       const body = typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined;
       const { machine, request } = typeof body === 'object' && body !== null ? (body as { machine?: unknown; request?: unknown }) : {};
       if (typeof machine !== 'string' || machine.length === 0 || typeof request !== 'object' || request === null) {
-        return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'expected {"machine": "<name or uuid>", "request": <requests-list document signed with the admin key>}' });
+        return reply.code(400).send(errorBody(400, 'bad_request', 'expected {"machine": "<name or uuid>", "request": <requests-list document signed with the admin key>}'));
       }
       try {
         const answer = (await callDaemon(configDir(), 'remoteRequests', REMOTE_TIMEOUT_MS, { peer: machine, request })) as { ok?: boolean; answer?: RequestsListAnswer; reason?: string; message?: string };
         if (answer.ok === true && answer.answer !== undefined) return reply.code(200).send(remoteRequestsPage(answer.answer, Math.floor(Date.now() / 1000)));
         const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
-        return reply.code(REMOTE_STATUS[reason] ?? 502).send({ status: REMOTE_STATUS[reason] ?? 502, kind: reason, error: typeof answer.message === 'string' ? answer.message : 'the peer did not answer with a list' });
+        return reply.code(REMOTE_STATUS[reason] ?? 502).send(errorBody(REMOTE_STATUS[reason] ?? 502, reason, typeof answer.message === 'string' ? answer.message : 'the peer did not answer with a list'));
       } catch (err) {
         const failure = failureOf(err);
         return reply.code(failure.status).send(failure);
@@ -438,13 +440,13 @@ export default function register(ctx: ModuleContextLike): void {
   const SENSITIVE = { effect: 'sensitive' } as const;
   const viaDaemon = async (req: unknown, reply: ReplyLike, command: string, payload: unknown | undefined, timeoutMs: number | undefined, ok: (result: unknown) => unknown = (r) => r, statuses: Record<string, number> = ALLOW_STATUS): Promise<unknown> => {
     const refusal = checkModuleHeader(req);
-    if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    if (refusal !== undefined) return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
     try {
       const answer = (await callDaemon(configDir(), command, timeoutMs, payload)) as { ok?: unknown; reason?: unknown; message?: unknown };
       if (typeof answer === 'object' && answer !== null && answer.ok === false) {
         const reason = typeof answer.reason === 'string' ? answer.reason : 'refused';
         const status = statuses[reason] ?? 502;
-        return reply.code(status).send({ status, kind: reason, error: typeof answer.message === 'string' ? answer.message : `the daemon refused the ${command} command` });
+        return reply.code(status).send(errorBody(status, reason, typeof answer.message === 'string' ? answer.message : `the daemon refused the ${command} command`));
       }
       return reply.code(200).send(ok(answer));
     } catch (err) {
@@ -457,17 +459,17 @@ export default function register(ctx: ModuleContextLike): void {
 
   ctx.registerRoute('GET', '/allow/:machine', (req, reply) => {
     const machine = typeof req === 'object' && req !== null ? (req as { params?: { machine?: unknown } }).params?.machine : undefined;
-    if (typeof machine !== 'string' || machine.length === 0) return reply.code(400).send({ status: 400, kind: 'bad_request', error: 'expected the machine (name, alias or uuid) in the path: /allow/<machine>' });
+    if (typeof machine !== 'string' || machine.length === 0) return reply.code(400).send(errorBody(400, 'bad_request', 'expected the machine (name, alias or uuid) in the path: /allow/<machine>'));
     return viaDaemon(req, reply, 'allowContext', { machine }, undefined);
   }, SENSITIVE);
 
   ctx.registerRoute('POST', '/allow', (req, reply) => {
     // The header first (a stray request learns nothing about the body rules), then the shape; viaDaemon checks the header again, which is cheap.
     const refusal = checkModuleHeader(req);
-    if (refusal !== undefined) return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+    if (refusal !== undefined) return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
     const body = typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined;
     const problem = allowBodyProblem(body);
-    if (problem !== undefined) return reply.code(400).send({ status: 400, kind: 'bad_request', error: problem });
+    if (problem !== undefined) return reply.code(400).send(errorBody(400, 'bad_request', problem));
     const { policy, document, noticeRecipients } = body as { policy: unknown; document?: unknown; noticeRecipients?: { signed: unknown; document: unknown } };
     // Only these fields go to the daemon, re-built here: nothing else of the request can travel with them.
     const forwarded = { policy, ...(document === undefined ? {} : { document }), ...(noticeRecipients === undefined ? {} : { noticeRecipients: { signed: noticeRecipients.signed, document: noticeRecipients.document } }) };
@@ -478,11 +480,11 @@ export default function register(ctx: ModuleContextLike): void {
   ctx.registerRoute('POST', '/deny', (req, reply) => {
     const refusal = checkModuleHeader(req);
     if (refusal !== undefined) {
-      return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+      return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
     }
     const parsed = parseDenyBody(typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined);
     if (!parsed.ok) {
-      return reply.code(400).send({ status: 400, kind: 'bad_request', error: parsed.problem });
+      return reply.code(400).send(errorBody(400, 'bad_request', parsed.problem));
     }
     const { id, reason, machine } = parsed;
     const rest = reason === undefined ? { id } : { id, reason };
@@ -498,11 +500,11 @@ export default function register(ctx: ModuleContextLike): void {
   ctx.registerRoute('POST', '/dismiss-notice', (req, reply) => {
     const refusal = checkModuleHeader(req);
     if (refusal !== undefined) {
-      return reply.code(refusal.status).send({ status: refusal.status, kind: 'module_header', error: refusal.error });
+      return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
     }
     const parsed = parseDismissBody(typeof req === 'object' && req !== null ? (req as { body?: unknown }).body : undefined);
     if (!parsed.ok) {
-      return reply.code(400).send({ status: 400, kind: 'bad_request', error: parsed.problem });
+      return reply.code(400).send(errorBody(400, 'bad_request', parsed.problem));
     }
     return viaDaemon(req, reply, 'dismissNotice', parsed.payload, undefined, (r) => r, DISMISS_STATUS);
   }, { effect: 'write' });

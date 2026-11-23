@@ -142,7 +142,7 @@ describe('GET /allow/:machine (the context)', () => {
     await withDaemon({ allowContext: { ok: false, reason, message: `why ${reason}` } });
     const out = await call(routes(), 'GET /allow/:machine', { headers: HEADER, params: { machine: SELF } });
     expect(out.status).toBe(status);
-    expect(out.body).toEqual({ status, kind: reason, error: `why ${reason}` });
+    expect(out.body).toEqual({ status, kind: reason, error: `why ${reason}`, message: `why ${reason}` });
   });
 
   it('a missing machine is a 400 that names the route', async () => {
@@ -213,7 +213,7 @@ describe('POST /allow (the signed policy)', () => {
     await withDaemon({ submitPolicy: { ok: false, reason, message: `why ${reason}` } });
     const out = await call(routes(), 'POST /allow', { headers: HEADER, body: { policy: SIGNED_POLICY } });
     expect(out.status).toBe(status);
-    expect(out.body).toEqual({ status, kind: reason, error: `why ${reason}` });
+    expect(out.body).toEqual({ status, kind: reason, error: `why ${reason}`, message: `why ${reason}` });
   });
 
   it('503 when the daemon is not running: nothing was stored', async () => {

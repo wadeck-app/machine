@@ -79,6 +79,8 @@ export interface WaitingRow {
   /** Seconds until the hold ends, by the clock of the daemon that holds it (never negative). */
   secondsLeft: number;
   askedText: string;
+  /** Seconds between the ask and `now` (this machine's clock): the page recomputes "asked X ago" from it every second. */
+  askedSecondsAgo: number;
   /** What the Allow dialog shows next to the peer (it shows `countText` of a pending row). */
   countText: string;
   nextCommand: string;
@@ -172,6 +174,7 @@ function waitingRow(w: WaitingRequest, machine: { name: string; policyMode: 'adm
     secondsLeft: Math.max(0, w.deadline - daemonNow),
     // `clockOffset`: the times of a peer are on ITS clock; the age is shown on this machine's clock.
     askedText: ago(w.since + clockOffset, now),
+    askedSecondsAgo: Math.max(0, now - (w.since + clockOffset)),
     countText: 'waiting now',
     nextCommand: allowCommand(w, machine),
     nextWhere: nextWhere(machine),

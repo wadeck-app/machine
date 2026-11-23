@@ -19,7 +19,7 @@ export interface RemotePage {
   policyMode: 'admin' | 'local';
   allow: { available: boolean; machine: { uuid: string; name: string }; note: string };
   count: number;
-  waiting: Array<{ id: string; peerText: string; peer: string; shell: string; command: string; secondsLeft: number; askedText: string; countText: string; nextCommand: string; nextWhere: string }>;
+  waiting: Array<{ id: string; peerText: string; peer: string; shell: string; command: string; secondsLeft: number; askedText: string; askedSecondsAgo?: number; countText: string; nextCommand: string; nextWhere: string }>;
   denyNote: string;
   pending: Array<{ peerText: string; peer: string; shell: string; command: string; countText: string; firstSeenText: string; lastSeenText: string; nextCommand: string; nextWhere: string }>;
   pendingTotal: number;

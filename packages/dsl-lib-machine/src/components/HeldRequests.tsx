@@ -2,6 +2,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
+import { agoText } from '../lib/agoText.js';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice } from '../lib/lifetimeChoice.js';
 import { cardFlags, lifetimeMemory, readOnlyDefaultKind, startChoiceOf } from '../lib/quickAllow.js';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
@@ -27,6 +28,8 @@ export interface HeldRequestRow {
   /** Seconds until the hold ends, by the clock of the daemon, at the time the page was fetched. */
   secondsLeft: number;
   askedText: string;
+  /** Seconds between the ask and the moment the page got the row (when the backend knows it): the page makes "asked X ago" tick from it, like the countdown. Absent: `askedText` is shown as is. */
+  askedSecondsAgo?: number;
   /** What the Allow dialog shows next to the peer. */
   countText: string;
   /** The `machine admin allow ...` command that does the same from a terminal. */
@@ -264,7 +267,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                       </>
                     )}{' '}
                     in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
-                    {r.note === undefined && <>, asked {r.askedText}</>}
+                    {r.note === undefined && <>, asked {r.askedSecondsAgo === undefined ? r.askedText : agoText(r.askedSecondsAgo + elapsedSince(r.fetchedAtMs ?? fetchedAt))}</>}
                   </span>
                   {reach !== undefined && (
                     <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>

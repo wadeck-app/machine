@@ -157,6 +157,24 @@ describe('the countdown', () => {
     expect(within(itemOf('ls')).queryByRole('button', { name: /^Deny/ })).toBeNull();
   });
 
+  it('"asked X ago" ticks with the same timer as the countdown, from the age of the fetch', () => {
+    vi.useFakeTimers();
+    render(<HeldRequests rows={[{ ...(ROWS[0] as HeldRequestRow), askedText: '5 s ago', askedSecondsAgo: 5 }]} allow={ALLOW} />);
+    expect(within(itemOf('ls')).getByText(/asked 5 s ago/)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(within(itemOf('ls')).getByText(/asked 15 s ago/)).toBeInTheDocument();
+    expect(within(itemOf('ls')).getByText('1 min 25 s left')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(110_000); });
+    expect(within(itemOf('ls')).getByText(/asked 2 min ago/)).toBeInTheDocument();
+  });
+
+  it('a row without the age keeps the text of the backend (an older backend)', () => {
+    vi.useFakeTimers();
+    render(<HeldRequests rows={[ROWS[0] as HeldRequestRow]} allow={ALLOW} />);
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(within(itemOf('ls')).getByText(/asked 5 s ago/)).toBeInTheDocument();
+  });
+
   it('a refreshed list starts again from its own seconds left', () => {
     vi.useFakeTimers();
     const { rerender } = render(<HeldRequests rows={[ROWS[0] as HeldRequestRow]} allow={ALLOW} />);

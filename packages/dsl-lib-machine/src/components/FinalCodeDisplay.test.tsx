@@ -46,4 +46,20 @@ describe('FinalCodeDisplay', () => {
     expect(screen.queryByLabelText('Security code')).toBeNull();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Codes match, continue' })).toBeNull());
   });
+
+  // The theme tokens follow the light/dark theme; a Tailwind palette class (hue and shade) or text-white does not.
+  const PALETTE = /\b(text|bg|border)-(red|gray|blue)-\d|\btext-white\b/;
+
+  it('uses only theme tokens, never a Tailwind palette colour: pending, ready', async () => {
+    const { container } = render(<FinalCodeDisplay {...inputs()} />);
+    expect(container.innerHTML).not.toMatch(PALETTE);
+    await screen.findByLabelText('Security code');
+    expect(container.innerHTML).not.toMatch(PALETTE);
+  });
+
+  it('uses only theme tokens, never a Tailwind palette colour: error', async () => {
+    const { container } = render(<FinalCodeDisplay {...inputs()} random="not-a-random" />);
+    await screen.findByRole('alert');
+    expect(container.innerHTML).not.toMatch(PALETTE);
+  });
 });
