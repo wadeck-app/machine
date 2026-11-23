@@ -33,9 +33,10 @@ idle-suspend  installed, up to date  (suspends after 5 min idle (RDP: 20 min))
   last: 18:13:56 not idle: rdp connected (input 3 min ago, needs 20) (3 min ago)
 ```
 
-- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decisions 102 and 103); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
+- `last:` and `last decision:` are wrapped on indented lines, never cut (the cause is at the end of the line; a word longer than the width is broken).
+- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decisions 102 to 105); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
 
-- `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown cut to 80 characters; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
+- `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown whole; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
 - `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.
 - The one-line summary is `Installable.summaryLine` (machine-core, at most 80 characters, tested).
 

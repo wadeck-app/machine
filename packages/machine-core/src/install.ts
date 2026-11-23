@@ -3,7 +3,7 @@ import {
   IDLE_DEFAULT_MINUTES,
   IDLE_RDP_DEFAULT_MINUTES,
   IDLE_DEFAULT_RUNUSER,
-  IDLE_DEFAULT_STAT,
+  IDLE_DEFAULT_LOGINCTL,
   IDLE_DEFAULT_XPRINTIDLE,
   IDLE_KEEP_AWAKE_RUN,
   IDLE_LOG_TAG,
@@ -48,7 +48,7 @@ export interface InstallFacts {
   rdpMinutes?: number;
   installedRdpMinutes?: number;
   /** Absolute paths of optional tools (`command -v`), absent when not found. */
-  tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string; xprintidle?: string; runuser?: string; stat?: string };
+  tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string; xprintidle?: string; runuser?: string; loginctl?: string };
 }
 
 /** The only user names written into a root-owned file: lowercase letters, digits, `_` and `-`, at most 32, never starting with a digit or `-`. */
@@ -365,7 +365,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
   }
   const minutes = facts.minutes ?? facts.installedMinutes ?? IDLE_DEFAULT_MINUTES;
   const rdpMinutes = facts.rdpMinutes ?? facts.installedRdpMinutes ?? IDLE_RDP_DEFAULT_MINUTES;
-  const script = idleSuspendScript({ minutes, rdpMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, stat: t.stat ?? IDLE_DEFAULT_STAT, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
+  const script = idleSuspendScript({ minutes, rdpMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, loginctl: t.loginctl ?? IDLE_DEFAULT_LOGINCTL, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
   const service = idleSuspendServiceUnit();
   const timer = idleSuspendTimerUnit();
   const file = (id: string, path: string, mode: string, content: string, describe: string): PlannedFile => ({ id, installable: 'idle-suspend', path, mode, owner: 'root', group: 'root', content, sha256: sha256Hex(content), describe, rootOnly: false });

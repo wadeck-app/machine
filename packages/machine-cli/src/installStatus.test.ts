@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findInstallable, type Installable } from '@wadeck-app/machine-core';
-import { ageText, installedStatusLines, listStatuses, parseDecision, statusBlock } from './installStatus.js';
+import { ageText, decisionText, installedStatusLines, listStatuses, parseDecision, statusBlock } from './installStatus.js';
 import { fakeInstall, type FakeInstallOptions } from './installTesting.js';
 
 const SCRIPT = '/usr/local/bin/machine-suspend';
@@ -151,10 +151,33 @@ describe('statusBlock: one compact block per item', () => {
     ]);
   });
 
-  it('an unparsable last decision is shown truncated to 80 characters', () => {
+  it('an unparsable last decision is never truncated: it is wrapped on indented lines, even a word longer than the width', () => {
     const raw = `x machine-idle-suspend[1]: ${'w'.repeat(200)}`;
     const lines = statusBlock({ ...base, details: ['suspends after 5 min idle', `last decision: ${raw}`], lastDecision: raw }, opts);
-    expect(lines[2]).toBe(`  last: ${raw.slice(0, 77)}...`);
+    const last = lines.slice(2);
+    expect(last[0]?.startsWith('  last: x machine-idle-suspend[1]:')).toBe(true);
+    expect(last.slice(1).every((l) => l.startsWith('    '))).toBe(true);
+    expect(last.every((l) => l.length <= 99)).toBe(true);
+    expect(last.join('').replace(/\s+/g, '')).toBe(`last:${raw.replace(/\s+/g, '')}`);
+    expect(last.join('')).not.toContain('...');
+  });
+
+  it('the cause of a long reason is never cut: the last line wraps on indented lines (bug seen on the box: `xprintidle f...`)', () => {
+    const raw = '2026-11-22T18:13:56+00:00 thinkcentre machine-idle-suspend[46595]: not idle: rdp connected (input idle unreadable: xprintidle failed on :0 as root)';
+    for (const columns of [60, 80, 100]) {
+      const lines = statusBlock({ ...base, details: ['suspends after 5 min idle'], lastDecision: raw }, { columns, now: NOW });
+      const last = lines.slice(2);
+      expect(last.join(' ').replace(/\s+/g, ' ')).toContain('not idle: rdp connected (input idle unreadable: xprintidle failed on :0 as root) (3 min ago)');
+      expect(last.slice(1).every((l) => l.startsWith('    '))).toBe(true);
+      expect(last.join('')).not.toContain('...');
+      for (const l of last) expect(l.length).toBeLessThanOrEqual(columns - 1);
+    }
+  });
+
+  it('decisionText (--check, machine status) keeps the whole line, parsed or not', () => {
+    const long = `x machine-idle-suspend[1]: ${'w'.repeat(200)}`;
+    expect(decisionText(long, NOW)).toBe(long);
+    expect(decisionText('2026-11-22T18:13:56+00:00 h t[1]: not idle: ' + 'c'.repeat(150), NOW)).toContain('c'.repeat(150));
   });
 
   it('a journal the user cannot read: says so and names the command on its own line', () => {

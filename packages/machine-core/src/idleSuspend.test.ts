@@ -29,6 +29,7 @@ const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
   state: { since: NOW - elapsedMin * 60, last: NOW - 120 },
   // A long quiet keyboard: the input check passes (decision 103); the tests of the input rules set it.
   inputIdleSeconds: 99999,
+  ignoredDisplays: [],
   ...over,
 });
 
@@ -179,14 +180,14 @@ describe('idleSuspendScript (the generated shell)', () => {
     rdpMinutes: 20,
     root: '',
     configDir: '/home/alice/.config/machine',
-    tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', stat: '/usr/bin/stat', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' },
+    tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' },
   };
   const script = (o: Partial<typeof opts> = {}): string => idleSuspendScript({ ...opts, ...o });
 
   it('starts with the shebang, carries the marker and the minutes, ends with a newline', () => {
     const s = script();
     expect(s.split('\n')[0]).toBe('#!/bin/sh');
-    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 3');
+    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 4');
     expect(s).toMatch(/^MINUTES=30$/m);
     expect(s.endsWith('\n')).toBe(true);
     expect(idleSuspendInstalledMinutes(s)).toBe(30);
@@ -233,20 +234,22 @@ describe('idleSuspendScript (the generated shell)', () => {
     expect(idleSuspendInstalledMinutes('MINUTES=abc\n')).toBeUndefined();
   });
 
-  it('decision 102: the three tools of the RDP input check are written as absolute paths, and the unsafe ones are refused', () => {
+  it('decision 102: the three tools of the input check are written as absolute paths, and the unsafe ones are refused', () => {
     const s = script();
     expect(s).toMatch(/^XPRINTIDLE='\/usr\/bin\/xprintidle'$/m);
     expect(s).toMatch(/^RUNUSER='\/usr\/sbin\/runuser'$/m);
-    expect(s).toMatch(/^STAT='\/usr\/bin\/stat'$/m);
-    for (const key of ['stat', 'runuser', 'xprintidle'] as const) {
+    expect(s).toMatch(/^LOGINCTL='\/usr\/bin\/loginctl'$/m);
+    for (const key of ['loginctl', 'runuser', 'xprintidle'] as const) {
       expect(() => script({ tools: { ...opts.tools, [key]: "/usr/bin/x'y" } }), key).toThrow(InstallError);
     }
   });
 
-  it('decision 102: no user text is spliced into the command run as the display owner', () => {
+  it('decision 105: no user text is spliced into the command run as the session user (the name comes from loginctl and is whitelisted first)', () => {
     const s = script();
-    expect(s).toMatch(/"\$ROOT\$RUNUSER" -u "\$owner" -- "\$ROOT\$XPRINTIDLE"/);
-    // The owner is checked against the same pattern as the installing user before it is used.
+    expect(s).toMatch(/"\$ROOT\$RUNUSER" -u "\$s_name" -- "\$ROOT\$XPRINTIDLE"/);
+    expect(s).toMatch(/show-session "\$sid" -p Name -p Type -p Display -p Class -p State/);
+    expect(s).not.toMatch(/\$STAT\b|stat -c/);
+    // The session user is checked against the same pattern as the installing user before it is used.
     expect(s).toContain('^[a-z_][a-z0-9_-]{0,31}$');
   });
 
@@ -381,5 +384,38 @@ describe('idleDecision: NO RDP connection (decision 103): input idle >= N and th
   it('N = 30: input 29 min 59 s is not idle, 30 min passes', () => {
     expect(idleDecision(noRdp(30 * 60 - 1), NOW, 30, 20).reason).toBe('not idle: input 29 min ago (needs 30)');
     expect(idleDecision(noRdp(30 * 60), NOW, 30, 20).reason).toBe('idle 12/30 min');
+  });
+});
+
+// Decision 105: the input idle time is measured per user SESSION (loginctl), not per X socket: a display without a user session (the greeter) is ignored, said once.
+describe('idleDecision: sessions (decision 105)', () => {
+  const R = 20;
+  const decide = (f: IdleFacts, minutes = MIN): ReturnType<typeof idleDecision> => idleDecision(f, NOW, minutes, R);
+  const rdp = { rdp: 1, ssh: 0, peer: 0 };
+  const GREETER = ' (ignored display :0: no user session)';
+
+  it('RDP, no user session at all: counts as activity, the line says so', () => {
+    expect(decide(idle({ connections: rdp, inputIdleSeconds: 'no-session' }))).toEqual({ suspend: false, reason: 'not idle: rdp connected but no user session found', state: null });
+  });
+  it('no RDP, no user session: the timer alone, said on the timer lines', () => {
+    expect(decide(idle({ inputIdleSeconds: 'no-session' }, 40)).reason).toBe('suspending: idle 40 min (input idleness not checked: no user session found)');
+  });
+  it('an ignored display is said on the lines that state the input idle time, once', () => {
+    const over = (o: Partial<IdleFacts>): IdleFacts => idle({ ignoredDisplays: [0], ...o }, 40);
+    expect(decide(over({ connections: rdp, inputIdleSeconds: 180 })).reason).toBe(`not idle: rdp connected (input 3 min ago, needs 20)${GREETER}`);
+    expect(decide(over({ connections: rdp, inputIdleSeconds: 3600 })).reason).toBe(`suspending: rdp connected but no input for 60 min (needs 20)${GREETER}`);
+    expect(decide(over({ connections: rdp, inputIdleSeconds: 3600, state: 'absent' })).reason).toBe(`idle: rdp connected but no input for 60 min (needs 20), confirming at the next check${GREETER}`);
+    expect(decide(over({ inputIdleSeconds: 60 })).reason).toBe(`not idle: input 1 min ago (needs 30)${GREETER}`);
+    expect(decide(over({ inputIdleSeconds: 3600, state: 'absent' })).reason).toBe(`idle 0/30 min${GREETER}`);
+    expect(decide(over({ inputIdleSeconds: 3600 })).reason).toBe(`suspending: idle 40 min${GREETER}`);
+  });
+  it('several ignored displays are listed in one phrase', () => {
+    expect(decide(idle({ ignoredDisplays: [0, 1], inputIdleSeconds: 60 })).reason).toBe('not idle: input 1 min ago (needs 30) (ignored displays :0, :1: no user session)');
+  });
+  it('no ignored display: no suffix; the suffix is never on an unreadable or other not-idle line', () => {
+    expect(decide(idle({ inputIdleSeconds: 60 })).reason).toBe('not idle: input 1 min ago (needs 30)');
+    expect(decide(idle({ ignoredDisplays: [0], connections: rdp, inputIdleSeconds: { unreadable: 'xprintidle failed on :10 as wadeck' } })).reason).toBe('not idle: rdp connected (input idle unreadable: xprintidle failed on :10 as wadeck)');
+    expect(decide(idle({ ignoredDisplays: [0], inputIdleSeconds: 3600, load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
+    expect(decide(idle({ ignoredDisplays: [0], inputIdleSeconds: 'missing' }, 40)).reason).toBe('suspending: idle 40 min (input idleness not checked: xprintidle is not installed)');
   });
 });

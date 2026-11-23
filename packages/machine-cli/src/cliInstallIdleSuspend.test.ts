@@ -82,7 +82,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(r.code, r.err).toBe(0);
     for (const p of [SCRIPT, SERVICE, TIMER]) expect(r.out).toContain(p);
     expect(r.out).toContain('| MINUTES=45');
-    expect(r.out).toContain('| # managed by machine install idle-suspend, version 3');
+    expect(r.out).toContain('| # managed by machine install idle-suspend, version 4');
     expect(r.out).toContain('$ /usr/bin/sudo /usr/bin/systemctl enable machine-idle-suspend.timer');
     expect(r.out).toMatch(/only RESTRICTS uptime/);
     expect(b.sudoCalls()).toEqual([]);
@@ -144,11 +144,11 @@ describe('machine install idle-suspend: xprintidle (read-only probe)', () => {
     expect(r.out.replace(/\s+/g, ' ')).toContain(` note: ${NO_XP}`);
   });
 
-  it('a script of the previous build (version 2, no RDP minutes) is outdated: --check says so and names --refresh; --refresh replaces it', async () => {
+  it('a script of the previous build (version 3, per-socket input) is outdated: --check says so and names --refresh; --refresh replaces it', async () => {
     const b = box();
     await b.go(['idle-suspend']);
     const current = b.fake.userFiles.get(SCRIPT) as string;
-    b.fake.userFiles.set(SCRIPT, current.replace('version 3', 'version 2').replace(/^RDP_MINUTES=.*\n/m, ''));
+    b.fake.userFiles.set(SCRIPT, current.replace('version 4', 'version 3').replace(/^LOGINCTL=.*\n/m, ''));
     const check = await b.go(['idle-suspend', '--check']);
     expect(check.code).toBe(1);
     expect(check.out).toContain('outdated');

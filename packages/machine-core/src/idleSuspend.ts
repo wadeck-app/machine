@@ -22,13 +22,13 @@ export const IDLE_SSH_PORT = 22;
 export const IDLE_STATE_DIR = '/run/machine-idle-suspend';
 export const IDLE_STATE_FILE = `${IDLE_STATE_DIR}/since`;
 export const IDLE_KEEP_AWAKE_RUN = '/run/machine-keep-awake';
-export const IDLE_SUSPEND_VERSION = 3;
+export const IDLE_SUSPEND_VERSION = 4;
 /** `--rdp-minutes` default: the input idle time from which an established RDP connection no longer counts as activity (decision 103). */
 export const IDLE_RDP_DEFAULT_MINUTES = 20;
 /** Where the script looks for the tools of the RDP input check when `command -v` found none at install time (the Debian/Ubuntu places). */
 export const IDLE_DEFAULT_XPRINTIDLE = '/usr/bin/xprintidle';
 export const IDLE_DEFAULT_RUNUSER = '/usr/sbin/runuser';
-export const IDLE_DEFAULT_STAT = '/usr/bin/stat';
+export const IDLE_DEFAULT_LOGINCTL = '/usr/bin/loginctl';
 export const IDLE_X11_SOCKET_DIR = '/tmp/.X11-unix';
 export const IDLE_SUSPEND_SCRIPT_PATH = '/usr/local/bin/machine-idle-suspend';
 export const IDLE_SUSPEND_SERVICE_PATH = '/etc/systemd/system/machine-idle-suspend.service';
@@ -54,7 +54,13 @@ export interface IdleFacts {
    * Seconds since the last X input, the MINIMUM over the X displays; `'missing'`: xprintidle is not installed; `{ unreadable }`: it could not be read
    * (the cause goes to the journal). With an RDP connection both count as activity (fail closed); without one the timer rule alone applies, said in the journal.
    */
-  inputIdleSeconds: number | 'missing' | { unreadable: string };
+  inputIdleSeconds: number | 'missing' | 'no-session' | { unreadable: string };
+  /**
+   * Decision 105: the input idle time is measured per user SESSION (loginctl: Class=user, State active or online, a Display), not per X socket.
+   * The numbers of the X sockets with NO such session (the login greeter...): ignored on purpose and said in the line. Read only with a numeric input.
+   * `'no-session'`: loginctl lists no such session.
+   */
+  ignoredDisplays: number[];
 }
 
 export interface IdleDecision {
@@ -71,6 +77,7 @@ export const IDLE_REASON = {
   keepAwake: 'keep-awake requested',
   connectionsUnreadable: 'cannot read the connections (ss or the daemon port file)',
   rdp: 'rdp connected',
+  rdpNoSession: 'rdp connected but no user session found',
   rdpXprintidleMissing: 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)',
   ssh: 'ssh connected',
   peer: 'machine peer connected',
@@ -146,17 +153,23 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   if (typeof input === 'number' && (!Number.isInteger(input) || input < 0)) {
     throw new InstallError(`the input idle time must be a whole number of seconds, got ${String(input)}`);
   }
+  // The displays ignored for lack of a user session are said only next to a measured input idle time.
+  const ignoredList = facts.ignoredDisplays.map((n) => `:${n}`).join(', ');
+  const ignored = typeof input === 'number' && facts.ignoredDisplays.length > 0 ? ` (ignored display${facts.ignoredDisplays.length > 1 ? 's' : ''} ${ignoredList}: no user session)` : '';
   // Decision 103. With an RDP connection the input idle time is the clock (it must reach R minutes); without one it must reach N minutes when it can be read.
   const rdpMode = c.rdp > 0;
   if (rdpMode) {
     if (input === 'missing') {
       return notIdle(IDLE_REASON.rdpXprintidleMissing);
     }
+    if (input === 'no-session') {
+      return notIdle(IDLE_REASON.rdpNoSession);
+    }
     if (typeof input === 'object') {
       return notIdle(`${IDLE_REASON.rdp} (input idle unreadable: ${input.unreadable})`);
     }
     if (input < rdpMinutes * 60) {
-      return notIdle(`${IDLE_REASON.rdp} (input ${Math.floor(input / 60)} min ago, needs ${rdpMinutes})`);
+      return notIdle(`${IDLE_REASON.rdp} (input ${Math.floor(input / 60)} min ago, needs ${rdpMinutes})${ignored}`);
     }
   }
   if (c.ssh > 0) {
@@ -170,10 +183,10 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   if (!rdpMode) {
     if (typeof input === 'number') {
       if (input < minutes * 60) {
-        return notIdle(`input ${Math.floor(input / 60)} min ago (needs ${minutes})`);
+        return notIdle(`input ${Math.floor(input / 60)} min ago (needs ${minutes})${ignored}`);
       }
     } else {
-      inputNote = ` (input idleness not checked: ${input === 'missing' ? 'xprintidle is not installed' : input.unreadable})`;
+      inputNote = ` (input idleness not checked: ${input === 'missing' ? 'xprintidle is not installed' : input === 'no-session' ? 'no user session found' : input.unreadable})`;
     }
   }
   const a = facts.audit;
@@ -203,7 +216,7 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   const rdpIdle = `rdp connected but no input for ${typeof input === 'number' ? Math.floor(input / 60) : 0} min (needs ${rdpMinutes})`;
   const restart = (why: string): IdleDecision => ({
     suspend: false,
-    reason: rdpMode ? `idle: ${rdpIdle}, confirming at the next check${why}` : `idle 0/${minutes} min${why}${inputNote}`,
+    reason: rdpMode ? `idle: ${rdpIdle}, confirming at the next check${why}${ignored}` : `idle 0/${minutes} min${why}${inputNote}${ignored}`,
     state: { since: now, last: now },
   });
   const s = facts.state;
@@ -220,13 +233,13 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
     return restart(RESTART.gap);
   }
   if (rdpMode) {
-    return { suspend: true, reason: `suspending: ${rdpIdle}`, state: null };
+    return { suspend: true, reason: `suspending: ${rdpIdle}${ignored}`, state: null };
   }
   const elapsed = Math.floor((now - s.since) / 60);
   if (elapsed >= minutes) {
-    return { suspend: true, reason: `suspending: idle ${elapsed} min${inputNote}`, state: null };
+    return { suspend: true, reason: `suspending: idle ${elapsed} min${inputNote}${ignored}`, state: null };
   }
-  return { suspend: false, reason: `idle ${elapsed}/${minutes} min${inputNote}`, state: { since: s.since, last: now } };
+  return { suspend: false, reason: `idle ${elapsed}/${minutes} min${inputNote}${ignored}`, state: { since: s.since, last: now } };
 }
 
 // ---------------------------------------------------------------- the generated script
@@ -240,7 +253,7 @@ export interface IdleScriptOptions {
   /** The configuration folder of machine of the owner: the audit log, the daemon port file and the keep-awake file are read there. */
   configDir: string;
   /** Absolute paths measured on the box. */
-  tools: { date: string; ss: string; systemdInhibit: string; logger: string; systemctl: string; stat: string; runuser: string; xprintidle: string };
+  tools: { date: string; ss: string; systemdInhibit: string; logger: string; systemctl: string; loginctl: string; runuser: string; xprintidle: string };
 }
 
 /** Absolute, only `A-Za-z0-9._+-` and `/`, no empty, `.` or `..` segment, no trailing `/`: safe between single quotes in a root-run script. */
@@ -295,7 +308,7 @@ SS='${t.ss}'
 INHIBIT='${t.systemdInhibit}'
 LOGGER='${t.logger}'
 SYSTEMCTL='${t.systemctl}'
-STAT='${t.stat}'
+LOGINCTL='${t.loginctl}'
 RUNUSER='${t.runuser}'
 XPRINTIDLE='${t.xprintidle}'
 AUDIT_LOG='${o.configDir}/audit.log'
@@ -346,31 +359,59 @@ while read -r c1 c2 c3 c4 rest; do
 done <<EOF
 $sockets
 EOF
-# (b2) the X input idle time (xprintidle, ms): the minimum over the X displays, each read as its owner. input_kind: num (input_secs), missing, or bad (input_cause).
+# (b2) the input idle time (xprintidle, ms), measured per logind SESSION (decision 105): the minimum over the user sessions that have an X display, each read as its user.
+# input_kind: num (input_secs), missing (no xprintidle), nosession (no such session), bad (input_cause). ignored_text names the X sockets that no such session uses.
 input_kind=num
 input_secs=''
 input_cause=''
+ignored_text=''
 input_bad() { input_kind=bad; input_cause="$1"; }
 read_input() {
   [ -x "$ROOT$XPRINTIDLE" ] || { input_kind=missing; return 0; }
+  [ -x "$ROOT$LOGINCTL" ] || { input_bad "loginctl is not installed ($LOGINCTL)"; return 0; }
   [ -x "$ROOT$RUNUSER" ] || { input_bad "runuser is not installed ($RUNUSER)"; return 0; }
-  [ -x "$ROOT$STAT" ] || { input_bad "stat is not installed ($STAT)"; return 0; }
+  session_list=$("$ROOT$LOGINCTL" list-sessions --no-legend 2>/dev/null </dev/null) || { input_bad "loginctl list-sessions failed"; return 0; }
   min_idle=''
+  measured=' '
+  while read -r sid rest; do
+    [ -n "$sid" ] || continue
+    printf '%s\n' "$sid" | grep -Eq '^[A-Za-z0-9]{1,16}$' || { input_bad "loginctl printed an unexpected session id"; return 0; }
+    props=$("$ROOT$LOGINCTL" show-session "$sid" -p Name -p Type -p Display -p Class -p State 2>/dev/null </dev/null) || { input_bad "loginctl show-session $sid failed"; return 0; }
+    s_class=$(printf '%s\n' "$props" | sed -n 's/^Class=//p' | head -n 1)
+    s_state=$(printf '%s\n' "$props" | sed -n 's/^State=//p' | head -n 1)
+    s_display=$(printf '%s\n' "$props" | sed -n 's/^Display=//p' | head -n 1)
+    s_name=$(printf '%s\n' "$props" | sed -n 's/^Name=//p' | head -n 1)
+    [ "$s_class" = user ] || continue
+    case $s_state in active|online) ;; *) continue ;; esac
+    [ -n "$s_display" ] || continue
+    printf '%s\n' "$s_name" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { input_bad "the name of session $sid is not a plain user name"; return 0; }
+    printf '%s\n' "$s_display" | grep -Eq '^:[0-9]{1,4}$' || { input_bad "session $sid has an unexpected display"; return 0; }
+    num=$(printf '%s\n' "$s_display" | sed 's/^://')
+    home=$(sed -n -E 's/^'"$s_name"':[^:]*:[0-9]*:[0-9]*:[^:]*:([^:]*):.*/\1/p' "$ROOT/etc/passwd" 2>/dev/null | head -n 1)
+    printf '%s\n' "$home" | grep -Eq '^(/[A-Za-z0-9._+-]+)+$' || { input_bad "no usable home folder for $s_name in /etc/passwd"; return 0; }
+    out=$(DISPLAY=":$num" XAUTHORITY="$home/.Xauthority" "$ROOT$RUNUSER" -u "$s_name" -- "$ROOT$XPRINTIDLE" 2>/dev/null </dev/null) || { input_bad "xprintidle failed on :$num as $s_name"; return 0; }
+    printf '%s\n' "$out" | grep -Eq '^[0-9]{1,15}$' || { input_bad "xprintidle printed no number on :$num"; return 0; }
+    secs=$((out / 1000))
+    if [ -z "$min_idle" ] || [ "$secs" -lt "$min_idle" ]; then min_idle=$secs; fi
+    measured="$measured$num "
+  done <<EOF
+$session_list
+EOF
+  [ -n "$min_idle" ] || { input_kind=nosession; return 0; }
+  input_secs=$min_idle
+  # The X sockets that no measured session uses (the login greeter...) are ignored on purpose, and said.
+  ignored_list=''
+  ignored_count=0
   for sock in "$ROOT${IDLE_X11_SOCKET_DIR}"/X*; do
     [ -e "$sock" ] || continue
     num=$(printf '%s\n' "$sock" | sed 's/.*\/X//')
     printf '%s\n' "$num" | grep -Eq '^[0-9]{1,4}$' || continue
-    owner=$("$ROOT$STAT" -c %U -- "$sock" 2>/dev/null) || { input_bad "cannot read the owner of :$num"; return 0; }
-    printf '%s\n' "$owner" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || { input_bad "the owner of :$num is not a plain user name"; return 0; }
-    home=$(sed -n -E 's/^'"$owner"':[^:]*:[0-9]*:[0-9]*:[^:]*:([^:]*):.*/\1/p' "$ROOT/etc/passwd" 2>/dev/null | head -n 1)
-    printf '%s\n' "$home" | grep -Eq '^(/[A-Za-z0-9._+-]+)+$' || { input_bad "no usable home folder for $owner in /etc/passwd"; return 0; }
-    out=$(DISPLAY=":$num" XAUTHORITY="$home/.Xauthority" "$ROOT$RUNUSER" -u "$owner" -- "$ROOT$XPRINTIDLE" 2>/dev/null) || { input_bad "xprintidle failed on :$num as $owner"; return 0; }
-    printf '%s\n' "$out" | grep -Eq '^[0-9]{1,15}$' || { input_bad "xprintidle printed no number on :$num"; return 0; }
-    secs=$((out / 1000))
-    if [ -z "$min_idle" ] || [ "$secs" -lt "$min_idle" ]; then min_idle=$secs; fi
+    case $measured in *" $num "*) continue ;; esac
+    if [ -z "$ignored_list" ]; then ignored_list=":$num"; else ignored_list="$ignored_list, :$num"; fi
+    ignored_count=$((ignored_count + 1))
   done
-  [ -n "$min_idle" ] || { input_bad "no X display in ${IDLE_X11_SOCKET_DIR}"; return 0; }
-  input_secs=$min_idle
+  if [ "$ignored_count" -eq 1 ]; then ignored_text=" (ignored display $ignored_list: no user session)"; fi
+  if [ "$ignored_count" -gt 1 ]; then ignored_text=" (ignored displays $ignored_list: no user session)"; fi
 }
 read_input
 # With an RDP connection the input idle time is the clock: activity until it reaches RDP_MINUTES, and no timer on top (decision 103).
@@ -378,8 +419,9 @@ rdp_mode=0
 if [ "$rdp" -gt 0 ]; then
   rdp_mode=1
   [ "$input_kind" != missing ] || not_idle "${IDLE_REASON.rdpXprintidleMissing}"
+  [ "$input_kind" != nosession ] || not_idle "${IDLE_REASON.rdpNoSession}"
   [ "$input_kind" != bad ] || not_idle "${IDLE_REASON.rdp} (input idle unreadable: $input_cause)"
-  if [ "$input_secs" -lt $((RDP_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.rdp} (input $((input_secs / 60)) min ago, needs $RDP_MINUTES)"; fi
+  if [ "$input_secs" -lt $((RDP_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.rdp} (input $((input_secs / 60)) min ago, needs $RDP_MINUTES)$ignored_text"; fi
 fi
 [ "$ssh" -eq 0 ] || not_idle "${IDLE_REASON.ssh}"
 [ "$peer" -eq 0 ] || not_idle "${IDLE_REASON.peer}"
@@ -387,8 +429,9 @@ fi
 input_note=''
 if [ "$rdp_mode" -eq 0 ]; then
   case $input_kind in
-    num) if [ "$input_secs" -lt $((MINUTES * 60)) ]; then not_idle "input $((input_secs / 60)) min ago (needs $MINUTES)"; fi ;;
+    num) if [ "$input_secs" -lt $((MINUTES * 60)) ]; then not_idle "input $((input_secs / 60)) min ago (needs $MINUTES)$ignored_text"; fi ;;
     missing) input_note=' (input idleness not checked: xprintidle is not installed)' ;;
+    nosession) input_note=' (input idleness not checked: no user session found)' ;;
     *) input_note=" (input idleness not checked: $input_cause)" ;;
   esac
 fi
@@ -466,7 +509,7 @@ write_state() {
 rdp_idle_text="rdp connected but no input for $((input_secs / 60)) min (needs $RDP_MINUTES)"
 restart() {
   write_state "$now"
-  if [ "$rdp_mode" -eq 1 ]; then log "idle: $rdp_idle_text, confirming at the next check$1"; else log "idle 0/$MINUTES min$1$input_note"; fi
+  if [ "$rdp_mode" -eq 1 ]; then log "idle: $rdp_idle_text, confirming at the next check$1$ignored_text"; else log "idle 0/$MINUTES min$1$input_note$ignored_text"; fi
   exit 0
 }
 case $state in
@@ -482,11 +525,11 @@ suspend_now() {
   exit 0
 }
 # RDP mode: the other checks have passed on the previous check too (the state is recent), the input idle time is the clock.
-if [ "$rdp_mode" -eq 1 ]; then suspend_now "suspending: $rdp_idle_text"; fi
+if [ "$rdp_mode" -eq 1 ]; then suspend_now "suspending: $rdp_idle_text$ignored_text"; fi
 elapsed=$(( (now - state_since) / 60 ))
-if [ "$elapsed" -ge "$MINUTES" ]; then suspend_now "suspending: idle $elapsed min$input_note"; fi
+if [ "$elapsed" -ge "$MINUTES" ]; then suspend_now "suspending: idle $elapsed min$input_note$ignored_text"; fi
 write_state "$state_since"
-log "idle $elapsed/$MINUTES min$input_note"
+log "idle $elapsed/$MINUTES min$input_note$ignored_text"
 `;
 }
 

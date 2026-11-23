@@ -118,11 +118,11 @@ describe('idle-suspend: the plan', () => {
   });
 
   it('decision 102: xprintidle found on this machine: its path is in the script and the plan says what it is used for', () => {
-    const plan = def().plan({ ...FACTS, tools: { ...FACTS.tools, xprintidle: '/opt/bin/xprintidle', runuser: '/sbin/runuser', stat: '/bin/stat' } });
+    const plan = def().plan({ ...FACTS, tools: { ...FACTS.tools, xprintidle: '/opt/bin/xprintidle', runuser: '/sbin/runuser', loginctl: '/bin/loginctl' } });
     const script = plan.files[0]?.content ?? '';
     expect(script).toMatch(/^XPRINTIDLE='\/opt\/bin\/xprintidle'$/m);
     expect(script).toMatch(/^RUNUSER='\/sbin\/runuser'$/m);
-    expect(script).toMatch(/^STAT='\/bin\/stat'$/m);
+    expect(script).toMatch(/^LOGINCTL='\/bin\/loginctl'$/m);
     expect(plan.notes).toEqual(['xprintidle found at /opt/bin/xprintidle: the input idle time is checked (30 min, 20 min with an RDP connection)']);
   });
 
@@ -133,11 +133,11 @@ describe('idle-suspend: the plan', () => {
     expect(plan.steps.map((s) => (s.kind === 'run' ? argvText(s.argv) : '')).join('\n')).not.toMatch(/apt|xprintidle/);
   });
 
-  it('decision 102: a script installed by the previous build (marker version 2, no RDP minutes) is outdated, not current', () => {
+  it('decision 102: a script installed by the previous build (marker version 3, sockets instead of sessions) is outdated, not current', () => {
     const plan = def().plan(FACTS);
     const file = plan.files[0] as NonNullable<(typeof plan.files)[0]>;
-    const old = file.content.replace('version 3', 'version 2').replace(/^RDP_MINUTES=.*\n/m, '');
-    expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 2 });
+    const old = file.content.replace('version 4', 'version 3').replace(/^LOGINCTL=.*\n/m, '');
+    expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 3 });
     expect(classifyInstalled(file, file.content).state).toBe('current');
   });
 

@@ -70,9 +70,9 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
     return base;
   }
   // What idle-suspend needs besides systemctl and sudo; a missing one is reported by that plan only (suspend does not need them).
-  const [date, ss, systemdInhibit, logger, journalctl, xprintidle, runuser, stat] = await Promise.all(['date', 'ss', 'systemd-inhibit', 'logger', 'journalctl', 'xprintidle', 'runuser', 'stat'].map((t) => optionalToolPath(env, t)));
-  // xprintidle, runuser and stat only serve the RDP input check: absent, the plan keeps the default path and says so (read-only, never installed here).
-  const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }), ...(xprintidle === undefined ? {} : { xprintidle }), ...(runuser === undefined ? {} : { runuser }), ...(stat === undefined ? {} : { stat }) };
+  const [date, ss, systemdInhibit, logger, journalctl, xprintidle, runuser, loginctl] = await Promise.all(['date', 'ss', 'systemd-inhibit', 'logger', 'journalctl', 'xprintidle', 'runuser', 'loginctl'].map((t) => optionalToolPath(env, t)));
+  // xprintidle, runuser and loginctl only serve the input idle check: absent, the plan keeps the default path and says so (read-only, never installed here).
+  const tools = { ...(date === undefined ? {} : { date }), ...(ss === undefined ? {} : { ss }), ...(systemdInhibit === undefined ? {} : { systemdInhibit }), ...(logger === undefined ? {} : { logger }), ...(journalctl === undefined ? {} : { journalctl }), ...(xprintidle === undefined ? {} : { xprintidle }), ...(runuser === undefined ? {} : { runuser }), ...(loginctl === undefined ? {} : { loginctl }) };
   // Without --minutes the script keeps the minutes it was installed with (so that a status does not call it outdated).
   // The same for --rdp-minutes (decision 103); a script of an older version has none (the default applies).
   let installedMinutes: number | undefined;
@@ -298,10 +298,10 @@ export function ageText(ms: number): string {
   return `${Math.floor(s / 86400)} d ago`;
 }
 
-/** `18:13:56 not idle: rdp connected (3 min ago)`; a line that does not parse is shown as it is, cut to 80 characters. */
+/** `18:13:56 not idle: rdp connected (3 min ago)`; a line that does not parse is shown as it is (never cut: it may carry the cause). */
 export function decisionText(raw: string, now: number): string {
   const d = parseDecision(raw);
-  return d === undefined ? fit(raw, VISIBLE_MAX) : `${d.time} ${d.reason} (${ageText(now - d.atMs)})`;
+  return d === undefined ? visible(raw) : `${d.time} ${d.reason} (${ageText(now - d.atMs)})`;
 }
 
 const LAST_PREFIX = 'last decision: ';
@@ -322,18 +322,37 @@ export interface BlockOptions {
 const MIN_WIDTH = 40;
 const MAX_WIDTH = 300;
 
-function wrap(text: string, width: number, indent: string): string[] {
+/** Wraps on spaces to `width` columns: the first line starts with `indent`, the next ones with `continuation`; a word longer than a line is broken (nothing is ever cut). */
+function wrap(text: string, width: number, indent: string, continuation: string = indent): string[] {
   const out: string[] = [];
   let line = '';
-  for (const word of text.split(/\s+/)) {
-    if (line !== '' && indent.length + line.length + 1 + word.length > width) {
-      out.push(`${indent}${line}`);
-      line = word;
-    } else {
-      line = line === '' ? word : `${line} ${word}`;
+  const room = (): number => Math.max(1, width - (out.length === 0 ? indent : continuation).length);
+  const flush = (): void => {
+    out.push(`${out.length === 0 ? indent : continuation}${line}`);
+    line = '';
+  };
+  for (const raw of text.split(/\s+/)) {
+    let word = raw;
+    while (word.length > room()) {
+      if (line !== '') {
+        flush();
+      }
+      line = word.slice(0, room());
+      word = word.slice(line.length);
+      flush();
     }
+    if (word === '') {
+      continue;
+    }
+    if (line !== '' && line.length + 1 + word.length > room()) {
+      flush();
+    }
+    line = line === '' ? word : `${line} ${word}`;
   }
-  return line === '' ? out : [...out, `${indent}${line}`];
+  if (line !== '') {
+    flush();
+  }
+  return out;
 }
 
 /** One compact block per item for the list and `install status`: state first, what it does, the last decision. The long text is in `<id> --dry-run`. */
@@ -357,11 +376,11 @@ export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
     lines.push(`  missing: ${s.missing.join(', ')}`);
   }
   for (const note of (s.details ?? []).filter((d) => d.startsWith(NOTE_PREFIX))) {
-    lines.push(...wrap(note, width, '  ').map((l, i) => (i === 0 ? l : `  ${l}`)));
+    lines.push(...wrap(note, width, '  ', '    '));
   }
   const unreadable = /^last decision: not readable by your user \(try: (.+)\)$/.exec((s.details ?? []).find((d) => d.startsWith(LAST_PREFIX)) ?? '');
   if (s.lastDecision !== undefined) {
-    lines.push(fit(`  last: ${decisionText(s.lastDecision, options.now)}`, width));
+    lines.push(...wrap(`last: ${decisionText(s.lastDecision, options.now)}`, width, '  ', '    '));
   } else if (unreadable !== null) {
     lines.push('  last: not readable by your user, try:', `    ${unreadable[1] as string}`);
   }
