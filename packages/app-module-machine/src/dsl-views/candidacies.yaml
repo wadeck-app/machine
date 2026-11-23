@@ -51,4 +51,4 @@ sections:
           - { key: "hostname", label: "Hostname", nowrap: true }
           - { key: "observedIp", label: "Seen from", nowrap: true }
           - { key: "ageText", label: "Age", nowrap: true }
-          - { key: "statusText", label: "Status" }
+          - { key: "statusText", label: "Status", nowrap: true }
