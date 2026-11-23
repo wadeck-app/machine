@@ -6,17 +6,18 @@ Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the
 
 - LOCAL command, run by the owner in a terminal on the box. No daemon command, peer frame, app-module route or API exists for it (hard rule 7: the daemon is never elevated). A test fails if a daemon-side source imports the executor.
 - Root actions are `sudo` child processes sharing the owner's terminal: the owner types HIS password to sudo itself. machine never reads, stores, logs or passes it (hard rule 8).
-- Refuses without a terminal (stdin and stderr), `--yes` included. `--dry-run` and `--check` need none.
+- Refuses without a terminal (stdin and stderr), `--yes` included: sudo needs it for the password. `--dry-run` and `--check` need none.
+- No y/N question (decision 107): the plan is printed, then the sudo steps run; the sudo password prompt on the owner terminal is the confirmation and Ctrl-C stops before any step. `--yes` is still accepted and does nothing (kept for compatibility).
 
 ## Commands
 
 | Command | Effect |
 |---|---|
 | `machine install`, `machine install status` | Same read-only list, one compact block per item (see below). `--json` supported, unchanged. |
-| `machine install <id>` | Shows state, every file (exact content, owner, mode, sha256) and every command, asks y/N (`--yes` skips), runs, then checks with `sudo -n -l`. |
+| `machine install <id>` | Shows state, every file (exact content, owner, mode, sha256) and every command, then runs them (sudo asks the password), then checks with `sudo -n -l`. |
 | `--dry-run` | Prints the plan. Runs nothing, not even sudo (the root-only rule is reported as not read). |
 | `--check` | State of one item. Exit 0 only for `installed`, 1 for every other state, 2 for a usage error. Never asks a password. |
-| `--refresh` | Force: the whole plan again (both files, visudo, verification) even when `installed`; same plan display, y/N, terminal and foreign-file refusal as install. |
+| `--refresh` | Force: the whole plan again (both files, visudo, verification) even when `installed`; same plan display, terminal and foreign-file refusal as install. |
 | `--remove` | Shows then removes exactly the managed files (rule first, script second). Refuses everything if one file is foreign. Post-check: the files are read again; anything left fails with path, owner and the sudo command to remove it. |
 
 ### The list

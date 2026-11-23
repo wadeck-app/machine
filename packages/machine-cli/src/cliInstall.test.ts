@@ -213,11 +213,11 @@ describe('machine install suspend', () => {
     expect(r.fake.calls).toEqual([]);
   });
 
-  it('installs after a y, with the name of this machine in the lines to run next', async () => {
+  it('installs without any question, with the name of this machine in the lines to run next', async () => {
     expect((await cli(dir, ['init', '--name', 'desktop'])).code).toBe(0);
     const r = await run(['suspend']);
     expect(r.code).toBe(0);
-    expect(r.asked).toHaveLength(1);
+    expect(r.asked).toEqual([]);
     expect(r.out).toContain('machine admin allow desktop --shell sh -- /usr/local/bin/machine-suspend');
     expect(r.out).toContain('machine run desktop -- /usr/local/bin/machine-suspend');
     expect(r.out).toContain('machine wake desktop');
@@ -232,14 +232,28 @@ describe('machine install suspend', () => {
     expect(r.err).toMatch(/\[warn\] this machine has no name yet/);
   });
 
-  it('an answer other than yes changes nothing', async () => {
+  it('asks no y/N question even when the answers would be no: the plan is printed and the sudo steps run', async () => {
     const r = await run(['suspend'], {}, ['n']);
-    expect(r.code).toBe(1);
-    expect(r.out).toMatch(/cancelled: nothing was changed/);
-    expect(r.fake.rootFiles.size).toBe(0);
+    expect(r.code).toBe(0);
+    expect(r.asked).toEqual([]);
+    expect(r.out).not.toMatch(/cancelled|\[y\/N\]|Apply this plan/);
+    expect(r.fake.rootFiles.size).toBeGreaterThan(0);
+    // The plan is on the screen before the steps, and the usage line no longer promises a question.
+    expect(r.out.indexOf('commands that will run')).toBeGreaterThanOrEqual(0);
   });
 
-  it('--yes asks nothing', async () => {
+  it('the usage and the item help say that no question is asked, and keep --yes as a compatibility flag', async () => {
+    const list = await run([], {});
+    expect(list.out).toContain('machine install <id>              prints them, then runs them with sudo (your own password is the confirmation; Ctrl-C stops)');
+    expect(list.out).not.toMatch(/asks y\/N/);
+    for (const id of ['suspend', 'idle-suspend']) {
+      const help = await cli(dir, ['install', id, '--help']);
+      expect(help.out, id).toContain('--yes   kept for compatibility, no question is asked any more');
+      expect(help.out, id).not.toMatch(/skip the y\/N question/);
+    }
+  });
+
+  it('--yes is a harmless no-op (no question with or without it)', async () => {
     const r = await run(['suspend', '--yes']);
     expect(r.code).toBe(0);
     expect(r.asked).toEqual([]);
@@ -302,10 +316,10 @@ describe('machine install is local only (hard rule 7: the daemon is never elevat
 });
 
 describe('machine install <id> --refresh', () => {
-  it('rewrites an installed item after a y, and says what it did', async () => {
+  it('rewrites an installed item without a question, and says what it did', async () => {
     const r = await run(['suspend', '--refresh'], INSTALLED);
     expect(r.code).toBe(0);
-    expect(r.asked).toHaveLength(1);
+    expect(r.asked).toEqual([]);
     expect(r.out).toContain('refreshed and verified');
     expect(r.fake.calls.filter((c) => c.includes('visudo -c -f'))).toHaveLength(1);
   });

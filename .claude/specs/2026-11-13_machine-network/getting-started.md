@@ -243,7 +243,7 @@ Run in a terminal ON the target (a local command, never remote). Items, Linux on
 ```
 machine install                      one block per item: state, what it does, last decision (alias: machine install status; --json)
 machine install suspend --dry-run    every file and command, nothing changed (no terminal needed)
-machine install suspend              the same, then y/N, then sudo (your own password) installs the script and the sudo rule
+machine install suspend              the same, then sudo (your own password is the confirmation, Ctrl-C stops; no y/N question, --yes is kept and does nothing) installs the script and the sudo rule
 machine install suspend --check      the state of this item, no password; exit 0 only when installed and up to date
 machine install suspend --refresh    write both files again even when up to date (repairs a script or a rule changed by hand)
 machine install suspend --remove     remove exactly what it installed, then check that the state reads "not installed"

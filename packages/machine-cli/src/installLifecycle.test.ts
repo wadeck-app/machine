@@ -15,23 +15,33 @@ const OPTIONS: FlowOptions = { mode: 'install', dryRun: false, yes: false, machi
 const INSTALLED: FakeInstallOptions = { userFiles: { [SCRIPT]: contentOf('script') }, rootFiles: { [SUDOERS]: contentOf('sudoers') } };
 const HAND_EDITED_SCRIPT = contentOf('script').replace('3 s', '1 s');
 
-function harness(o: FakeInstallOptions = {}, answer = true) {
+/** The sudo steps that change the machine (the first one marks the end of the plan on the screen). */
+const CHANGING_STEP = /(^| )(install|visudo|systemctl|rm)( |$)/;
+
+function harness(o: FakeInstallOptions = {}) {
   const fake = fakeInstall(o);
   const said: string[] = [];
   const warned: string[] = [];
   const questions: string[] = [];
-  // What had been said when each question was asked: the plan must be on the screen BEFORE the question.
-  const beforeQuestion: string[] = [];
-  const io: FlowIo = {
-    say: (t) => void said.push(t),
-    warn: (t) => void warned.push(t),
-    confirm: async (q) => {
+  // What had been said when the first sudo step that changes something ran: the plan must be on the screen BEFORE it (no question is asked any more).
+  const beforeFirstStep: string[] = [];
+  // A spy that fails any test that uses it: the flow must never ask a question (cast: FlowIo has no `confirm` any more).
+  const io = {
+    say: (t: string) => void said.push(t),
+    warn: (t: string) => void warned.push(t),
+    confirm: async (q: string) => {
       questions.push(q);
-      beforeQuestion.push(said.join(''));
-      return answer;
+      return true;
     },
+  } as FlowIo;
+  const realExec = fake.env.exec;
+  fake.env.exec = async (argv) => {
+    if (beforeFirstStep.length === 0 && argv[0] === '/usr/bin/sudo' && CHANGING_STEP.test(argv.join(' '))) {
+      beforeFirstStep.push(said.join(''));
+    }
+    return realExec(argv);
   };
-  return { fake, io, questions, beforeQuestion, text: () => said.join('') + warned.join('') };
+  return { fake, io, questions, beforeFirstStep, text: () => said.join('') + warned.join('') };
 }
 
 const sudoCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('/usr/bin/sudo'));
@@ -50,9 +60,9 @@ describe('--refresh (force: the whole plan again, even when the status says up t
     expect(at('install -m 0755 -o root -g root')).toBeGreaterThan(at('visudo -c -f'));
     expect(at('install -m 0440 -o root -g root')).toBeGreaterThan(at('install -m 0755'));
     expect(at('-n -l /usr/bin/systemctl suspend')).toBeGreaterThan(at('install -m 0440'));
-    expect(h.questions).toHaveLength(1);
-    expect(h.beforeQuestion[0]).toContain('install -m 0440');
-    expect(h.beforeQuestion[0]).toMatch(/REWRITTEN/);
+    expect(h.questions).toEqual([]);
+    expect(h.beforeFirstStep[0]).toContain('install -m 0440');
+    expect(h.beforeFirstStep[0]).toMatch(/REWRITTEN/);
     expect(r.document).toMatchObject({ id: 'suspend', action: 'refresh', applied: true, state: 'installed', supportedHere: true });
     expect(h.text()).toContain('refreshed and verified');
   });
@@ -60,8 +70,8 @@ describe('--refresh (force: the whole plan again, even when the status says up t
   it('says that the status cannot read the rule without root, and that refresh rewrites it whatever it holds', async () => {
     const h = harness(INSTALLED);
     await runInstallFlow(def, REFRESH, h.fake.env, h.io);
-    expect(h.beforeQuestion[0]).toMatch(/status cannot read .*sudoers.*without root/s);
-    expect(h.beforeQuestion[0]).toMatch(/refresh .*rewrit/i);
+    expect(h.beforeFirstStep[0]).toMatch(/status cannot read .*sudoers.*without root/s);
+    expect(h.beforeFirstStep[0]).toMatch(/refresh .*rewrit/i);
   });
 
   it('repairs a rule and a script changed by hand (the marker is still there, the content is not)', async () => {
@@ -75,18 +85,19 @@ describe('--refresh (force: the whole plan again, even when the status says up t
     expect(h.fake.rootFiles.get(SUDOERS)).toBe(contentOf('sudoers'));
   });
 
-  it('--yes does not ask', async () => {
+  it('--yes is accepted and changes nothing about the questions (there are none)', async () => {
     const h = harness(INSTALLED);
     await runInstallFlow(def, { ...REFRESH, yes: true }, h.fake.env, h.io);
     expect(h.questions).toEqual([]);
   });
 
-  it('declining changes nothing', async () => {
-    const h = harness(INSTALLED, false);
+  it('--refresh asks no question without --yes: the plan, then the steps', async () => {
+    const h = harness(INSTALLED);
     const r = await runInstallFlow(def, REFRESH, h.fake.env, h.io);
-    expect(r.exit).toBe(1);
-    expect(mutating(h.fake.calls)).toEqual([]);
-    expect(h.text()).toMatch(/cancelled: nothing was changed/);
+    expect(r.exit).toBe(0);
+    expect(h.questions).toEqual([]);
+    expect(h.text()).not.toMatch(/\[y\/N\]|Apply this plan|cancelled/);
+    expect(mutating(h.fake.calls).length).toBeGreaterThan(0);
   });
 
   it('refuses a file machine did not write, exactly like install, and changes nothing', async () => {

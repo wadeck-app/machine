@@ -189,7 +189,7 @@ Commands:
                                      set up an item on THIS machine, a LOCAL command run in a terminal on it (never remote, never by the daemon).
                                      Without an id (or \`install status\`): lists what can be installed, where, and its state here. \`install suspend\` (Linux only): the root-owned script
                                      /usr/local/bin/machine-suspend and a sudoers rule for the ONE command \`systemctl suspend\`, written through sudo with
-                                     YOUR password (typed to sudo, never read by machine); shows every file and command, asks y/N; idempotent;
+                                     YOUR password (typed to sudo, never read by machine); prints every file and command, then runs them (no y/N question: sudo's password is the confirmation); idempotent;
                                      --dry-run changes nothing, --check reports the state (exit 0 only when installed and up to date), --refresh writes
                                      everything again (repairs a file changed by hand), --remove removes exactly what it installed and checks it. Once allowed in the default list, every trusted peer can suspend this machine
                                      \`install idle-suspend [--minutes <n>] [--rdp-minutes <n>]\` (Linux only): a root systemd timer that suspends this machine by itself after n minutes (default 30; 20 min of no input when an RDP connection is open) with no

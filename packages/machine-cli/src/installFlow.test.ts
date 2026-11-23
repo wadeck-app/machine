@@ -12,23 +12,33 @@ const contentOf = (id: string): string => (shipped.files.find((f) => f.id === id
 
 const OPTIONS: FlowOptions = { mode: 'install', dryRun: false, yes: false, machineName: 'desktop' };
 
-function harness(o: FakeInstallOptions = {}, answer = true) {
+/** The sudo steps that change the machine (the first one marks the end of the plan on the screen). */
+const CHANGING_STEP = /(^| )(install|visudo|systemctl|rm)( |$)/;
+
+function harness(o: FakeInstallOptions = {}) {
   const fake = fakeInstall(o);
   const said: string[] = [];
   const warned: string[] = [];
   const questions: string[] = [];
-  // What had been said when each question was asked: the plan must be on the screen BEFORE the question.
-  const beforeQuestion: string[] = [];
-  const io: FlowIo = {
-    say: (t) => void said.push(t),
-    warn: (t) => void warned.push(t),
-    confirm: async (q) => {
+  // What had been said when the first sudo step that changes something ran: the plan must be on the screen BEFORE it (no question is asked any more).
+  const beforeFirstStep: string[] = [];
+  // A spy that fails any test that uses it: the flow must never ask a question (cast: FlowIo has no `confirm` any more).
+  const io = {
+    say: (t: string) => void said.push(t),
+    warn: (t: string) => void warned.push(t),
+    confirm: async (q: string) => {
       questions.push(q);
-      beforeQuestion.push(said.join(''));
-      return answer;
+      return true;
     },
+  } as FlowIo;
+  const realExec = fake.env.exec;
+  fake.env.exec = async (argv) => {
+    if (beforeFirstStep.length === 0 && argv[0] === '/usr/bin/sudo' && CHANGING_STEP.test(argv.join(' '))) {
+      beforeFirstStep.push(said.join(''));
+    }
+    return realExec(argv);
   };
-  return { fake, io, said, warned, questions, beforeQuestion, text: () => said.join('') + warned.join('') };
+  return { fake, io, said, warned, questions, beforeFirstStep, text: () => said.join('') + warned.join('') };
 }
 
 const sudoCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('/usr/bin/sudo'));
@@ -54,7 +64,7 @@ describe('install: the happy path', () => {
     expect([...h.fake.staged.values()].map((s) => s.content).sort()).toEqual([contentOf('script'), contentOf('sudoers')].sort());
     expect(h.fake.removedDirs).toEqual(h.fake.tempDirs);
     expect(h.fake.tempDirs).toHaveLength(1);
-    expect(h.questions).toHaveLength(1);
+    expect(h.questions).toEqual([]);
     expect(r.document).toMatchObject({ id: 'suspend', action: 'install', applied: true });
   });
 
@@ -63,10 +73,10 @@ describe('install: the happy path', () => {
     await runInstallFlow(def, OPTIONS, h.fake.env, h.io);
     const text = h.text();
     const at = (s: string): number => text.indexOf(s);
-    expect(h.beforeQuestion[0]).toContain('visudo -c -f <temp dir>/sudoers');
-    expect(h.beforeQuestion[0]).toContain('install -m 0755 -o root -g root <temp dir>/script /usr/local/bin/machine-suspend');
-    expect(h.beforeQuestion[0]).toContain('install -m 0440 -o root -g root <temp dir>/sudoers /etc/sudoers.d/machine-suspend');
-    expect(h.beforeQuestion[0]).toContain('| #!/bin/sh');
+    expect(h.beforeFirstStep[0]).toContain('visudo -c -f <temp dir>/sudoers');
+    expect(h.beforeFirstStep[0]).toContain('install -m 0755 -o root -g root <temp dir>/script /usr/local/bin/machine-suspend');
+    expect(h.beforeFirstStep[0]).toContain('install -m 0440 -o root -g root <temp dir>/sudoers /etc/sudoers.d/machine-suspend');
+    expect(h.beforeFirstStep[0]).toContain('| #!/bin/sh');
     expect(at('visudo -c -f')).toBeGreaterThanOrEqual(0);
     expect(at('alice ALL=(root) NOPASSWD: /usr/bin/systemctl suspend')).toBeGreaterThanOrEqual(0);
     expect(at('sudo asks YOUR password')).toBeGreaterThanOrEqual(0);
@@ -86,7 +96,7 @@ describe('install: the happy path', () => {
     expect(h.text()).toMatch(/\[warn\] this machine has no name yet/);
   });
 
-  it('--yes does not ask', async () => {
+  it('--yes is accepted and changes nothing about the questions (there are none)', async () => {
     const h = harness();
     const r = await runInstallFlow(def, { ...OPTIONS, yes: true }, h.fake.env, h.io);
     expect(r.exit).toBe(0);
@@ -94,13 +104,21 @@ describe('install: the happy path', () => {
     expect(h.fake.rootFiles.has(SUDOERS)).toBe(true);
   });
 
-  it('an answer other than yes changes nothing', async () => {
-    const h = harness({}, false);
+  it('no question is asked without --yes either: the plan is printed, then the sudo steps run (sudo asks the password)', async () => {
+    const h = harness();
     const r = await runInstallFlow(def, OPTIONS, h.fake.env, h.io);
-    expect(r.exit).toBe(1);
-    expect(h.text()).toMatch(/cancelled: nothing was changed/);
-    expect(mutating(h.fake.calls)).toEqual([]);
-    expect(h.fake.tempDirs).toEqual([]);
+    expect(r.exit).toBe(0);
+    expect(h.questions).toEqual([]);
+    expect(h.text()).not.toMatch(/\[y\/N\]|Apply this plan|cancelled/);
+    expect(mutating(h.fake.calls).length).toBeGreaterThan(0);
+  });
+
+  it('--dry-run prints the plan and runs no sudo step at all', async () => {
+    const h = harness({ tty: false });
+    const r = await runInstallFlow(def, { ...OPTIONS, dryRun: true }, h.fake.env, h.io);
+    expect(r.exit).toBe(0);
+    expect(sudoCalls(h.fake.calls)).toEqual([]);
+    expect(h.questions).toEqual([]);
   });
 });
 
@@ -123,18 +141,20 @@ describe('install: idempotence and outdated files', () => {
     expect(r.exit).toBe(0);
     expect(h.text()).toContain(sha256Hex(old).slice(0, 12));
     expect(h.text()).toContain(sha256Hex(contentOf('script')).slice(0, 12));
-    expect(h.questions).toHaveLength(1);
+    expect(h.questions).toEqual([]);
     expect(h.fake.userFiles.get(SCRIPT)).toBe(contentOf('script'));
     expect(mutating(h.fake.calls).filter((c) => c.includes('install -m 0440'))).toEqual([]);
     expect(h.fake.calls.some((c) => c.includes('visudo'))).toBe(false);
   });
 
-  it('declining the replacement leaves the outdated script', async () => {
+  it('the outdated script is replaced without a question, after the plan shows both hashes', async () => {
     const old = contentOf('script').replace('3 s', '9 s');
-    const h = harness({ ...INSTALLED, userFiles: { [SCRIPT]: old } }, false);
+    const h = harness({ ...INSTALLED, userFiles: { [SCRIPT]: old } });
     const r = await runInstallFlow(def, OPTIONS, h.fake.env, h.io);
-    expect(r.exit).toBe(1);
-    expect(h.fake.userFiles.get(SCRIPT)).toBe(old);
+    expect(r.exit).toBe(0);
+    expect(h.questions).toEqual([]);
+    expect(h.beforeFirstStep[0]).toContain(sha256Hex(old).slice(0, 12));
+    expect(h.fake.userFiles.get(SCRIPT)).toBe(contentOf('script'));
   });
 });
 
@@ -305,9 +325,9 @@ describe('--remove', () => {
     expect(mutating(h.fake.calls)).toEqual([`/usr/bin/sudo rm -- ${SUDOERS}`, `/usr/bin/sudo rm -- ${SCRIPT}`]);
     expect(h.fake.rootFiles.size).toBe(0);
     expect([...h.fake.userFiles.keys()]).toEqual(['/usr/local/bin/other']);
-    expect(h.questions).toHaveLength(1);
-    expect(h.beforeQuestion[0]).toContain(SUDOERS);
-    expect(h.beforeQuestion[0]).toContain(`rm -- ${SCRIPT}`);
+    expect(h.questions).toEqual([]);
+    expect(h.beforeFirstStep[0]).toContain(SUDOERS);
+    expect(h.beforeFirstStep[0]).toContain(`rm -- ${SCRIPT}`);
     expect(r.document).toMatchObject({ action: 'remove', applied: true });
     expect(h.text()).toMatch(/machine admin allow desktop --shell sh --remove -- \/usr\/local\/bin\/machine-suspend/);
   });
@@ -334,11 +354,15 @@ describe('--remove', () => {
     expect(h.fake.rootFiles.has(SUDOERS)).toBe(true);
   });
 
-  it('declining removes nothing', async () => {
-    const h = harness(INSTALLED, false);
+  it('the removal asks no question either: the files to delete are printed first, then the steps run', async () => {
+    const h = harness(INSTALLED);
     const r = await runInstallFlow(def, { ...OPTIONS, mode: 'remove' }, h.fake.env, h.io);
-    expect(r.exit).toBe(1);
-    expect(mutating(h.fake.calls)).toEqual([]);
+    expect(r.exit).toBe(0);
+    expect(h.questions).toEqual([]);
+    expect(h.text()).not.toMatch(/\[y\/N\]|Remove these files\?|cancelled/);
+    expect(h.beforeFirstStep[0]).toContain('files that will be removed (all written by machine)');
+    expect(h.beforeFirstStep[0]).toContain(`${SCRIPT}`);
+    expect(h.fake.rootFiles.has(SUDOERS)).toBe(false);
   });
 });
 

@@ -250,14 +250,14 @@ const GROUPS: GroupHelp[] = [
       {
         name: 'suspend',
         usage: 'suspend [--dry-run | --check | --refresh | --remove] [--yes] [--json]',
-        text: 'Linux only: let `machine run` suspend this machine. Installs two root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-suspend and the sudoers rule /etc/sudoers.d/machine-suspend, which lets your user run `systemctl suspend` (this one command) without a password. Shows every file and command, then asks y/N',
+        text: 'Linux only: let `machine run` suspend this machine. Installs two root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-suspend and the sudoers rule /etc/sudoers.d/machine-suspend, which lets your user run `systemctl suspend` (this one command) without a password. Prints every file and command, then runs them (no question: the sudo password is the confirmation, Ctrl-C stops before any step)',
         options: [
           '--dry-run   print the plan (files, commands) and change nothing, not even by running sudo; needs no terminal',
           '--check   the status of this item: installed / not installed / outdated (this build ships another content) / partial (names the missing part) / foreign (a file machine did not write, never touched), without changing anything and without a password; exit 0 only when installed and up to date, 1 for every other state, 2 for a usage error',
-          '--refresh   force: write the whole plan again (both files), re-validate with visudo and re-verify, even when the status says up to date; shows the plan and asks y/N like the install, refuses a foreign file the same way. Use it to repair a rule or a script changed by hand: the status cannot read the root-only rule without your password, refresh rewrites it whatever it holds',
+          '--refresh   force: write the whole plan again (both files), re-validate with visudo and re-verify, even when the status says up to date; prints the plan and runs it like the install (no question), refuses a foreign file the same way. Use it to repair a rule or a script changed by hand: the status cannot read the root-only rule without your password, refresh rewrites it whatever it holds',
           '--remove   remove exactly what was installed (the rule, then the script), after showing them; a file machine did not write is never touched; afterwards the status must read not installed, else it fails with what is left (path, owner) and the sudo command to remove it',
-          '--yes   skip the y/N question (sudo still asks your password: a terminal is required, e.g. `ssh -t` on a remote box)',
-          'Safe to run again: "already installed, up to date"; an outdated script is replaced after showing the hashes and asking. A file at those paths without the "# managed by machine install suspend" line is refused',
+          '--yes   kept for compatibility, no question is asked any more (sudo asks your password: a terminal is required, e.g. `ssh -t` on a remote box)',
+          'Safe to run again: "already installed, up to date"; an outdated script is replaced after the plan shows the hashes. A file at those paths without the "# managed by machine install suspend" line is refused',
           'After it: allow it on the ADMIN machine with `machine admin allow <this machine> --shell sh -- /usr/local/bin/machine-suspend`, call it with `machine run <this machine> -- /usr/local/bin/machine-suspend`, wake it with `machine wake <this machine>`',
           'Consequence: once the command is allowed in the DEFAULT list, every trusted peer can suspend this machine (a per-peer list restricts that: `machine policy allow --peer <machine>` in mode local)',
         ],
@@ -266,7 +266,7 @@ const GROUPS: GroupHelp[] = [
       {
         name: 'idle-suspend',
         usage: 'idle-suspend [--minutes <1..1440>] [--rdp-minutes <1..1440>] [--dry-run | --check | --refresh | --remove] [--yes] [--json]',
-        text: 'Linux only: suspend THIS machine by itself when it is really idle, whatever the state of the desktop sessions (a disconnected xrdp session does not keep it awake). Installs three root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-idle-suspend and the systemd service and timer machine-idle-suspend (checked every 2 minutes). Shows every file and command, then asks y/N',
+        text: 'Linux only: suspend THIS machine by itself when it is really idle, whatever the state of the desktop sessions (a disconnected xrdp session does not keep it awake). Installs three root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-idle-suspend and the systemd service and timer machine-idle-suspend (checked every 2 minutes). Prints every file and command, then runs them (no question: the sudo password is the confirmation, Ctrl-C stops before any step)',
         options: [
           '--minutes <1..1440>   idle time before the suspend, default 30; without it an installed script keeps its minutes. The timer runs every 2 min, so a value below 2 acts at the first check after it is reached (1 min: at most about 2 min later); very small values can suspend the box between two commands of a short pause: your own choice, it only restricts uptime (no new right for any peer)',
           '--rdp-minutes <1..1440>   input idle time from which an ESTABLISHED RDP connection no longer keeps the box awake, default 20; the box then suspends at the next check once the other checks pass (no extra timer). Without it an installed script keeps its value',
@@ -276,7 +276,7 @@ const GROUPS: GroupHelp[] = [
           '--check   the status of this item (also whether the timer runs), without changing anything and without a password; exit 0 only when installed and up to date, 1 for every other state, 2 for a usage error',
           '--refresh   write the whole plan again (all three files) and restart the timer; use it to change --minutes or to repair a file changed by hand',
           '--remove   disable the timer, then remove exactly the three files; a file machine did not write is never touched; afterwards the status must read not installed',
-          '--yes   skip the y/N question (sudo still asks your password: a terminal is required, e.g. `ssh -t` on a remote box)',
+          '--yes   kept for compatibility, no question is asked any more (sudo asks your password: a terminal is required, e.g. `ssh -t` on a remote box)',
           'Consequence: it only RESTRICTS uptime (the box suspends itself); no network surface, no right for any peer. Keep it awake on purpose with the keep-awake files',
         ],
         examples: ['machine install idle-suspend --dry-run', 'machine install idle-suspend --minutes 30', 'machine install idle-suspend --minutes 5 --rdp-minutes 20 --refresh', 'machine install idle-suspend --check', 'machine install idle-suspend --remove'],

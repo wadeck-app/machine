@@ -5,7 +5,6 @@ import { readMachine } from './identity.js';
 import { realInstallEnv, type InstallEnv } from './installEnv.js';
 import { runInstallFlow, type FlowOptions } from './installFlow.js';
 import { installedStatusLines, listStatuses, statusBlock, type ItemStatus } from './installStatus.js';
-import { promptLine } from './prompt.js';
 
 // `machine install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes]`: thin front-end over installFlow.ts, installStatus.ts and the registry of machine-core.
 // LOCAL ONLY: no daemon command, peer frame or app-module route exists for it (hard rule 7: the daemon is never elevated).
@@ -78,7 +77,7 @@ function listText(statuses: ItemStatus[], columns: number | undefined): string {
     '  machine install status            this list again (read-only, no password; --json for scripts)',
     '  machine install <id> --check      the state of one item; exit 0 only when installed and up to date',
     '  machine install <id> --dry-run    the full description, every file and command; changes nothing',
-    '  machine install <id>              shows them, asks y/N, then runs them with sudo (your own password)',
+    '  machine install <id>              prints them, then runs them with sudo (your own password is the confirmation; Ctrl-C stops)',
     '  machine install <id> --refresh    writes the whole plan again (repairs what was changed by hand)',
     '  machine install <id> --remove     removes exactly what was installed',
     'More: machine install --help',
@@ -130,7 +129,6 @@ export async function runInstallCommand(ctx: CommandContext): Promise<number> {
     {
       say,
       warn: io.stderr,
-      confirm: async (question) => /^y(es)?$/i.test((await (io.ask ?? ((label: string) => promptLine(label)))(question)).trim()),
     },
   );
   if (args.json) {

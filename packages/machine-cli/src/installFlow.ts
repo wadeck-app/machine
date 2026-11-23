@@ -23,7 +23,7 @@ export interface FlowOptions {
   mode: 'install' | 'remove' | 'check' | 'refresh';
   /** Print the plan (install, refresh or remove) and change nothing, not even by running sudo. */
   dryRun: boolean;
-  /** Skip the y/N question. It never replaces the terminal. */
+  /** Kept for compatibility (decision 107): no question is asked any more, the flag changes nothing. It never replaced the terminal. */
   yes: boolean;
   /** The name of this machine, for the lines to run next; undefined when it has no identity yet. */
   machineName?: string;
@@ -32,7 +32,6 @@ export interface FlowOptions {
 export interface FlowIo {
   say: (text: string) => void;
   warn: (text: string) => void;
-  confirm: (question: string) => Promise<boolean>;
 }
 
 export interface FlowResult {
@@ -250,10 +249,8 @@ async function installFlow(def: Installable, plan: InstallPlan, env: InstallEnv,
     io.say('\n[ok] dry run: nothing was changed, no command was run\n');
     return { exit: 0, document: { ...base, state: 'not applied', applied: false, nextSteps: [], steps: steps.map((s) => ({ describe: s.describe, ...(s.kind === 'run' ? { command: display(s.argv, undefined) } : {}) })) } };
   }
-  if (!options.yes && !(await io.confirm('\nApply this plan? [y/N] '))) {
-    io.say('\ncancelled: nothing was changed\n');
-    return { exit: 1, document: { ...base, state: 'cancelled', applied: false, nextSteps: [] } };
-  }
+  // No question: the plan is on the screen, and the sudo password prompt (this terminal, never read by machine) is the confirmation; Ctrl-C stops before any step.
+  io.say('\nnext: sudo asks YOUR password, that is the confirmation (Ctrl-C now stops before any step)\n');
   const installed: string[] = [];
   const dir = env.fs.makeTempDir();
   try {
@@ -312,10 +309,8 @@ async function removeFlow(def: Installable, plan: InstallPlan, env: InstallEnv, 
     io.say('\n[ok] dry run: nothing was changed, no command was run\n');
     return { exit: 0, document: { ...base, state: 'not applied', applied: false, nextSteps: [] } };
   }
-  if (!options.yes && !(await io.confirm('\nRemove these files? [y/N] '))) {
-    io.say('\ncancelled: nothing was changed\n');
-    return { exit: 1, document: { ...base, state: 'cancelled', applied: false, nextSteps: [] } };
-  }
+  // No question: this DELETES the files listed above; the sudo password prompt is the confirmation, Ctrl-C stops before any step.
+  io.say('\nnext: this deletes the files listed above; sudo asks YOUR password, that is the confirmation (Ctrl-C now stops before any step)\n');
   const removed: string[] = [];
   for (const step of steps) {
     const argv = step.argv.map((a) => (typeof a === 'string' ? a : ''));
