@@ -99,8 +99,8 @@ describe('idleDecision: idle (the timer)', () => {
   });
 
   it('works with the smallest and the largest N', () => {
-    expect(idleDecision(idle({}, 5), NOW, IDLE_MIN_MINUTES).suspend).toBe(true);
-    expect(idleDecision(idle({}, 4), NOW, IDLE_MIN_MINUTES).reason).toBe('idle 4/5 min');
+    expect(idleDecision(idle({}, 5), NOW, 5).suspend).toBe(true);
+    expect(idleDecision(idle({}, 4), NOW, 5).reason).toBe('idle 4/5 min');
     const quiet = { audit: { lastActivityEpoch: NOW - 2 * 86400, openHolds: 0 } };
     expect(idleDecision(idle({ ...quiet }, 1439), NOW, IDLE_MAX_MINUTES).reason).toBe('idle 1439/1440 min');
     expect(idleDecision(idle({ ...quiet, state: { since: NOW - 1440 * 60, last: NOW - 120 } }), NOW, IDLE_MAX_MINUTES).suspend).toBe(true);
@@ -137,7 +137,7 @@ describe('idleDecision: idle (the timer)', () => {
   });
 
   it('refuses a non-integer, out-of-range or non-finite N and a bad clock, loudly', () => {
-    for (const bad of [4, 1441, 0, -30, 30.5, NaN, Infinity, 1e21]) {
+    for (const bad of [1441, 0, -30, 30.5, NaN, Infinity, 1e21]) {
       expect(() => idleDecision(idle(), NOW, bad), String(bad)).toThrow(/minutes/);
     }
     for (const bad of [NaN, -1, 1.5, Infinity]) {
@@ -147,16 +147,17 @@ describe('idleDecision: idle (the timer)', () => {
 });
 
 describe('parseIdleMinutes', () => {
-  it('accepts whole numbers 5 to 1440 only', () => {
+  it('accepts whole numbers 1 to 1440 only', () => {
     expect(parseIdleMinutes('30')).toBe(30);
-    expect(parseIdleMinutes('5')).toBe(5);
+    expect(parseIdleMinutes('1')).toBe(1);
+    expect(parseIdleMinutes('3')).toBe(3);
     expect(parseIdleMinutes('1440')).toBe(1440);
-    for (const bad of ['4', '1441', '', ' 30', '30 ', '3e1', '0x1e', '30.0', '-30', '+30', '030', 'abc', '30; reboot']) {
+    for (const bad of ['0', '1441', '', ' 30', '30 ', '3e1', '0x1e', '30.0', '-30', '+30', '030', 'abc', '30; reboot']) {
       expect(() => parseIdleMinutes(bad), bad).toThrow(/--minutes/);
     }
   });
   it('the error names the range and the default', () => {
-    expect(() => parseIdleMinutes('2')).toThrow(/5 to 1440/);
+    expect(() => parseIdleMinutes('0')).toThrow(/from 1 to 1440/);
     expect(IDLE_DEFAULT_MINUTES).toBe(30);
   });
 });
@@ -204,8 +205,8 @@ describe('idleSuspendScript (the generated shell)', () => {
     expect(script({ minutes: 45 })).toBe(script().replace('MINUTES=30', 'MINUTES=45'));
   });
 
-  it('refuses a minutes value outside 5..1440 or not an integer', () => {
-    for (const minutes of [4, 1441, 30.5, NaN]) expect(() => script({ minutes })).toThrow(InstallError);
+  it('refuses a minutes value outside 1..1440 or not an integer', () => {
+    for (const minutes of [0, 1441, 30.5, NaN]) expect(() => script({ minutes })).toThrow(InstallError);
   });
 
   it('refuses every unsafe path (quote, space, newline, dollar, backtick, relative, dot dot)', () => {
@@ -253,22 +254,23 @@ describe('idleSuspendScript (the generated shell)', () => {
     expect(s).toContain('^[a-z_][a-z0-9_-]{0,31}$');
   });
 
-  it('decision 103: the RDP minutes are in the script (RDP_MINUTES=<n>), read back by idleSuspendInstalledRdpMinutes, refused out of 5..1440', () => {
+  it('decision 103: the RDP minutes are in the script (RDP_MINUTES=<n>), read back by idleSuspendInstalledRdpMinutes, refused out of 1..1440', () => {
     expect(script()).toMatch(/^RDP_MINUTES=20$/m);
     expect(script({ rdpMinutes: 45 })).toBe(script().replace('RDP_MINUTES=20', 'RDP_MINUTES=45'));
     expect(idleSuspendInstalledRdpMinutes(script({ rdpMinutes: 45 }))).toBe(45);
     expect(idleSuspendInstalledRdpMinutes('#!/bin/sh\nMINUTES=30\n')).toBeUndefined();
     expect(idleSuspendInstalledRdpMinutes('RDP_MINUTES=9999\n')).toBeUndefined();
-    for (const rdpMinutes of [4, 1441, 20.5, NaN]) expect(() => script({ rdpMinutes }), String(rdpMinutes)).toThrow(InstallError);
+    for (const rdpMinutes of [0, 1441, 20.5, NaN]) expect(() => script({ rdpMinutes }), String(rdpMinutes)).toThrow(InstallError);
   });
 });
 
 describe('parseIdleRdpMinutes (--rdp-minutes)', () => {
-  it('accepts whole minutes 5..1440 and names the flag in the refusal', () => {
-    expect(parseIdleRdpMinutes('5')).toBe(5);
+  it('accepts whole minutes 1..1440 and names the flag in the refusal', () => {
+    expect(parseIdleRdpMinutes('1')).toBe(1);
+    expect(parseIdleRdpMinutes('3')).toBe(3);
     expect(parseIdleRdpMinutes('1440')).toBe(1440);
-    for (const bad of ['4', '1441', '20m', '', '-5', '1e2', '2.5', ' 20']) {
-      expect(() => parseIdleRdpMinutes(bad), bad).toThrow(/--rdp-minutes must be a whole number of minutes from 5 to 1440 \(default 20\)/);
+    for (const bad of ['0', '1441', '20m', '', '-5', '1e2', '2.5', ' 20']) {
+      expect(() => parseIdleRdpMinutes(bad), bad).toThrow(/--rdp-minutes must be a whole number of minutes from 1 to 1440 \(default 20\)/);
     }
   });
 });
@@ -334,7 +336,7 @@ describe('idleDecision: RDP connected (decision 103): the input idle time agains
   it('a negative or fractional input idle time, or an R out of range, is refused as a programming error', () => {
     expect(() => decide(withRdp(-1))).toThrow(InstallError);
     expect(() => decide(withRdp(1.5))).toThrow(InstallError);
-    for (const rdpMinutes of [4, 1441, 2.5]) expect(() => idleDecision(withRdp(3600), NOW, MIN, rdpMinutes)).toThrow(InstallError);
+    for (const rdpMinutes of [0, 1441, 2.5]) expect(() => idleDecision(withRdp(3600), NOW, MIN, rdpMinutes)).toThrow(InstallError);
   });
   it('the default R is 20', () => {
     expect(idleDecision(withRdp(19 * 60), NOW, MIN).reason).toContain('needs 20');
@@ -417,5 +419,35 @@ describe('idleDecision: sessions (decision 105)', () => {
     expect(decide(idle({ ignoredDisplays: [0], connections: rdp, inputIdleSeconds: { unreadable: 'xprintidle failed on :10 as wadeck' } })).reason).toBe('not idle: rdp connected (input idle unreadable: xprintidle failed on :10 as wadeck)');
     expect(decide(idle({ ignoredDisplays: [0], inputIdleSeconds: 3600, load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
     expect(decide(idle({ ignoredDisplays: [0], inputIdleSeconds: 'missing' }, 40)).reason).toBe('suspending: idle 40 min (input idleness not checked: xprintidle is not installed)');
+  });
+});
+
+// Decision 106: the lower bound of --minutes and --rdp-minutes is 1.
+describe('minimum of 1 minute (decision 106)', () => {
+  const rdp = { rdp: 1, ssh: 0, peer: 0 };
+  it('one constant: the bounds are 1 and 1440, the defaults stay 30 and 20', () => {
+    expect(IDLE_MIN_MINUTES).toBe(1);
+    expect(IDLE_MAX_MINUTES).toBe(1440);
+    expect(IDLE_DEFAULT_MINUTES).toBe(30);
+    expect(IDLE_RDP_DEFAULT_MINUTES).toBe(20);
+  });
+  it('the error text of both flags says from 1 to 1440', () => {
+    expect(() => parseIdleMinutes('0')).toThrow('--minutes must be a whole number of minutes from 1 to 1440 (default 30), got "0": for example `machine install idle-suspend --minutes 30`');
+    expect(() => parseIdleRdpMinutes('0')).toThrow('--rdp-minutes must be a whole number of minutes from 1 to 1440 (default 20), got "0": for example `machine install idle-suspend --rdp-minutes 20`');
+  });
+  it('N = 1 without RDP: input 59 s is not idle, 60 s passes; the timer suspends at 1 whole minute', () => {
+    expect(idleDecision(idle({ inputIdleSeconds: 59 }), NOW, 1, 1).reason).toBe('not idle: input 0 min ago (needs 1)');
+    expect(idleDecision(idle({ inputIdleSeconds: 60, state: { since: NOW - 60, last: NOW - 30 } }), NOW, 1, 1)).toEqual({ suspend: true, reason: 'suspending: idle 1 min', state: null });
+    expect(idleDecision(idle({ inputIdleSeconds: 60, state: { since: NOW - 30, last: NOW - 30 } }), NOW, 1, 1).reason).toBe('idle 0/1 min');
+  });
+  it('R = 3 with RDP: input 179 s is activity, 180 s suspends at the next check', () => {
+    const f = (s: number): IdleFacts => idle({ connections: rdp, inputIdleSeconds: s });
+    expect(idleDecision(f(179), NOW, 9, 3).reason).toBe('not idle: rdp connected (input 2 min ago, needs 3)');
+    expect(idleDecision(f(180), NOW, 9, 3).reason).toBe('suspending: rdp connected but no input for 3 min (needs 3)');
+  });
+  it('the installed values 1 are read back from the script', () => {
+    const s = idleSuspendScript({ minutes: 1, rdpMinutes: 1, root: '', configDir: '/home/alice/.config/machine', tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' } });
+    expect(idleSuspendInstalledMinutes(s)).toBe(1);
+    expect(idleSuspendInstalledRdpMinutes(s)).toBe(1);
   });
 });

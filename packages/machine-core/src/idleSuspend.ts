@@ -4,7 +4,8 @@ import { InstallError } from './install.js';
 // desktop sessions. Pure: no file, no process. `idleDecision` is the specification of the decision; `idleSuspendScript` generates the shell that
 // takes the same decision on the box (the golden test in machine-cli runs the script on fake inputs and compares it with `idleDecision`).
 
-export const IDLE_MIN_MINUTES = 5;
+/** Lower bound of --minutes and --rdp-minutes (decision 106). The timer fires every 2 min, so a value below 2 acts at the first check after it is reached. */
+export const IDLE_MIN_MINUTES = 1;
 export const IDLE_MAX_MINUTES = 1440;
 export const IDLE_DEFAULT_MINUTES = 30;
 /** The timer fires every 2 minutes. */
@@ -96,7 +97,7 @@ const RESTART = {
 
 const hundredths = (h: number): string => `${Math.floor(h / 100)}.${String(h % 100).padStart(2, '0')}`;
 
-/** `--rdp-minutes` as typed: whole decimal digits, 5 to 1440 (decision 103). */
+/** `--rdp-minutes` as typed: whole decimal digits, 1 to 1440 (decisions 103, 106). */
 export function parseIdleRdpMinutes(text: string): number {
   const n = /^(0|[1-9][0-9]{0,3})$/.test(text) ? Number(text) : NaN;
   if (!Number.isInteger(n) || n < IDLE_MIN_MINUTES || n > IDLE_MAX_MINUTES) {
@@ -105,7 +106,7 @@ export function parseIdleRdpMinutes(text: string): number {
   return n;
 }
 
-/** `--minutes` as typed: whole decimal digits, 5 to 1440. */
+/** `--minutes` as typed: whole decimal digits, 1 to 1440. */
 export function parseIdleMinutes(text: string): number {
   const n = /^(0|[1-9][0-9]{0,3})$/.test(text) ? Number(text) : NaN;
   if (!Number.isInteger(n) || n < IDLE_MIN_MINUTES || n > IDLE_MAX_MINUTES) {

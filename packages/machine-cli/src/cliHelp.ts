@@ -265,11 +265,11 @@ const GROUPS: GroupHelp[] = [
       },
       {
         name: 'idle-suspend',
-        usage: 'idle-suspend [--minutes <5..1440>] [--rdp-minutes <5..1440>] [--dry-run | --check | --refresh | --remove] [--yes] [--json]',
+        usage: 'idle-suspend [--minutes <1..1440>] [--rdp-minutes <1..1440>] [--dry-run | --check | --refresh | --remove] [--yes] [--json]',
         text: 'Linux only: suspend THIS machine by itself when it is really idle, whatever the state of the desktop sessions (a disconnected xrdp session does not keep it awake). Installs three root-owned files through sudo (your own password, typed to sudo itself): the script /usr/local/bin/machine-idle-suspend and the systemd service and timer machine-idle-suspend (checked every 2 minutes). Shows every file and command, then asks y/N',
         options: [
-          '--minutes <5..1440>   idle time before the suspend, default 30 (5 allowed to test); without it an installed script keeps its minutes',
-          '--rdp-minutes <5..1440>   input idle time from which an ESTABLISHED RDP connection no longer keeps the box awake, default 20; the box then suspends at the next check once the other checks pass (no extra timer). Without it an installed script keeps its value',
+          '--minutes <1..1440>   idle time before the suspend, default 30; without it an installed script keeps its minutes. The timer runs every 2 min, so a value below 2 acts at the first check after it is reached (1 min: at most about 2 min later); very small values can suspend the box between two commands of a short pause: your own choice, it only restricts uptime (no new right for any peer)',
+          '--rdp-minutes <1..1440>   input idle time from which an ESTABLISHED RDP connection no longer keeps the box awake, default 20; the box then suspends at the next check once the other checks pass (no extra timer). Without it an installed script keeps its value',
           'Idle means ALL true for that long: no established ssh (22) or machine peer connection; an established RDP connection (3389) counts only while the X input of the session (xprintidle: sudo apt install xprintidle) is more recent than that time, and always counts when xprintidle is missing or unreadable; no machine request accepted, completed or held in the audit log and no open hold; load average over 5 min under 0.30; no sleep inhibitor in block mode; no /run/machine-keep-awake and no <config dir>/keep-awake file (content "keep awake until <epoch>" limits it in time)',
           'Anything unreadable counts as NOT idle: it never suspends on an error. After a resume the idle time restarts from zero. Every decision is in the journal: journalctl -t machine-idle-suspend; --check and `machine status` show the last one when your user can read the journal',
           '--dry-run   print the plan (files, commands) and change nothing, not even by running sudo; needs no terminal',

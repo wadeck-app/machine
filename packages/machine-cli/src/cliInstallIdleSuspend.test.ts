@@ -41,8 +41,8 @@ function box(o: FakeInstallOptions = {}) {
 
 describe('--minutes: usage errors (exit 2), nothing run', () => {
   it.each([
-    [['idle-suspend', '--minutes', '4'], /5 to 1440/],
-    [['idle-suspend', '--minutes', '1441'], /5 to 1440/],
+    [['idle-suspend', '--minutes', '0'], /1 to 1440/],
+    [['idle-suspend', '--minutes', '1441'], /1 to 1440/],
     [['idle-suspend', '--minutes', '30m'], /--minutes must be a whole number/],
     [['idle-suspend', '--minutes', '1e2'], /--minutes must be a whole number/],
     [['idle-suspend', '--minutes', '-5'], /needs a value|--minutes must be/],
@@ -52,8 +52,8 @@ describe('--minutes: usage errors (exit 2), nothing run', () => {
     [['suspend', '--minutes', '30'], /only applies to `machine install idle-suspend`/],
     [['status', '--minutes', '30'], /only applies to `machine install idle-suspend`/],
     [['--minutes', '30'], /only applies to `machine install idle-suspend`/],
-    [['idle-suspend', '--rdp-minutes', '4'], /--rdp-minutes must be a whole number of minutes from 5 to 1440 \(default 20\)/],
-    [['idle-suspend', '--rdp-minutes', '1441'], /--rdp-minutes must be a whole number of minutes from 5 to 1440/],
+    [['idle-suspend', '--rdp-minutes', '0'], /--rdp-minutes must be a whole number of minutes from 1 to 1440 \(default 20\)/],
+    [['idle-suspend', '--rdp-minutes', '1441'], /--rdp-minutes must be a whole number of minutes from 1 to 1440/],
     [['idle-suspend', '--rdp-minutes', '20m'], /--rdp-minutes must be a whole number/],
     [['idle-suspend', '--rdp-minutes'], /--rdp-minutes needs a value/],
     [['idle-suspend', '--check', '--rdp-minutes', '30'], /--rdp-minutes sets what is installed.*not with --check/],
@@ -92,6 +92,24 @@ describe('machine install idle-suspend --dry-run', () => {
   it('without --minutes: 30', async () => {
     const r = await box({ tty: false }).go(['idle-suspend', '--dry-run']);
     expect(r.out).toContain('| MINUTES=30');
+  });
+
+  it('decision 106: 1 is accepted for both flags (9 and 3 too), 0 is not, and the help says the timer checks every 2 min', async () => {
+    const r = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--minutes', '1', '--rdp-minutes', '1']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('| MINUTES=1');
+    expect(r.out).toContain('| RDP_MINUTES=1');
+    const r2 = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--minutes', '9', '--rdp-minutes', '3']);
+    expect(r2.code, r2.err).toBe(0);
+    expect(r2.out).toContain('| MINUTES=9');
+    expect(r2.out).toContain('| RDP_MINUTES=3');
+    const bad = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--rdp-minutes', '0']);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain('--rdp-minutes must be a whole number of minutes from 1 to 1440 (default 20), got "0"');
+    const help = await cli(dir, ['install', 'idle-suspend', '--help']);
+    expect(help.out).toContain('--minutes <1..1440>');
+    expect(help.out).toMatch(/timer runs every 2 min, so a value below 2 acts at the first check/);
+    expect(help.out).toMatch(/only restricts uptime/);
   });
 
   it('decision 103: --rdp-minutes (default 20) is written into the script, with --minutes it is independent', async () => {

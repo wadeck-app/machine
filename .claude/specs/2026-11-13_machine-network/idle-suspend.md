@@ -1,6 +1,6 @@
 # `machine install idle-suspend`
 
-Decisions 101, 102, 103 and 105 (user concerns 2026-11-22). Item of `machine install` (see `install.md` for the lifecycle). Linux only. Suspends the box when it is REALLY idle, independent of session state.
+Decisions 101, 102, 103, 105 and 106 (user concerns 2026-11-22). Item of `machine install` (see `install.md` for the lifecycle). Linux only. Suspends the box when it is REALLY idle, independent of session state.
 
 Why: on `thinkcentre` (xrdp) logind's `IdleAction=suspend` never fires: the xrdp session keeps `IdleHint=no` and survives the RDP disconnect. Disconnected sessions must stay (they hold open windows), so the decision is made outside logind.
 
@@ -13,7 +13,7 @@ Why: on `thinkcentre` (xrdp) logind's `IdleAction=suspend` never fires: the xrdp
 | `/etc/systemd/system/machine-idle-suspend.timer` | 0644 | `OnBootSec=2min`, `OnUnitActiveSec=2min`, `WantedBy=timers.target` |
 
 - Install steps: stage, `sudo install` x3, `daemon-reload`, `enable`, `restart` the timer; verified with `systemctl is-active` (no sudo). Remove: `disable --now`, `rm` timer, service, script, `daemon-reload`; post-check as in `install.md`.
-- `--rdp-minutes <5..1440>` (default 20, decision 103) lives in the script (`RDP_MINUTES=<n>`) and is kept like `--minutes`. `--minutes <5..1440>` (default 30, 5 allowed to test) lives in the script (`MINUTES=<n>`), the units do not depend on it. Without `--minutes` an installed script keeps its minutes (a status never calls it outdated for that); with it, the script is replaced after the usual display.
+- `--rdp-minutes <1..1440>` (default 20, decision 103) lives in the script (`RDP_MINUTES=<n>`) and is kept like `--minutes`. `--minutes <1..1440>` (default 30, 1 allowed, see below) lives in the script (`MINUTES=<n>`), the units do not depend on it. Without `--minutes` an installed script keeps its minutes (a status never calls it outdated for that); with it, the script is replaced after the usual display.
 - Needs `ss`, `systemd-inhibit`, `logger`, `date` (absolute paths measured with `command -v`); a missing one is `unsupported here` with the package named. `journalctl` is optional (status only).
 - No sudoers rule, no peer command: the script runs as root from systemd. It is independent of the `suspend` item.
 
@@ -68,7 +68,7 @@ All 5 pass: the timer runs on `/run/machine-idle-suspend/since` (`<since> <last 
 
   | Situation | Rule |
   |---|---|
-  | RDP connected | activity while input idle < R (`--rdp-minutes`, default 20, 5..1440); from R on it is not activity and the box suspends at the next check once ssh/peer, machine requests (last N min, holds), load, inhibitors and keep-awake pass. The input idle time is the clock: no N-minute timer on top (the 2N latency of decision 102 is gone) |
+  | RDP connected | activity while input idle < R (`--rdp-minutes`, default 20, 1..1440); from R on it is not activity and the box suspends at the next check once ssh/peer, machine requests (last N min, holds), load, inhibitors and keep-awake pass. The input idle time is the clock: no N-minute timer on top (the 2N latency of decision 102 is gone) |
   | No RDP, input readable | the input idle must be >= N (`--minutes`): `not idle: input 2 min ago (needs 5)`; then the unchanged N-minute timer |
   | No RDP, xprintidle missing, unreadable or no user session | the unchanged timer alone, never silent: every timer line ends with ` (input idleness not checked: xprintidle is not installed)`, ` (input idleness not checked: no user session found)` or ` (input idleness not checked: <cause>)` (`idle 12/5 min (...)`, `suspending: idle 6 min (...)`); status says `note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle` |
 
@@ -76,6 +76,7 @@ All 5 pass: the timer runs on `/run/machine-idle-suspend/since` (`<since> <last 
   - Without an RDP connection the box still waits for BOTH the input (N) and the timer (N, which starts once every check passes, input included): after the keyboard stops the suspend comes about 2N min later (5 min test: about 10). Not changed by decision 103.
   - `--minutes` and `--rdp-minutes` are independent; each is kept when the other is changed (`RDP_MINUTES=<n>` and `MINUTES=<n>` in the script).
 - Script version 4 (decision 105; 3 was decision 103, 2 decision 102): an older script is `outdated` until `machine install idle-suspend --refresh`. The plan never installs xprintidle; `--dry-run`, `--check`, `status` and `--json` say `note: xprintidle found at <path>: ...` or the missing note above; the summary reads `suspends after 5 min idle (RDP: 20 min)`.
+- Small values (decision 106, lower bound 1 for `--minutes` and `--rdp-minutes`, upper 1440, defaults 30 and 20): the timer fires every 2 min, so a value below 2 behaves as the next check (1 min: the box suspends at the first check after the input idle reaches 1 min, at most about 2 min later). Very small values can suspend the box between two commands of a short pause; that is the owner's own choice and only restricts uptime (T-68 unchanged: no network surface, no right for any peer). Only the validation changed: the script text does not, so its version stays 4 and an installed script is not `outdated`. The `machine install idle-suspend --help` says the same once.
 - The audit lines are matched ANCHORED on `{"seq":..,"prev":..,"entry":{"ts":"..","event":"<e>"`: `ts` and `event` are the first keys the daemon writes, so a command text containing `"event":"accepted"` (escaped in the JSON line) never matches.
 - Peer connections are short-lived (probes close at once); a long-lived peer socket would keep the box awake (check on the box: `ss -Htn state established`).
 - Every decision goes to the journal: `logger -t machine-idle-suspend -- <reason>`. `machine install` list, `--check` and `machine status` show `suspends after N min idle` and the last line of `journalctl -t machine-idle-suspend -n 1` when the user can read it, parsed (`last: 18:13:56 not idle: rdp connected (3 min ago)`: no host, tag or pid, local time, age; shown whole when it does not parse, wrapped and never cut; layout in `install.md`), else `not readable by your user` with the `sudo ...` command; never an error. `--json` keeps the raw line.

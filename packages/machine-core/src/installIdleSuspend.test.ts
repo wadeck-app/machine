@@ -24,7 +24,7 @@ describe('idle-suspend: the plan', () => {
     expect(def().platforms).toEqual(['linux']);
     expect(def().consequence).toMatch(/only RESTRICTS uptime/);
     expect(def().consequence).toMatch(/no right for any peer/);
-    expect(def().description).toMatch(/--minutes 5\.\.1440/);
+    expect(def().description).toMatch(/--minutes 1\.\.1440/);
   });
 
   it('three root-owned files with the marker, the right modes, none root-only', () => {
@@ -150,8 +150,17 @@ describe('idle-suspend: the plan', () => {
     expect(def().plan({ ...FACTS, installedRdpMinutes: 60, rdpMinutes: 7 }).files[0]?.content).toMatch(/^RDP_MINUTES=7$/m);
   });
 
+  it('decision 106: a value of 1 is a valid plan (MINUTES=1, RDP_MINUTES=1) and is read back', () => {
+    const plan = def().plan({ ...FACTS, minutes: 1, rdpMinutes: 1 });
+    const script = plan.files[0]?.content ?? '';
+    expect(script).toMatch(/^MINUTES=1$/m);
+    expect(script).toMatch(/^RDP_MINUTES=1$/m);
+    expect(idleSuspendInstalledMinutes(script)).toBe(1);
+    expect(plan.summary).toBe('suspends after 1 min idle (RDP: 1 min)');
+  });
+
   it('decision 103: refuses --rdp-minutes out of range (a plan never carries it)', () => {
-    for (const rdpMinutes of [4, 1441, 0, 2.5]) expect(() => def().plan({ ...FACTS, rdpMinutes }), String(rdpMinutes)).toThrow(/minutes/);
+    for (const rdpMinutes of [1441, 0, 2.5, -1]) expect(() => def().plan({ ...FACTS, rdpMinutes }), String(rdpMinutes)).toThrow(/minutes/);
   });
 
   it('refuses another platform with the supported ones', () => {
@@ -178,7 +187,7 @@ describe('idle-suspend: the plan', () => {
   });
 
   it('refuses minutes out of range (a plan never carries them)', () => {
-    for (const minutes of [4, 1441, 0, 2.5]) expect(() => def().plan({ ...FACTS, minutes }), String(minutes)).toThrow(/minutes/);
+    for (const minutes of [1441, 0, 2.5, -1]) expect(() => def().plan({ ...FACTS, minutes }), String(minutes)).toThrow(/minutes/);
   });
 
   it('refuses an unsafe sudo or systemctl path', () => {

@@ -433,7 +433,7 @@ const IDLE_SUSPEND: Installable = {
       `  echo "keep awake until $(( $(date +%s) + 3600 ))" > ${configDir}/keep-awake    (one more hour, then it is ignored)`,
       '',
       'a disconnected desktop session (xrdp) is NOT counted as activity; an established ssh or machine peer connection is; an established RDP connection counts only while the X input of the session is more recent than --rdp-minutes (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why); without an RDP connection the input must be idle for --minutes when xprintidle can be read, otherwise the journal says that input idleness is not checked.',
-      `to test quickly: machine install idle-suspend --minutes ${IDLE_MIN_MINUTES} --refresh, then leave the box alone for ${IDLE_MIN_MINUTES}-${IDLE_MIN_MINUTES + 2} minutes; wake it with machine wake.`,
+      'to test quickly: machine install idle-suspend --minutes 5 --refresh, then leave the box alone for 5-7 minutes (the timer checks every 2 minutes); wake it with machine wake.',
       '',
       `[warn] ${IDLE_SUSPEND.consequence}`,
     ];

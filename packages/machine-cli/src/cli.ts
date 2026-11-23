@@ -185,7 +185,7 @@ Commands:
                                      running (--no-start: register only); disable removes it; status shows
                                      whether the daemon runs, whether the job exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
-  install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <5..1440>] [--rdp-minutes <5..1440>]
+  install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <1..1440>] [--rdp-minutes <1..1440>]
                                      set up an item on THIS machine, a LOCAL command run in a terminal on it (never remote, never by the daemon).
                                      Without an id (or \`install status\`): lists what can be installed, where, and its state here. \`install suspend\` (Linux only): the root-owned script
                                      /usr/local/bin/machine-suspend and a sudoers rule for the ONE command \`systemctl suspend\`, written through sudo with

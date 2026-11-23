@@ -248,9 +248,9 @@ machine install suspend --check      the state of this item, no password; exit 0
 machine install suspend --refresh    write both files again even when up to date (repairs a script or a rule changed by hand)
 machine install suspend --remove     remove exactly what it installed, then check that the state reads "not installed"
 machine install idle-suspend --dry-run             the three files (script, systemd service and timer) and every command, nothing changed
-machine install idle-suspend --minutes 30          install; the box suspends after 30 min of real idleness (5..1440, default 30)
+machine install idle-suspend --minutes 30          install; the box suspends after 30 min of real idleness (1..1440, default 30)
 machine install idle-suspend --minutes 5 --refresh change the idle time (5 min to test), restarts the timer
-machine install idle-suspend --rdp-minutes 20      with an RDP window open, suspend once the keyboard/mouse input has been idle that long (5..1440, default 20)
+machine install idle-suspend --rdp-minutes 20      with an RDP window open, suspend once the keyboard/mouse input has been idle that long (1..1440, default 20)
 journalctl -t machine-idle-suspend -n 20           every decision with its reason; keep awake: touch /run/machine-keep-awake
 sudo apt install xprintidle                        needed to read the keyboard/mouse input idle time (without it an open RDP window always keeps the box awake)
 machine install idle-suspend --refresh             after an update of machine (status says "outdated") or after installing xprintidle
