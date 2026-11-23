@@ -11,6 +11,7 @@ Goal: the MacBook Pro is a spare computer used like the thinkcentre: it suspends
 USER facts (2026-11-23), the target configuration:
 - MacBook Pro M2 family, host name `MacBook-Pro-de-Wadeck`, macOS version UNKNOWN.
 - Used with the LID CLOSED if possible (to save the screen), on AC POWER, on ETHERNET (not Wi-Fi). No external display or keyboard was mentioned: UNKNOWN, asked in section 2.
+- MEASURED by the user on his Mac (2026-11-23, pasted output): `pmset -g` shows `womp 0` (WoL is OFF today), `standby 1`, `powernap 1`, `hibernatemode 3`, `networkoversleep 0`, `tcpkeepalive 1`, and `sleep 1 (sleep prevented by powerd)`; `HIDIdleTime` is readable as the normal user (62007761666 ns = 62 s, so the unit is nanoseconds); three ports named "Ethernet Adapter" (`en4`, `en6`, `en7`) have locally administered MACs (first octet 62): none of them is shown to be the real hardware MAC, so the MAC to pin for the wake is NOT yet identified (never written in this repo).
 - The M2 MacBook Pro has no built-in Ethernet port: ethernet means a dock or an adapter (ASSUMED, which one is UNKNOWN: measured in section 2).
 
 Non-goals: Wi-Fi-only wake (section 4: no promise); powered-off wake (SOURCE below: impossible); a new right for any peer; a new peer command; changing the Linux item; shipping any code before the measurements of section 2 are in.
@@ -44,8 +45,12 @@ Test 12 protocol (wake from lid closed). Needs a second machine on the same wire
 1. Mac: on AC, Ethernet connected, `sudo pmset -c womp 1`, then `pmset -g custom` shows `womp 1` on AC. Note whether `System Settings > Battery > Options > Wake for network access` shows "Only on Power Adapter" or "Always".
 2. Variant A (lid OPEN control): from the Mac `pmset sleepnow`; wait 60 s; from the other machine `ping -c 3 <ip>` (expect no answer) then `machine wake <peer>` or any magic-packet sender; record whether it answers and after how long.
 3. Variant B (lid CLOSED, no external display): close the lid first, wait until it is asleep (`ping` from the other machine stops answering; if it never sleeps or stays reachable, note that: it is a fact), send the magic packet as in A, wait 60 s, record.
-4. Variant C (lid closed with external display and keyboard, only if he has them): same.
-5. Afterwards `pmset -g log | tail -40` on the Mac: the wake reason line for each attempt. Revert: `sudo pmset -c womp <previous value>` if it was 0.
+4. Variant C (lid closed with an external display and keyboard, or a dummy HDMI plug, only if he has one): same.
+5. Afterwards `pmset -g log | grep -E 'Wake|DarkWake|Clamshell'` on the Mac: the wake reason and time of each attempt, and `uptime`. Revert: `sudo pmset -c womp <previous value>` (it is 0 today, section 1).
+6. Repeat the best variant with the dock NIC and the adapter NIC separately (which of `en4`, `en6`, `en7` is the real NIC: `networksetup -listallhardwareports` plus `ifconfig` `ether` of the one with status active; the MAC to pin is the hardware address printed there, check it is not a locally administered one, first octet with bit 2 set).
+7. Delay: send the packet 30 min after sleep, then 8 h after sleep (`hibernatemode 3` and `standby 1` may turn a long sleep into a hibernation).
+8. If a wake happens: note whether it is a dark wake (display off) and how many seconds the Mac stays reachable: from the other machine `ping` every second and `machine ping <peer>` immediately after the packet; `machine` can only run if the Mac stays awake long enough to connect (reports above: 5 to 10 s, 7 s).
+9. Keep-awake alternative, lid closed no display, AC: `caffeinate -s` in a Terminal for 10 min, close the lid, from the other machine `ping` for the 10 min; then `pmset -g log | grep -E 'Sleep|Clamshell'`. Stop it with Ctrl-C after reopening.
 
 ## 3. Facts from sources (power management, launchd)
 
@@ -84,6 +89,7 @@ Known from sources:
 What this means for the user's configuration (lid closed, AC, Ethernet):
 - Wi-Fi: no Apple source says a sleeping Wi-Fi MacBook wakes on a magic packet; the two sources that discuss it say "not reliably" and "must be employed". VERDICT: reliable wake of a sleeping Wi-Fi-only MacBook by a magic packet is NOT supported by any source found; do not promise it. Not the user's setup (Ethernet).
 - Ethernet + AC + lid OPEN: matches the only documented case (Cheshire: Ethernet, AC, display available). Whether the NIC of a dock or USB/Thunderbolt adapter keeps listening in sleep and honours `womp`: no source found (depends on the adapter, ASSUMED); test 12 variant A.
+- VERDICT after section 4a: reports found for Ethernet + AC + lid closed + no display: 0 positive, 1 direct negative; Apple Silicon wake over any link is mostly reported as failing. Plan on "a magic packet will NOT wake this Mac" until test 12 proves otherwise; section 4a lists the real alternatives.
 - Ethernet + AC + lid CLOSED with NO external display: the only source that mentions it says a laptop needs "a display available (either lid open, or an external display connected)" for the Sleep Proxy wake. By that source a lid-closed, display-less Mac is NOT a supported wake case; a raw magic packet to the NIC is not discussed by any Apple source. Unknown, test 12 variant B decides. SOURCE-3P also says the Mac sleeps at lid close with no external display whatever `caffeinate` says, so the Mac may be asleep as soon as the lid closes.
 - Lid closed WITH an external display and keyboard (closed-display use, section 3): the Mac stays usable; wake rules unknown (variant C).
 - `machine` side, unchanged: the sender pins the NIC MAC (`machine peer connect --wake-mac`), `planWakeSteps` sends broadcast then unicast (connectivity.md 8, 9.1: on the Linux box unicast alone never woke it, broadcast did). The Mac's wake time after a magic packet is unknown (Linux: about 7 s).
@@ -98,6 +104,39 @@ Alternatives and cost:
 | C. A waker peer on the same LAN (todo #48 wake phase B, `connectivity.md` 4.5) | wake from another network | a new signed right and threat-model rows (rule 10: not decided, not built); does not solve a Mac that cannot be woken at all |
 | D. Wake by hand (open the lid / key press) | works, SOURCE: "Press a key on the keyboard, or click the mouse or trackpad" and "On a Mac laptop, open the display." (https://support.apple.com/guide/mac-help/put-your-mac-to-sleep-or-wake-it-mh10330/mac) | not remote |
 | E. Wi-Fi only and sleeping | not supported by any source | do not offer |
+
+## 4a. Evidence from user reports (2026-11-23 research)
+
+Reported to this spec by a second research agent (pages fetched through the Stack Exchange API, the PullPush Reddit archive, GitHub and Hacker News APIs); I did NOT re-fetch them. M = the reporter measured it, A = the reporter asserted it. All are third-party and anecdotal. Hardware is as the report states it.
+
+Result: magic packet on Apple Silicon MacBook, AC, Ethernet, lid closed, no display: 0 positive, 1 direct negative. Overall 1 positive (anecdotal, with an external display) against 8 negative (6 Apple Silicon or unspecified, 2 Intel).
+
+| Report | Setup | Result | M/A |
+|---|---|---|---|
+| reddit.com/r/MacOS/comments/1bi3hbp (2024-03-18) | M1 MBP 13, Sonoma 14.4, USB-C Ethernet adapter, womp on | cannot wake, not even the login screen | M |
+| same thread | M1 Air, Wi-Fi | cannot wake | M |
+| github.com/Ylianst/MeshAgent/issues/238 (2024-04-04) | M1 Air, Wi-Fi | agent offline while asleep | M |
+| apple.stackexchange.com/q/435148 | M1 Mac mini, Ethernet | no wake, or awake 5 to 10 s then asleep again | M |
+| talk.tidbits.com/t/wake-on-lan-with-apple-silicon/33183 (2026-03-31) | M1 Mac mini, womp 1, same subnet | WoL failed; TeamViewer support says not reliable on Apple Silicon | M |
+| apple.stackexchange.com/q/461244 (2023-06) | 2019 Intel MBP, Ventura, lid closed, USB-C Ethernet | WoL fails | M |
+| reddit.com/r/apple/comments/151up54 (2023-07) | MBP (chip not stated), clamshell WITH external monitor, AC | a WoL app wakes it every time | A |
+| news.ycombinator.com/item?id=45159910 | M-series MacBooks, lid shut | stay asleep with WoL off, occasional misbehaviour with it on | M |
+| github.com/gjovanov/roomler-ai/issues/1154 | MacBook, AC, lid open or closed, womp 1 | "Clamshell Sleep" on AC despite power assertions; a dozing Mac went back to sleep 47 times in about 1 h 43, 7 s after each wake (sleep behaviour, not WoL) | M |
+| github.com/NousResearch/hermes-agent/pull/134353 (2026-10) | Apple Silicon MacBook, AC, lid closed, display not stated | `caffeinate -s` kept it awake; `caffeinate -i` and `pmset sleep 0` did not (Clamshell Sleep after about 5 s) | M |
+| github.com/clintcan/macrdp/pull/107 | AC, lid closed | Clamshell Sleep on AC; an RDP SYN does not wake it | M |
+| apple.stackexchange.com/q/454554 | M2 MBP 2022, HDMI monitor, lid closed, `disablesleep 1` | on battery cannot be woken from the keyboard, on AC can | M |
+| apple.stackexchange.com/q/464592 | M1 Air, macOS 13.5.1, lid open, AC | still sleeps after about 2 h despite `disablesleep 1` | M |
+| apple.stackexchange.com/q/443145 | Intel MBP, Catalina, HDMI display | WoL gives a dark wake (display stays off) | M |
+
+Pending: a 48 h soak in github.com/abyssparanoia/varjo/issues/7 (M1 Max MBP 16, macOS 27.2, lid closed, `sleep 0`, `womp 1`): no result yet.
+
+Contradictions, unresolved:
+- `caffeinate -s` holds a lid-closed Mac awake on AC (hermes, M) versus "caffeinate cannot" (stablyai/orca#20194, section 3). Reconciliation offered: `-i` fails, `-s` works; only hermes measured `-s`. Not tested on the user's Mac.
+- HN 33850511 (2022) asserts "Wake for network access" is not WoL on Apple Silicon; HN 50432465 (2026-11) says WoL works when enabled. Neither measured.
+
+Recipes seen, NONE measured for our exact case (AC, Ethernet, lid closed, no display): `caffeinate -s` on AC; `pmset -a disablesleep 1` (failed on an M1 Air lid open); Amphetamine closed-display mode (greyed out on an M2, q/454554); a dummy HDMI plug (recommended on apple.stackexchange.com/q/415539, not measured); a Bonjour Sleep Proxy (Apple TV or HomePod) handles Bonjour services only, not WoL.
+
+UNKNOWN, to settle on the user's Mac: whether a wired, AC, lid-closed, no-display M2 MBP honours a magic packet at all; the behaviour of a dock or adapter NIC in sleep; the length of a dark wake; the effect of `hibernatemode` and `standby` (the Mac has `hibernatemode 3`, `standby 1`).
 
 ## 5. Idle-suspend design for macOS
 
@@ -162,9 +201,9 @@ Row T-69 (proposed, not added yet, "spec only"): `machine install idle-suspend` 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
 | U1 | Build the item, or first fix with the built-in timer? | (a) measure, then `sudo pmset -c sleep N` and do nothing else: zero code, but a machine peer connection or a run in progress is not a "reason to stay awake" (assertions only); (b) build `idle-suspend` for macOS (L): parity and the audit-log/peer rules | measure first (tests 3, 4, 7); build (b) only if (a) does not fit, and say why in the spec |
-| U2 | Lid closed with no external display: what is the goal? | (a) accept that the Mac sleeps at lid close and is woken by opening it (nothing to build, no remote wake); (b) `pmset disablesleep 1` to stay awake closed (privileged, global, thermal and battery warnings, SOURCE-3P): needs its own T-row, a `machine install` item to set and revert it, never default; (c) an external display (or a dummy one: no source found) for the documented closed-display case; (d) lid open, display asleep | (d) or (c) before (b); decide after tests 8, 12 |
+| U2 | Lid closed with no external display: what is the goal? | (a) accept that the Mac sleeps at lid close and is woken by opening it (nothing to build, no remote wake); (b) `pmset disablesleep 1` to stay awake closed (privileged, global, thermal and battery warnings, SOURCE-3P): needs its own T-row, a `machine install` item to set and revert it, never default; (c) an external display (or a dummy one: no source found) for the documented closed-display case; (d) lid open, display asleep | Not (b) first (section 4a: `disablesleep 1` failed once lid open). Measure `caffeinate -s` lid closed on AC (test 12 step 9, the only recipe reported to work, by one agent report), then (c) with a dummy HDMI plug or (d); decide after tests 8, 12 |
 | U3 | Peer-triggered suspend on the Mac (the Linux `suspend` item)? | (a) none (idle-suspend only); (b) a darwin `suspend` item with a sudoers rule for `pmset sleepnow` | (a); (b) only if test 18 shows root is needed AND he wants `machine run <mac> -- suspend` |
-| U4 | Wake-on-LAN claim | (a) say "supported only if test 12 passes, with the variant that passed"; (b) support only Ethernet + AC + lid open; (c) none | (a): print the tested variant in `machine wake-info` for darwin |
+| U4 | Wake-on-LAN claim | (a) say "supported only if test 12 passes, with the variant that passed"; (b) support only Ethernet + AC + lid open; (c) none | (a), with the starting assumption "not wakeable" (section 4a: 0 positive reports for his exact setup): until test 12 passes, `machine wake-info` says remote wake of this Mac is not supported and recommends keep-awake (`caffeinate -s` on AC) or a waker peer; after a pass it prints the variant that passed |
 | U5 | Script folder | `/usr/local/libexec` vs `/Library/Application Support/machine` | decide after test 16 |
 | U6 | One template with a platform branch vs two generators | one tail, two fact-readers (less drift) vs two full scripts (simpler to read) | one decision tail, two fact blocks, both under the same golden decision table |
 | U7 | Option names | keep `--rdp-minutes` (documented as "remote screen session: ssh excluded, 5900, 3283") vs a neutral alias | keep, say so in help |
@@ -188,5 +227,4 @@ Total: L (about 3 M phases plus user measurements). Cross-platform CI note: the 
 ## 9. Side effects and equivalent patterns (no action taken)
 
 - `connectivity.md` section 7 already lists "That the Mac wakes from sleep on a magic packet at all" as not verified; this spec adds the sources, not a measurement.
-- `idle-suspend.md` lines 50 to 66 contain the "RDP situation" table twice (the second copy is shorter): a doc duplicate to clean in a separate step.
 - The same facts (no remote wake of a closed laptop) apply to a Windows laptop: not examined here.
