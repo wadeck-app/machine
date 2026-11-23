@@ -1,6 +1,6 @@
 # `machine install`
 
-Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the facts of this machine. Items, both Linux only: `suspend` (below) and `idle-suspend` (decision 101, `idle-suspend.md`).
+Decision 87 (user request 2026-11-22). Sets up an item on THIS machine, with the facts of this machine. Items, both Linux only: `suspend` (below) and `idle-suspend` (decision 101, `idle-suspend.md`). A macOS version of `idle-suspend` is specified only, not built: `macos-idle-suspend-wake.md` (decision 108).
 
 ## Scope
 

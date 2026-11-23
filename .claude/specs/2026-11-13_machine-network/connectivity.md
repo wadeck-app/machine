@@ -176,7 +176,7 @@ Cannot be tested offline: that a real NIC wakes (BIOS, driver, switch, Wi-Fi), t
 
 - Every Apple and Windows claim, and every Linux command in 4.2 (taken from general knowledge; nothing run).
 - That Node `dgram` broadcast bound to an interface address leaves by that interface on Windows 10/11, macOS and Linux.
-- That the Mac wakes from sleep on a magic packet at all. The wired Linux box does (section 9).
+- That the Mac wakes from sleep on a magic packet at all. The wired Linux box does (section 9). Sources and the measurements to run on the M2 Pro MacBook Pro (lid closed, AC, Ethernet): `macos-idle-suspend-wake.md` (decision 108, spec only).
 - Whether the audit log format and the protocol hello can take new kinds without a version bump (code not read for this).
 - Whether `tls.connect({socket})` fits the current `connectToPeer` pinning flow (S3, S4): only the host/port form was read.
 - The existence of any relay limit relevant to S5/S6 (relay code not read).
