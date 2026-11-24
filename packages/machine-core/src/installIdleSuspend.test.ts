@@ -57,13 +57,13 @@ describe('idle-suspend: the plan', () => {
     expect(script(a)).toContain("AUDIT_LOG='/home/alice/.config/machine/audit.log'");
     expect(script(a)).toContain("SS='/usr/bin/ss'");
     expect(a.files.slice(1).map((f) => f.sha256)).toEqual(b.files.slice(1).map((f) => f.sha256));
-    expect(a.summary).toBe('suspends after 30 min idle (RDP: 20 min)');
-    expect(b.summary).toBe('suspends after 45 min idle (RDP: 20 min)');
+    expect(a.summary).toBe('suspends after 30 min idle (RDP: 20 min, SSH: 20 min)');
+    expect(b.summary).toBe('suspends after 45 min idle (RDP: 20 min, SSH: 20 min)');
   });
 
   it('without --minutes the minutes of the installed script are kept; --minutes wins', () => {
-    expect(def().plan({ ...FACTS, installedMinutes: 90 }).summary).toBe('suspends after 90 min idle (RDP: 20 min)');
-    expect(def().plan({ ...FACTS, installedMinutes: 90, minutes: 10 }).summary).toBe('suspends after 10 min idle (RDP: 20 min)');
+    expect(def().plan({ ...FACTS, installedMinutes: 90 }).summary).toBe('suspends after 90 min idle (RDP: 20 min, SSH: 20 min)');
+    expect(def().plan({ ...FACTS, installedMinutes: 90, minutes: 10 }).summary).toBe('suspends after 10 min idle (RDP: 20 min, SSH: 20 min)');
   });
 
   it('install order: stage, install the script, the units, reload, enable, restart; each step names its file', () => {
@@ -136,16 +136,16 @@ describe('idle-suspend: the plan', () => {
   it('decision 102: a script installed by the previous build (marker version 3, sockets instead of sessions) is outdated, not current', () => {
     const plan = def().plan(FACTS);
     const file = plan.files[0] as NonNullable<(typeof plan.files)[0]>;
-    const old = file.content.replace('version 4', 'version 3').replace(/^LOGINCTL=.*\n/m, '');
+    const old = file.content.replace('version 5', 'version 3').replace(/^LOGINCTL=.*\n/m, '');
     expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 3 });
     expect(classifyInstalled(file, file.content).state).toBe('current');
   });
 
   it('decision 103: --rdp-minutes (default 20) goes into the script and the summary; without the flag the installed value is kept', () => {
     expect(def().plan(FACTS).files[0]?.content).toMatch(/^RDP_MINUTES=20$/m);
-    expect(def().plan(FACTS).summary).toBe('suspends after 30 min idle (RDP: 20 min)');
+    expect(def().plan(FACTS).summary).toBe('suspends after 30 min idle (RDP: 20 min, SSH: 20 min)');
     expect(def().plan({ ...FACTS, minutes: 5, rdpMinutes: 45 }).files[0]?.content).toMatch(/^RDP_MINUTES=45$/m);
-    expect(def().plan({ ...FACTS, minutes: 5, rdpMinutes: 45 }).summary).toBe('suspends after 5 min idle (RDP: 45 min)');
+    expect(def().plan({ ...FACTS, minutes: 5, rdpMinutes: 45 }).summary).toBe('suspends after 5 min idle (RDP: 45 min, SSH: 20 min)');
     expect(def().plan({ ...FACTS, installedRdpMinutes: 60 }).files[0]?.content).toMatch(/^RDP_MINUTES=60$/m);
     expect(def().plan({ ...FACTS, installedRdpMinutes: 60, rdpMinutes: 7 }).files[0]?.content).toMatch(/^RDP_MINUTES=7$/m);
   });
@@ -156,7 +156,24 @@ describe('idle-suspend: the plan', () => {
     expect(script).toMatch(/^MINUTES=1$/m);
     expect(script).toMatch(/^RDP_MINUTES=1$/m);
     expect(idleSuspendInstalledMinutes(script)).toBe(1);
-    expect(plan.summary).toBe('suspends after 1 min idle (RDP: 1 min)');
+    expect(plan.summary).toBe('suspends after 1 min idle (RDP: 1 min, SSH: 20 min)');
+  });
+
+  it('decision 109: --ssh-minutes (default 20) goes into the script and the summary; without the flag the installed value is kept', () => {
+    expect(def().plan(FACTS).files[0]?.content).toMatch(/^SSH_MINUTES=20$/m);
+    expect(def().plan({ ...FACTS, sshMinutes: 45 }).files[0]?.content).toMatch(/^SSH_MINUTES=45$/m);
+    expect(def().plan({ ...FACTS, sshMinutes: 45 }).summary).toBe('suspends after 30 min idle (RDP: 20 min, SSH: 45 min)');
+    expect(def().plan({ ...FACTS, installedSshMinutes: 60 }).files[0]?.content).toMatch(/^SSH_MINUTES=60$/m);
+    expect(def().plan({ ...FACTS, installedSshMinutes: 60, sshMinutes: 7 }).files[0]?.content).toMatch(/^SSH_MINUTES=7$/m);
+    expect(def().plan({ ...FACTS, sshMinutes: 1 }).summary).toBe('suspends after 30 min idle (RDP: 20 min, SSH: 1 min)');
+  });
+
+  it('decision 109: refuses --ssh-minutes out of range, and the description and next say that ssh counts only while its traffic is recent', () => {
+    for (const sshMinutes of [1441, 0, 2.5, -1]) expect(() => def().plan({ ...FACTS, sshMinutes }), String(sshMinutes)).toThrow(/minutes/);
+    expect(def().description).toMatch(/--ssh-minutes/);
+    const text = def().next(def().plan(FACTS), 'desktop').join('\n');
+    expect(text).toMatch(/established ssh connection counts only while it has traffic more recent than --ssh-minutes/);
+    expect(text).toMatch(/keepalive/);
   });
 
   it('decision 103: refuses --rdp-minutes out of range (a plan never carries it)', () => {

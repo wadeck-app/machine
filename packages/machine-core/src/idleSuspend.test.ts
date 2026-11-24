@@ -5,12 +5,15 @@ import {
   IDLE_MAX_MINUTES,
   IDLE_MIN_MINUTES,
   IDLE_RDP_DEFAULT_MINUTES,
+  IDLE_SSH_DEFAULT_MINUTES,
   idleDecision,
   idleSuspendInstalledMinutes,
   idleSuspendInstalledRdpMinutes,
+  idleSuspendInstalledSshMinutes,
   idleSuspendScript,
   parseIdleMinutes,
   parseIdleRdpMinutes,
+  parseIdleSshMinutes,
   parseLoadHundredths,
   type IdleFacts,
 } from './idleSuspend.js';
@@ -23,6 +26,8 @@ const MIN = 30;
 const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
   keepAwake: [{ present: false }, { present: false }],
   connections: { rdp: 0, ssh: 0, peer: 0 },
+  // Decision 109: read only with an ssh connection; a long quiet one is not activity.
+  sshTrafficIdleSeconds: 99999,
   audit: { lastActivityEpoch: NOW - 3 * 3600, openHolds: 0 },
   load5Hundredths: 5,
   inhibitors: 0,
@@ -39,7 +44,7 @@ describe('idleDecision: not idle (each reason, the state is cleared)', () => {
     ['the second keep-awake file', { keepAwake: [{ present: false }, { present: true, untilEpoch: null }] }, 'not idle: keep-awake requested'],
     ['a keep-awake file until the future', { keepAwake: [{ present: true, untilEpoch: NOW + 1 }, { present: false }] }, 'not idle: keep-awake requested'],
     ['unreadable keep-awake files', { keepAwake: null }, 'not idle: cannot read the keep-awake files'],
-    ['an SSH connection', { connections: { rdp: 0, ssh: 2, peer: 0 } }, 'not idle: ssh connected'],
+    ['an SSH connection with recent traffic', { connections: { rdp: 0, ssh: 2, peer: 0 }, sshTrafficIdleSeconds: 180 }, 'not idle: ssh connected (traffic 3 min ago, needs 20)'],
     ['a machine peer connection', { connections: { rdp: 0, ssh: 0, peer: 1 } }, 'not idle: machine peer connected'],
     ['rdp and ssh together: rdp is named first', { connections: { rdp: 1, ssh: 1, peer: 1 }, inputIdleSeconds: 60 }, 'not idle: rdp connected (input 1 min ago, needs 20)'],
     ['unreadable connections', { connections: null }, 'not idle: cannot read the connections (ss or the daemon port file)'],
@@ -179,6 +184,7 @@ describe('idleSuspendScript (the generated shell)', () => {
   const opts = {
     minutes: 30,
     rdpMinutes: 20,
+    sshMinutes: 20,
     root: '',
     configDir: '/home/alice/.config/machine',
     tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' },
@@ -188,7 +194,7 @@ describe('idleSuspendScript (the generated shell)', () => {
   it('starts with the shebang, carries the marker and the minutes, ends with a newline', () => {
     const s = script();
     expect(s.split('\n')[0]).toBe('#!/bin/sh');
-    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 4');
+    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 5');
     expect(s).toMatch(/^MINUTES=30$/m);
     expect(s.endsWith('\n')).toBe(true);
     expect(idleSuspendInstalledMinutes(s)).toBe(30);
@@ -320,7 +326,7 @@ describe('idleDecision: RDP connected (decision 103): the input idle time agains
     expect(decide(withRdp(3600, { keepAwake: [{ present: true, untilEpoch: null }, { present: false }] })).reason).toBe('not idle: keep-awake requested');
   });
   it('ssh and peer connections stay activity whatever the input idle time', () => {
-    expect(decide(idle({ connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 99999 })).reason).toBe('not idle: ssh connected');
+    expect(decide(idle({ connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 99999, sshTrafficIdleSeconds: 5 })).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
     expect(decide(idle({ connections: { rdp: 1, ssh: 0, peer: 1 }, inputIdleSeconds: 99999 })).reason).toBe('not idle: machine peer connected');
   });
   it('R follows the parameter (5 min boundary, and 1440)', () => {
@@ -378,8 +384,8 @@ describe('idleDecision: NO RDP connection (decision 103): input idle >= N and th
     expect(decide(noRdp('missing', { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
   });
   it('the input check comes after the connections and before the audit log (order of the reasons)', () => {
-    const everything = noRdp(0, { connections: { rdp: 0, ssh: 1, peer: 0 }, audit: null });
-    expect(decide(everything).reason).toBe('not idle: ssh connected');
+    const everything = noRdp(0, { connections: { rdp: 0, ssh: 1, peer: 0 }, sshTrafficIdleSeconds: 5, audit: null });
+    expect(decide(everything).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
     expect(decide({ ...everything, connections: { rdp: 0, ssh: 0, peer: 0 } }).reason).toBe('not idle: input 0 min ago (needs 5)');
     expect(decide({ ...everything, connections: { rdp: 0, ssh: 0, peer: 0 }, inputIdleSeconds: 99999 }).reason).toBe('not idle: cannot read the machine audit log');
   });
@@ -446,8 +452,79 @@ describe('minimum of 1 minute (decision 106)', () => {
     expect(idleDecision(f(180), NOW, 9, 3).reason).toBe('suspending: rdp connected but no input for 3 min (needs 3)');
   });
   it('the installed values 1 are read back from the script', () => {
-    const s = idleSuspendScript({ minutes: 1, rdpMinutes: 1, root: '', configDir: '/home/alice/.config/machine', tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' } });
+    const s = idleSuspendScript({ minutes: 1, rdpMinutes: 1, sshMinutes: 1, root: '', configDir: '/home/alice/.config/machine', tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' } });
     expect(idleSuspendInstalledMinutes(s)).toBe(1);
     expect(idleSuspendInstalledRdpMinutes(s)).toBe(1);
+  });
+});
+
+// Decision 109: an established ssh connection is activity only while its TRAFFIC is recent (S = --ssh-minutes, default 20); the machine peer port stays unconditional.
+describe('idleDecision: ssh connected (decision 109): the traffic idle time against S', () => {
+  const ssh = { rdp: 0, ssh: 1, peer: 0 };
+  const withSsh = (sshTrafficIdleSeconds: IdleFacts['sshTrafficIdleSeconds'], over: Partial<IdleFacts> = {}, elapsedMin = 40): IdleFacts => idle({ connections: ssh, sshTrafficIdleSeconds, ...over }, elapsedMin);
+  const decide = (f: IdleFacts, s = 20): ReturnType<typeof idleDecision> => idleDecision(f, NOW, MIN, 20, s);
+
+  it('the default is 20 min', () => {
+    expect(IDLE_SSH_DEFAULT_MINUTES).toBe(20);
+    expect(idleDecision(withSsh(20 * 60 - 1), NOW, MIN).reason).toBe('not idle: ssh connected (traffic 19 min ago, needs 20)');
+    expect(idleDecision(withSsh(20 * 60), NOW, MIN).suspend).toBe(true);
+  });
+  it.each([1, 20, 1440])('S = %i: traffic S*60-1 s ago is activity, S*60 s ago is not (boundary)', (s) => {
+    expect(decide(withSsh(s * 60 - 1), s)).toEqual({ suspend: false, reason: `not idle: ssh connected (traffic ${s - 1} min ago, needs ${s})`, state: null });
+    expect(decide(withSsh(s * 60), s)).toEqual({ suspend: true, reason: `suspending: idle 40 min (ssh connected but no traffic for ${s} min, needs ${s})`, state: null });
+  });
+  it('traffic 0 s and 3 min ago: whole minutes shown', () => {
+    expect(decide(withSsh(0)).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
+    expect(decide(withSsh(180)).reason).toBe('not idle: ssh connected (traffic 3 min ago, needs 20)');
+  });
+  it('unreadable traffic idle time: activity, with the cause (fail closed)', () => {
+    expect(decide(withSsh({ unreadable: 'ss is not installed' }))).toEqual({ suspend: false, reason: 'not idle: ssh connected (traffic idle unreadable: ss is not installed)', state: null });
+  });
+  it('the suffix is on the timer lines: restart, wait and the rdp mode', () => {
+    const note = ' (ssh connected but no traffic for 25 min, needs 20)';
+    expect(decide(withSsh(25 * 60, { state: 'absent' })).reason).toBe(`idle 0/30 min${note}`);
+    expect(decide(withSsh(25 * 60, {}, 12)).reason).toBe(`idle 12/30 min${note}`);
+    expect(decide(withSsh(25 * 60, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600 })).reason).toBe(`suspending: rdp connected but no input for 60 min (needs 20)${note}`);
+    expect(decide(withSsh(25 * 60, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600, state: 'absent' })).reason).toBe(`idle: rdp connected but no input for 60 min (needs 20), confirming at the next check${note}`);
+  });
+  it('the suffix comes after the input note and the ignored displays', () => {
+    expect(decide(withSsh(25 * 60, { inputIdleSeconds: 'missing' }, 12)).reason).toBe('idle 12/30 min (input idleness not checked: xprintidle is not installed) (ssh connected but no traffic for 25 min, needs 20)');
+    expect(decide(withSsh(25 * 60, { ignoredDisplays: [0], inputIdleSeconds: 99999 }, 12)).reason).toBe('idle 12/30 min (ignored display :0: no user session) (ssh connected but no traffic for 25 min, needs 20)');
+  });
+  it('no ssh connection: the traffic fact is not read (unreadable or recent, no suffix)', () => {
+    expect(idleDecision(idle({ sshTrafficIdleSeconds: { unreadable: 'x' } }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
+    expect(idleDecision(idle({ sshTrafficIdleSeconds: 0 }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
+  });
+  it('a peer connection stays unconditional even with an idle ssh connection', () => {
+    expect(decide(withSsh(99999, { connections: { rdp: 0, ssh: 1, peer: 1 } })).reason).toBe('not idle: machine peer connected');
+  });
+  it('the machine request rule stays unconditional: a request in the last N min blocks despite an idle ssh connection', () => {
+    expect(decide(withSsh(99999, { audit: { lastActivityEpoch: NOW - 60, openHolds: 0 } })).reason).toBe('not idle: machine request in the last 30 min');
+  });
+  it('an ignored ssh connection does not bypass the other checks', () => {
+    expect(decide(withSsh(99999, { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
+    expect(decide(withSsh(99999, { inhibitors: 1 })).reason).toBe('not idle: sleep inhibitor held (block)');
+  });
+  it('a non-integer or negative traffic idle time and an out-of-range S are refused loudly', () => {
+    for (const bad of [-1, 1.5, NaN]) expect(() => decide(withSsh(bad)), String(bad)).toThrow(InstallError);
+    for (const s of [0, 1441, 2.5, NaN]) expect(() => decide(withSsh(60), s), String(s)).toThrow(/minutes/);
+  });
+});
+
+describe('parseIdleSshMinutes (--ssh-minutes) and the script (decision 109)', () => {
+  it('accepts whole numbers 1 to 1440 only, the error names the flag, range and default', () => {
+    expect(parseIdleSshMinutes('1')).toBe(1);
+    expect(parseIdleSshMinutes('1440')).toBe(1440);
+    for (const bad of ['0', '1441', '', ' 20', '20m', '2e1', '-5']) expect(() => parseIdleSshMinutes(bad), bad).toThrow(/--ssh-minutes must be a whole number of minutes from 1 to 1440 \(default 20\)/);
+    expect(() => parseIdleSshMinutes('0')).toThrow('for example `machine install idle-suspend --ssh-minutes 20`');
+  });
+  it('SSH_MINUTES=<n> is in the script, read back, undefined for an older script', () => {
+    const tools = { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' };
+    const mk = (sshMinutes: number): string => idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes, root: '', configDir: '/home/alice/.config/machine', tools });
+    expect(mk(20)).toMatch(/^SSH_MINUTES=20$/m);
+    expect(idleSuspendInstalledSshMinutes(mk(45))).toBe(45);
+    expect(idleSuspendInstalledSshMinutes('#!/bin/sh\nMINUTES=30\n')).toBeUndefined();
+    expect(idleSuspendInstalledSshMinutes('SSH_MINUTES=9999\n')).toBeUndefined();
+    for (const bad of [0, 1441, 20.5, NaN]) expect(() => mk(bad), String(bad)).toThrow(InstallError);
   });
 });

@@ -166,7 +166,7 @@ describe('statusBlock: one compact block per item', () => {
     const raw = '2026-11-22T18:13:56+00:00 thinkcentre machine-idle-suspend[46595]: not idle: rdp connected (input idle unreadable: xprintidle failed on :0 as root)';
     for (const columns of [60, 80, 100]) {
       const lines = statusBlock({ ...base, details: ['suspends after 5 min idle'], lastDecision: raw }, { columns, now: NOW });
-      const last = lines.slice(2);
+      const last = lines.slice(lines.findIndex((l) => l.startsWith('  last:')));
       expect(last.join(' ').replace(/\s+/g, ' ')).toContain('not idle: rdp connected (input idle unreadable: xprintidle failed on :0 as root) (3 min ago)');
       expect(last.slice(1).every((l) => l.startsWith('    '))).toBe(true);
       expect(last.join('')).not.toContain('...');

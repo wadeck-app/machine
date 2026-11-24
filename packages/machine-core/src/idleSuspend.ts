@@ -23,9 +23,11 @@ export const IDLE_SSH_PORT = 22;
 export const IDLE_STATE_DIR = '/run/machine-idle-suspend';
 export const IDLE_STATE_FILE = `${IDLE_STATE_DIR}/since`;
 export const IDLE_KEEP_AWAKE_RUN = '/run/machine-keep-awake';
-export const IDLE_SUSPEND_VERSION = 4;
+export const IDLE_SUSPEND_VERSION = 5;
 /** `--rdp-minutes` default: the input idle time from which an established RDP connection no longer counts as activity (decision 103). */
 export const IDLE_RDP_DEFAULT_MINUTES = 20;
+/** `--ssh-minutes` default: the TRAFFIC idle time from which an established ssh connection no longer counts as activity (decision 109). */
+export const IDLE_SSH_DEFAULT_MINUTES = 20;
 /** Where the script looks for the tools of the RDP input check when `command -v` found none at install time (the Debian/Ubuntu places). */
 export const IDLE_DEFAULT_XPRINTIDLE = '/usr/bin/xprintidle';
 export const IDLE_DEFAULT_RUNUSER = '/usr/sbin/runuser';
@@ -44,6 +46,12 @@ export interface IdleFacts {
   keepAwake: Array<{ present: false } | { present: true; untilEpoch: number | null }> | null;
   /** ESTABLISHED TCP connections whose LOCAL port is the RDP port, the ssh port, the machine peer port. */
   connections: { rdp: number; ssh: number; peer: number } | null;
+  /**
+   * Decision 109: seconds since the last TCP traffic of the ssh connections, the MINIMUM over the established connections to the sshd port (`ss -Htin`:
+   * min(lastrcv, lastsnd), whole seconds); `{ unreadable }`: it could not be read for at least one connection (the cause goes to the journal, ssh then counts as
+   * activity: fail closed). Read only when `connections.ssh > 0`; ignored otherwise.
+   */
+  sshTrafficIdleSeconds: number | { unreadable: string };
   /** Epoch of the last accepted/completed/held entry of the audit log (null: none in the part read), and the holds without an end. */
   audit: { lastActivityEpoch: number | null; openHolds: number } | null;
   load5Hundredths: number | null;
@@ -106,6 +114,15 @@ export function parseIdleRdpMinutes(text: string): number {
   return n;
 }
 
+/** `--ssh-minutes` as typed: whole decimal digits, 1 to 1440 (decision 109). */
+export function parseIdleSshMinutes(text: string): number {
+  const n = /^(0|[1-9][0-9]{0,3})$/.test(text) ? Number(text) : NaN;
+  if (!Number.isInteger(n) || n < IDLE_MIN_MINUTES || n > IDLE_MAX_MINUTES) {
+    throw new InstallError(`--ssh-minutes must be a whole number of minutes from ${IDLE_MIN_MINUTES} to ${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), got ${JSON.stringify(text.slice(0, 20))}: for example \`machine install idle-suspend --ssh-minutes 20\``);
+  }
+  return n;
+}
+
 /** `--minutes` as typed: whole decimal digits, 1 to 1440. */
 export function parseIdleMinutes(text: string): number {
   const n = /^(0|[1-9][0-9]{0,3})$/.test(text) ? Number(text) : NaN;
@@ -133,9 +150,10 @@ export function parseLoadHundredths(text: string): number | null {
  * timer runs: it starts at 0, restarts when the clock went back, when the last check is older than IDLE_GAP_SECONDS (the box slept: a wake for a short
  * run must not suspend again at once) or when the state file is unusable, and suspends once `minutes` whole minutes have passed.
  */
-export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdpMinutes: number = IDLE_RDP_DEFAULT_MINUTES): IdleDecision {
+export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdpMinutes: number = IDLE_RDP_DEFAULT_MINUTES, sshMinutes: number = IDLE_SSH_DEFAULT_MINUTES): IdleDecision {
   checkMinutes(minutes);
   checkMinutes(rdpMinutes);
+  checkMinutes(sshMinutes);
   if (!Number.isInteger(now) || now < 0) {
     throw new InstallError(`the clock must be a whole number of seconds since 1970, got ${String(now)}`);
   }
@@ -173,8 +191,20 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
       return notIdle(`${IDLE_REASON.rdp} (input ${Math.floor(input / 60)} min ago, needs ${rdpMinutes})${ignored}`);
     }
   }
+  // Decision 109: an ssh connection is activity only while its traffic is recent (S min); idle >= S is not activity and is said on the timer lines.
+  let sshNote = '';
   if (c.ssh > 0) {
-    return notIdle(IDLE_REASON.ssh);
+    const traffic = facts.sshTrafficIdleSeconds;
+    if (typeof traffic === 'object') {
+      return notIdle(`${IDLE_REASON.ssh} (traffic idle unreadable: ${traffic.unreadable})`);
+    }
+    if (!Number.isInteger(traffic) || traffic < 0) {
+      throw new InstallError(`the ssh traffic idle time must be a whole number of seconds, got ${String(traffic)}`);
+    }
+    if (traffic < sshMinutes * 60) {
+      return notIdle(`${IDLE_REASON.ssh} (traffic ${Math.floor(traffic / 60)} min ago, needs ${sshMinutes})`);
+    }
+    sshNote = ` (ssh connected but no traffic for ${Math.floor(traffic / 60)} min, needs ${sshMinutes})`;
   }
   if (c.peer > 0) {
     return notIdle(IDLE_REASON.peer);
@@ -217,7 +247,7 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   const rdpIdle = `rdp connected but no input for ${typeof input === 'number' ? Math.floor(input / 60) : 0} min (needs ${rdpMinutes})`;
   const restart = (why: string): IdleDecision => ({
     suspend: false,
-    reason: rdpMode ? `idle: ${rdpIdle}, confirming at the next check${why}${ignored}` : `idle 0/${minutes} min${why}${inputNote}${ignored}`,
+    reason: rdpMode ? `idle: ${rdpIdle}, confirming at the next check${why}${ignored}${sshNote}` : `idle 0/${minutes} min${why}${inputNote}${ignored}${sshNote}`,
     state: { since: now, last: now },
   });
   const s = facts.state;
@@ -234,13 +264,13 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
     return restart(RESTART.gap);
   }
   if (rdpMode) {
-    return { suspend: true, reason: `suspending: ${rdpIdle}${ignored}`, state: null };
+    return { suspend: true, reason: `suspending: ${rdpIdle}${ignored}${sshNote}`, state: null };
   }
   const elapsed = Math.floor((now - s.since) / 60);
   if (elapsed >= minutes) {
-    return { suspend: true, reason: `suspending: idle ${elapsed} min${inputNote}${ignored}`, state: null };
+    return { suspend: true, reason: `suspending: idle ${elapsed} min${inputNote}${ignored}${sshNote}`, state: null };
   }
-  return { suspend: false, reason: `idle ${elapsed}/${minutes} min${inputNote}${ignored}`, state: { since: s.since, last: now } };
+  return { suspend: false, reason: `idle ${elapsed}/${minutes} min${inputNote}${ignored}${sshNote}`, state: { since: s.since, last: now } };
 }
 
 // ---------------------------------------------------------------- the generated script
@@ -249,6 +279,8 @@ export interface IdleScriptOptions {
   minutes: number;
   /** The input idle time from which an established RDP connection no longer counts as activity (decision 103). */
   rdpMinutes: number;
+  /** The traffic idle time from which an established ssh connection no longer counts as activity (decision 109). */
+  sshMinutes: number;
   /** '' in the shipped script. A relative prefix put before EVERY path the script reads or runs: only the golden test sets it. */
   root: string;
   /** The configuration folder of machine of the owner: the audit log, the daemon port file and the keep-awake file are read there. */
@@ -273,6 +305,13 @@ export function idleSuspendInstalledMinutes(script: string): number | undefined 
   return Number.isInteger(n) && n >= IDLE_MIN_MINUTES && n <= IDLE_MAX_MINUTES ? n : undefined;
 }
 
+/** The ssh minutes the installed script was generated with; undefined for a script of an older version (no `SSH_MINUTES=` line). */
+export function idleSuspendInstalledSshMinutes(script: string): number | undefined {
+  const m = /^SSH_MINUTES=([0-9]{1,4})$/m.exec(script);
+  const n = m === null ? NaN : Number(m[1]);
+  return Number.isInteger(n) && n >= IDLE_MIN_MINUTES && n <= IDLE_MAX_MINUTES ? n : undefined;
+}
+
 /** The RDP minutes the installed script was generated with; undefined for a script of an older version (no `RDP_MINUTES=` line). */
 export function idleSuspendInstalledRdpMinutes(script: string): number | undefined {
   const m = /^RDP_MINUTES=([0-9]{1,4})$/m.exec(script);
@@ -283,6 +322,7 @@ export function idleSuspendInstalledRdpMinutes(script: string): number | undefin
 export function idleSuspendScript(o: IdleScriptOptions): string {
   checkMinutes(o.minutes);
   checkMinutes(o.rdpMinutes);
+  checkMinutes(o.sshMinutes);
   if (!isSafeRoot(o.root)) {
     throw new InstallError(`internal: the test root ${JSON.stringify(o.root.slice(0, 40))} is not a safe relative path`);
   }
@@ -304,6 +344,7 @@ ${marker}
 ROOT='${o.root}'
 MINUTES=${o.minutes}
 RDP_MINUTES=${o.rdpMinutes}
+SSH_MINUTES=${o.sshMinutes}
 DATE='${t.date}'
 SS='${t.ss}'
 INHIBIT='${t.systemdInhibit}'
@@ -424,7 +465,49 @@ if [ "$rdp" -gt 0 ]; then
   [ "$input_kind" != bad ] || not_idle "${IDLE_REASON.rdp} (input idle unreadable: $input_cause)"
   if [ "$input_secs" -lt $((RDP_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.rdp} (input $((input_secs / 60)) min ago, needs $RDP_MINUTES)$ignored_text"; fi
 fi
-[ "$ssh" -eq 0 ] || not_idle "${IDLE_REASON.ssh}"
+# Decision 109: an ssh connection is activity only while its TRAFFIC is recent: the minimum over the connections of min(lastrcv, lastsnd) of ss -Htin (ms).
+# Anything unreadable (no ss output, a connection without its info line, no lastrcv/lastsnd, not a number) is activity, with the cause.
+ssh_secs=''
+ssh_cause=''
+ssh_note=''
+read_ssh() {
+  info=$("$ROOT$SS" -Htin state established '( sport = :${IDLE_SSH_PORT} )' 2>/dev/null </dev/null) || { ssh_cause="ss -i failed"; return 1; }
+  tab=$(printf '\t')
+  min_ms=''
+  conns=0
+  pending=0
+  while IFS= read -r line; do
+    case $line in
+      '') continue ;;
+      ' '*|"$tab"*)
+        [ "$pending" -eq 1 ] || { ssh_cause="ss -i printed a TCP info line without a connection"; return 1; }
+        pending=0
+        rcv=$(printf '%s\n' "$line" | sed -n -E 's/.*[[:space:]]lastrcv:([^[:space:]]*).*/\1/p')
+        snd=$(printf '%s\n' "$line" | sed -n -E 's/.*[[:space:]]lastsnd:([^[:space:]]*).*/\1/p')
+        [ -n "$rcv" ] && [ -n "$snd" ] || { ssh_cause="ss -i printed no lastrcv or lastsnd on a connection (iproute2 too old?)"; return 1; }
+        printf '%s\n' "$rcv" | grep -Eq '^[0-9]{1,15}$' && printf '%s\n' "$snd" | grep -Eq '^[0-9]{1,15}$' || { ssh_cause="ss -i printed an unparsable lastrcv or lastsnd"; return 1; }
+        ms=$rcv
+        if [ "$snd" -lt "$ms" ]; then ms=$snd; fi
+        if [ -z "$min_ms" ] || [ "$ms" -lt "$min_ms" ]; then min_ms=$ms; fi
+        ;;
+      *)
+        [ "$pending" -eq 0 ] || { ssh_cause="ss -i printed a connection without its TCP info line"; return 1; }
+        pending=1
+        conns=$((conns + 1))
+        ;;
+    esac
+  done <<EOF
+$info
+EOF
+  [ "$pending" -eq 0 ] || { ssh_cause="ss -i printed a connection without its TCP info line"; return 1; }
+  [ "$conns" -gt 0 ] || { ssh_cause="ss -i lists no ssh connection (it closed since the first listing?)"; return 1; }
+  ssh_secs=$((min_ms / 1000))
+}
+if [ "$ssh" -gt 0 ]; then
+  read_ssh || not_idle "${IDLE_REASON.ssh} (traffic idle unreadable: $ssh_cause)"
+  if [ "$ssh_secs" -lt $((SSH_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.ssh} (traffic $((ssh_secs / 60)) min ago, needs $SSH_MINUTES)"; fi
+  ssh_note=" (ssh connected but no traffic for $((ssh_secs / 60)) min, needs $SSH_MINUTES)"
+fi
 [ "$peer" -eq 0 ] || not_idle "${IDLE_REASON.peer}"
 # Without an RDP connection: a readable input must be MINUTES old; an unreadable one is said on every timer line.
 input_note=''
@@ -510,7 +593,7 @@ write_state() {
 rdp_idle_text="rdp connected but no input for $((input_secs / 60)) min (needs $RDP_MINUTES)"
 restart() {
   write_state "$now"
-  if [ "$rdp_mode" -eq 1 ]; then log "idle: $rdp_idle_text, confirming at the next check$1$ignored_text"; else log "idle 0/$MINUTES min$1$input_note$ignored_text"; fi
+  if [ "$rdp_mode" -eq 1 ]; then log "idle: $rdp_idle_text, confirming at the next check$1$ignored_text$ssh_note"; else log "idle 0/$MINUTES min$1$input_note$ignored_text$ssh_note"; fi
   exit 0
 }
 case $state in
@@ -526,11 +609,11 @@ suspend_now() {
   exit 0
 }
 # RDP mode: the other checks have passed on the previous check too (the state is recent), the input idle time is the clock.
-if [ "$rdp_mode" -eq 1 ]; then suspend_now "suspending: $rdp_idle_text$ignored_text"; fi
+if [ "$rdp_mode" -eq 1 ]; then suspend_now "suspending: $rdp_idle_text$ignored_text$ssh_note"; fi
 elapsed=$(( (now - state_since) / 60 ))
-if [ "$elapsed" -ge "$MINUTES" ]; then suspend_now "suspending: idle $elapsed min$input_note$ignored_text"; fi
+if [ "$elapsed" -ge "$MINUTES" ]; then suspend_now "suspending: idle $elapsed min$input_note$ignored_text$ssh_note"; fi
 write_state "$state_since"
-log "idle $elapsed/$MINUTES min$input_note$ignored_text"
+log "idle $elapsed/$MINUTES min$input_note$ignored_text$ssh_note"
 `;
 }
 

@@ -187,6 +187,8 @@ export interface Parsed {
   minutes?: string;
   /** `machine install idle-suspend --rdp-minutes <1..1440>`: the input idle time from which an established RDP connection no longer keeps the box awake (decision 103). */
   rdpMinutes?: string;
+  /** `machine install idle-suspend --ssh-minutes <1..1440>`: the TRAFFIC idle time from which an established ssh connection no longer keeps the box awake (decision 109). */
+  sshMinutes?: string;
   promptTimeout?: string;
   policy?: string;
   yesFinalCode?: string;

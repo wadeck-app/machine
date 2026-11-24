@@ -6,6 +6,7 @@ import {
   deriveInstallState,
   idleSuspendInstalledMinutes,
   idleSuspendInstalledRdpMinutes,
+  idleSuspendInstalledSshMinutes,
   findInstallable,
   stateLabel,
   stateNextSteps,
@@ -77,15 +78,19 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
   // The same for --rdp-minutes (decision 103); a script of an older version has none (the default applies).
   let installedMinutes: number | undefined;
   let installedRdpMinutes: number | undefined;
-  if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined) {
+  // The same for --ssh-minutes (decision 109); a script of an older version has none (the default applies).
+  let installedSshMinutes: number | undefined;
+  if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined || env.context.sshMinutes === undefined) {
     try {
       const text = env.fs.readText(IDLE_SUSPEND_SCRIPT_PATH);
       installedMinutes = text === undefined ? undefined : idleSuspendInstalledMinutes(text);
       installedRdpMinutes = text === undefined ? undefined : idleSuspendInstalledRdpMinutes(text);
+      installedSshMinutes = text === undefined ? undefined : idleSuspendInstalledSshMinutes(text);
     } catch {
       // Unreadable: the status of the item reports it, with its cause.
       installedMinutes = undefined;
       installedRdpMinutes = undefined;
+      installedSshMinutes = undefined;
     }
   }
   return {
@@ -96,6 +101,8 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
     ...(installedMinutes === undefined ? {} : { installedMinutes }),
     ...(env.context?.rdpMinutes === undefined ? {} : { rdpMinutes: env.context.rdpMinutes }),
     ...(installedRdpMinutes === undefined ? {} : { installedRdpMinutes }),
+    ...(env.context?.sshMinutes === undefined ? {} : { sshMinutes: env.context.sshMinutes }),
+    ...(installedSshMinutes === undefined ? {} : { installedSshMinutes }),
   };
 }
 
@@ -367,7 +374,10 @@ export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
     return lines;
   }
   const config = (s.details ?? []).filter((d) => !d.startsWith(LAST_PREFIX) && !d.startsWith(NOTE_PREFIX));
-  const lines = [fit(`${s.id}  ${stateLabel(s.state)}${config.length === 0 ? '' : `  (${config.join('; ')})`}`, width)];
+  // The configuration (minutes of each rule) stays on the first line when it fits, else it wraps under it: never cut (decision 109 made it longer than 80 columns).
+  const head = `${s.id}  ${stateLabel(s.state)}`;
+  const detail = config.length === 0 ? '' : `(${config.join('; ')})`;
+  const lines = detail === '' || `${head}  ${detail}`.length <= width ? [fit(detail === '' ? head : `${head}  ${detail}`, width)] : [fit(head, width), ...wrap(detail, width, '  ', '    ')];
   const def = findInstallable(s.id);
   if (def !== undefined) {
     lines.push(fit(`  ${def.summaryLine}`, width));

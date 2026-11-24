@@ -41,6 +41,10 @@ interface World {
   minutes?: number;
   /** Decision 103: the input idle time from which an established RDP connection no longer counts (default 20). */
   rdpMinutes?: number;
+  /** Decision 109: the traffic idle time from which an established ssh connection no longer counts (default 20). */
+  sshMinutes?: number;
+  /** What `ss -Htin state established '( sport = :22 )'` prints (two lines per socket), 'fail', or 'derive': every ssh socket of `ss` with a busy info line (traffic 1 s ago). */
+  sshInfo?: string[] | 'fail' | 'derive';
   keepRun?: string | 'unreadable';
   keepUser?: string | 'unreadable';
   ss?: string[] | 'fail';
@@ -59,6 +63,8 @@ const DEFAULT_WORLD: Required<World> = {
   now: NOW,
   minutes: 30,
   rdpMinutes: 20,
+  sshMinutes: 20,
+  sshInfo: 'derive',
   keepRun: 'absent',
   keepUser: 'absent',
   ss: [],
@@ -83,6 +89,8 @@ const DEFAULT_WORLD: Required<World> = {
 const DEFAULT_FACTS: IdleFacts = {
   keepAwake: [{ present: false }, { present: false }],
   connections: { rdp: 0, ssh: 0, peer: 0 },
+  // Read only with an ssh connection: the default fake ss info says traffic 1 s ago (decision 109).
+  sshTrafficIdleSeconds: 1,
   audit: { lastActivityEpoch: NOW - 5 * H, openHolds: 0 },
   load5Hundredths: 8,
   inhibitors: 0,
@@ -117,6 +125,22 @@ const disp = (out: { toString: () => string }, n = '10', owner = 'alice', sessio
 const RECENT = [disp(600000)];
 const ssh6 = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.9]:40000';
 const peer = '0      0      192.168.1.10:4242   192.168.1.50:50001';
+/** The TCP info line of `ss -i` (iproute2), indented by a tab and a space: a real layout, `lastsnd`, `lastrcv` and `lastack` in milliseconds. */
+/** The values a broken ss could print instead of milliseconds. */
+type UnparsableMs = 'abc' | '5ms';
+const info = (lastsnd: number | UnparsableMs, lastrcv: number | UnparsableMs): string => `\t cubic wscale:7,7 rto:204 rtt:3.4/1.7 ato:40 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:10 bytes_sent:5129 bytes_acked:5129 bytes_received:3597 segs_out:60 segs_in:46 data_segs_out:36 data_segs_in:27 send 34Mbps lastsnd:${lastsnd} lastrcv:${lastrcv} lastack:${lastsnd} pacing_rate 68Mbps delivery_rate 12Mbps delivered:37 app_limited busy:2412ms rcv_space:14480 rcv_ssthresh:64088 minrtt:0.9 snd_wnd:64128`;
+const busyInfo = info(1000, 1000);
+const ssh6b = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.10]:40001';
+const ssh6c = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.11]:40002';
+const SSH_CAUSE = {
+  failed: 'ss -i failed',
+  noConnection: 'ss -i lists no ssh connection (it closed since the first listing?)',
+  noInfo: 'ss -i printed a connection without its TCP info line',
+  orphan: 'ss -i printed a TCP info line without a connection',
+  noField: 'ss -i printed no lastrcv or lastsnd on a connection (iproute2 too old?)',
+  unparsable: 'ss -i printed an unparsable lastrcv or lastsnd',
+};
+const onSsh = (n = 1): IdleFacts['connections'] => ({ rdp: 0, ssh: n, peer: 0 });
 const audit = (...e: Entry[]): string => auditLines([started(6 * H), ...e]);
 
 const ROWS: Row[] = [
@@ -162,6 +186,47 @@ const ROWS: Row[] = [
   { name: 'outgoing ssh and RDP from this box are not counted', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22', '0      0      192.168.1.10:51001   192.168.1.78:3389', '0      0      192.168.1.10:2222   192.168.1.78:40000'] } },
   { name: 'RDP and ssh together: rdp named first', world: { ss: [ssh6, rdp, peer], displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 1 }, inputIdleSeconds: 600 } },
   { name: 'two ssh connections', world: { ss: [ssh6, ssh6] }, facts: { connections: { rdp: 0, ssh: 2, peer: 0 } } },
+
+  // ---- decision 109: an ssh connection is activity only while its TRAFFIC (ss -Htin: min(lastrcv, lastsnd)) is more recent than S (default 20 min)
+  { name: 'ssh, traffic 1 s ago (the default fake): activity, minutes shown', world: { ss: [ssh6] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1 } },
+  { name: 'ssh, traffic 3 min ago on both directions: activity', world: { ss: [ssh6], sshInfo: [ssh6, info(180000, 180000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 180 } },
+  { name: 'ssh, traffic S*60-1 s ago (1199999 ms): still activity', world: { ss: [ssh6], sshInfo: [ssh6, info(1199999, 1199999)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1199 } },
+  { name: 'ssh, traffic exactly S*60 s ago (1200000 ms), timer at 12 min: not activity, said in the timer line', world: { ss: [ssh6], sshInfo: [ssh6, info(1200000, 1200000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1200 } },
+  { name: 'ssh, traffic S*60 s ago, timer at 47 min: suspends and says the ssh connection was ignored', world: { ss: [ssh6], sshInfo: [ssh6, info(1200000, 1200000)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1200, state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh, idle for hours, no state file: restart line carries the ssh suffix', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], state: 'absent' }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, state: 'absent' } },
+  { name: 'ssh: lastrcv is the older one, lastsnd the recent one: the MINIMUM counts (activity)', world: { ss: [ssh6], sshInfo: [ssh6, info(30000, 7200000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 30 } },
+  { name: 'ssh: lastsnd is the older one, lastrcv the recent one: the MINIMUM counts (activity)', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 45000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 45 } },
+  { name: 'ssh: lastrcv 25 min, lastsnd 40 min: not activity, 25 min named', world: { ss: [ssh6], sshInfo: [ssh6, info(2400000, 1500000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1500 } },
+  { name: 'ssh, ms rounded down to whole seconds: 1200999 ms is 1200 s', world: { ss: [ssh6], sshInfo: [ssh6, info(1200999, 1200999)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 1200 } },
+  { name: 'three ssh connections, one busy (1 min), two idle (2 h): the busy one counts', world: { ss: [ssh6, ssh6b, ssh6c], sshInfo: [ssh6, info(7200000, 7200000), ssh6b, info(60000, 60000), ssh6c, info(7200000, 7200000)] }, facts: { connections: onSsh(3), sshTrafficIdleSeconds: 60 } },
+  { name: 'two ssh connections both idle (2 h and 40 min): not activity, the shorter idle time is named, timer at 47 min', world: { ss: [ssh6, ssh6b], sshInfo: [ssh6, info(7200000, 7200000), ssh6b, info(2400000, 2400000)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(2), sshTrafficIdleSeconds: 2400, state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh: one busy, one idle and one WITHOUT an info line (last): fail closed, with the cause', world: { ss: [ssh6, ssh6b, ssh6c], sshInfo: [ssh6, info(1000, 1000), ssh6b, info(7200000, 7200000), ssh6c] }, facts: { connections: onSsh(3), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noInfo } } },
+  { name: 'ssh: a connection without an info line in the MIDDLE: fail closed even if the others are idle', world: { ss: [ssh6, ssh6b, ssh6c], sshInfo: [ssh6, info(7200000, 7200000), ssh6b, ssh6c, info(7200000, 7200000)] }, facts: { connections: onSsh(3), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noInfo } } },
+  { name: 'ssh: ss -i fails: fail closed', world: { ss: [ssh6], sshInfo: 'fail' }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.failed } } },
+  { name: 'ssh: ss -i lists nothing (the connection closed in between): fail closed', world: { ss: [ssh6], sshInfo: [] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noConnection } } },
+  { name: 'ssh: an info line without a connection: fail closed', world: { ss: [ssh6], sshInfo: [busyInfo, ssh6, busyInfo] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.orphan } } },
+  { name: 'ssh: no lastrcv field (old iproute2): fail closed', world: { ss: [ssh6], sshInfo: [ssh6, '\t cubic wscale:7,7 rto:204 rtt:3.4/1.7 lastsnd:7200000 lastack:7200000'] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noField } } },
+  { name: 'ssh: no lastsnd field: fail closed', world: { ss: [ssh6], sshInfo: [ssh6, '\t cubic wscale:7,7 rto:204 rtt:3.4/1.7 lastrcv:7200000 lastack:7200000'] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noField } } },
+  { name: 'ssh: an info line with no TCP info at all (only the congestion control): fail closed', world: { ss: [ssh6], sshInfo: [ssh6, '\t cubic'] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.noField } } },
+  { name: 'ssh: lastrcv is not a number: fail closed', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 'abc')] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.unparsable } } },
+  { name: 'ssh: lastsnd is negative: fail closed', world: { ss: [ssh6], sshInfo: [ssh6, info(-5, 7200000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.unparsable } } },
+  { name: 'ssh: lastrcv has a unit suffix: fail closed', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, '5ms')] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.unparsable } } },
+  { name: 'ssh: one idle connection and one unparsable: fail closed, never the idle one alone', world: { ss: [ssh6, ssh6b], sshInfo: [ssh6, info(7200000, 7200000), ssh6b, info(1, 'abc')] }, facts: { connections: onSsh(2), sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.unparsable } } },
+  { name: 'ssh-minutes 1: traffic 59 s ago (59999 ms) is activity', world: { sshMinutes: 1, ss: [ssh6], sshInfo: [ssh6, info(59999, 59999)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 59 } },
+  { name: 'ssh-minutes 1: traffic exactly 60 s ago is not activity', world: { sshMinutes: 1, ss: [ssh6], sshInfo: [ssh6, info(60000, 60000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 60 } },
+  { name: 'ssh-minutes 1440: traffic 86399 s ago (86399999 ms) is activity', world: { sshMinutes: 1440, ss: [ssh6], sshInfo: [ssh6, info(86399999, 86399999)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 86399 } },
+  { name: 'ssh-minutes 1440: traffic exactly 86400 s ago is not activity, timer at 47 min: suspends', world: { sshMinutes: 1440, ss: [ssh6], sshInfo: [ssh6, info(86400000, 86400000)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 86400, state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh idle for hours AND a peer connection: the peer still counts unconditionally', world: { ss: [ssh6, peer], sshInfo: [ssh6, info(7200000, 7200000)] }, facts: { connections: { rdp: 0, ssh: 1, peer: 1 }, sshTrafficIdleSeconds: 7200 } },
+  { name: 'ssh idle for hours AND a request 10 min ago: the audit rule stays unconditional', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], audit: audit(accepted(10 * M)) }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
+  { name: 'ssh idle for hours AND an open hold: the hold stays unconditional', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], audit: audit(held(90 * M, 'h1')) }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, audit: { lastActivityEpoch: NOW - 90 * M, openHolds: 1 } } },
+  { name: 'ssh idle for hours but a high load: the load is the reason', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, load5Hundredths: 500 } },
+  { name: 'ssh idle for hours AND a recent input (no rdp): the input is the reason', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], displays: RECENT }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, inputIdleSeconds: 600 } },
+  { name: 'ssh idle for hours, xprintidle missing, timer at 47 min: the suffix follows the input note', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], xprintidle: 'absent', state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, inputIdleSeconds: 'missing', state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh idle for hours, a greeter display ignored: the suffix follows the ignored display', world: { ss: [ssh6], sshInfo: [ssh6, info(7200000, 7200000)], displays: [disp('FAIL', '0', 'root', false), disp(7200000)] }, facts: { connections: onSsh(), sshTrafficIdleSeconds: 7200, ignoredDisplays: [0] } },
+  { name: 'rdp idle for hours AND ssh idle for hours: suspends, both ignored connections are said', world: { ss: [rdp, ssh6], sshInfo: [ssh6, info(7200000, 7200000)], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshTrafficIdleSeconds: 7200 } },
+  { name: 'rdp idle for hours AND ssh idle for hours, no state: confirms at the next check, ssh said', world: { ss: [rdp, ssh6], sshInfo: [ssh6, info(7200000, 7200000)], displays: [disp(21600000)], state: 'absent' }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshTrafficIdleSeconds: 7200, state: 'absent' } },
+  { name: 'rdp recent AND ssh idle: rdp is the reason, ss -i is not even needed', world: { ss: [rdp, ssh6], sshInfo: 'fail', displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 600, sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.failed } } },
+  { name: 'outgoing ssh (peer port 22) is not an ssh connection to this box: ss -i is not asked, idle', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22'], sshInfo: 'fail' }, facts: { sshTrafficIdleSeconds: { unreadable: SSH_CAUSE.failed } } },
 
   // ---- decision 103, RDP connected: the input idle time is the clock (R = 20 min), no timer on top
   { name: 'rdp, input 10 min ago: activity, the minutes and the threshold are shown', world: { ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
@@ -338,7 +403,17 @@ function build(dir: string, w: Required<World>): void {
   put(`${root}/usr/bin/logger`, '#!/bin/sh\nprintf "%s\\n" "$*" >> logger.log\n', 0o755);
   put(`${root}/usr/bin/systemctl`, '#!/bin/sh\nprintf "%s\\n" "$*" >> suspended\n', 0o755);
   const outputOf = (lines: string[] | 'fail'): string => (lines === 'fail' ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\ncat <<'EOT'\n${lines.join('\n')}\nEOT\n`);
-  put(`${root}/usr/bin/ss`, outputOf(w.ss), 0o755);
+  // Decision 109: `ss -Htn state established` prints the sockets; `ss -Htin state established '( sport = :22 )'` prints each ssh socket on TWO lines (the TCP info line is indented).
+  if (w.ss === 'fail') {
+    put(`${root}/usr/bin/ss`, outputOf('fail'), 0o755);
+  } else {
+    put(`${root}/usr/bin/ss`, `#!/bin/sh\nif [ "$1" = "-Htin" ]; then\n  [ -f ss-info.out ] || exit 1\n  cat ss-info.out\nelse\n  cat ss-plain.out\nfi\n`, 0o755);
+    put('ss-plain.out', w.ss.length === 0 ? '' : `${w.ss.join('\n')}\n`);
+    if (w.sshInfo !== 'fail') {
+      const lines = w.sshInfo === 'derive' ? w.ss.filter((l) => /^(ESTAB\s+)?\S+\s+\S+\s+\S*:22\s/.test(l)).flatMap((l) => [l, busyInfo]) : w.sshInfo;
+      put('ss-info.out', lines.length === 0 ? '' : `${lines.join('\n')}\n`);
+    }
+  }
   put(`${root}/usr/bin/systemd-inhibit`, outputOf(w.inhibit), 0o755);
   fill(`${root}${CONFIG}/daemon.port.json`, w.portFile);
   fill(`${root}${CONFIG}/audit.log`, w.audit, 'missing');
@@ -376,14 +451,14 @@ function build(dir: string, w: Required<World>): void {
   }
   // The config folder exists even when a file is missing (a missing audit log is a missing FILE).
   folder(`${root}${CONFIG}`);
-  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, rdpMinutes: w.rdpMinutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
+  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, rdpMinutes: w.rdpMinutes, sshMinutes: w.sshMinutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
 }
 
 describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides like idleDecision', () => {
   it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
     const world: Required<World> = { ...DEFAULT_WORLD, ...row.world };
     const facts: IdleFacts = { ...DEFAULT_FACTS, ...row.facts };
-    const expected = idleDecision(facts, world.now, world.minutes, world.rdpMinutes);
+    const expected = idleDecision(facts, world.now, world.minutes, world.rdpMinutes, world.sshMinutes);
     const dir = mkdtempSync(join(base, 'run-'));
     cleanup.push(dir);
     build(dir, world);
@@ -449,9 +524,9 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
 
   it('the table covers every decision kind of idleDecision (suspend, wait, each not-idle reason, each restart)', () => {
     const reasons = new Set(
-      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20).reason.replace(/\d+(\.\d+)?/g, '#')),
+      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20, r.world?.sshMinutes ?? 20).reason.replace(/\d+(\.\d+)?/g, '#')),
     );
-    for (const needle of ['suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
+    for (const needle of ['ssh connected (traffic # min ago, needs #)', '(ssh connected but no traffic for # min, needs #)', 'ssh connected (traffic idle unreadable: ss -i printed a connection without its TCP info line)', 'suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
       expect([...reasons].some((x) => x.includes(needle)), needle).toBe(true);
     }
   });
