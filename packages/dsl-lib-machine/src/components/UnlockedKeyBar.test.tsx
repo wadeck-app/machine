@@ -90,10 +90,10 @@ describe('UnlockedKeyBar', () => {
 });
 
 describe('KeepUnlockedSelect', () => {
-  it('offers 1, 5, 15, 30 minutes and ask every time, with 5 minutes selected by default', () => {
+  it('offers 1, 5, 15, 30, 60 minutes and ask every time, with 5 minutes selected by default', () => {
     render(<KeepUnlockedSelect />);
     const select = screen.getByLabelText('Keep unlocked for') as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['1 min', '5 min', '15 min', '30 min', 'Ask every time']);
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['1 min', '5 min', '15 min', '30 min', '1 h', 'Ask every time']);
     expect(select.value).toBe('5');
   });
 
@@ -116,6 +116,21 @@ describe('KeepUnlockedSelect', () => {
 });
 
 describe('UnlockedKeyBar as a floating pill (the Requests page)', () => {
+  // User request 2026-11-24: lengthen the time from the badge itself, without going to the dialog.
+  it('has a "Keep unlocked for" choice on the pill: picking a longer time extends the key from now and the countdown follows', () => {
+    render(<UnlockedKeyBar variant="chip" />);
+    act(() => void adminKeyHolder.hold(fakeKey()));
+    advance(3 * MIN);
+    expect(screen.getByTestId('unlocked-key-chip')).toHaveTextContent('Key unlocked 2:00');
+    const select = screen.getByLabelText('Keep unlocked for') as HTMLSelectElement;
+    expect(select.value).toBe('5');
+    fireEvent.change(select, { target: { value: '60' } });
+    expect(screen.getByTestId('unlocked-key-chip')).toHaveTextContent('Key unlocked 60:00');
+    advance(10 * MIN);
+    expect(adminKeyHolder.current()).not.toBeNull();
+  });
+
+
   it('is nothing while the key is locked', () => {
     const { container } = render(<UnlockedKeyBar variant="chip" />);
     expect(container).toBeEmptyDOMElement();

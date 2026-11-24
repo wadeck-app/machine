@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
-import { adminKeyHolder, formatCountdown } from '../lib/adminKeyHolder.js';
+import { adminKeyHolder, formatCountdown, KEEP_CHOICES, type KeepChoice } from '../lib/adminKeyHolder.js';
 import { KEY_PILL, NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 const PILL = KEY_PILL;
@@ -28,7 +28,7 @@ export interface UnlockedKeyBarProps {
 }
 
 export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
-  const { unlocked, expiresAt } = useAdminKey();
+  const { unlocked, expiresAt, keep } = useAdminKey();
   const [now, setNow] = useState(() => Date.now());
   const pageHasPill = useSyncExternalStore(subscribePills, hasPill);
   const isPill = variant === 'chip';
@@ -127,6 +127,12 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
           <span data-testid="unlocked-key-dot" aria-hidden="true" className={`h-2 w-2 rounded-full ${remaining < 60_000 ? 'bg-warning' : 'bg-success'}`} />
           {`Key unlocked ${formatCountdown(remaining)}`}
         </span>
+        {/* The time the key stays unlocked after the last signature: a longer choice applies from now (the holder restarts the countdown). */}
+        <select aria-label="Keep unlocked for" value={keep} onChange={(e) => adminKeyHolder.setKeep(e.target.value as KeepChoice)} className="rounded border border-border bg-surface px-1 text-xs text-content focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+          {KEEP_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>{choice.label}</option>
+          ))}
+        </select>
         <button type="button" onClick={() => adminKeyHolder.lock()} className="rounded px-1 text-xs font-medium text-content underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           Lock
         </button>

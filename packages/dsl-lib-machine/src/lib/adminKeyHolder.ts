@@ -11,13 +11,14 @@ import type { UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
 // navigation out of the page). The unmount of a component is NOT a reason to lock.
 
 /** The choices of "Keep unlocked for": minutes as text, or `ask` (keep nothing: the passphrase is asked every time, the behaviour of before). */
-export type KeepChoice = '1' | '5' | '15' | '30' | 'ask';
+export type KeepChoice = '1' | '5' | '15' | '30' | '60' | 'ask';
 
 export const KEEP_CHOICES: ReadonlyArray<{ value: KeepChoice; label: string; ms: number | null }> = [
   { value: '1', label: '1 min', ms: 60_000 },
   { value: '5', label: '5 min', ms: 5 * 60_000 },
   { value: '15', label: '15 min', ms: 15 * 60_000 },
   { value: '30', label: '30 min', ms: 30 * 60_000 },
+  { value: '60', label: '1 h', ms: 60 * 60_000 },
   { value: 'ask', label: 'Ask every time', ms: null },
 ];
 

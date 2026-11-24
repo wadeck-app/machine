@@ -33,10 +33,10 @@ afterEach(() => {
 });
 
 describe('the holder of the unlocked admin key', () => {
-  it('starts locked, with 5 minutes as the default and the choices 1, 5, 15, 30 minutes and ask every time', () => {
+  it('starts locked, with 5 minutes as the default and the choices 1, 5, 15, 30, 60 minutes and ask every time', () => {
     expect(adminKeyHolder.current()).toBeNull();
     expect(adminKeyHolder.snapshot()).toMatchObject({ unlocked: false, expiresAt: null, keep: '5' });
-    expect(KEEP_CHOICES.map((c) => c.value)).toEqual(['1', '5', '15', '30', 'ask']);
+    expect(KEEP_CHOICES.map((c) => c.value)).toEqual(['1', '5', '15', '30', '60', 'ask']);
   });
 
   it('keeps the key after hold, and wipes AND locks it when the idle timeout runs out', () => {
