@@ -289,16 +289,18 @@ export function requestsPage(answer: unknown, nowSeconds: number): RequestsPage 
   } else if (!answer.adminKeyHere) {
     allowNote = 'Only the admin machine can allow a command: it holds the admin key. Run the command shown in each row there (`machine admin allow`).';
   }
+  const noticeParts = noticesOf(answer, nowSeconds);
   return {
     machine: answer.self,
     policyMode: answer.policyMode,
     allow: { available: allowNote === '', machine: answer.self, note: allowNote },
     remote,
-    count: summary.waiting.length + summary.pending.length,
+    // The menu number: what waits for the owner on this page. A live notice (a request held on another machine, reported here) is one of them; expired ones only offer Dismiss.
+    count: summary.waiting.length + summary.pending.length + noticeParts.notices.length,
     waiting: summary.waiting.map((w) => waitingRow(w, machine, answer.now, nowSeconds)),
     pending: summary.pending.map((g) => pendingRow(g, machine, nowSeconds)),
     pendingTotal: summary.pendingTotal,
-    ...noticesOf(answer, nowSeconds),
+    ...noticeParts,
     // The daemon answers oldest first: the page shows the HISTORY_PAGE_ROWS newest, newest first (the full log is `machine log` and the Activity page).
     history: summary.history.slice(-HISTORY_PAGE_ROWS).reverse().map((h) => historyRow(h, nowSeconds)),
     historyTotal: summary.historyTotal,

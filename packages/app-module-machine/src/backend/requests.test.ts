@@ -166,8 +166,10 @@ describe('requestsPage: request notices (request-notices.md, phase 2)', () => {
     expect(page.notices[0]?.secondsLeft).toBe(0);
   });
 
-  it('notices do not count in the tab indicator (they are not verified here)', () => {
-    expect(requestsPage(daemonAnswer([], { notices: [stored()] }), NOW).count).toBe(0);
+  // The user's report: a request held on another machine is on the Requests page (as a notice) but the menu number said 0.
+  it('live notices count in the tab indicator (they wait for the owner here even if the other machine is not verified), expired ones do not', () => {
+    expect(requestsPage(daemonAnswer([], { notices: [stored()] }), NOW).count).toBe(1);
+    expect(requestsPage(daemonAnswer([], { notices: [stored(), stored()] }), NOW).count).toBe(2);
   });
 
   it('a damaged store is reported with the daemon message, never silently', () => {
