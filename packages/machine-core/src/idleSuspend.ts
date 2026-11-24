@@ -23,11 +23,27 @@ export const IDLE_SSH_PORT = 22;
 export const IDLE_STATE_DIR = '/run/machine-idle-suspend';
 export const IDLE_STATE_FILE = `${IDLE_STATE_DIR}/since`;
 export const IDLE_KEEP_AWAKE_RUN = '/run/machine-keep-awake';
-export const IDLE_SUSPEND_VERSION = 6;
+export const IDLE_SUSPEND_VERSION = 7;
 /** `--rdp-minutes` default: the input idle time from which an established RDP connection no longer counts as activity (decision 103). */
 export const IDLE_RDP_DEFAULT_MINUTES = 20;
 /** `--ssh-minutes` default: the input idle time of the TTY of an ssh session from which it no longer counts as activity (decision 111). */
 export const IDLE_SSH_DEFAULT_MINUTES = 20;
+/**
+ * Decision 111: a notty ssh connection (scp, rsync, `ssh host cmd`, the Herdr stream) is activity when the average rate of its TCP connection (bytes_acked +
+ * bytes_received of `ss -tin`, sent + received combined) between two checks is at or above this many bytes per second. Measured idle Herdr baseline: 190 to 230 B/s.
+ */
+export const IDLE_SSH_NOTTY_BYTES_PER_SECOND = 2048;
+/** The file of the previous samples (one line per notty connection: `<local> <peer> <epoch> <bytes>`); NOT cleared with the timer state. */
+export const IDLE_SSH_SAMPLES_FILE = `${IDLE_STATE_DIR}/ssh-samples`;
+/** The causes of an unknown rate, shared by the script and the tests. */
+export const IDLE_SSH_RATE_UNKNOWN = {
+  first: 'first check of this connection (no previous sample)',
+  stale: `previous sample older than ${IDLE_GAP_SECONDS} s`,
+  down: 'byte counter went down (a new connection on the same address)',
+  clock: 'the clock did not advance since the previous sample',
+  previous: 'previous sample unreadable',
+  counters: 'bytes_acked or bytes_received missing or not a number in ss -tin',
+} as const;
 /** Where the script looks for the tools of the RDP input check when `command -v` found none at install time (the Debian/Ubuntu places). */
 export const IDLE_DEFAULT_XPRINTIDLE = '/usr/bin/xprintidle';
 export const IDLE_DEFAULT_RUNUSER = '/usr/sbin/runuser';
@@ -40,6 +56,11 @@ export const IDLE_SUSPEND_TIMER_UNIT = 'machine-idle-suspend.timer';
 /** The tag of the journal lines: `journalctl -t machine-idle-suspend`. */
 export const IDLE_LOG_TAG = 'machine-idle-suspend';
 
+/** One ssh connection of the box (decision 111): `peer` is its remote address:port as ss prints it. */
+export type IdleSshConnection =
+  | { peer: string; kind: 'pts'; tty: string; idleSeconds: number }
+  | { peer: string; kind: 'notty'; rate: number | { unknown: string } };
+
 /** What was read from the box. `null` anywhere means "could not be read": the decision is then NOT idle (fail closed). */
 export interface IdleFacts {
   /** One entry per keep-awake file (the run file, the owner's file). `untilEpoch` null: no valid "until": keeps the box awake without end. */
@@ -47,11 +68,13 @@ export interface IdleFacts {
   /** ESTABLISHED TCP connections whose LOCAL port is the RDP port, the ssh port, the machine peer port. */
   connections: { rdp: number; ssh: number; peer: number } | null;
   /**
-   * Decision 111: the ssh logins WITH A TTY (sshd process title `sshd-session: <user>@pts/<n>`), each with the seconds since the last input on its tty (atime of
-   * /dev/pts/N). A login without a tty (`@notty`) is not listed: it is never activity by itself (an empty list means: only logins without tty). `{ unreadable }`: the sessions or one idle time could not be read
-   * (the cause goes to the journal, ssh then counts as activity: fail closed). Read only when `connections.ssh > 0`; ignored otherwise.
+   * Decision 111: every ssh connection of the box (local port 22, in the order of `ss`), classified from the title of its sshd login process: `pts` (a terminal
+   * login: the seconds since the last input on its tty, atime of /dev/pts/N; its traffic is ignored) or `notty` (no terminal: the rate in whole B/s over the
+   * last two checks, or `{ unknown }` when it cannot be computed: first sight, stale or unusable sample, counter reset: activity, fail closed). `{ unreadable }`:
+   * the connections, a login mapping or one idle time could not be read (the cause goes to the journal, ssh then counts as activity: fail closed).
+   * Read only when `connections.ssh > 0`; ignored otherwise.
    */
-  sshTtySessions: Array<{ tty: string; idleSeconds: number }> | { unreadable: string };
+  sshConnections: IdleSshConnection[] | { unreadable: string };
   /** Epoch of the last accepted/completed/held entry of the audit log (null: none in the part read), and the holds without an end. */
   audit: { lastActivityEpoch: number | null; openHolds: number } | null;
   load5Hundredths: number | null;
@@ -90,6 +113,7 @@ export const IDLE_REASON = {
   rdpXprintidleMissing: 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)',
   ssh: 'ssh connected',
   sshSession: 'ssh session',
+  sshConnection: 'ssh connection',
   peer: 'machine peer connected',
   auditUnreadable: 'cannot read the machine audit log',
   hold: 'machine request on hold',
@@ -192,29 +216,44 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
       return notIdle(`${IDLE_REASON.rdp} (input ${Math.floor(input / 60)} min ago, needs ${rdpMinutes})${ignored}`);
     }
   }
-  // Decision 111: an ssh connection is activity only through a session WITH A TTY whose input idle time is below S min; a session without a tty never is.
-  // The state of the ssh rule is said on the timer lines.
+  // Decision 111: EVERY ssh connection is tested. A pts login is activity while its tty input idle time is below S min (its traffic is ignored); a notty login
+  // is activity when its rate is at or above the threshold or unknown. The state of the ssh rule is said on the timer lines.
   let sshNote = '';
   if (c.ssh > 0) {
-    const sessions = facts.sshTtySessions;
-    if (!Array.isArray(sessions)) {
-      return notIdle(`${IDLE_REASON.ssh} (tty idle unreadable: ${sessions.unreadable})`);
+    const conns = facts.sshConnections;
+    if (!Array.isArray(conns)) {
+      return notIdle(`${IDLE_REASON.ssh} (cannot read the ssh state: ${conns.unreadable})`);
     }
     let freshest: { tty: string; idleSeconds: number } | undefined;
-    for (const x of sessions) {
-      if (!Number.isInteger(x.idleSeconds) || x.idleSeconds < 0) {
-        throw new InstallError(`the ssh tty idle time must be a whole number of seconds, got ${String(x.idleSeconds)}`);
-      }
-      if (freshest === undefined || x.idleSeconds < freshest.idleSeconds) {
-        freshest = x;
+    for (const x of conns) {
+      if (x.kind === 'pts') {
+        if (!Number.isInteger(x.idleSeconds) || x.idleSeconds < 0) {
+          throw new InstallError(`the ssh tty idle time must be a whole number of seconds, got ${String(x.idleSeconds)}`);
+        }
+        if (freshest === undefined || x.idleSeconds < freshest.idleSeconds) {
+          freshest = x;
+        }
+      } else if (typeof x.rate === 'number' && (!Number.isInteger(x.rate) || x.rate < 0)) {
+        throw new InstallError(`the ssh connection rate must be a whole number of bytes per second, got ${String(x.rate)}`);
       }
     }
-    if (freshest === undefined) {
-      sshNote = ' (ssh connection without tty ignored: no terminal input to measure)';
-    } else if (freshest.idleSeconds < sshMinutes * 60) {
-      return notIdle(`${IDLE_REASON.sshSession} ${freshest.tty} active (input ${Math.floor(freshest.idleSeconds / 60)} min ago, needs ${sshMinutes})`);
-    } else {
+    if (freshest !== undefined) {
+      if (freshest.idleSeconds < sshMinutes * 60) {
+        return notIdle(`${IDLE_REASON.sshSession} ${freshest.tty} active (input ${Math.floor(freshest.idleSeconds / 60)} min ago, needs ${sshMinutes})`);
+      }
       sshNote = ` (ssh session ${freshest.tty} idle for ${Math.floor(freshest.idleSeconds / 60)} min, needs ${sshMinutes})`;
+    }
+    for (const x of conns) {
+      if (x.kind !== 'notty') {
+        continue;
+      }
+      if (typeof x.rate === 'object') {
+        return notIdle(`${IDLE_REASON.sshConnection} ${x.peer} rate unknown (${x.rate.unknown})`);
+      }
+      if (x.rate >= IDLE_SSH_NOTTY_BYTES_PER_SECOND) {
+        return notIdle(`${IDLE_REASON.sshConnection} ${x.peer} active (${x.rate} B/s, needs ${IDLE_SSH_NOTTY_BYTES_PER_SECOND})`);
+      }
+      sshNote += ` (ssh connection ${x.peer} quiet: ${x.rate} B/s, under ${IDLE_SSH_NOTTY_BYTES_PER_SECOND})`;
     }
   }
   if (c.peer > 0) {
@@ -412,6 +451,114 @@ while read -r c1 c2 c3 c4 rest; do
 done <<EOF
 $sockets
 EOF
+# (b1) Decision 111: EVERY ssh connection is tested. It is read here, before any later check can exit, so the samples of the notty connections are kept at every run
+# (they are NOT cleared with the timer state). ss -Htinp prints, per connection, a line with the Process column (every pid of the login: the [priv] parent AND the
+# user process) and, tab-indented, the counters. The title of each pid (/proc/<pid>/cmdline, set by sshd) ending in @pts/<n> is a terminal login: activity while the input
+# idle time of its tty (atime of /dev/pts/<n>, what w and logind read) is below SSH_MINUTES, its traffic is ignored. A title ending in @notty (scp, rsync, ssh host cmd,
+# herdr) is activity when the average rate of its TCP connection since the previous run (bytes_acked + bytes_received, samples file) is at least THRESHOLD B/s, or unknown
+# (first sight, sample older than 5 min, counter went down, counters unreadable). Anything unreadable (no login title for the connection, a tty that is not pts/<n>,
+# no stat, an atime in the future, no ss, no samples file to write) is activity, with the cause. /dev/pts is never listed (a stale pts has no sshd process).
+THRESHOLD=${IDLE_SSH_NOTTY_BYTES_PER_SECOND}
+SSH_SAMPLES='${IDLE_SSH_SAMPLES_FILE}'
+ssh_fail=''
+ssh_pts_secs=''
+ssh_pts_tty=''
+ssh_block=''
+ssh_quiet_note=''
+ssh_new_samples=''
+ssh_old=''
+ssh_cur_open=0
+ssh_cur_local=''
+ssh_cur_peer=''
+ssh_cur_proc=''
+ssh_cur_info=''
+ssh_fail_set() { [ -n "$ssh_fail" ] || ssh_fail="$1"; }
+ssh_unknown() { [ -n "$ssh_block" ] || ssh_block="${IDLE_REASON.sshConnection} $c_peer rate unknown ($1)"; }
+ssh_notty() {
+  c_acked=$(printf '%s\n' "$c_info" | grep -Eo '(^|[[:space:]])bytes_acked:[^[:space:]]*' | head -n 1 | sed 's/.*://')
+  c_recv=$(printf '%s\n' "$c_info" | grep -Eo '(^|[[:space:]])bytes_received:[^[:space:]]*' | head -n 1 | sed 's/.*://')
+  printf '%s\n' "$c_acked" | grep -Eq '^(0|[1-9][0-9]{0,17})$' || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.counters}"; return 0; }
+  printf '%s\n' "$c_recv" | grep -Eq '^(0|[1-9][0-9]{0,17})$' || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.counters}"; return 0; }
+  c_total=$((c_acked + c_recv))
+  ssh_new_samples="$ssh_new_samples$c_local $c_peer $now $c_total
+"
+  prev_epoch=''
+  prev_total=''
+  while read -r o_local o_peer o_epoch o_total o_rest; do
+    if [ "$o_local" = "$c_local" ] && [ "$o_peer" = "$c_peer" ]; then prev_epoch=$o_epoch; prev_total=$o_total; break; fi
+  done <<EOF
+$ssh_old
+EOF
+  [ -n "$prev_epoch" ] || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.first}"; return 0; }
+  printf '%s\n' "$prev_epoch" | grep -Eq '^(0|[1-9][0-9]{0,11})$' && printf '%s\n' "$prev_total" | grep -Eq '^(0|[1-9][0-9]{0,17})$' || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.previous}"; return 0; }
+  c_dt=$((now - prev_epoch))
+  [ "$c_dt" -gt 0 ] || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.clock}"; return 0; }
+  [ "$c_dt" -le ${IDLE_GAP_SECONDS} ] || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.stale}"; return 0; }
+  [ "$c_total" -ge "$prev_total" ] || { ssh_unknown "${IDLE_SSH_RATE_UNKNOWN.down}"; return 0; }
+  c_rate=$(( (c_total - prev_total) / c_dt ))
+  if [ "$c_rate" -ge "$THRESHOLD" ]; then
+    [ -n "$ssh_block" ] || ssh_block="${IDLE_REASON.sshConnection} $c_peer active ($c_rate B/s, needs $THRESHOLD)"
+  else
+    ssh_quiet_note="$ssh_quiet_note (ssh connection $c_peer quiet: $c_rate B/s, under $THRESHOLD)"
+  fi
+}
+ssh_conn() {
+  c_local=$1
+  c_peer=$2
+  c_proc=$3
+  c_info=$4
+  c_kind=''
+  c_login_pid=''
+  for c_pid in $(printf '%s\n' "$c_proc" | grep -Eo 'pid=[0-9]{1,8}' | sed 's/^pid=//'); do
+    c_file="$ROOT/proc/$c_pid/cmdline"
+    [ -e "$c_file" ] || continue
+    c_title=$(tr -d '\000' <"$c_file" 2>/dev/null) || continue
+    c_tty=$(printf '%s\n' "$c_title" | sed -n -E 's/^sshd(-session)?: [^ ]+@(.*)$/\2/p')
+    [ -n "$c_tty" ] || continue
+    c_kind=$c_tty
+    c_login_pid=$c_pid
+    break
+  done
+  if [ -z "$c_kind" ]; then ssh_fail_set "no sshd login process (title sshd-session: <user>@<tty>) found for the ssh connection $c_peer"; return 0; fi
+  if [ "$c_kind" = notty ]; then ssh_notty; return 0; fi
+  printf '%s\n' "$c_kind" | grep -Eq '^pts/[0-9]{1,6}$' || { ssh_fail_set "an sshd login process has an unexpected tty in its title ($c_login_pid)"; return 0; }
+  c_atime=$(stat -c %X -- "$ROOT/dev/$c_kind" 2>/dev/null) || { ssh_fail_set "cannot read the idle time of $c_kind (stat /dev/$c_kind failed)"; return 0; }
+  printf '%s\n' "$c_atime" | grep -Eq '^[0-9]{1,12}$' || { ssh_fail_set "stat printed no number for /dev/$c_kind"; return 0; }
+  [ "$c_atime" -le "$now" ] || { ssh_fail_set "the last input of $c_kind is in the future (clock or tty error)"; return 0; }
+  c_secs=$((now - c_atime))
+  if [ -z "$ssh_pts_tty" ] || [ "$c_secs" -lt "$ssh_pts_secs" ]; then ssh_pts_secs=$c_secs; ssh_pts_tty=$c_kind; fi
+}
+ssh_flush() {
+  [ "$ssh_cur_open" -eq 1 ] || return 0
+  ssh_cur_open=0
+  printf '%s\n' "$ssh_cur_local" | grep -Eqx '[][0-9A-Za-z:.%_-]+' && printf '%s\n' "$ssh_cur_peer" | grep -Eqx '[][0-9A-Za-z:.%_-]+' || { ssh_fail_set "cannot parse an address of the ssh connections printed by ss"; return 0; }
+  ssh_conn "$ssh_cur_local" "$ssh_cur_peer" "$ssh_cur_proc" "$ssh_cur_info"
+}
+read_ssh() {
+  ssh_listing=$("$ROOT$SS" -Htinp state established '( sport = :${IDLE_SSH_PORT} )' 2>/dev/null </dev/null) || { ssh_fail_set "cannot list the ssh connections ($SS -tinp failed)"; return 0; }
+  if [ -e "$ROOT$SSH_SAMPLES" ]; then ssh_old=$(cat -- "$ROOT$SSH_SAMPLES" 2>/dev/null) || { ssh_fail_set "cannot read $SSH_SAMPLES"; ssh_old=''; }; fi
+  while IFS= read -r ssh_line; do
+    ssh_trim=$(printf '%s\n' "$ssh_line" | sed 's/^[[:space:]]*//')
+    case $ssh_trim in
+      '') continue ;;
+      ESTAB*|estab*|[0-9]*) ;;
+      *) ssh_cur_info="$ssh_cur_info $ssh_trim"; continue ;;
+    esac
+    ssh_flush
+    read -r c1 c2 c3 c4 c5 c6 <<EOT
+$ssh_trim
+EOT
+    case $c1 in ESTAB|estab) ssh_cur_local=$c4; ssh_cur_peer=$c5; ssh_cur_proc=$c6 ;; *) ssh_cur_local=$c3; ssh_cur_peer=$c4; ssh_cur_proc=$c5 ;; esac
+    ssh_cur_info=''
+    ssh_cur_open=1
+  done <<EOF
+$ssh_listing
+EOF
+  ssh_flush
+  if mkdir -p -- "$ROOT$STATE_DIR" 2>/dev/null && { printf '%s' "$ssh_new_samples" > "$ROOT$SSH_SAMPLES"; } 2>/dev/null; then :; else ssh_fail_set "cannot write $SSH_SAMPLES"; fi
+}
+# Without an ssh connection the samples are dropped (a vanished connection leaves no entry).
+if [ "$ssh" -gt 0 ]; then read_ssh; else rm -f -- "$ROOT$SSH_SAMPLES"; fi
 # (b2) the input idle time (xprintidle, ms), measured per logind SESSION (decision 105): the minimum over the user sessions that have an X display, each read as its user.
 # input_kind: num (input_secs), missing (no xprintidle), nosession (no such session), bad (input_cause). ignored_text names the X sockets that no such session uses.
 input_kind=num
@@ -476,45 +623,18 @@ if [ "$rdp" -gt 0 ]; then
   [ "$input_kind" != bad ] || not_idle "${IDLE_REASON.rdp} (input idle unreadable: $input_cause)"
   if [ "$input_secs" -lt $((RDP_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.rdp} (input $((input_secs / 60)) min ago, needs $RDP_MINUTES)$ignored_text"; fi
 fi
-# Decision 111: an ssh connection is activity only through a login WITH A TTY whose input idle time is below SSH_MINUTES. The logins are the sshd processes
-# whose title (/proc/<pid>/cmdline, set by sshd) is "sshd-session: <user>@pts/<n>" (or "sshd: ..." on an older sshd) or "...@notty"; the tty of a title is the only
-# tty read (never a listing of /dev/pts: a stale pts has no sshd process). Input idle = now - atime of /dev/pts/<n> (what w and logind read; output does not touch it).
-# A login without a tty (scp, rsync, ssh host cmd, herdr) is never activity. Anything unreadable (no sshd login process for the connection, a tty that is not
-# pts/<n>, no stat, an atime in the future) is activity, with the cause.
-ssh_secs=''
-ssh_tty=''
-ssh_cause=''
+# Decision 111 verdict (the connections were read in (b1)): unreadable is activity, then a pts login with recent input, then a notty connection that is busy or whose rate is unknown.
 ssh_note=''
-read_ssh() {
-  ssh_logins=0
-  ssh_files=$(grep -a -l -E '^sshd(-session)?: ' "$ROOT"/proc/[0-9]*/cmdline 2>/dev/null </dev/null)
-  while read -r cmd_file; do
-    [ -n "$cmd_file" ] || continue
-    title=$(tr -d '\000' 2>/dev/null <"$cmd_file") || { [ ! -e "$cmd_file" ] && continue; ssh_cause="cannot read $cmd_file"; return 1; }
-    s_tty=$(printf '%s\n' "$title" | sed -n -E 's/^sshd(-session)?: [^ ]+@(.*)$/\2/p')
-    [ -n "$s_tty" ] || continue
-    ssh_logins=$((ssh_logins + 1))
-    [ "$s_tty" != notty ] || continue
-    printf '%s\n' "$s_tty" | grep -Eq '^pts/[0-9]{1,6}$' || { ssh_cause="an sshd login process has an unexpected tty in its title ($(printf '%s' "$cmd_file" | sed 's/.*proc\///; s/\/cmdline$//'))"; return 1; }
-    atime=$(stat -c %X -- "$ROOT/dev/$s_tty" 2>/dev/null) || { ssh_cause="cannot read the idle time of $s_tty (stat /dev/$s_tty failed)"; return 1; }
-    printf '%s\n' "$atime" | grep -Eq '^[0-9]{1,12}$' || { ssh_cause="stat printed no number for /dev/$s_tty"; return 1; }
-    [ "$atime" -le "$now" ] || { ssh_cause="the last input of $s_tty is in the future (clock or tty error)"; return 1; }
-    secs=$((now - atime))
-    if [ -z "$ssh_tty" ] || [ "$secs" -lt "$ssh_secs" ]; then ssh_secs=$secs; ssh_tty=$s_tty; fi
-  done <<EOF
-$ssh_files
-EOF
-  [ "$ssh_logins" -gt 0 ] || { ssh_cause="no sshd login process (title sshd-session: <user>@<tty>) found for the ssh connection"; return 1; }
-}
 if [ "$ssh" -gt 0 ]; then
-  read_ssh || not_idle "${IDLE_REASON.ssh} (tty idle unreadable: $ssh_cause)"
-  if [ -z "$ssh_tty" ]; then
-    ssh_note=' (ssh connection without tty ignored: no terminal input to measure)'
-  elif [ "$ssh_secs" -lt $((SSH_MINUTES * 60)) ]; then
-    not_idle "${IDLE_REASON.sshSession} $ssh_tty active (input $((ssh_secs / 60)) min ago, needs $SSH_MINUTES)"
-  else
-    ssh_note=" (ssh session $ssh_tty idle for $((ssh_secs / 60)) min, needs $SSH_MINUTES)"
+  [ -z "$ssh_fail" ] || not_idle "${IDLE_REASON.ssh} (cannot read the ssh state: $ssh_fail)"
+  if [ -n "$ssh_pts_tty" ]; then
+    if [ "$ssh_pts_secs" -lt $((SSH_MINUTES * 60)) ]; then
+      not_idle "${IDLE_REASON.sshSession} $ssh_pts_tty active (input $((ssh_pts_secs / 60)) min ago, needs $SSH_MINUTES)"
+    fi
+    ssh_note=" (ssh session $ssh_pts_tty idle for $((ssh_pts_secs / 60)) min, needs $SSH_MINUTES)"
   fi
+  [ -z "$ssh_block" ] || not_idle "$ssh_block"
+  ssh_note="$ssh_note$ssh_quiet_note"
 fi
 [ "$peer" -eq 0 ] || not_idle "${IDLE_REASON.peer}"
 # Without an RDP connection: a readable input must be MINUTES old; an unreadable one is said on every timer line.

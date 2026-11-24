@@ -47,7 +47,7 @@ describe('machine install (list)', () => {
     expect(r.err).toBe('');
     expect(r.out).toMatch(/^suspend {2}not installed$/m);
     // The configuration does not fit the 80 columns of the first line: it wraps under it, never cut (decision 109).
-    expect(r.out).toMatch(/^idle-suspend {2}not installed\n {2}\(suspends after 30 min idle \(RDP: 20 min, SSH: 20 min\)\)$/m);
+    expect(r.out).toMatch(/^idle-suspend {2}not installed\n {2}\(suspends after 30 min idle \(RDP: 20 min, SSH: 20 min, no tty: 2048 B\/s\)\)$/m);
     expect(r.out).not.toContain('SSH: 2...');
     // One compact block per item: no generic text repeated, the long description stays in --dry-run.
     expect(r.out).not.toMatch(/platforms: linux|supported on this machine|state:/);

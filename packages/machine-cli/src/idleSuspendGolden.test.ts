@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appendAudit, GENESIS_HASH, idleDecision, idleSuspendScript, type IdleFacts, type Json } from '@wadeck-app/machine-core';
+import { appendAudit, GENESIS_HASH, IDLE_SSH_RATE_UNKNOWN, idleDecision, idleSuspendScript, type IdleFacts, type IdleSshConnection, type Json } from '@wadeck-app/machine-core';
 
 // GOLDEN TEST (idle-suspend.md): the generated shell script, run with `sh` on a fake root (fake /proc, fake ss, fake systemd-inhibit, fake audit log,
 // fake keep-awake files, a fake clock), must reach the SAME decision as `idleDecision` on the table below. Each row states the world twice: as files
@@ -47,6 +47,14 @@ interface World {
   sshProcs?: SshProc[] | 'derive';
   /** /dev/pts/N files that no sshd process owns (a stale pts): their atime is now - idle. */
   stalePts?: Array<{ n: number; idle: number }>;
+  /** Decision 111: the TCP counters of the ssh connections (one entry per ssh line of `ss`, in order; default 100 B/s over 120 s) as `ss -Htinp` prints them. */
+  sshNet?: NetSpec[];
+  /** The samples file of the previous run: 'auto' (one line per ssh connection from `sshNet`, plus `sshSamplesExtra`; absent when there is none), 'absent', 'unreadable' (a folder) or the raw text. */
+  sshSamples?: string | 'auto' | 'absent' | 'unreadable';
+  /** Lines appended to the samples file in 'auto' mode (a connection that has vanished). */
+  sshSamplesExtra?: string;
+  /** `ss -Htinp` fails (the plain `ss -Htn` works). */
+  sshListFails?: boolean;
   keepRun?: string | 'unreadable';
   keepUser?: string | 'unreadable';
   ss?: string[] | 'fail';
@@ -68,6 +76,10 @@ const DEFAULT_WORLD: Required<World> = {
   sshMinutes: 20,
   sshProcs: 'derive',
   stalePts: [],
+  sshNet: [],
+  sshSamples: 'auto',
+  sshSamplesExtra: '',
+  sshListFails: false,
   keepRun: 'absent',
   keepUser: 'absent',
   ss: [],
@@ -93,7 +105,7 @@ const DEFAULT_FACTS: IdleFacts = {
   keepAwake: [{ present: false }, { present: false }],
   connections: { rdp: 0, ssh: 0, peer: 0 },
   // Read only with an ssh connection (decision 111): no tty session by default.
-  sshTtySessions: [],
+  sshConnections: [],
   audit: { lastActivityEpoch: NOW - 5 * H, openHolds: 0 },
   load5Hundredths: 8,
   inhibitors: 0,
@@ -112,6 +124,26 @@ interface SessionSpec {
   state?: string;
   type?: string;
   showFails?: boolean;
+}
+
+/** The counters of one ssh connection in `ss -Htinp` and its previous sample. The previous total is 1000 and bytes_received 1000; the bytes_acked make the delta. */
+interface NetSpec {
+  /** Bytes (acked + received) gained since the previous sample (default 12000: 100 B/s over 120 s). */
+  delta?: number;
+  /** Seconds since the previous sample (default 120), or 'none': no sample of this connection. */
+  dt?: number | 'none';
+  /** The total of the previous sample (default 1000). */
+  prevTotal?: number;
+  /** bytes_acked as printed (default: makes `delta`). */
+  acked?: string;
+  /** bytes_received as printed (default 1000), or 'absent': the field is not printed. */
+  received?: string | 'absent';
+  /** No counter line at all. */
+  info?: 'absent';
+  /** ss prints the state column. */
+  estab?: boolean;
+  /** The Process column is not printed (ss run without root). */
+  column?: 'none';
 }
 
 interface Row {
@@ -137,11 +169,19 @@ interface SshProc {
 const pts = (n: number, idle: number | 'missing' | 'future'): SshProc => ({ pid: 3000 + n, title: `sshd-session: alice@pts/${n}`, idle });
 const notty = (n: number): SshProc => ({ pid: 4000 + n, title: 'sshd-session: alice@notty' });
 const priv = (n: number): SshProc => ({ pid: 2000 + n, title: 'sshd-session: alice [priv]' });
-const t = (n: number, idleSeconds: number): { tty: string; idleSeconds: number } => ({ tty: `pts/${n}`, idleSeconds });
+const t = (n: number, idleSeconds: number, peer = P6): IdleSshConnection => ({ peer, kind: 'pts', tty: `pts/${n}`, idleSeconds });
+/** A notty connection with this rate (B/s), or an unknown one with this cause. */
+const nt = (rate: number, peer = P6): IdleSshConnection => ({ peer, kind: 'notty', rate });
+const ntu = (unknown: string, peer = P6): IdleSshConnection => ({ peer, kind: 'notty', rate: { unknown } });
 const ssh6b = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.10]:40001';
+const P6 = '[::ffff:10.0.0.9]:40000';
+const P6b = '[::ffff:10.0.0.10]:40001';
+const P6c = '[::ffff:10.0.0.11]:40002';
 const ssh6c = '0      0      [::ffff:10.0.0.1]:22   [::ffff:10.0.0.11]:40002';
 const SSH_CAUSE = {
-  noProc: 'no sshd login process (title sshd-session: <user>@<tty>) found for the ssh connection',
+  noProc: (peer: string): string => `no sshd login process (title sshd-session: <user>@<tty>) found for the ssh connection ${peer}`,
+  list: 'cannot list the ssh connections (/usr/bin/ss -tinp failed)',
+  samples: 'cannot read /run/machine-idle-suspend/ssh-samples',
   stat: 'cannot read the idle time of pts/1 (stat /dev/pts/1 failed)',
   future: 'the last input of pts/1 is in the future (clock or tty error)',
   badTty: 'an sshd login process has an unexpected tty in its title (3001)',
@@ -182,7 +222,7 @@ const ROWS: Row[] = [
 
   // ---- connections
   { name: 'established RDP, recent input', world: { ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
-  { name: 'established ssh over IPv6-mapped address', world: { ss: [ssh6] }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 } } },
+  { name: 'established ssh over IPv6-mapped address (a quiet notty connection)', world: { ss: [ssh6] }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 }, sshConnections: [nt(100)] } },
   { name: 'established machine peer connection', world: { ss: [peer] }, facts: { connections: { rdp: 0, ssh: 0, peer: 1 } } },
   { name: 'peer port file absent: a connection to that port is not counted', world: { ss: [peer], portFile: 'absent' }, facts: { connections: { rdp: 0, ssh: 0, peer: 0 } } },
   { name: 'peer port file with garbage', world: { portFile: '{not json' }, facts: { connections: null } },
@@ -191,52 +231,76 @@ const ROWS: Row[] = [
   { name: 'ss prints the state column', world: { ss: ['ESTAB  0      0      192.168.1.10:3389   192.168.1.99:52311'], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
   { name: 'outgoing ssh and RDP from this box are not counted', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22', '0      0      192.168.1.10:51001   192.168.1.78:3389', '0      0      192.168.1.10:2222   192.168.1.78:40000'] } },
   { name: 'RDP and ssh together: rdp named first', world: { ss: [ssh6, rdp, peer], displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 1 }, inputIdleSeconds: 600 } },
-  { name: 'two ssh connections', world: { ss: [ssh6, ssh6] }, facts: { connections: { rdp: 0, ssh: 2, peer: 0 } } },
+  { name: 'two ssh connections (two quiet notty connections)', world: { ss: [ssh6, ssh6b] }, facts: { connections: { rdp: 0, ssh: 2, peer: 0 }, sshConnections: [nt(100), nt(100, P6b)] } },
 
   // ---- decision 111: an ssh connection is activity only through a session WITH A TTY whose input idle time (atime of /dev/pts/N) is below S (default 20 min)
-  { name: 'ssh, tty session with input 3 min ago: activity, names the tty and the minutes', world: { ss: [ssh6], sshProcs: [pts(1, 180)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 180)] } },
-  { name: 'ssh, tty input S*60-1 s ago (1199 s): still activity', world: { ss: [ssh6], sshProcs: [pts(1, 1199)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 1199)] } },
-  { name: 'ssh, tty input exactly S*60 s ago, timer at 12 min: not activity, said in the timer line', world: { ss: [ssh6], sshProcs: [pts(1, 1200)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 1200)] } },
-  { name: 'ssh, tty input S*60 s ago, timer at 47 min: suspends and says the session was idle', world: { ss: [ssh6], sshProcs: [pts(1, 1200)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTtySessions: [t(1, 1200)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'ssh, tty idle for hours, no state file: the restart line carries the ssh suffix', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], state: 'absent' }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], state: 'absent' } },
-  { name: 'ssh, tty input 0 s ago', world: { ss: [ssh6], sshProcs: [pts(2, 0)] }, facts: { connections: onSsh(), sshTtySessions: [t(2, 0)] } },
-  { name: 'ssh: the real process tree (a [priv] parent, the pts login, a bash) : the login is found, the others ignored', world: { ss: [ssh6], sshProcs: [priv(1), pts(1, 120), { pid: 77, title: 'bash' }] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 120)] } },
-  { name: 'ssh: an older sshd titles the process "sshd: alice@pts/2": the same', world: { ss: [ssh6], sshProcs: [{ pid: 3002, title: 'sshd: alice@pts/2', idle: 60 }] }, facts: { connections: onSsh(), sshTtySessions: [t(2, 60)] } },
-  { name: 'ssh: the Herdr tree ([priv] then @notty) only, with a STALE fresh /dev/pts/0 that no sshd process owns: not activity', world: { ss: [ssh6], sshProcs: [priv(1), notty(1)], stalePts: [{ n: 0, idle: 30 }] }, facts: { connections: onSsh(), sshTtySessions: [] } },
-  { name: 'ssh: a fresh pts login AND the Herdr notty tree: the pts login blocks', world: { ss: [ssh6, ssh6b], sshProcs: [priv(1), pts(1, 47), priv(2), notty(2)] }, facts: { connections: onSsh(2), sshTtySessions: [t(1, 47)] } },
-  { name: 'ssh: a connection but NO sshd login process at all (other server, hidden /proc): fail closed, with the cause', world: { ss: [ssh6], sshProcs: [] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.noProc } } },
-  { name: 'ssh: only [priv] processes (a login still being set up): fail closed', world: { ss: [ssh6], sshProcs: [priv(1)] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.noProc } } },
-  { name: 'ssh: the title carries a tty that is not pts/N (tty1): fail closed, never stat-ed', world: { ss: [ssh6], sshProcs: [{ pid: 3001, title: 'sshd-session: alice@tty1' }] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.badTty } } },
-  { name: 'ssh: the title carries a path (pts/../x): fail closed, never stat-ed', world: { ss: [ssh6], sshProcs: [{ pid: 3001, title: 'sshd-session: alice@pts/../x' }] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.badTty } } },
-  { name: 'rdp recent AND ssh with no sshd login process: rdp is the reason, the ssh sessions are not even needed', world: { ss: [rdp, ssh6], sshProcs: [], displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 600, sshTtySessions: { unreadable: SSH_CAUSE.noProc } } },
-  { name: 'outgoing ssh (peer port 22) is not an ssh connection to this box: the processes are not read, idle', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22'], sshProcs: [] }, facts: { sshTtySessions: { unreadable: SSH_CAUSE.noProc } } },
-  { name: 'ssh, ONLY a session without tty (scp, rsync, ssh host cmd, herdr): not activity, timer at 12 min', world: { ss: [ssh6], sshProcs: [notty(9)] }, facts: { connections: onSsh(), sshTtySessions: [] } },
-  { name: 'ssh, ONLY a session without tty, timer at 47 min: suspends and says the connection without tty was ignored', world: { ss: [ssh6], sshProcs: [notty(9)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTtySessions: [], state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'ssh, no tty and no state file: restart line carries the notty suffix', world: { ss: [ssh6], sshProcs: [notty(9)], state: 'absent' }, facts: { connections: onSsh(), sshTtySessions: [], state: 'absent' } },
-  { name: 'ssh: a session without tty AND a tty session with fresh input: the tty session blocks', world: { ss: [ssh6, ssh6b], sshProcs: [notty(9), pts(3, 60)] }, facts: { connections: onSsh(2), sshTtySessions: [t(3, 60)] } },
-  { name: 'ssh: a session without tty AND a tty session idle for hours: not activity, the idle tty is named', world: { ss: [ssh6, ssh6b], sshProcs: [notty(9), pts(3, 7200)] }, facts: { connections: onSsh(2), sshTtySessions: [t(3, 7200)] } },
-  { name: 'ssh: three tty sessions, the MINIMUM counts and names its tty (pts/2, 90 s)', world: { ss: [ssh6, ssh6b, ssh6c], sshProcs: [pts(0, 7200), pts(2, 90), pts(4, 3600)] }, facts: { connections: onSsh(3), sshTtySessions: [t(0, 7200), t(2, 90), t(4, 3600)] } },
-  { name: 'ssh: two tty sessions with the same idle time: the first in /proc order (lowest pid directory) is named', world: { ss: [ssh6, ssh6b], sshProcs: [pts(5, 90), pts(2, 90)] }, facts: { connections: onSsh(2), sshTtySessions: [t(2, 90), t(5, 90)] } },
-  { name: 'ssh: two tty sessions both idle (2 h and 40 min): not activity, the shorter idle time is named, timer at 47 min', world: { ss: [ssh6, ssh6b], sshProcs: [pts(0, 7200), pts(1, 2400)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(2), sshTtySessions: [t(0, 7200), t(1, 2400)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'ssh: a fresh tty session but no established ssh connection (stale session): not read, idle', world: { sshProcs: [pts(1, 5)] }, facts: { sshTtySessions: [t(1, 5)] } },
-  { name: 'ssh: the tty idle time is unreadable (no /dev/pts/N): fail closed, with the cause', world: { ss: [ssh6], sshProcs: [{ ...pts(1, 0), idle: 'missing' }] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.stat } } },
-  { name: 'ssh: the last input is in the future (atime ahead of the clock): fail closed', world: { ss: [ssh6], sshProcs: [{ ...pts(1, 0), idle: 'future' }] }, facts: { connections: onSsh(), sshTtySessions: { unreadable: SSH_CAUSE.future } } },
-  { name: 'ssh: one tty session idle for hours and one unreadable: fail closed, never the idle one alone', world: { ss: [ssh6, ssh6b], sshProcs: [pts(0, 7200), { ...pts(1, 0), idle: 'missing' }] }, facts: { connections: onSsh(2), sshTtySessions: { unreadable: SSH_CAUSE.stat } } },
-  { name: 'ssh-minutes 1: tty input 59 s ago is activity', world: { sshMinutes: 1, ss: [ssh6], sshProcs: [pts(1, 59)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 59)] } },
-  { name: 'ssh-minutes 1: tty input exactly 60 s ago is not activity', world: { sshMinutes: 1, ss: [ssh6], sshProcs: [pts(1, 60)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 60)] } },
-  { name: 'ssh-minutes 1440: tty input 86399 s ago is activity', world: { sshMinutes: 1440, ss: [ssh6], sshProcs: [pts(1, 86399)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 86399)] } },
-  { name: 'ssh-minutes 1440: tty input exactly 86400 s ago is not activity, timer at 47 min: suspends', world: { sshMinutes: 1440, ss: [ssh6], sshProcs: [pts(1, 86400)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTtySessions: [t(1, 86400)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'ssh tty idle for hours AND a peer connection: the peer still counts unconditionally', world: { ss: [ssh6, peer], sshProcs: [pts(1, 7200)] }, facts: { connections: { rdp: 0, ssh: 1, peer: 1 }, sshTtySessions: [t(1, 7200)] } },
-  { name: 'ssh tty idle for hours AND a request 10 min ago: the audit rule stays unconditional', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], audit: audit(accepted(10 * M)) }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
-  { name: 'ssh tty idle for hours AND an open hold: the hold stays unconditional', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], audit: audit(held(90 * M, 'h1')) }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], audit: { lastActivityEpoch: NOW - 90 * M, openHolds: 1 } } },
-  { name: 'ssh without tty but a high load: the load is the reason (the limit of a notty job)', world: { ss: [ssh6], sshProcs: [notty(9)], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: onSsh(), sshTtySessions: [], load5Hundredths: 500 } },
-  { name: 'ssh without tty but a sleep inhibitor in block mode: the inhibitor is the reason', world: { ss: [ssh6], sshProcs: [notty(9)], inhibit: ['Steam 1000 alice 9 steam sleep Playing block'] }, facts: { connections: onSsh(), sshTtySessions: [], inhibitors: 1 } },
-  { name: 'ssh tty idle for hours AND a recent X input (no rdp): the input is the reason', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], displays: RECENT }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], inputIdleSeconds: 600 } },
-  { name: 'ssh tty idle for hours, xprintidle missing, timer at 47 min: the suffix follows the input note', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], xprintidle: 'absent', state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], inputIdleSeconds: 'missing', state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'ssh tty idle for hours, a greeter display ignored: the suffix follows the ignored display', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], displays: [disp('FAIL', '0', 'root', false), disp(7200000)] }, facts: { connections: onSsh(), sshTtySessions: [t(1, 7200)], ignoredDisplays: [0] } },
-  { name: 'rdp idle for hours AND ssh tty idle for hours: suspends, both ignored connections are said', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 7200)], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshTtySessions: [t(1, 7200)] } },
-  { name: 'rdp idle for hours AND ssh tty idle for hours, no state: confirms at the next check, ssh said', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 7200)], displays: [disp(21600000)], state: 'absent' }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshTtySessions: [t(1, 7200)], state: 'absent' } },
-  { name: 'rdp idle for hours AND a fresh ssh tty session: ssh blocks', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 30)], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshTtySessions: [t(1, 30)] } },
+  { name: 'ssh, tty session with input 3 min ago: activity, names the tty and the minutes', world: { ss: [ssh6], sshProcs: [pts(1, 180)] }, facts: { connections: onSsh(), sshConnections: [t(1, 180)] } },
+  { name: 'ssh, tty input S*60-1 s ago (1199 s): still activity', world: { ss: [ssh6], sshProcs: [pts(1, 1199)] }, facts: { connections: onSsh(), sshConnections: [t(1, 1199)] } },
+  { name: 'ssh, tty input exactly S*60 s ago, timer at 12 min: not activity, said in the timer line', world: { ss: [ssh6], sshProcs: [pts(1, 1200)] }, facts: { connections: onSsh(), sshConnections: [t(1, 1200)] } },
+  { name: 'ssh, tty input S*60 s ago, timer at 47 min: suspends and says the session was idle', world: { ss: [ssh6], sshProcs: [pts(1, 1200)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [t(1, 1200)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh, tty idle for hours, no state file: the restart line carries the ssh suffix', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], state: 'absent' }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], state: 'absent' } },
+  { name: 'ssh, tty input 0 s ago', world: { ss: [ssh6], sshProcs: [pts(2, 0)] }, facts: { connections: onSsh(), sshConnections: [t(2, 0)] } },
+  { name: 'ssh: the real process tree (a [priv] parent, the pts login, a bash) : the login is found, the others ignored', world: { ss: [ssh6], sshProcs: [priv(1), pts(1, 120), { pid: 77, title: 'bash' }] }, facts: { connections: onSsh(), sshConnections: [t(1, 120)] } },
+  { name: 'ssh: an older sshd titles the process "sshd: alice@pts/2": the same', world: { ss: [ssh6], sshProcs: [{ pid: 3002, title: 'sshd: alice@pts/2', idle: 60 }] }, facts: { connections: onSsh(), sshConnections: [t(2, 60)] } },
+  { name: 'ssh: the Herdr tree ([priv] then @notty) only, with a STALE fresh /dev/pts/0 that no sshd process owns: quiet, the stale pts is never counted', world: { ss: [ssh6], sshProcs: [priv(1), notty(1)], stalePts: [{ n: 0, idle: 30 }] }, facts: { connections: onSsh(), sshConnections: [nt(100)] } },
+  { name: 'ssh: a fresh pts login AND the Herdr notty tree: the pts login blocks', world: { ss: [ssh6, ssh6b], sshProcs: [priv(1), pts(1, 47), priv(2), notty(2)] }, facts: { connections: onSsh(2), sshConnections: [t(1, 47), nt(100, P6b)] } },
+  { name: 'ssh: a connection but NO sshd login process at all (other server, hidden /proc): fail closed, with the cause', world: { ss: [ssh6], sshProcs: [] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.noProc(P6) } } },
+  { name: 'ssh: only [priv] processes (a login still being set up): fail closed', world: { ss: [ssh6], sshProcs: [priv(1)] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.noProc(P6) } } },
+  { name: 'ssh: the title carries a tty that is not pts/N (tty1): fail closed, never stat-ed', world: { ss: [ssh6], sshProcs: [{ pid: 3001, title: 'sshd-session: alice@tty1' }] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.badTty } } },
+  { name: 'ssh: the title carries a path (pts/../x): fail closed, never stat-ed', world: { ss: [ssh6], sshProcs: [{ pid: 3001, title: 'sshd-session: alice@pts/../x' }] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.badTty } } },
+  { name: 'rdp recent AND ssh with no sshd login process: rdp is the reason, the ssh state is not even needed', world: { ss: [rdp, ssh6], sshProcs: [], displays: RECENT }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 600, sshConnections: { unreadable: SSH_CAUSE.noProc(P6) } } },
+  { name: 'outgoing ssh (peer port 22) is not an ssh connection to this box: the processes are not read, idle', world: { ss: ['0      0      192.168.1.10:51000   192.168.1.77:22'], sshProcs: [] }, facts: { sshConnections: { unreadable: SSH_CAUSE.noProc(P6) } } },
+  { name: 'ssh, ONLY a session without tty at 100 B/s (idle Herdr), timer at 12 min: quiet, said in the timer line', world: { ss: [ssh6], sshProcs: [notty(9)] }, facts: { connections: onSsh(), sshConnections: [nt(100)] } },
+  { name: 'ssh, ONLY a session without tty at 100 B/s, timer at 47 min: suspends and says the connection was quiet', world: { ss: [ssh6], sshProcs: [notty(9)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [nt(100)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh, no tty and no state file: restart line carries the quiet suffix', world: { ss: [ssh6], sshProcs: [notty(9)], state: 'absent' }, facts: { connections: onSsh(), sshConnections: [nt(100)], state: 'absent' } },
+  { name: 'ssh: a session without tty AND a tty session with fresh input: the tty session blocks', world: { ss: [ssh6, ssh6b], sshProcs: [notty(9), pts(3, 60)] }, facts: { connections: onSsh(2), sshConnections: [nt(100), t(3, 60, P6b)] } },
+  { name: 'ssh: a quiet session without tty AND a tty session idle for hours: not activity, the idle tty is named first, then the quiet connection', world: { ss: [ssh6, ssh6b], sshProcs: [notty(9), pts(3, 7200)] }, facts: { connections: onSsh(2), sshConnections: [nt(100), t(3, 7200, P6b)] } },
+  { name: 'ssh: three tty sessions, the MINIMUM counts and names its tty (pts/2, 90 s)', world: { ss: [ssh6, ssh6b, ssh6c], sshProcs: [pts(0, 7200), pts(2, 90), pts(4, 3600)] }, facts: { connections: onSsh(3), sshConnections: [t(0, 7200), t(2, 90, P6b), t(4, 3600, P6c)] } },
+  { name: 'ssh: two tty sessions with the same idle time: the first in the order of ss is named', world: { ss: [ssh6, ssh6b], sshProcs: [pts(5, 90), pts(2, 90)] }, facts: { connections: onSsh(2), sshConnections: [t(5, 90), t(2, 90, P6b)] } },
+  { name: 'ssh: two tty sessions both idle (2 h and 40 min): not activity, the shorter idle time is named, timer at 47 min', world: { ss: [ssh6, ssh6b], sshProcs: [pts(0, 7200), pts(1, 2400)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(2), sshConnections: [t(0, 7200), t(1, 2400, P6b)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh: a fresh tty session but no established ssh connection (stale session): not read, idle', world: { sshProcs: [pts(1, 5)] }, facts: { sshConnections: [t(1, 5)] } },
+  { name: 'ssh: the tty idle time is unreadable (no /dev/pts/N): fail closed, with the cause', world: { ss: [ssh6], sshProcs: [{ ...pts(1, 0), idle: 'missing' }] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.stat } } },
+  { name: 'ssh: the last input is in the future (atime ahead of the clock): fail closed', world: { ss: [ssh6], sshProcs: [{ ...pts(1, 0), idle: 'future' }] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.future } } },
+  { name: 'ssh: one tty session idle for hours and one unreadable: fail closed, never the idle one alone', world: { ss: [ssh6, ssh6b], sshProcs: [pts(0, 7200), { ...pts(1, 0), idle: 'missing' }] }, facts: { connections: onSsh(2), sshConnections: { unreadable: SSH_CAUSE.stat } } },
+  // ---- decision 111 (corrected): a notty connection is activity at 2048 B/s or more (average since the previous check), or when its rate is unknown
+  { name: 'ssh notty at 5000 B/s: activity, named with its peer and rate', world: { ss: [ssh6], sshNet: [{ delta: 600000 }] }, facts: { connections: onSsh(), sshConnections: [nt(5000)] } },
+  { name: 'ssh notty at 200 B/s, timer at 47 min: suspends, says the connection was quiet', world: { ss: [ssh6], sshNet: [{ delta: 24000 }], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [nt(200)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh notty exactly at the threshold (2048 B/s): activity', world: { ss: [ssh6], sshNet: [{ delta: 245760 }] }, facts: { connections: onSsh(), sshConnections: [nt(2048)] } },
+  { name: 'ssh notty one byte under the threshold (2047 B/s): quiet', world: { ss: [ssh6], sshNet: [{ delta: 245759 }] }, facts: { connections: onSsh(), sshConnections: [nt(2047)] } },
+  { name: 'ssh notty, previous sample exactly 300 s old: usable (100 B/s)', world: { ss: [ssh6], sshNet: [{ dt: 300, delta: 30000 }] }, facts: { connections: onSsh(), sshConnections: [nt(100)] } },
+  { name: 'ssh notty, previous sample 301 s old: rate unknown, activity', world: { ss: [ssh6], sshNet: [{ dt: 301, delta: 30100 }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.stale)] } },
+  { name: 'ssh notty, first sight (no samples file): rate unknown, activity', world: { ss: [ssh6], sshSamples: 'absent' }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.first)] } },
+  { name: 'ssh notty, the samples file holds other connections only: first sight of this one', world: { ss: [ssh6], sshNet: [{ dt: 'none' }], sshSamplesExtra: `[::ffff:10.0.0.1]:22 [::ffff:10.0.0.99]:1 ${NOW - 120} 500\n` }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.first)] } },
+  { name: 'ssh notty, the counter went down (a new connection on the same address): activity', world: { ss: [ssh6], sshNet: [{ prevTotal: 5000000 }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.down)] } },
+  { name: 'ssh notty, the previous sample is from the same second: the clock did not advance, activity', world: { ss: [ssh6], sshNet: [{ dt: 0, delta: 0 }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.clock)] } },
+  { name: 'ssh notty, the previous sample is damaged: activity', world: { ss: [ssh6], sshSamples: '[::ffff:10.0.0.1]:22 [::ffff:10.0.0.9]:40000 abc def\n' }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.previous)] } },
+  { name: 'ssh notty, bytes_acked is not a number: activity', world: { ss: [ssh6], sshNet: [{ acked: '12x' }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.counters)] } },
+  { name: 'ssh notty, bytes_received is not printed: activity', world: { ss: [ssh6], sshNet: [{ received: 'absent' }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.counters)] } },
+  { name: 'ssh notty, no counter line at all: activity', world: { ss: [ssh6], sshNet: [{ info: 'absent' }] }, facts: { connections: onSsh(), sshConnections: [ntu(IDLE_SSH_RATE_UNKNOWN.counters)] } },
+  { name: 'ssh notty, the listing carries the state column: read the same', world: { ss: [ssh6], sshNet: [{ estab: true, delta: 24000 }] }, facts: { connections: onSsh(), sshConnections: [nt(200)] } },
+  { name: 'ssh pts login with huge traffic since the previous check (a terminal printing output) but idle input, timer at 47 min: the traffic is ignored, suspends', world: { ss: [ssh6], sshProcs: [priv(1), pts(1, 7200)], sshNet: [{ delta: 900000000 }], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh notty above the threshold AND a pts login idle for hours: the notty connection blocks', world: { ss: [ssh6, ssh6b], sshProcs: [pts(1, 7200), notty(2)], sshNet: [{}, { delta: 600000 }] }, facts: { connections: onSsh(2), sshConnections: [t(1, 7200), nt(5000, P6b)] } },
+  { name: 'ssh two notty connections, one quiet one busy: the busy one blocks', world: { ss: [ssh6, ssh6b], sshProcs: [notty(1), notty(2)], sshNet: [{ delta: 24000 }, { delta: 600000 }] }, facts: { connections: onSsh(2), sshConnections: [nt(200), nt(5000, P6b)] } },
+  { name: 'ssh two notty connections, both quiet: both are said on the timer line', world: { ss: [ssh6, ssh6b], sshProcs: [notty(1), notty(2)], sshNet: [{ delta: 24000 }, { delta: 36000 }] }, facts: { connections: onSsh(2), sshConnections: [nt(200), nt(300, P6b)] } },
+  { name: 'ssh two notty connections, one quiet one new: the new one (rate unknown) blocks', world: { ss: [ssh6, ssh6b], sshProcs: [notty(1), notty(2)], sshNet: [{}, { dt: 'none' }] }, facts: { connections: onSsh(2), sshConnections: [nt(100), ntu(IDLE_SSH_RATE_UNKNOWN.first, P6b)] } },
+  { name: 'ssh mapping failure: the Process column is not printed (ss without root): fail closed with the connection named', world: { ss: [ssh6], sshNet: [{ column: 'none' }] }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.noProc(P6) } } },
+  { name: 'ssh: ss -Htinp fails (the plain ss works): fail closed with the cause', world: { ss: [ssh6], sshListFails: true }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.list } } },
+  { name: 'ssh: the samples file cannot be read or written (a folder): fail closed with the cause', world: { ss: [ssh6], sshSamples: 'unreadable' }, facts: { connections: onSsh(), sshConnections: { unreadable: SSH_CAUSE.samples } } },
+  { name: 'ssh-minutes 1: tty input 59 s ago is activity', world: { sshMinutes: 1, ss: [ssh6], sshProcs: [pts(1, 59)] }, facts: { connections: onSsh(), sshConnections: [t(1, 59)] } },
+  { name: 'ssh-minutes 1: tty input exactly 60 s ago is not activity', world: { sshMinutes: 1, ss: [ssh6], sshProcs: [pts(1, 60)] }, facts: { connections: onSsh(), sshConnections: [t(1, 60)] } },
+  { name: 'ssh-minutes 1440: tty input 86399 s ago is activity', world: { sshMinutes: 1440, ss: [ssh6], sshProcs: [pts(1, 86399)] }, facts: { connections: onSsh(), sshConnections: [t(1, 86399)] } },
+  { name: 'ssh-minutes 1440: tty input exactly 86400 s ago is not activity, timer at 47 min: suspends', world: { sshMinutes: 1440, ss: [ssh6], sshProcs: [pts(1, 86400)], state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [t(1, 86400)], state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh tty idle for hours AND a peer connection: the peer still counts unconditionally', world: { ss: [ssh6, peer], sshProcs: [pts(1, 7200)] }, facts: { connections: { rdp: 0, ssh: 1, peer: 1 }, sshConnections: [t(1, 7200)] } },
+  { name: 'ssh tty idle for hours AND a request 10 min ago: the audit rule stays unconditional', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], audit: audit(accepted(10 * M)) }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
+  { name: 'ssh tty idle for hours AND an open hold: the hold stays unconditional', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], audit: audit(held(90 * M, 'h1')) }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], audit: { lastActivityEpoch: NOW - 90 * M, openHolds: 1 } } },
+  { name: 'ssh without tty (quiet) but a high load: the load is the reason (the limit of a slow notty job)', world: { ss: [ssh6], sshProcs: [notty(9)], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: onSsh(), sshConnections: [nt(100)], load5Hundredths: 500 } },
+  { name: 'ssh without tty (quiet) but a sleep inhibitor in block mode: the inhibitor is the reason', world: { ss: [ssh6], sshProcs: [notty(9)], inhibit: ['Steam 1000 alice 9 steam sleep Playing block'] }, facts: { connections: onSsh(), sshConnections: [nt(100)], inhibitors: 1 } },
+  { name: 'ssh tty idle for hours AND a recent X input (no rdp): the input is the reason', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], displays: RECENT }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], inputIdleSeconds: 600 } },
+  { name: 'ssh tty idle for hours, xprintidle missing, timer at 47 min: the suffix follows the input note', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], xprintidle: 'absent', state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], inputIdleSeconds: 'missing', state: { since: NOW - 47 * M, last: NOW - 120 } } },
+  { name: 'ssh tty idle for hours, a greeter display ignored: the suffix follows the ignored display', world: { ss: [ssh6], sshProcs: [pts(1, 7200)], displays: [disp('FAIL', '0', 'root', false), disp(7200000)] }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], ignoredDisplays: [0] } },
+  { name: 'rdp idle for hours AND ssh tty idle for hours: suspends, both ignored connections are said', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 7200)], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshConnections: [t(1, 7200)] } },
+  { name: 'rdp idle for hours AND ssh tty idle for hours, no state: confirms at the next check, ssh said', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 7200)], displays: [disp(21600000)], state: 'absent' }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshConnections: [t(1, 7200)], state: 'absent' } },
+  { name: 'rdp idle for hours AND a fresh ssh tty session: ssh blocks', world: { ss: [rdp, ssh6], sshProcs: [pts(1, 30)], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshConnections: [t(1, 30)] } },
 
   // ---- decision 103, RDP connected: the input idle time is the clock (R = 20 min), no timer on top
   { name: 'rdp, input 10 min ago: activity, the minutes and the threshold are shown', world: { ss: [rdp], displays: RECENT }, facts: { connections: onRdp, inputIdleSeconds: 600 } },
@@ -267,7 +331,7 @@ const ROWS: Row[] = [
   { name: 'rdp, the user of the session is not a plain user name: activity', world: { ss: [rdp], displays: [disp(7200000, '10', "Bad User'x")] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'the name of session s10 is not a plain user name' } } },
   { name: 'rdp, the user of the session has no home folder in /etc/passwd: activity', world: { ss: [rdp], displays: [disp(7200000, '10', 'carol')] }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'no usable home folder for carol in /etc/passwd' } } },
   { name: 'rdp, the home folder of the owner is not a safe path: activity', world: { ss: [rdp], displays: RECENT, passwd: 'alice:x:1000:1000::/home/al ice:/bin/sh\n' }, facts: { connections: onRdp, inputIdleSeconds: { unreadable: 'no usable home folder for alice in /etc/passwd' } } },
-  { name: 'rdp idle for hours AND an ssh connection without tty: not activity, said', world: { ss: [rdp, ssh6], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600 } },
+  { name: 'rdp idle for hours AND a quiet ssh connection without tty: not activity, said', world: { ss: [rdp, ssh6], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 21600, sshConnections: [nt(100)] } },
   { name: 'rdp idle for hours AND a peer connection: the peer still counts', world: { ss: [rdp, peer], displays: [disp(21600000)] }, facts: { connections: { rdp: 1, ssh: 0, peer: 1 }, inputIdleSeconds: 21600 } },
   { name: 'rdp idle for hours but a high load: the load is the reason', world: { ss: [rdp], displays: [disp(21600000)], load: '0.01 5.00 0.01 1/2 3\n' }, facts: { connections: onRdp, inputIdleSeconds: 21600, load5Hundredths: 500 } },
   { name: 'rdp idle for hours but a request 10 min ago: the request is the reason', world: { ss: [rdp], displays: [disp(21600000)], audit: audit(accepted(10 * M)) }, facts: { connections: onRdp, inputIdleSeconds: 21600, audit: { lastActivityEpoch: NOW - 10 * M, openHolds: 0 } } },
@@ -315,7 +379,7 @@ const ROWS: Row[] = [
   { name: 'no rdp, a recent input AND a high load: the input is named first', world: { displays: RECENT, load: '0.01 5.00 0.01 1/2 3\n' }, facts: { inputIdleSeconds: 600, load5Hundredths: 500 } },
   { name: 'no rdp, a recent input AND an unreadable audit log: the input is named first', world: { displays: RECENT, audit: 'missing' }, facts: { inputIdleSeconds: 600, audit: null } },
   { name: 'no rdp, an idle input AND an unreadable audit log: the audit log is the reason', world: { audit: 'missing' }, facts: { audit: null } },
-  { name: 'ssh connection without tty AND a recent input: the input is the reason', world: { ss: [ssh6], displays: RECENT }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 }, inputIdleSeconds: 600 } },
+  { name: 'ssh connection without tty (quiet) AND a recent input: the input is the reason', world: { ss: [ssh6], displays: RECENT }, facts: { connections: { rdp: 0, ssh: 1, peer: 0 }, inputIdleSeconds: 600, sshConnections: [nt(100)] } },
   { name: 'no rdp, a recent input AND a high load, xprintidle missing: the load only (no note on a not-idle line)', world: { xprintidle: 'absent', load: '0.01 5.00 0.01 1/2 3\n' }, facts: { inputIdleSeconds: 'missing', load5Hundredths: 500 } },
 
   // ---- the machine audit log
@@ -411,13 +475,6 @@ function build(dir: string, w: Required<World>): void {
   put(`${root}/usr/bin/logger`, '#!/bin/sh\nprintf "%s\\n" "$*" >> logger.log\n', 0o755);
   put(`${root}/usr/bin/systemctl`, '#!/bin/sh\nprintf "%s\\n" "$*" >> suspended\n', 0o755);
   const outputOf = (lines: string[] | 'fail'): string => (lines === 'fail' ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\ncat <<'EOT'\n${lines.join('\n')}\nEOT\n`);
-  // `ss -Htn state established` prints the sockets (decision 111: nothing else is asked of ss any more).
-  if (w.ss === 'fail') {
-    put(`${root}/usr/bin/ss`, outputOf('fail'), 0o755);
-  } else {
-    put(`${root}/usr/bin/ss`, '#!/bin/sh\ncat ss-plain.out\n', 0o755);
-    put('ss-plain.out', w.ss.length === 0 ? '' : `${w.ss.join('\n')}\n`);
-  }
   put(`${root}/usr/bin/systemd-inhibit`, outputOf(w.inhibit), 0o755);
   fill(`${root}${CONFIG}/daemon.port.json`, w.portFile);
   fill(`${root}${CONFIG}/audit.log`, w.audit, 'missing');
@@ -447,6 +504,51 @@ function build(dir: string, w: Required<World>): void {
     if (m !== null && p.idle !== undefined && p.idle !== 'missing') {
       setAtime(join(dir, root, 'dev', m[1] as string), p.idle === 'future' ? w.now + 600 : w.now - p.idle);
     }
+  }
+  // `ss -Htn state established` prints the sockets; `ss -Htinp state established '( sport = :22 )'` (decision 111) prints the ssh ones with the Process column and the counters line.
+  const sshConns = (w.ss === 'fail' ? [] : w.ss)
+    .map((l) => l.trim().split(/\s+/))
+    .map((tok) => (tok[0] === 'ESTAB' ? tok.slice(1) : tok))
+    .filter((tok) => /:22$/.test(tok[2] ?? ''))
+    .map((tok) => ({ local: tok[2] as string, peer: tok[3] as string }));
+  const logins = procs.filter((p) => p.title.includes('@'));
+  const privs = procs.filter((p) => p.title.includes('[priv]'));
+  const net = (i: number): NetSpec => w.sshNet[i] ?? {};
+  const listing = sshConns.map((c, i) => {
+    const login = logins[i];
+    const pids = login === undefined ? (privs[i] === undefined ? [] : [privs[i]!.pid]) : [login.pid, ...procs.filter((p) => p.pid === 2000 + (login.pid % 1000) && p.title.includes('[priv]')).map((p) => p.pid)];
+    const column = net(i).column === 'none' || pids.length === 0 ? '' : ` users:(${pids.map((p) => `("sshd-session",pid=${p},fd=9)`).join(',')})`;
+    const delta = net(i).delta ?? 12000;
+    const received = net(i).received ?? '1000';
+    const counters = `bytes_sent:894134 bytes_retrans:508 bytes_acked:${net(i).acked ?? String(delta)}${received === 'absent' ? '' : ` bytes_received:${received}`} segs_out:6333 segs_in:5217`;
+    const head = `${net(i).estab === true ? 'ESTAB ' : ''}0      0      ${c.local}   ${c.peer}${column}`;
+    return net(i).info === 'absent' ? head : `${head}\n\tcubic wscale:7,7 rto:204 rtt:1.2/0.6 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:10 ${counters}`;
+  });
+  if (w.ss === 'fail') {
+    put(`${root}/usr/bin/ss`, outputOf('fail'), 0o755);
+  } else {
+    put(`${root}/usr/bin/ss`, '#!/bin/sh\ncase "$*" in\n  *-Htinp*) [ -f ss-ssh.out ] || exit 1; cat ss-ssh.out ;;\n  *) cat ss-plain.out ;;\nesac\n', 0o755);
+    put('ss-plain.out', w.ss.length === 0 ? '' : `${w.ss.join('\n')}\n`);
+    if (!w.sshListFails) {
+      put('ss-ssh.out', listing.length === 0 ? '' : `${listing.join('\n')}\n`);
+    }
+  }
+  // The samples file of the previous run (decision 111): one line per connection with a previous sample, plus the extra lines.
+  const autoSamples =
+    sshConns
+      .flatMap((c, i) => {
+        const dt = net(i).dt;
+        return dt === 'none' ? [] : [`${c.local} ${c.peer} ${w.now - (dt ?? 120)} ${net(i).prevTotal ?? 1000}\n`];
+      })
+      .join('') + w.sshSamplesExtra;
+  if (w.sshSamples === 'auto') {
+    if (autoSamples !== '') {
+      put(`${root}/run/machine-idle-suspend/ssh-samples`, autoSamples);
+    }
+  } else if (w.sshSamples === 'unreadable') {
+    folder(`${root}/run/machine-idle-suspend/ssh-samples`);
+  } else if (w.sshSamples !== 'absent') {
+    put(`${root}/run/machine-idle-suspend/ssh-samples`, w.sshSamples);
   }
   for (const x of w.stalePts) {
     setAtime(join(dir, root, 'dev/pts', String(x.n)), w.now - x.idle);
@@ -544,11 +646,55 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
     expect(run({ ...DEFAULT_WORLD, ss: [], displays, xprintidle: 'absent' })).toBe('');
   });
 
+  // Decision 111 (corrected): the samples file is kept between the runs, whatever the verdict of a run (a not-idle verdict clears the timer, never the samples).
+  const run = (dir: string): { stdout: string; stderr: string; status: number | null } => spawnSync('sh', ['machine-idle-suspend.sh'], { cwd: dir, encoding: 'utf8' });
+  const samplesPath = (dir: string): string => join(dir, 'fakeroot/run/machine-idle-suspend/ssh-samples');
+  it('decision 111: a connection seen for the first time blocks once, the next check measures its rate (the samples survive the not-idle verdict)', () => {
+    const dir = mkdtempSync(join(base, 'run-'));
+    cleanup.push(dir);
+    build(dir, { ...DEFAULT_WORLD, ss: [ssh6], sshSamples: 'absent' });
+    const first = run(dir);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout.trim()).toBe(`not idle: ssh connection ${P6} rate unknown (${IDLE_SSH_RATE_UNKNOWN.first})`);
+    expect(readFileSync(samplesPath(dir), 'utf8')).toBe(`[::ffff:10.0.0.1]:22 ${P6} ${NOW} 13000\n`);
+    // Two minutes later 24000 more bytes (200 B/s): quiet, so not a reason any more; the timer was cleared by the first verdict and restarts.
+    writeFileSync(join(dir, 'now'), `${NOW + 120}\n`);
+    writeFileSync(join(dir, 'ss-ssh.out'), `0      0      [::ffff:10.0.0.1]:22   ${P6} users:(("sshd-session",pid=4010,fd=9),("sshd-session",pid=2010,fd=9))\n\tcubic bytes_sent:1 bytes_acked:36000 bytes_received:1000 segs_out:1\n`);
+    const second = run(dir);
+    expect(second.stdout.trim()).toBe(`idle 0/30 min (ssh connection ${P6} quiet: 200 B/s, under 2048)`);
+    expect(existsSync(join(dir, 'suspended'))).toBe(false);
+    expect(readFileSync(samplesPath(dir), 'utf8')).toBe(`[::ffff:10.0.0.1]:22 ${P6} ${NOW + 120} 37000\n`);
+  });
+  it('decision 111: the entries of connections that no longer exist are dropped from the samples file', () => {
+    const dir = mkdtempSync(join(base, 'run-'));
+    cleanup.push(dir);
+    build(dir, { ...DEFAULT_WORLD, ss: [ssh6], sshSamplesExtra: `[::ffff:10.0.0.1]:22 [::ffff:10.0.0.99]:1 ${NOW - 120} 500\n` });
+    expect(readFileSync(samplesPath(dir), 'utf8')).toContain('10.0.0.99');
+    const r = run(dir);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(readFileSync(samplesPath(dir), 'utf8')).toBe(`[::ffff:10.0.0.1]:22 ${P6} ${NOW} 13000\n`);
+  });
+  it('decision 111: without any ssh connection the samples file is removed', () => {
+    const dir = mkdtempSync(join(base, 'run-'));
+    cleanup.push(dir);
+    build(dir, { ...DEFAULT_WORLD, ss: [], sshSamples: `[::ffff:10.0.0.1]:22 ${P6} ${NOW - 120} 1000\n` });
+    expect(existsSync(samplesPath(dir))).toBe(true);
+    expect(run(dir).status).toBe(0);
+    expect(existsSync(samplesPath(dir))).toBe(false);
+  });
+  it('decision 111: a pts login does not store a sample (only notty connections are measured)', () => {
+    const dir = mkdtempSync(join(base, 'run-'));
+    cleanup.push(dir);
+    build(dir, { ...DEFAULT_WORLD, ss: [ssh6], sshProcs: [priv(1), pts(1, 7200)], sshSamples: 'absent' });
+    expect(run(dir).status).toBe(0);
+    expect(readFileSync(samplesPath(dir), 'utf8')).toBe('');
+  });
+
   it('the table covers every decision kind of idleDecision (suspend, wait, each not-idle reason, each restart)', () => {
     const reasons = new Set(
       ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20, r.world?.sshMinutes ?? 20).reason.replace(/\d+(\.\d+)?/g, '#')),
     );
-    for (const needle of ['ssh session pts/# active (input # min ago, needs #)', '(ssh session pts/# idle for # min, needs #)', '(ssh connection without tty ignored: no terminal input to measure)', 'ssh connected (tty idle unreadable: cannot read the idle time of pts/# (stat /dev/pts/# failed))', 'suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
+    for (const needle of ['ssh session pts/# active (input # min ago, needs #)', '(ssh session pts/# idle for # min, needs #)', 'B/s, needs #)', 'rate unknown (first check of this connection', 'quiet: # B/s, under #)', 'ssh connected (cannot read the ssh state: cannot read the idle time of pts/# (stat /dev/pts/# failed))', 'cannot read the ssh state: no sshd login process', 'suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
       expect([...reasons].some((x) => x.includes(needle)), needle).toBe(true);
     }
   });

@@ -420,4 +420,4 @@ export {
   type RunStep,
   type StageStep,
 } from './install.js';
-export { IDLE_DEFAULT_MINUTES, IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, IDLE_RDP_DEFAULT_MINUTES, IDLE_SSH_DEFAULT_MINUTES, IDLE_SUSPEND_SCRIPT_PATH, idleDecision, idleSuspendInstalledMinutes, idleSuspendInstalledRdpMinutes, idleSuspendInstalledSshMinutes, idleSuspendScript, parseIdleMinutes, parseIdleRdpMinutes, parseIdleSshMinutes, parseLoadHundredths, type IdleDecision, type IdleFacts, type IdleScriptOptions } from './idleSuspend.js';
+export { IDLE_DEFAULT_MINUTES, IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, IDLE_RDP_DEFAULT_MINUTES, IDLE_SSH_DEFAULT_MINUTES, IDLE_SSH_NOTTY_BYTES_PER_SECOND, IDLE_SSH_RATE_UNKNOWN, IDLE_SSH_SAMPLES_FILE, IDLE_SUSPEND_SCRIPT_PATH, idleDecision, idleSuspendInstalledMinutes, idleSuspendInstalledRdpMinutes, idleSuspendInstalledSshMinutes, idleSuspendScript, parseIdleMinutes, parseIdleRdpMinutes, parseIdleSshMinutes, parseLoadHundredths, type IdleDecision, type IdleFacts, type IdleScriptOptions, type IdleSshConnection } from './idleSuspend.js';
