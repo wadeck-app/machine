@@ -136,7 +136,7 @@ describe('idle-suspend: the plan', () => {
   it('decision 102: a script installed by the previous build (marker version 3, sockets instead of sessions) is outdated, not current', () => {
     const plan = def().plan(FACTS);
     const file = plan.files[0] as NonNullable<(typeof plan.files)[0]>;
-    const old = file.content.replace('version 5', 'version 3').replace(/^LOGINCTL=.*\n/m, '');
+    const old = file.content.replace('version 6', 'version 3').replace(/^LOGINCTL=.*\n/m, '');
     expect(classifyInstalled(file, old)).toMatchObject({ state: 'outdated', version: 3 });
     expect(classifyInstalled(file, file.content).state).toBe('current');
   });
@@ -168,12 +168,13 @@ describe('idle-suspend: the plan', () => {
     expect(def().plan({ ...FACTS, sshMinutes: 1 }).summary).toBe('suspends after 30 min idle (RDP: 20 min, SSH: 1 min)');
   });
 
-  it('decision 109: refuses --ssh-minutes out of range, and the description and next say that ssh counts only while its traffic is recent', () => {
+  it('decision 111: refuses --ssh-minutes out of range, and the description and next say that ssh counts only through a tty session with recent input', () => {
     for (const sshMinutes of [1441, 0, 2.5, -1]) expect(() => def().plan({ ...FACTS, sshMinutes }), String(sshMinutes)).toThrow(/minutes/);
     expect(def().description).toMatch(/--ssh-minutes/);
     const text = def().next(def().plan(FACTS), 'desktop').join('\n');
-    expect(text).toMatch(/established ssh connection counts only while it has traffic more recent than --ssh-minutes/);
-    expect(text).toMatch(/keepalive/);
+    expect(text).toMatch(/established ssh connection counts only through a session WITH A TERMINAL \(tty\) whose last input is more recent than --ssh-minutes/);
+    expect(text).toMatch(/without a tty.*never activity by itself.*protected only by the load/);
+    expect(def().plan(FACTS).files[0]?.describe).toMatch(/no ssh session with a terminal that had input in the last 20 min/);
   });
 
   it('decision 103: refuses --rdp-minutes out of range (a plan never carries it)', () => {

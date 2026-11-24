@@ -192,7 +192,7 @@ Commands:
                                      YOUR password (typed to sudo, never read by machine); prints every file and command, then runs them (no y/N question: sudo's password is the confirmation); idempotent;
                                      --dry-run changes nothing, --check reports the state (exit 0 only when installed and up to date), --refresh writes
                                      everything again (repairs a file changed by hand), --remove removes exactly what it installed and checks it. Once allowed in the default list, every trusted peer can suspend this machine
-                                     \`install idle-suspend [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>]\` (Linux only): a root systemd timer that suspends this machine by itself after n minutes (default 30; 20 min of no input when an RDP connection is open, 20 min of no traffic when an ssh connection is open) with no
+                                     \`install idle-suspend [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>]\` (Linux only): a root systemd timer that suspends this machine by itself after n minutes (default 30; 20 min of no input when an RDP connection is open, 20 min of no input on the tty of an ssh session) with no
                                      machine peer connection, keyboard/mouse input idle (needs xprintidle), no machine request, low load, no sleep inhibitor and no keep-awake file; a disconnected desktop session does not count; decisions in the journal (journalctl -t machine-idle-suspend)
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new

@@ -26,8 +26,8 @@ const MIN = 30;
 const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
   keepAwake: [{ present: false }, { present: false }],
   connections: { rdp: 0, ssh: 0, peer: 0 },
-  // Decision 109: read only with an ssh connection; a long quiet one is not activity.
-  sshTrafficIdleSeconds: 99999,
+  // Decision 111: read only with an ssh connection; no ssh session with a tty is no activity.
+  sshTtySessions: [],
   audit: { lastActivityEpoch: NOW - 3 * 3600, openHolds: 0 },
   load5Hundredths: 5,
   inhibitors: 0,
@@ -44,7 +44,7 @@ describe('idleDecision: not idle (each reason, the state is cleared)', () => {
     ['the second keep-awake file', { keepAwake: [{ present: false }, { present: true, untilEpoch: null }] }, 'not idle: keep-awake requested'],
     ['a keep-awake file until the future', { keepAwake: [{ present: true, untilEpoch: NOW + 1 }, { present: false }] }, 'not idle: keep-awake requested'],
     ['unreadable keep-awake files', { keepAwake: null }, 'not idle: cannot read the keep-awake files'],
-    ['an SSH connection with recent traffic', { connections: { rdp: 0, ssh: 2, peer: 0 }, sshTrafficIdleSeconds: 180 }, 'not idle: ssh connected (traffic 3 min ago, needs 20)'],
+    ['an SSH session with a tty and recent input', { connections: { rdp: 0, ssh: 2, peer: 0 }, sshTtySessions: [{ tty: 'pts/1', idleSeconds: 180 }] }, 'not idle: ssh session pts/1 active (input 3 min ago, needs 20)'],
     ['a machine peer connection', { connections: { rdp: 0, ssh: 0, peer: 1 } }, 'not idle: machine peer connected'],
     ['rdp and ssh together: rdp is named first', { connections: { rdp: 1, ssh: 1, peer: 1 }, inputIdleSeconds: 60 }, 'not idle: rdp connected (input 1 min ago, needs 20)'],
     ['unreadable connections', { connections: null }, 'not idle: cannot read the connections (ss or the daemon port file)'],
@@ -194,7 +194,7 @@ describe('idleSuspendScript (the generated shell)', () => {
   it('starts with the shebang, carries the marker and the minutes, ends with a newline', () => {
     const s = script();
     expect(s.split('\n')[0]).toBe('#!/bin/sh');
-    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 5');
+    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 6');
     expect(s).toMatch(/^MINUTES=30$/m);
     expect(s.endsWith('\n')).toBe(true);
     expect(idleSuspendInstalledMinutes(s)).toBe(30);
@@ -255,7 +255,10 @@ describe('idleSuspendScript (the generated shell)', () => {
     const s = script();
     expect(s).toMatch(/"\$ROOT\$RUNUSER" -u "\$s_name" -- "\$ROOT\$XPRINTIDLE"/);
     expect(s).toMatch(/show-session "\$sid" -p Name -p Type -p Display -p Class -p State/);
-    expect(s).not.toMatch(/\$STAT\b|stat -c/);
+    // Decision 111: stat reads only a tty name that matched ^pts/N$ first (never a user-controlled path).
+    expect(s).not.toMatch(/\$STAT\b/);
+    expect(s.indexOf("'^pts/[0-9]{1,6}$'")).toBeGreaterThan(-1);
+    expect(s.indexOf("'^pts/[0-9]{1,6}$'")).toBeLessThan(s.indexOf('stat -c %X'));
     // The session user is checked against the same pattern as the installing user before it is used.
     expect(s).toContain('^[a-z_][a-z0-9_-]{0,31}$');
   });
@@ -325,8 +328,8 @@ describe('idleDecision: RDP connected (decision 103): the input idle time agains
     expect(decide(withRdp(3600, { inhibitors: 1 })).reason).toBe('not idle: sleep inhibitor held (block)');
     expect(decide(withRdp(3600, { keepAwake: [{ present: true, untilEpoch: null }, { present: false }] })).reason).toBe('not idle: keep-awake requested');
   });
-  it('ssh and peer connections stay activity whatever the input idle time', () => {
-    expect(decide(idle({ connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 99999, sshTrafficIdleSeconds: 5 })).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
+  it('a fresh ssh tty session and a peer connection stay activity whatever the X input idle time', () => {
+    expect(decide(idle({ connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 99999, sshTtySessions: [{ tty: 'pts/0', idleSeconds: 5 }] })).reason).toBe('not idle: ssh session pts/0 active (input 0 min ago, needs 20)');
     expect(decide(idle({ connections: { rdp: 1, ssh: 0, peer: 1 }, inputIdleSeconds: 99999 })).reason).toBe('not idle: machine peer connected');
   });
   it('R follows the parameter (5 min boundary, and 1440)', () => {
@@ -384,8 +387,8 @@ describe('idleDecision: NO RDP connection (decision 103): input idle >= N and th
     expect(decide(noRdp('missing', { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
   });
   it('the input check comes after the connections and before the audit log (order of the reasons)', () => {
-    const everything = noRdp(0, { connections: { rdp: 0, ssh: 1, peer: 0 }, sshTrafficIdleSeconds: 5, audit: null });
-    expect(decide(everything).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
+    const everything = noRdp(0, { connections: { rdp: 0, ssh: 1, peer: 0 }, sshTtySessions: [{ tty: 'pts/0', idleSeconds: 5 }], audit: null });
+    expect(decide(everything).reason).toBe('not idle: ssh session pts/0 active (input 0 min ago, needs 20)');
     expect(decide({ ...everything, connections: { rdp: 0, ssh: 0, peer: 0 } }).reason).toBe('not idle: input 0 min ago (needs 5)');
     expect(decide({ ...everything, connections: { rdp: 0, ssh: 0, peer: 0 }, inputIdleSeconds: 99999 }).reason).toBe('not idle: cannot read the machine audit log');
   });
@@ -458,60 +461,84 @@ describe('minimum of 1 minute (decision 106)', () => {
   });
 });
 
-// Decision 109: an established ssh connection is activity only while its TRAFFIC is recent (S = --ssh-minutes, default 20); the machine peer port stays unconditional.
-describe('idleDecision: ssh connected (decision 109): the traffic idle time against S', () => {
+// Decision 111: an established ssh connection is activity only through a session WITH A TTY whose input idle time is below S (--ssh-minutes, default 20).
+// A session without a tty (scp, rsync, `ssh host cmd`, the Herdr stream) never counts by itself. The machine peer port stays unconditional.
+describe('idleDecision: ssh connected (decision 111): the tty input idle time against S', () => {
   const ssh = { rdp: 0, ssh: 1, peer: 0 };
-  const withSsh = (sshTrafficIdleSeconds: IdleFacts['sshTrafficIdleSeconds'], over: Partial<IdleFacts> = {}, elapsedMin = 40): IdleFacts => idle({ connections: ssh, sshTrafficIdleSeconds, ...over }, elapsedMin);
+  const tty = (t: string, idleSeconds: number): { tty: string; idleSeconds: number } => ({ tty: t, idleSeconds });
+  const withSsh = (sshTtySessions: IdleFacts['sshTtySessions'], over: Partial<IdleFacts> = {}, elapsedMin = 40): IdleFacts => idle({ connections: ssh, sshTtySessions, ...over }, elapsedMin);
   const decide = (f: IdleFacts, s = 20): ReturnType<typeof idleDecision> => idleDecision(f, NOW, MIN, 20, s);
+  const NOTTY = ' (ssh connection without tty ignored: no terminal input to measure)';
 
   it('the default is 20 min', () => {
     expect(IDLE_SSH_DEFAULT_MINUTES).toBe(20);
-    expect(idleDecision(withSsh(20 * 60 - 1), NOW, MIN).reason).toBe('not idle: ssh connected (traffic 19 min ago, needs 20)');
-    expect(idleDecision(withSsh(20 * 60), NOW, MIN).suspend).toBe(true);
+    expect(idleDecision(withSsh([tty('pts/1', 20 * 60 - 1)]), NOW, MIN).reason).toBe('not idle: ssh session pts/1 active (input 19 min ago, needs 20)');
+    expect(idleDecision(withSsh([tty('pts/1', 20 * 60)]), NOW, MIN).suspend).toBe(true);
   });
-  it.each([1, 20, 1440])('S = %i: traffic S*60-1 s ago is activity, S*60 s ago is not (boundary)', (s) => {
-    expect(decide(withSsh(s * 60 - 1), s)).toEqual({ suspend: false, reason: `not idle: ssh connected (traffic ${s - 1} min ago, needs ${s})`, state: null });
-    expect(decide(withSsh(s * 60), s)).toEqual({ suspend: true, reason: `suspending: idle 40 min (ssh connected but no traffic for ${s} min, needs ${s})`, state: null });
+  it.each([1, 20, 1440])('S = %i: tty input S*60-1 s ago is activity, S*60 s ago is not (boundary)', (s) => {
+    expect(decide(withSsh([tty('pts/1', s * 60 - 1)]), s)).toEqual({ suspend: false, reason: `not idle: ssh session pts/1 active (input ${s - 1} min ago, needs ${s})`, state: null });
+    expect(decide(withSsh([tty('pts/1', s * 60)]), s)).toEqual({ suspend: true, reason: `suspending: idle 40 min (ssh session pts/1 idle for ${s} min, needs ${s})`, state: null });
   });
-  it('traffic 0 s and 3 min ago: whole minutes shown', () => {
-    expect(decide(withSsh(0)).reason).toBe('not idle: ssh connected (traffic 0 min ago, needs 20)');
-    expect(decide(withSsh(180)).reason).toBe('not idle: ssh connected (traffic 3 min ago, needs 20)');
+  it('input 0 s and 3 min ago: whole minutes shown', () => {
+    expect(decide(withSsh([tty('pts/0', 0)])).reason).toBe('not idle: ssh session pts/0 active (input 0 min ago, needs 20)');
+    expect(decide(withSsh([tty('pts/0', 180)])).reason).toBe('not idle: ssh session pts/0 active (input 3 min ago, needs 20)');
   });
-  it('unreadable traffic idle time: activity, with the cause (fail closed)', () => {
-    expect(decide(withSsh({ unreadable: 'ss is not installed' }))).toEqual({ suspend: false, reason: 'not idle: ssh connected (traffic idle unreadable: ss is not installed)', state: null });
+  it('a connection without any tty session is not activity, and the line says so', () => {
+    expect(decide(withSsh([]))).toEqual({ suspend: true, reason: `suspending: idle 40 min${NOTTY}`, state: null });
+    expect(decide(withSsh([], {}, 12)).reason).toBe(`idle 12/30 min${NOTTY}`);
+    expect(decide(withSsh([], { state: 'absent' })).reason).toBe(`idle 0/30 min${NOTTY}`);
   });
-  it('the suffix is on the timer lines: restart, wait and the rdp mode', () => {
-    const note = ' (ssh connected but no traffic for 25 min, needs 20)';
-    expect(decide(withSsh(25 * 60, { state: 'absent' })).reason).toBe(`idle 0/30 min${note}`);
-    expect(decide(withSsh(25 * 60, {}, 12)).reason).toBe(`idle 12/30 min${note}`);
-    expect(decide(withSsh(25 * 60, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600 })).reason).toBe(`suspending: rdp connected but no input for 60 min (needs 20)${note}`);
-    expect(decide(withSsh(25 * 60, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600, state: 'absent' })).reason).toBe(`idle: rdp connected but no input for 60 min (needs 20), confirming at the next check${note}`);
+  it('a notty connection plus a fresh tty session: the tty session blocks', () => {
+    expect(decide(withSsh([tty('pts/3', 60)], { connections: { rdp: 0, ssh: 2, peer: 0 } })).reason).toBe('not idle: ssh session pts/3 active (input 1 min ago, needs 20)');
   });
-  it('the suffix comes after the input note and the ignored displays', () => {
-    expect(decide(withSsh(25 * 60, { inputIdleSeconds: 'missing' }, 12)).reason).toBe('idle 12/30 min (input idleness not checked: xprintidle is not installed) (ssh connected but no traffic for 25 min, needs 20)');
-    expect(decide(withSsh(25 * 60, { ignoredDisplays: [0], inputIdleSeconds: 99999 }, 12)).reason).toBe('idle 12/30 min (ignored display :0: no user session) (ssh connected but no traffic for 25 min, needs 20)');
+  it('several tty sessions: the most recent input counts and names its tty (the first on a tie)', () => {
+    expect(decide(withSsh([tty('pts/0', 7200), tty('pts/2', 90), tty('pts/4', 3600)])).reason).toBe('not idle: ssh session pts/2 active (input 1 min ago, needs 20)');
+    expect(decide(withSsh([tty('pts/5', 90), tty('pts/2', 90)])).reason).toBe('not idle: ssh session pts/5 active (input 1 min ago, needs 20)');
+    expect(decide(withSsh([tty('pts/0', 7200), tty('pts/2', 2400)])).reason).toBe('suspending: idle 40 min (ssh session pts/2 idle for 40 min, needs 20)');
   });
-  it('no ssh connection: the traffic fact is not read (unreadable or recent, no suffix)', () => {
-    expect(idleDecision(idle({ sshTrafficIdleSeconds: { unreadable: 'x' } }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
-    expect(idleDecision(idle({ sshTrafficIdleSeconds: 0 }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
+  it('unreadable idle time: activity, with the cause (fail closed)', () => {
+    expect(decide(withSsh({ unreadable: 'cannot read the idle time of pts/1' }))).toEqual({ suspend: false, reason: 'not idle: ssh connected (tty idle unreadable: cannot read the idle time of pts/1)', state: null });
   });
-  it('a peer connection stays unconditional even with an idle ssh connection', () => {
-    expect(decide(withSsh(99999, { connections: { rdp: 0, ssh: 1, peer: 1 } })).reason).toBe('not idle: machine peer connected');
+  it('the suffix is on the timer lines: restart, wait and the rdp mode, after the input note and the ignored displays', () => {
+    const note = ' (ssh session pts/1 idle for 25 min, needs 20)';
+    const t = [tty('pts/1', 25 * 60)];
+    expect(decide(withSsh(t, { state: 'absent' })).reason).toBe(`idle 0/30 min${note}`);
+    expect(decide(withSsh(t, {}, 12)).reason).toBe(`idle 12/30 min${note}`);
+    expect(decide(withSsh(t, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600 })).reason).toBe(`suspending: rdp connected but no input for 60 min (needs 20)${note}`);
+    expect(decide(withSsh(t, { connections: { rdp: 1, ssh: 1, peer: 0 }, inputIdleSeconds: 3600, state: 'absent' })).reason).toBe(`idle: rdp connected but no input for 60 min (needs 20), confirming at the next check${note}`);
+    expect(decide(withSsh(t, { inputIdleSeconds: 'missing' }, 12)).reason).toBe(`idle 12/30 min (input idleness not checked: xprintidle is not installed)${note}`);
+    expect(decide(withSsh(t, { ignoredDisplays: [0], inputIdleSeconds: 99999 }, 12)).reason).toBe(`idle 12/30 min (ignored display :0: no user session)${note}`);
   });
-  it('the machine request rule stays unconditional: a request in the last N min blocks despite an idle ssh connection', () => {
-    expect(decide(withSsh(99999, { audit: { lastActivityEpoch: NOW - 60, openHolds: 0 } })).reason).toBe('not idle: machine request in the last 30 min');
+  it('no ssh connection: the fact is not read (unreadable or fresh, no suffix)', () => {
+    expect(idleDecision(idle({ sshTtySessions: { unreadable: 'x' } }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
+    expect(idleDecision(idle({ sshTtySessions: [tty('pts/0', 0)] }, 12), NOW, MIN).reason).toBe('idle 12/30 min');
   });
-  it('an ignored ssh connection does not bypass the other checks', () => {
-    expect(decide(withSsh(99999, { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
-    expect(decide(withSsh(99999, { inhibitors: 1 })).reason).toBe('not idle: sleep inhibitor held (block)');
+  it('a peer connection stays unconditional even with an idle ssh session', () => {
+    expect(decide(withSsh([tty('pts/1', 99999)], { connections: { rdp: 0, ssh: 1, peer: 1 } })).reason).toBe('not idle: machine peer connected');
   });
-  it('a non-integer or negative traffic idle time and an out-of-range S are refused loudly', () => {
-    for (const bad of [-1, 1.5, NaN]) expect(() => decide(withSsh(bad)), String(bad)).toThrow(InstallError);
-    for (const s of [0, 1441, 2.5, NaN]) expect(() => decide(withSsh(60), s), String(s)).toThrow(/minutes/);
+  it('the machine request rule stays unconditional: a request in the last N min blocks despite an idle ssh session', () => {
+    expect(decide(withSsh([tty('pts/1', 99999)], { audit: { lastActivityEpoch: NOW - 60, openHolds: 0 } })).reason).toBe('not idle: machine request in the last 30 min');
+  });
+  it('an ignored ssh connection does not bypass the other checks (load, inhibitor): the limit of a notty job is the load and the inhibitors only', () => {
+    expect(decide(withSsh([], { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
+    expect(decide(withSsh([], { inhibitors: 1 })).reason).toBe('not idle: sleep inhibitor held (block)');
+  });
+  it('a non-integer or negative idle time and an out-of-range S are refused loudly', () => {
+    for (const bad of [-1, 1.5, NaN]) expect(() => decide(withSsh([tty('pts/1', bad)])), String(bad)).toThrow(InstallError);
+    for (const s of [0, 1441, 2.5, NaN]) expect(() => decide(withSsh([tty('pts/1', 60)]), s), String(s)).toThrow(/minutes/);
+  });
+  it('the script no longer reads the TCP traffic (decision 109 is replaced)', () => {
+    const tools = { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' };
+    const s = idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes: 20, root: '', configDir: '/home/alice/.config/machine', tools });
+    expect(s).not.toMatch(/lastsnd|lastrcv|-Htin/);
+    expect(s).toContain('stat -c %X');
+    // The logins come from the sshd process titles; /dev/pts is never listed (a stale pts has no sshd process).
+    expect(s).toContain('/proc/[0-9]*/cmdline');
+    expect(s).not.toMatch(/\/dev\/pts\/\*|ls[^\n]*\/dev\/pts/);
   });
 });
 
-describe('parseIdleSshMinutes (--ssh-minutes) and the script (decision 109)', () => {
+describe('parseIdleSshMinutes (--ssh-minutes) and the script (decision 111)', () => {
   it('accepts whole numbers 1 to 1440 only, the error names the flag, range and default', () => {
     expect(parseIdleSshMinutes('1')).toBe(1);
     expect(parseIdleSshMinutes('1440')).toBe(1440);

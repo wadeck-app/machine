@@ -23,10 +23,10 @@ export const IDLE_SSH_PORT = 22;
 export const IDLE_STATE_DIR = '/run/machine-idle-suspend';
 export const IDLE_STATE_FILE = `${IDLE_STATE_DIR}/since`;
 export const IDLE_KEEP_AWAKE_RUN = '/run/machine-keep-awake';
-export const IDLE_SUSPEND_VERSION = 5;
+export const IDLE_SUSPEND_VERSION = 6;
 /** `--rdp-minutes` default: the input idle time from which an established RDP connection no longer counts as activity (decision 103). */
 export const IDLE_RDP_DEFAULT_MINUTES = 20;
-/** `--ssh-minutes` default: the TRAFFIC idle time from which an established ssh connection no longer counts as activity (decision 109). */
+/** `--ssh-minutes` default: the input idle time of the TTY of an ssh session from which it no longer counts as activity (decision 111). */
 export const IDLE_SSH_DEFAULT_MINUTES = 20;
 /** Where the script looks for the tools of the RDP input check when `command -v` found none at install time (the Debian/Ubuntu places). */
 export const IDLE_DEFAULT_XPRINTIDLE = '/usr/bin/xprintidle';
@@ -47,11 +47,11 @@ export interface IdleFacts {
   /** ESTABLISHED TCP connections whose LOCAL port is the RDP port, the ssh port, the machine peer port. */
   connections: { rdp: number; ssh: number; peer: number } | null;
   /**
-   * Decision 109: seconds since the last TCP traffic of the ssh connections, the MINIMUM over the established connections to the sshd port (`ss -Htin`:
-   * min(lastrcv, lastsnd), whole seconds); `{ unreadable }`: it could not be read for at least one connection (the cause goes to the journal, ssh then counts as
-   * activity: fail closed). Read only when `connections.ssh > 0`; ignored otherwise.
+   * Decision 111: the ssh logins WITH A TTY (sshd process title `sshd-session: <user>@pts/<n>`), each with the seconds since the last input on its tty (atime of
+   * /dev/pts/N). A login without a tty (`@notty`) is not listed: it is never activity by itself (an empty list means: only logins without tty). `{ unreadable }`: the sessions or one idle time could not be read
+   * (the cause goes to the journal, ssh then counts as activity: fail closed). Read only when `connections.ssh > 0`; ignored otherwise.
    */
-  sshTrafficIdleSeconds: number | { unreadable: string };
+  sshTtySessions: Array<{ tty: string; idleSeconds: number }> | { unreadable: string };
   /** Epoch of the last accepted/completed/held entry of the audit log (null: none in the part read), and the holds without an end. */
   audit: { lastActivityEpoch: number | null; openHolds: number } | null;
   load5Hundredths: number | null;
@@ -89,6 +89,7 @@ export const IDLE_REASON = {
   rdpNoSession: 'rdp connected but no user session found',
   rdpXprintidleMissing: 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)',
   ssh: 'ssh connected',
+  sshSession: 'ssh session',
   peer: 'machine peer connected',
   auditUnreadable: 'cannot read the machine audit log',
   hold: 'machine request on hold',
@@ -114,7 +115,7 @@ export function parseIdleRdpMinutes(text: string): number {
   return n;
 }
 
-/** `--ssh-minutes` as typed: whole decimal digits, 1 to 1440 (decision 109). */
+/** `--ssh-minutes` as typed: whole decimal digits, 1 to 1440 (decisions 109, 111). */
 export function parseIdleSshMinutes(text: string): number {
   const n = /^(0|[1-9][0-9]{0,3})$/.test(text) ? Number(text) : NaN;
   if (!Number.isInteger(n) || n < IDLE_MIN_MINUTES || n > IDLE_MAX_MINUTES) {
@@ -191,20 +192,30 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
       return notIdle(`${IDLE_REASON.rdp} (input ${Math.floor(input / 60)} min ago, needs ${rdpMinutes})${ignored}`);
     }
   }
-  // Decision 109: an ssh connection is activity only while its traffic is recent (S min); idle >= S is not activity and is said on the timer lines.
+  // Decision 111: an ssh connection is activity only through a session WITH A TTY whose input idle time is below S min; a session without a tty never is.
+  // The state of the ssh rule is said on the timer lines.
   let sshNote = '';
   if (c.ssh > 0) {
-    const traffic = facts.sshTrafficIdleSeconds;
-    if (typeof traffic === 'object') {
-      return notIdle(`${IDLE_REASON.ssh} (traffic idle unreadable: ${traffic.unreadable})`);
+    const sessions = facts.sshTtySessions;
+    if (!Array.isArray(sessions)) {
+      return notIdle(`${IDLE_REASON.ssh} (tty idle unreadable: ${sessions.unreadable})`);
     }
-    if (!Number.isInteger(traffic) || traffic < 0) {
-      throw new InstallError(`the ssh traffic idle time must be a whole number of seconds, got ${String(traffic)}`);
+    let freshest: { tty: string; idleSeconds: number } | undefined;
+    for (const x of sessions) {
+      if (!Number.isInteger(x.idleSeconds) || x.idleSeconds < 0) {
+        throw new InstallError(`the ssh tty idle time must be a whole number of seconds, got ${String(x.idleSeconds)}`);
+      }
+      if (freshest === undefined || x.idleSeconds < freshest.idleSeconds) {
+        freshest = x;
+      }
     }
-    if (traffic < sshMinutes * 60) {
-      return notIdle(`${IDLE_REASON.ssh} (traffic ${Math.floor(traffic / 60)} min ago, needs ${sshMinutes})`);
+    if (freshest === undefined) {
+      sshNote = ' (ssh connection without tty ignored: no terminal input to measure)';
+    } else if (freshest.idleSeconds < sshMinutes * 60) {
+      return notIdle(`${IDLE_REASON.sshSession} ${freshest.tty} active (input ${Math.floor(freshest.idleSeconds / 60)} min ago, needs ${sshMinutes})`);
+    } else {
+      sshNote = ` (ssh session ${freshest.tty} idle for ${Math.floor(freshest.idleSeconds / 60)} min, needs ${sshMinutes})`;
     }
-    sshNote = ` (ssh connected but no traffic for ${Math.floor(traffic / 60)} min, needs ${sshMinutes})`;
   }
   if (c.peer > 0) {
     return notIdle(IDLE_REASON.peer);
@@ -279,7 +290,7 @@ export interface IdleScriptOptions {
   minutes: number;
   /** The input idle time from which an established RDP connection no longer counts as activity (decision 103). */
   rdpMinutes: number;
-  /** The traffic idle time from which an established ssh connection no longer counts as activity (decision 109). */
+  /** The input idle time of an ssh tty from which the session no longer counts as activity (decision 111). */
   sshMinutes: number;
   /** '' in the shipped script. A relative prefix put before EVERY path the script reads or runs: only the golden test sets it. */
   root: string;
@@ -465,48 +476,45 @@ if [ "$rdp" -gt 0 ]; then
   [ "$input_kind" != bad ] || not_idle "${IDLE_REASON.rdp} (input idle unreadable: $input_cause)"
   if [ "$input_secs" -lt $((RDP_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.rdp} (input $((input_secs / 60)) min ago, needs $RDP_MINUTES)$ignored_text"; fi
 fi
-# Decision 109: an ssh connection is activity only while its TRAFFIC is recent: the minimum over the connections of min(lastrcv, lastsnd) of ss -Htin (ms).
-# Anything unreadable (no ss output, a connection without its info line, no lastrcv/lastsnd, not a number) is activity, with the cause.
+# Decision 111: an ssh connection is activity only through a login WITH A TTY whose input idle time is below SSH_MINUTES. The logins are the sshd processes
+# whose title (/proc/<pid>/cmdline, set by sshd) is "sshd-session: <user>@pts/<n>" (or "sshd: ..." on an older sshd) or "...@notty"; the tty of a title is the only
+# tty read (never a listing of /dev/pts: a stale pts has no sshd process). Input idle = now - atime of /dev/pts/<n> (what w and logind read; output does not touch it).
+# A login without a tty (scp, rsync, ssh host cmd, herdr) is never activity. Anything unreadable (no sshd login process for the connection, a tty that is not
+# pts/<n>, no stat, an atime in the future) is activity, with the cause.
 ssh_secs=''
+ssh_tty=''
 ssh_cause=''
 ssh_note=''
 read_ssh() {
-  info=$("$ROOT$SS" -Htin state established '( sport = :${IDLE_SSH_PORT} )' 2>/dev/null </dev/null) || { ssh_cause="ss -i failed"; return 1; }
-  tab=$(printf '\t')
-  min_ms=''
-  conns=0
-  pending=0
-  while IFS= read -r line; do
-    case $line in
-      '') continue ;;
-      ' '*|"$tab"*)
-        [ "$pending" -eq 1 ] || { ssh_cause="ss -i printed a TCP info line without a connection"; return 1; }
-        pending=0
-        rcv=$(printf '%s\n' "$line" | sed -n -E 's/.*[[:space:]]lastrcv:([^[:space:]]*).*/\1/p')
-        snd=$(printf '%s\n' "$line" | sed -n -E 's/.*[[:space:]]lastsnd:([^[:space:]]*).*/\1/p')
-        [ -n "$rcv" ] && [ -n "$snd" ] || { ssh_cause="ss -i printed no lastrcv or lastsnd on a connection (iproute2 too old?)"; return 1; }
-        printf '%s\n' "$rcv" | grep -Eq '^[0-9]{1,15}$' && printf '%s\n' "$snd" | grep -Eq '^[0-9]{1,15}$' || { ssh_cause="ss -i printed an unparsable lastrcv or lastsnd"; return 1; }
-        ms=$rcv
-        if [ "$snd" -lt "$ms" ]; then ms=$snd; fi
-        if [ -z "$min_ms" ] || [ "$ms" -lt "$min_ms" ]; then min_ms=$ms; fi
-        ;;
-      *)
-        [ "$pending" -eq 0 ] || { ssh_cause="ss -i printed a connection without its TCP info line"; return 1; }
-        pending=1
-        conns=$((conns + 1))
-        ;;
-    esac
+  ssh_logins=0
+  ssh_files=$(grep -a -l -E '^sshd(-session)?: ' "$ROOT"/proc/[0-9]*/cmdline 2>/dev/null </dev/null)
+  while read -r cmd_file; do
+    [ -n "$cmd_file" ] || continue
+    title=$(tr -d '\000' 2>/dev/null <"$cmd_file") || { [ ! -e "$cmd_file" ] && continue; ssh_cause="cannot read $cmd_file"; return 1; }
+    s_tty=$(printf '%s\n' "$title" | sed -n -E 's/^sshd(-session)?: [^ ]+@(.*)$/\2/p')
+    [ -n "$s_tty" ] || continue
+    ssh_logins=$((ssh_logins + 1))
+    [ "$s_tty" != notty ] || continue
+    printf '%s\n' "$s_tty" | grep -Eq '^pts/[0-9]{1,6}$' || { ssh_cause="an sshd login process has an unexpected tty in its title ($(printf '%s' "$cmd_file" | sed 's/.*proc\///; s/\/cmdline$//'))"; return 1; }
+    atime=$(stat -c %X -- "$ROOT/dev/$s_tty" 2>/dev/null) || { ssh_cause="cannot read the idle time of $s_tty (stat /dev/$s_tty failed)"; return 1; }
+    printf '%s\n' "$atime" | grep -Eq '^[0-9]{1,12}$' || { ssh_cause="stat printed no number for /dev/$s_tty"; return 1; }
+    [ "$atime" -le "$now" ] || { ssh_cause="the last input of $s_tty is in the future (clock or tty error)"; return 1; }
+    secs=$((now - atime))
+    if [ -z "$ssh_tty" ] || [ "$secs" -lt "$ssh_secs" ]; then ssh_secs=$secs; ssh_tty=$s_tty; fi
   done <<EOF
-$info
+$ssh_files
 EOF
-  [ "$pending" -eq 0 ] || { ssh_cause="ss -i printed a connection without its TCP info line"; return 1; }
-  [ "$conns" -gt 0 ] || { ssh_cause="ss -i lists no ssh connection (it closed since the first listing?)"; return 1; }
-  ssh_secs=$((min_ms / 1000))
+  [ "$ssh_logins" -gt 0 ] || { ssh_cause="no sshd login process (title sshd-session: <user>@<tty>) found for the ssh connection"; return 1; }
 }
 if [ "$ssh" -gt 0 ]; then
-  read_ssh || not_idle "${IDLE_REASON.ssh} (traffic idle unreadable: $ssh_cause)"
-  if [ "$ssh_secs" -lt $((SSH_MINUTES * 60)) ]; then not_idle "${IDLE_REASON.ssh} (traffic $((ssh_secs / 60)) min ago, needs $SSH_MINUTES)"; fi
-  ssh_note=" (ssh connected but no traffic for $((ssh_secs / 60)) min, needs $SSH_MINUTES)"
+  read_ssh || not_idle "${IDLE_REASON.ssh} (tty idle unreadable: $ssh_cause)"
+  if [ -z "$ssh_tty" ]; then
+    ssh_note=' (ssh connection without tty ignored: no terminal input to measure)'
+  elif [ "$ssh_secs" -lt $((SSH_MINUTES * 60)) ]; then
+    not_idle "${IDLE_REASON.sshSession} $ssh_tty active (input $((ssh_secs / 60)) min ago, needs $SSH_MINUTES)"
+  else
+    ssh_note=" (ssh session $ssh_tty idle for $((ssh_secs / 60)) min, needs $SSH_MINUTES)"
+  fi
 fi
 [ "$peer" -eq 0 ] || not_idle "${IDLE_REASON.peer}"
 # Without an RDP connection: a readable input must be MINUTES old; an unreadable one is said on every timer line.

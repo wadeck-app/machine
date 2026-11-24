@@ -47,7 +47,7 @@ export function installFlagProblem(command: string, rest: string[], args: Parsed
   }
   if (args.sshMinutes !== undefined) {
     if (command !== 'install' || rest[0] !== 'idle-suspend') {
-      return `--ssh-minutes only applies to \`machine install idle-suspend\` (the traffic idle time from which an open ssh connection no longer keeps the box awake, ${IDLE_MIN_MINUTES} to ${IDLE_MAX_MINUTES}): \`machine install idle-suspend --ssh-minutes 20\``;
+      return `--ssh-minutes only applies to \`machine install idle-suspend\` (the input idle time of the tty of an ssh session from which it no longer keeps the box awake, ${IDLE_MIN_MINUTES} to ${IDLE_MAX_MINUTES}): \`machine install idle-suspend --ssh-minutes 20\``;
     }
     if (args.check || args.remove) {
       return `--ssh-minutes sets what is installed: it goes with the install, --refresh or --dry-run of \`machine install idle-suspend\`, not with ${args.check ? '--check' : '--remove'}`;

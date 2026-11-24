@@ -90,7 +90,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(r.code, r.err).toBe(0);
     for (const p of [SCRIPT, SERVICE, TIMER]) expect(r.out).toContain(p);
     expect(r.out).toContain('| MINUTES=45');
-    expect(r.out).toContain('| # managed by machine install idle-suspend, version 5');
+    expect(r.out).toContain('| # managed by machine install idle-suspend, version 6');
     expect(r.out).toContain('$ /usr/bin/sudo /usr/bin/systemctl enable machine-idle-suspend.timer');
     expect(r.out).toMatch(/only RESTRICTS uptime/);
     expect(b.sudoCalls()).toEqual([]);
@@ -130,8 +130,8 @@ describe('machine install idle-suspend --dry-run', () => {
   });
 });
 
-// Decision 109: --ssh-minutes (default 20), stored and read back like --rdp-minutes.
-describe('machine install idle-suspend --ssh-minutes (decision 109)', () => {
+// Decision 111: --ssh-minutes (default 20, meaning: input idle time of the tty of an ssh session), stored and read back like --rdp-minutes.
+describe('machine install idle-suspend --ssh-minutes (decision 111)', () => {
   it('is written into the script (default 20), independent of the other two, and the help says what counts', async () => {
     const r = await box({ tty: false }).go(['idle-suspend', '--dry-run']);
     expect(r.out).toContain('| SSH_MINUTES=20');
@@ -142,8 +142,8 @@ describe('machine install idle-suspend --ssh-minutes (decision 109)', () => {
     expect(r2.out).toContain('| SSH_MINUTES=3');
     const help = await box().go(['idle-suspend', '--help']);
     expect(help.out).toMatch(/[--ssh-minutes <1..1440>]/);
-    expect(help.out).toMatch(/--ssh-minutes <1..1440>.*TRAFFIC/);
-    expect(help.out).toMatch(/keepalive/);
+    expect(help.out).toMatch(/--ssh-minutes <1..1440>.*tty/);
+    expect(help.out).toMatch(/without a tty.*never activity by itself/);
   });
 
   it('is stored like --rdp-minutes: shown by --check, kept when only another flag changes, a script of version 4 is outdated', async () => {
@@ -156,7 +156,7 @@ describe('machine install idle-suspend --ssh-minutes (decision 109)', () => {
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^SSH_MINUTES=7$/m);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^RDP_MINUTES=60$/m);
     expect((await b.go(['status'])).out).toContain('(suspends after 5 min idle (RDP: 60 min, SSH: 7 min))');
-    const old = (b.fake.userFiles.get(SCRIPT) ?? '').replace('version 5', 'version 4').replace(/^SSH_MINUTES=.*\n/m, '');
+    const old = (b.fake.userFiles.get(SCRIPT) ?? '').replace('version 6', 'version 4').replace(/^SSH_MINUTES=.*\n/m, '');
     b.fake.userFiles.set(SCRIPT, old);
     const check = await b.go(['idle-suspend', '--check']);
     expect(check.code).toBe(1);
@@ -209,7 +209,7 @@ describe('machine install idle-suspend: xprintidle (read-only probe)', () => {
     const b = box();
     await b.go(['idle-suspend']);
     const current = b.fake.userFiles.get(SCRIPT) as string;
-    b.fake.userFiles.set(SCRIPT, current.replace('version 5', 'version 3').replace(/^LOGINCTL=.*\n/m, ''));
+    b.fake.userFiles.set(SCRIPT, current.replace('version 6', 'version 3').replace(/^LOGINCTL=.*\n/m, ''));
     const check = await b.go(['idle-suspend', '--check']);
     expect(check.code).toBe(1);
     expect(check.out).toContain('outdated');

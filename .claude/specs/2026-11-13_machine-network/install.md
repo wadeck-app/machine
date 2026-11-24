@@ -42,7 +42,7 @@ idle-suspend  installed, up to date
 - `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.
 - The one-line summary is `Installable.summaryLine` (machine-core, at most 80 characters, tested).
 
-`--minutes <n>`, `--rdp-minutes <n>` (decision 103, default 20) and `--ssh-minutes <n>` (decision 109, default 20) (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 1..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
+`--minutes <n>`, `--rdp-minutes <n>` (decision 103, default 20) and `--ssh-minutes <n>` (decisions 109 and 111, default 20: input idle time of an ssh tty) (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 1..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 
 Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit 1, nothing run. Unknown id: exit 2.
 

@@ -78,7 +78,7 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
   // The same for --rdp-minutes (decision 103); a script of an older version has none (the default applies).
   let installedMinutes: number | undefined;
   let installedRdpMinutes: number | undefined;
-  // The same for --ssh-minutes (decision 109); a script of an older version has none (the default applies).
+  // The same for --ssh-minutes (decisions 109, 111); a script of an older version has none (the default applies).
   let installedSshMinutes: number | undefined;
   if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined || env.context.sshMinutes === undefined) {
     try {

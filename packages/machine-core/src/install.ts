@@ -383,7 +383,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     version: IDLE_SUSPEND_VERSION,
     platform: facts.platform,
     files: [
-      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no machine peer connection, no ssh connection with traffic in the last ${sshMinutes} min, the keyboard/mouse input idle for ${minutes} min (${rdpMinutes} min when an RDP connection is open), no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
+      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no machine peer connection, no ssh session with a terminal that had input in the last ${sshMinutes} min, the keyboard/mouse input idle for ${minutes} min (${rdpMinutes} min when an RDP connection is open), no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
       file('service', IDLE_SUSPEND_SERVICE_PATH, '0644', service, 'the systemd service that runs the script once (as root)'),
       file('timer', IDLE_SUSPEND_TIMER_PATH, '0644', timer, 'the systemd timer that starts the service 2 minutes after boot and every 2 minutes after'),
     ],
@@ -418,7 +418,7 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
 
 const IDLE_SUSPEND: Installable = {
   id: 'idle-suspend',
-  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no machine peer connection, no ssh connection with traffic in the last --ssh-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), keyboard/mouse input idle (needs xprintidle: --minutes without an RDP connection, --rdp-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}, default ${IDLE_RDP_DEFAULT_MINUTES}, when one is open), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
+  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no machine peer connection, no ssh session with a terminal that had input in the last --ssh-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), keyboard/mouse input idle (needs xprintidle: --minutes without an RDP connection, --rdp-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}, default ${IDLE_RDP_DEFAULT_MINUTES}, when one is open), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
   summaryLine: 'suspends this box by itself when really idle (root timer, every 2 min)',
   platforms: ['linux'],
   consequence:
@@ -437,7 +437,7 @@ const IDLE_SUSPEND: Installable = {
       `  touch ${IDLE_KEEP_AWAKE_RUN}   or   touch ${configDir}/keep-awake    (remove it to release)`,
       `  echo "keep awake until $(( $(date +%s) + 3600 ))" > ${configDir}/keep-awake    (one more hour, then it is ignored)`,
       '',
-      'a disconnected desktop session (xrdp) is NOT counted as activity; an established machine peer connection is; an established ssh connection counts only while it has traffic more recent than --ssh-minutes (an application keepalive such as ServerAliveInterval or ClientAliveInterval is traffic and keeps the box awake); an established RDP connection counts only while the X input of the session is more recent than --rdp-minutes (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why); without an RDP connection the input must be idle for --minutes when xprintidle can be read, otherwise the journal says that input idleness is not checked.',
+      'a disconnected desktop session (xrdp) is NOT counted as activity; an established machine peer connection is; an established ssh connection counts only through a session WITH A TERMINAL (tty) whose last input is more recent than --ssh-minutes (an ssh session without a tty, such as scp, rsync, \`ssh host command\` or the Herdr stream, is never activity by itself: a slow low-CPU job run that way is protected only by the load, the sleep inhibitors and the machine requests; anything unreadable counts as activity and the journal says why); an established RDP connection counts only while the X input of the session is more recent than --rdp-minutes (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why); without an RDP connection the input must be idle for --minutes when xprintidle can be read, otherwise the journal says that input idleness is not checked.',
       'to test quickly: machine install idle-suspend --minutes 5 --refresh, then leave the box alone for 5-7 minutes (the timer checks every 2 minutes); wake it with machine wake.',
       '',
       `[warn] ${IDLE_SUSPEND.consequence}`,
