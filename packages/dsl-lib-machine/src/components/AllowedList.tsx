@@ -1,8 +1,13 @@
-import { SearchBar, Tabs, type SortDir } from '@wadeck-app/dsl-ui';
+import { ButtonAction, ChipButton, SearchBar, Tabs, type SortDir } from '@wadeck-app/dsl-ui';
+import { RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
+import type { EditOutcome } from '../lib/allowedEdit.js';
 import { appFetcher } from '../lib/shellApi.js';
-import { NOTICE_WARNING, PAGE_BUTTON, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { NOTICE_SUCCESS, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowedMachineBlock, matches } from './AllowedMachineBlock.js';
+import { UnlockedKeyBar } from './UnlockedKeyBar.js';
+import { useSaferMode } from './useSaferMode.js';
 
 // A type alias (not an interface): DataTable wants rows assignable to Record<string, unknown>.
 export type AllowedEntryData = {
@@ -23,6 +28,11 @@ export type AllowedEntryData = {
   limited: boolean;
   /** Why a value is not shown (the calls left of a list signed here); empty when there is nothing to say. */
   limitNote: string;
+  /** The uuid of the peer of an own list (what a signed edit names); empty for the default list. */
+  peerUuid: string;
+  /** The limits as signed (null: none). */
+  maxCalls: number | null;
+  expiresAt: number | null;
   /** Epoch seconds, null when not known (see lastUsedText). */
   lastUsedAt: number | null;
   /** Seconds, or -1 when unknown (sorts as the oldest). */
@@ -48,6 +58,10 @@ export interface AllowedMachineData {
   problem: string;
   emptyText: string;
   fillCommand: string;
+  /** This machine can sign a change of this list: the page offers delete and change of lifetime (decision 112). */
+  canEdit: boolean;
+  /** Why not, with the terminal command, when the list has entries and cannot be changed here. */
+  editNote: string;
 }
 
 /** The answer of `GET /api/modules/machine/allowed`. */
@@ -66,13 +80,17 @@ export interface AllowedListProps {
 
 const LOAD_ERROR = 'flex flex-col items-start gap-2 rounded border border-danger bg-danger-bg p-3 text-sm text-danger-text';
 const URL = 'GET /api/modules/machine/allowed';
+// ChipButton marks itself as a toggle (aria-pressed); Refresh is an action, so the attribute is dropped (a spread, because the prop type only takes a boolean).
+const NOT_A_TOGGLE = { 'aria-pressed': undefined } as unknown as object;
 
 /** The tab label: name and entries (the entries that match the search while one is typed), and a word when the policy could not be read. */
 const labelOf = (m: AllowedMachineData, count: number): string => `${m.name} (${count})${m.problem === '' ? '' : ' - unreadable policy'}`;
 
 /**
  * The Allowed page: the commands approved for each machine, the same lists `machine allowed <machine>` prints. One tab per machine, one table per tab.
- * Read-only: it asks one route of the module and shows what that route says, errors included (they name the fix). A command is shown as text, never as HTML.
+ * Where this machine can sign (the admin machine, policy mode admin), a row can be deleted or given another lifetime, one by one or by a selection of the
+ * shared table (decision 112): the confirmation names the exact commands, the signature is made IN THE BROWSER with the unlocked admin key like Allow. Elsewhere
+ * it is read-only and says why. It asks one route of the module and shows what that route says, errors included (they name the fix). A command is shown as text, never as HTML.
  *
  * @registryCategory composite
  * @registryTags allowed whitelist allow list policy commands approved machines
@@ -91,6 +109,11 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
   const [sortCol, setSortCol] = useState('lastUsedSort');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const latest = useRef(0);
+  // What the last change did (signed, delivered or not), kept until the next one.
+  const [outcome, setOutcome] = useState<EditOutcome | null>(null);
+  const api = useRef<AllowApi | null>(null);
+  api.current ??= shellAllowApi();
+  const safer = useSaferMode();
 
   useEffect(() => {
     const mine = ++latest.current;
@@ -132,11 +155,15 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
 
   return (
     <section className="flex flex-col gap-3" aria-label="Allowed commands">
+      <UnlockedKeyBar variant="chip" />
       <div className="flex flex-wrap items-center gap-3">
-        <SearchBar value={search} onChange={setSearch} placeholder="Search" debounceMs={0} focusExpand />
-        <button type="button" className={PAGE_BUTTON} onClick={() => setReload((n) => n + 1)}>
-          Refresh
-        </button>
+        <SearchBar value={search} onChange={setSearch} placeholder="Search" debounceMs={0} focusExpand size="sm" />
+        <ChipButton active={false} onClick={() => setReload((n) => n + 1)} {...NOT_A_TOGGLE}>
+          <span className="inline-flex items-center gap-1.5">
+            <RefreshCw className="h-3 w-3" aria-hidden="true" />
+            Refresh
+          </span>
+        </ChipButton>
         {known && needle !== '' ? <span className={TEXT_MUTED_SM} aria-live="polite">{`${shownEntries} of ${data.entryCount} entries shown`}</span> : null}
       </div>
 
@@ -144,9 +171,13 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
       {error !== undefined ? (
         <div role="alert" className={LOAD_ERROR}>
           <span className={TEXT_ERROR}>{error}</span>
-          <button type="button" className={PAGE_BUTTON} onClick={() => setReload((n) => n + 1)}>
-            Retry
-          </button>
+          <ButtonAction label="Retry" variant="secondary" size="sm" onClick={() => setReload((n) => n + 1)} />
+        </div>
+      ) : null}
+
+      {outcome !== null ? (
+        <div role={outcome.tone === 'danger' ? 'alert' : 'status'} aria-label="Last change" className={outcome.tone === 'success' ? NOTICE_SUCCESS : outcome.tone === 'warning' ? NOTICE_WARNING : LOAD_ERROR}>
+          {outcome.text}
         </div>
       ) : null}
 
@@ -172,6 +203,13 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
                     onSortColChange={setSortCol}
                     onSortDirChange={setSortDir}
                     refreshing={loading}
+                    api={api.current as AllowApi}
+                    saferMode={safer.on}
+                    onEdited={(done) => {
+                      setOutcome(done);
+                      // The list is the daemon's own again (a signed change is recorded here even when its delivery failed).
+                      setReload((n) => n + 1);
+                    }}
                   />
                 ),
               }))}

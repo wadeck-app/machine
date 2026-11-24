@@ -1,8 +1,8 @@
-import { entryFromText as coreEntryFromText, buildDocument as coreBuildDocument, documentId as coreDocumentId, nextPolicyBody as coreNext, nextPolicyBodyMany as coreMany, signPolicy as coreSignPolicy, DOCUMENT_RETENTION_SECONDS as CORE_RETENTION, verifyInboxDocument as coreVerifyDocument, verifyDocumentEnvelope, type PolicyBody, type PolicyChange, type PolicyEntry } from '@wadeck-app/machine-core';
+import { entryFromText as coreEntryFromText, buildDocument as coreBuildDocument, documentId as coreDocumentId, nextPolicyBody as coreNext, nextPolicyBodyMany as coreMany, nextPolicyBodyRemoveMany as coreRemoveMany, nextPolicyBodyRenewMany as coreRenewMany, signPolicy as coreSignPolicy, DOCUMENT_RETENTION_SECONDS as CORE_RETENTION, verifyInboxDocument as coreVerifyDocument, verifyDocumentEnvelope, type PolicyBody, type PolicyChange, type PolicyEntry } from '@wadeck-app/machine-core';
 import { keyId as coreKeyId } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import { newPair, prng, uuid, webKeyFrom } from '../test-support/kit.js';
-import { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, nextPolicyBodyMany } from './policyEdit.js';
+import { DEFAULT_APPLY_WINDOW_SECONDS, nextPolicyBody, nextPolicyBodyMany, nextPolicyBodyRemoveMany, nextPolicyBodyRenewMany } from './policyEdit.js';
 import { sealedPolicyDocument, signPolicy } from './documents.js';
 
 // The browser builds the next policy itself (the page must not sign a body that a hostile backend wrote), so its rule is a copy of machine-core
@@ -243,5 +243,46 @@ describe('nextPolicyBodyMany (copy of machine-core): several entries in one vers
     const two = [entry('sh', 'x'), entry('sh', 'y')];
     expect(messageOf(() => nextPolicyBodyMany(full, ctx, two))).toMatch(/at most 200/);
     expect(messageOf(() => nextPolicyBodyMany(full, ctx, two))).toBe(messageOf(() => coreMany(full, ctx, two)));
+  });
+});
+
+describe('nextPolicyBodyRemoveMany and nextPolicyBodyRenewMany (copies of machine-core): the Allowed page edits entries of the lists in one version', () => {
+  const PEER = uuid();
+  const typed = coreEntryFromText('orch logs <j:name>', 'sh');
+  const policy = base(5, [entry('sh', 'a'), entry('sh', 'b', { maxCalls: 2 }), entry('cmd', 'c'), typed], { [PEER]: [entry('sh', 'p1'), entry('sh', 'p2', { expiresAt: NOW + 500, renewals: 1 })] });
+  const ref = (index: number, shell: PolicyEntry['shell'], text: string, peer?: string) => ({ index, shell, text, ...(peer === undefined ? {} : { peer }) });
+  const messageOf = (run: () => unknown): string => { try { run(); } catch (e) { return (e as Error).message; } return ''; };
+
+  const removals: Array<[string, Array<ReturnType<typeof ref>>]> = [
+    ['two of the default list', [ref(1, 'sh', 'a'), ref(3, 'cmd', 'c')]],
+    ['default and own list', [ref(2, 'sh', 'b'), ref(2, 'sh', 'p2', PEER)]],
+    ['a typed entry', [ref(4, 'sh', 'orch logs <j:name>')]],
+    ['the whole own list', [ref(1, 'sh', 'p1', PEER), ref(2, 'sh', 'p2', PEER)]],
+    ['a duplicate reference', [ref(1, 'sh', 'a'), ref(1, 'sh', 'a')]],
+  ];
+  it.each(removals)('removal, %s: same result as machine-core', (_name, refs) => {
+    expect(nextPolicyBodyRemoveMany(policy, ctx, refs)).toEqual(coreRemoveMany(policy, ctx, refs));
+  });
+
+  const limitsChoices: Array<[string, PolicyEntry['limits'] | undefined]> = [['permanent', undefined], ['once', { maxCalls: 1 }], ['a date', { expiresAt: NOW + 3600 }], ['calls and a date', { maxCalls: 4, expiresAt: NOW + 7200 }]];
+  it.each(limitsChoices)('new lifetime %s: same result as machine-core', (_name, limits) => {
+    const refs = [ref(1, 'sh', 'a'), ref(2, 'sh', 'b'), ref(4, 'sh', 'orch logs <j:name>'), ref(2, 'sh', 'p2', PEER)];
+    expect(nextPolicyBodyRenewMany(policy, ctx, refs, limits)).toEqual(coreRenewMany(policy, ctx, refs, limits));
+  });
+
+  it('refuses with the machine-core wording: a moved list, an index out of the list, no own list, an empty selection, another target, no policy', () => {
+    const cases: Array<[PolicyBody | undefined, Array<ReturnType<typeof ref>>]> = [
+      [policy, [ref(1, 'sh', 'zzz')]],
+      [policy, [ref(99, 'sh', 'a')]],
+      [policy, [ref(1, 'sh', 'p1', uuid())]],
+      [policy, []],
+      [{ ...policy, target: uuid() }, [ref(1, 'sh', 'a')]],
+      [undefined, [ref(1, 'sh', 'a')]],
+    ];
+    for (const [current, refs] of cases) {
+      expect(messageOf(() => nextPolicyBodyRemoveMany(current, ctx, refs))).not.toBe('');
+      expect(messageOf(() => nextPolicyBodyRemoveMany(current, ctx, refs))).toBe(messageOf(() => coreRemoveMany(current, ctx, refs)));
+      expect(messageOf(() => nextPolicyBodyRenewMany(current, ctx, refs, { maxCalls: 1 }))).toBe(messageOf(() => coreRenewMany(current, ctx, refs, { maxCalls: 1 })));
+    }
   });
 });

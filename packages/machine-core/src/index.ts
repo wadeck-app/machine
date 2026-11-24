@@ -68,7 +68,7 @@ export {
   type SignedPolicy,
   type TypedEntry,
 } from './policy.js';
-export { DEFAULT_APPLY_WINDOW_SECONDS, POLICY_MAX_ENTRIES_PER_LIST, entryFromText, nextPolicyBody, nextPolicyBodyMany, type EditContext, type PolicyChange, type PolicyEdit, type PolicyEditMany } from './policyEdit.js';
+export { DEFAULT_APPLY_WINDOW_SECONDS, POLICY_MAX_ENTRIES_PER_LIST, entryFromText, nextPolicyBody, nextPolicyBodyMany, nextPolicyBodyRemoveMany, nextPolicyBodyRenewMany, type EditContext, type EntryRef, type PolicyChange, type PolicyEdit, type PolicyEditEntries, type PolicyEditMany } from './policyEdit.js';
 export { MAX_ASK_WHY, ASK_LARGE_TIMES, askAllowFlags, askFromFlags, askRisk, askSummary, parseCallerAsk, type AskFlags, type AskResult, type CallerAsk } from './callerAsk.js';
 export { describeLimits, limitsEqual, MAX_LIFETIME_SECONDS, MAX_TIMES, parseLifetime, type LifetimeInput, type LifetimeLimits } from './lifetime.js';
 export { allowedLists, type AllowedEntryView, type AllowedListView } from './allowedList.js';

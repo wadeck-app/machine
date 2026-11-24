@@ -7,6 +7,7 @@ import { policyRecordFile } from './adminAllow.js';
 import { readMachine } from './identity.js';
 import { provision } from './testing.js';
 import { REMOTE_VIEW_LINE } from './allowedView.js';
+import { editRights } from './allowedAnswer.js';
 
 // The `allowed` command of the daemon (the Allowed page of the module): the data of `machine allowed <machine>` for every machine, read-only.
 
@@ -96,5 +97,26 @@ ${accepted('2026-11-20T10:00:00.000Z', admin, 'ls')}
   it('never carries the signature of a policy record', async () => {
     const text = JSON.stringify(await makeCommands(a, 'test').allowed());
     expect(text).not.toMatch(/signature/i);
+  });
+});
+
+describe('who can sign a change of a list (the Allowed page offers actions only where this machine can sign)', () => {
+  it('the admin machine can sign the list it signed for another machine; the target that does not hold the admin key cannot change its own installed list', async () => {
+    const onAdmin = (await makeCommands(a, 'test').allowed()) as any;
+    expect(onAdmin.machines.find((m: any) => m.name === 'laptop')).toMatchObject({ canEdit: true, editNote: '' });
+    const onTarget = (await makeCommands(b, 'test').allowed()) as any;
+    const self = onTarget.machines.find((m: any) => m.isSelf);
+    expect(self.canEdit).toBe(false);
+    expect(self.editNote).toMatch(/does not hold the admin key/);
+    expect(self.editNote).toMatch(/admin machine/);
+  });
+
+  it('editRights: mode local says who manages the list and the command; a mode admin machine without the key says to go to the admin machine; nothing to say when nothing is listed', () => {
+    expect(editRights({ source: 'installed', mode: 'local', hasAdminKey: true, hasPolicy: true })).toEqual({ canEdit: false, editNote: expect.stringMatching(/policy mode local.*machine policy allow/s) });
+    expect(editRights({ source: 'installed', mode: 'admin', hasAdminKey: false, hasPolicy: true })).toEqual({ canEdit: false, editNote: expect.stringMatching(/does not hold the admin key.*admin machine/s) });
+    expect(editRights({ source: 'installed', mode: 'admin', hasAdminKey: true, hasPolicy: true })).toEqual({ canEdit: true, editNote: '' });
+    expect(editRights({ source: 'signed-here', mode: 'admin', hasAdminKey: true, hasPolicy: true })).toEqual({ canEdit: true, editNote: '' });
+    expect(editRights({ source: 'signed-here', mode: 'admin', hasAdminKey: false, hasPolicy: true }).canEdit).toBe(false);
+    expect(editRights({ source: 'signed-here', mode: 'admin', hasAdminKey: true, hasPolicy: false })).toEqual({ canEdit: false, editNote: '' });
   });
 });

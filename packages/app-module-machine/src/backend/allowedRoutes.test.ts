@@ -90,8 +90,8 @@ function daemonAnswer(over: Record<string, unknown> = {}): Record<string, unknow
     now: NOW,
     warnings: [],
     machines: [
-      { ...SELF, isSelf: true, source: 'installed', mode: 'admin', fillCommand: 'machine admin allow desktop -- <command>', policy: { version: 4, issuedAt: NOW - 600, lists: [{ scope: 'default', entries: [entry(1), entry(2, { maxCalls: 5, used: 2, lifetime: '3 of 5 calls left' })] }] } },
-      { ...PEER, isSelf: false, source: 'signed-here', mode: 'admin', fillCommand: 'machine admin allow laptop -- <command>', remoteViewLine: REMOTE_LINE, policy: { version: 2, issuedAt: NOW - 7200, lists: [{ scope: 'default', entries: [entry(1, { text: '<img src=x onerror=alert(1)>', maxCalls: 3, lifetime: '3 calls' })] }, { scope: 'peer', peer: { uuid: SELF.uuid, name: 'desktop' }, entries: [entry(1, { expiresAt: NOW + 3600, lifetime: 'until 2026-11-22 23:00' })] }] } },
+      { ...SELF, isSelf: true, source: 'installed', mode: 'admin', fillCommand: 'machine admin allow desktop -- <command>', canEdit: false, editNote: 'This machine does not hold the admin key (policy mode admin): only the admin machine signs this list.', policy: { version: 4, issuedAt: NOW - 600, lists: [{ scope: 'default', entries: [entry(1), entry(2, { maxCalls: 5, used: 2, lifetime: '3 of 5 calls left' })] }] } },
+      { ...PEER, isSelf: false, source: 'signed-here', mode: 'admin', fillCommand: 'machine admin allow laptop -- <command>', remoteViewLine: REMOTE_LINE, canEdit: true, editNote: '', policy: { version: 2, issuedAt: NOW - 7200, lists: [{ scope: 'default', entries: [entry(1, { text: '<img src=x onerror=alert(1)>', maxCalls: 3, lifetime: '3 calls' })] }, { scope: 'peer', peer: { uuid: SELF.uuid, name: 'desktop' }, entries: [entry(1, { expiresAt: NOW + 3600, lifetime: 'until 2026-11-22 23:00' })] }] } },
       { uuid: '33333333-3333-4333-8333-333333333333', name: 'nas', isSelf: false, source: 'signed-here', mode: 'admin', fillCommand: 'machine admin allow nas -- <command>', remoteViewLine: 'as installed on nas: ask there', policy: null },
       { uuid: '44444444-4444-4444-8444-444444444444', name: 'box', isSelf: false, source: 'signed-here', mode: 'admin', fillCommand: 'machine admin allow box -- <command>', policy: null, problem: '/x/policies/44.json is not a valid policy record (bad json): delete it, the next policy is then built from nothing' },
     ],
@@ -107,9 +107,33 @@ describe('allowedPage', () => {
     expect(self).toMatchObject({ name: 'desktop', isSelf: true, source: 'installed', mode: 'admin', version: 4, signedText: expect.stringMatching(/10 min ago/) });
     expect(self?.entries.map((e) => [e.index, e.shell, e.text, e.lifetimeText])).toEqual([[1, 'sh', 'echo 1', 'permanent'], [2, 'sh', 'echo 2', '3 of 5 calls left']]);
     expect(peer?.entries.map((e) => [e.listLabel, e.index])).toEqual([['default', 1], ['only for desktop', 1]]);
-    expect(peer?.entries.map((e) => e.key)).toEqual(['0:0', '1:0']);
+    // The key is the IDENTITY of the entry (list, shell, text), not its place: a selection made on the page survives a re-read that moved the entry.
+    expect(peer?.entries.map((e) => e.key)).toEqual([`default|sh|<img src=x onerror=alert(1)>`, `${SELF.uuid}|sh|echo 1`]);
     expect(peer?.entries[1]?.listTitle).toBe('Only for desktop (its own list, it replaces the default)');
     expect(peer).toMatchObject({ name: 'laptop', source: 'signed-here', version: 2, signedText: expect.stringMatching(/2 h ago/) });
+  });
+
+  it('an entry carries what the actions need: the uuid of the peer of its list, the numbers of its lifetime, and the machine says whether this machine can sign a change', () => {
+    const [self, peer] = allowedPage(daemonAnswer(), NOW).machines;
+    expect(peer?.entries.map((e) => [e.peerUuid, e.maxCalls, e.expiresAt])).toEqual([['', 3, null], [SELF.uuid, null, NOW + 3600]]);
+    expect(self?.entries.map((e) => [e.peerUuid, e.maxCalls, e.expiresAt])).toEqual([['', null, null], ['', 5, null]]);
+    expect(peer).toMatchObject({ canEdit: true, editNote: '' });
+    expect(self).toMatchObject({ canEdit: false, editNote: expect.stringContaining('does not hold the admin key') });
+  });
+
+  it('the same command in two lists, or twice in one list, gets distinct keys (a selection never reaches two rows)', () => {
+    const answer = daemonAnswer({ machines: [{ ...SELF, isSelf: true, source: 'installed', mode: 'admin', fillCommand: 'x', canEdit: true, editNote: '', policy: { version: 1, issuedAt: NOW, lists: [{ scope: 'default', entries: [entry(1, { text: 'ls' }), entry(2, { text: 'ls' })] }, { scope: 'peer', peer: { uuid: PEER.uuid, name: 'laptop' }, entries: [entry(1, { text: 'ls' })] }] } }] });
+    const keys = allowedPage(answer, NOW).machines[0]?.entries.map((e) => e.key);
+    expect(keys).toEqual(['default|sh|ls', 'default|sh|ls#2', `${PEER.uuid}|sh|ls`]);
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it('a daemon that does not say whether this machine can sign (an older one) is said, never a silent read-only: the note names the update', () => {
+    const answer = daemonAnswer({ machines: [{ ...SELF, isSelf: true, source: 'installed', mode: 'admin', fillCommand: 'x', policy: { version: 1, issuedAt: NOW, lists: [{ scope: 'default', entries: [entry(1)] }] } }] });
+    const [self] = allowedPage(answer, NOW).machines;
+    expect(self?.canEdit).toBe(false);
+    expect(self?.editNote).toMatch(/older than this page/);
+    expect(self?.editNote).toMatch(/machine cli update/);
   });
 
   it('has no summary and no change note any more: the page carries only counts', () => {

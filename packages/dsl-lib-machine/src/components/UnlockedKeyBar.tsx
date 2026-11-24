@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, CompactSelect } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder, formatCountdown, KEEP_CHOICES, type KeepChoice } from '../lib/adminKeyHolder.js';
 import { KEY_PILL, NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 const PILL = KEY_PILL;
+const KEEP_OPTIONS = KEEP_CHOICES.map((c) => ({ value: c.value, label: c.label }));
 // The indicator exists once per page: while a pill is mounted, a bar (the dialogs and inline prompts) only says that no passphrase is needed.
 let pillsMounted = 0;
 const pillListeners = new Set<() => void>();
@@ -128,11 +129,7 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
           {`Key unlocked ${formatCountdown(remaining)}`}
         </span>
         {/* The time the key stays unlocked after the last signature: a longer choice applies from now (the holder restarts the countdown). */}
-        <select aria-label="Keep unlocked for" value={keep} onChange={(e) => adminKeyHolder.setKeep(e.target.value as KeepChoice)} className="rounded border border-border bg-surface px-1 text-xs text-content focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          {KEEP_CHOICES.map((choice) => (
-            <option key={choice.value} value={choice.value}>{choice.label}</option>
-          ))}
-        </select>
+        <CompactSelect ariaLabel="Keep unlocked for" value={keep} onChange={(v) => adminKeyHolder.setKeep(v as KeepChoice)} options={KEEP_OPTIONS} />
         <button type="button" onClick={() => adminKeyHolder.lock()} className="rounded px-1 text-xs font-medium text-content underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           Lock
         </button>

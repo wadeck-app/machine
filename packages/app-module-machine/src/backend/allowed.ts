@@ -13,7 +13,7 @@ export class AllowedAnswerError extends Error {
 }
 
 export interface AllowedEntryRow {
-  /** Unique inside its machine: list number, entry number. */
+  /** Unique inside its machine and stable across two reads: the IDENTITY of the entry (its list, shell and text), never its place. A selection on the page is kept by it. */
   key: string;
   /** Short name of the list the entry belongs to: `default` or `only for <peer>`. */
   listLabel: string;
@@ -21,6 +21,8 @@ export interface AllowedEntryRow {
   listTitle: string;
   /** The name of the peer the list is for; empty for the default list. */
   peerName: string;
+  /** The uuid of that peer (what a signed edit names); empty for the default list. */
+  peerUuid: string;
   /** Place in its list, from 1. */
   index: number;
   shell: string;
@@ -29,6 +31,9 @@ export interface AllowedEntryRow {
   lifetimeText: string;
   /** True when the entry has a call count or an end date. */
   limited: boolean;
+  /** The limits as signed (null: none): what a change of lifetime compares with. */
+  maxCalls: number | null;
+  expiresAt: number | null;
   /** Why a value is not shown (the calls left of a list signed here), empty when there is nothing to say. */
   limitNote: string;
   /** Epoch seconds of the last accepted use, null when it is not known (see lastUsedText). */
@@ -63,6 +68,10 @@ export interface AllowedMachineRow {
   /** Why there is no list, with what to do; empty when there is a list or a problem. */
   emptyText: string;
   fillCommand: string;
+  /** This machine can sign a change of this list: the page offers delete and change of lifetime. */
+  canEdit: boolean;
+  /** Why not, with the terminal command, when the list has entries and cannot be changed here. */
+  editNote: string;
 }
 
 export interface AllowedPage {
@@ -73,6 +82,7 @@ export interface AllowedPage {
   warnings: string[];
 }
 
+const OLDER_FOR_EDIT = 'the daemon is older than this page and does not say whether this machine can sign a change of this list, so no action is offered: update it with `machine cli update` and restart it';
 const OLDER = 'the daemon answered something that is not the `allowed` command of this version: it is an older version, update it with `machine cli update` and restart it';
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -117,7 +127,15 @@ function removeCommandOf(m: MachineContext, peerName: string, index: number): st
   return peerName === '' ? `${m.fillCommand.replace(/ -- <command>$/, '')} --remove --index ${index}` : '';
 }
 
-function entryRow(raw: unknown, key: string, list: { label: string; title: string; peerName: string }, m: MachineContext): AllowedEntryRow {
+/** The identity key of an entry: its list (default, or the uuid of the peer), shell and text; a repeat inside the machine gets `#2`, `#3`. */
+function identityKey(seen: Map<string, number>, list: { peerUuid: string }, shell: string, text: string): string {
+  const base = `${list.peerUuid === '' ? 'default' : list.peerUuid}|${shell}|${text}`;
+  const n = (seen.get(base) ?? 0) + 1;
+  seen.set(base, n);
+  return n === 1 ? base : `${base}#${n}`;
+}
+
+function entryRow(raw: unknown, seen: Map<string, number>, list: { label: string; title: string; peerName: string; peerUuid: string }, m: MachineContext): AllowedEntryRow {
   if (!isObject(raw)) {
     throw new AllowedAnswerError(OLDER);
   }
@@ -126,16 +144,19 @@ function entryRow(raw: unknown, key: string, list: { label: string; title: strin
   const used = num(raw['used']);
   const index = num(raw['index']) ?? 0;
   return {
-    key,
+    key: identityKey(seen, list, text(raw['shell']), text(raw['text'])),
     listLabel: list.label,
     listTitle: list.title,
     peerName: list.peerName,
+    peerUuid: list.peerUuid,
     index,
     shell: text(raw['shell']),
     text: text(raw['text']),
     typed: raw['typed'] === true,
     lifetimeText: text(raw['lifetime'], 'permanent'),
     limited: maxCalls !== undefined || expiresAt !== undefined,
+    maxCalls: maxCalls ?? null,
+    expiresAt: expiresAt ?? null,
     // The counter of an entry lives on the target: for a list signed here the calls left are not known, and the page says so rather than guess.
     limitNote: maxCalls !== undefined && used === undefined && m.source === 'signed-here' ? `calls left: not shown, the counter is kept on ${m.name}` : '',
     ...lastUseOf(num(raw['lastUsedAt']), m),
@@ -143,7 +164,7 @@ function entryRow(raw: unknown, key: string, list: { label: string; title: strin
   };
 }
 
-function listEntries(raw: unknown, m: MachineContext, at: number): AllowedEntryRow[] {
+function listEntries(raw: unknown, m: MachineContext, seen: Map<string, number>): AllowedEntryRow[] {
   if (!isObject(raw) || !Array.isArray(raw['entries'])) {
     throw new AllowedAnswerError(OLDER);
   }
@@ -153,8 +174,9 @@ function listEntries(raw: unknown, m: MachineContext, at: number): AllowedEntryR
     label: isPeer ? `only for ${peer}` : 'default',
     title: isPeer ? `Only for ${peer} (its own list, it replaces the default)` : 'Default list (every trusted peer without a list of its own)',
     peerName: isPeer ? peer : '',
+    peerUuid: isPeer && isObject(raw['peer']) ? text(raw['peer']['uuid']) : '',
   };
-  return raw['entries'].map((e, i) => entryRow(e, `${at}:${i}`, list, m));
+  return raw['entries'].map((e) => entryRow(e, seen, list, m));
 }
 
 function machineRow(raw: unknown, now: number): AllowedMachineRow {
@@ -172,7 +194,8 @@ function machineRow(raw: unknown, now: number): AllowedMachineRow {
   const scan = isObject(raw['lastUse']) ? raw['lastUse'] : undefined;
   const lastUse = scan === undefined ? undefined : { scanned: num(scan['scanned']) ?? 0, damaged: num(scan['damaged']) ?? 0, complete: scan['complete'] === true };
   const context: MachineContext = { name, source, mode, fillCommand, lastUse, now };
-  const entries = policy !== undefined && Array.isArray(policy['lists']) ? policy['lists'].flatMap((l, i) => listEntries(l, context, i)) : [];
+  const seen = new Map<string, number>();
+  const entries = policy !== undefined && Array.isArray(policy['lists']) ? policy['lists'].flatMap((l) => listEntries(l, context, seen)) : [];
   let emptyText = '';
   if (policy === undefined && problem === '') {
     emptyText = source === 'installed'
@@ -194,6 +217,9 @@ function machineRow(raw: unknown, now: number): AllowedMachineRow {
     problem,
     emptyText,
     fillCommand,
+    // A daemon that does not say is an OLDER one: said with the fix, never a silent read-only page.
+    canEdit: raw['canEdit'] === true,
+    editNote: typeof raw['canEdit'] === 'boolean' ? text(raw['editNote']) : entries.length > 0 ? OLDER_FOR_EDIT : '',
   };
 }
 

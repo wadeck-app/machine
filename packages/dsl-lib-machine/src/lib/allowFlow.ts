@@ -220,7 +220,7 @@ function entryOf(shell: string, command: string, renewal: AllowRenewal | undefin
 }
 
 /** The signed policy the next one is edited from must be one the pinned admin key signed, for this machine: a base a backend wrote is never used. */
-async function assertBase(context: AllowContext): Promise<void> {
+export async function assertBase(context: AllowContext): Promise<void> {
   const { current } = context;
   if (current === null) {
     return;
@@ -270,10 +270,10 @@ export async function prepareAllow(context: AllowContext, change: AllowChange, n
   };
 }
 
-type DeliveryCheck = { targetKey: string | undefined; stored: SignedNoticeRecipients | null };
+export type DeliveryCheck = { targetKey: string | undefined; stored: SignedNoticeRecipients | null };
 
 /** What must be true BEFORE any key is unlocked for a policy sent to `context`: the key the document is sealed to, and a stored notice list the pinned key signed. */
-async function checkDelivery(context: AllowContext): Promise<DeliveryCheck> {
+export async function checkDelivery(context: AllowContext): Promise<DeliveryCheck> {
   // Decision 78: the document is sealed to the target, so its key is needed BEFORE anything is unlocked. No key, no document (never a clear one).
   const targetKey = context.target.identityPublicKey;
   if (context.delivery === 'inbox' && (typeof targetKey !== 'string' || targetKey.length === 0)) {
@@ -356,10 +356,10 @@ export async function withAdminKey<T>(api: AllowApi, passphrase: string | null, 
   }
 }
 
-type AllowPost = { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
+export type AllowPost = { policy: SignedPolicy; document?: unknown; noticeRecipients?: { signed: SignedNoticeRecipients; document: unknown } };
 
 /** With the key unlocked: signs the policy, its inbox document for another machine, and the list of notice recipients (the same unlock, like every distribution of the CLI). */
-async function signDocuments(key: { privateKey: Parameters<typeof signPolicy>[1] }, context: AllowContext, policyBody: PolicyBody, now: number, check: DeliveryCheck): Promise<AllowPost> {
+export async function signDocuments(key: { privateKey: Parameters<typeof signPolicy>[1] }, context: AllowContext, policyBody: PolicyBody, now: number, check: DeliveryCheck): Promise<AllowPost> {
   const { targetKey, stored } = check;
   const policy = await signPolicy(policyBody, key.privateKey);
   const body: AllowPost = context.delivery === 'inbox' ? { policy, document: await sealedPolicyDocument(policy, now, key.privateKey, targetKey as string) } : { policy };
@@ -372,7 +372,7 @@ async function signDocuments(key: { privateKey: Parameters<typeof signPolicy>[1]
 }
 
 /** The daemon's answer to the post of the signed documents. */
-async function postSigned(api: AllowApi, context: AllowContext, body: AllowPost): Promise<AllowResult> {
+export async function postSigned(api: AllowApi, context: AllowContext, body: AllowPost): Promise<AllowResult> {
   const result = await api.post('/allow', body);
   if (!isObject(result) || result['ok'] === false) {
     throw unexpected('the signed policy');
@@ -385,7 +385,7 @@ async function postSigned(api: AllowApi, context: AllowContext, body: AllowPost)
 }
 
 /** The key unlocked from the file must be the admin key this machine pinned. */
-function assertPinnedKey(key: { keyId: string; publicKey: string }, context: AllowContext): void {
+export function assertPinnedKey(key: { keyId: string; publicKey: string }, context: AllowContext): void {
   if (key.keyId !== context.adminKeyId || key.publicKey !== context.adminPublicKey) {
     throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
   }

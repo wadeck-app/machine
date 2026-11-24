@@ -6,6 +6,7 @@ import { auditLogFile } from './requestsView.js';
 import { FileUsageStore } from './stores.js';
 import { recordedPolicy, REMOTE_VIEW_LINE } from './allowedView.js';
 import { NotInitializedError } from './errors.js';
+import { adminKeyFile } from './admin.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 
@@ -47,6 +48,27 @@ export interface AllowedMachineView {
   remoteViewLine?: string;
   /** The command that adds an entry for this machine. */
   fillCommand: string;
+  /** This machine can sign a change of this list (it holds the admin key and the list is the admin's): the page then offers delete and change of lifetime. */
+  canEdit: boolean;
+  /** Why not, with where to change it, when the list has entries and cannot be changed here; empty otherwise. */
+  editNote: string;
+}
+
+/**
+ * Whether THIS machine can sign a change of the list of a machine (the Allowed page offers actions only there). An installed list is the admin's only in
+ * mode admin, and only the machine that holds the admin key signs it; a list signed here needs the admin key too. Never a silent "no": the note says why.
+ */
+export function editRights(input: { source: 'installed' | 'signed-here'; mode: PolicyMode; hasAdminKey: boolean; hasPolicy: boolean }): { canEdit: boolean; editNote: string } {
+  if (!input.hasPolicy) {
+    return { canEdit: false, editNote: '' };
+  }
+  if (input.source === 'installed' && input.mode === 'local') {
+    return { canEdit: false, editNote: 'This machine manages its own list (policy mode local): no admin signature is used here. Change it from a terminal on this machine with `machine policy allow`; `machine policy delegate` gives the list back to the admin first.' };
+  }
+  if (!input.hasAdminKey) {
+    return { canEdit: false, editNote: 'This machine does not hold the admin key (policy mode admin): only the admin machine signs this list. Change it from a terminal on the admin machine with `machine admin allow`.' };
+  }
+  return { canEdit: true, editNote: '' };
 }
 
 export type AllowedAnswer =
@@ -69,6 +91,7 @@ export function allowedAnswer(configDir: string, nowSeconds: number): AllowedAns
   const nameOf = (uuid: string): string => everyone.find((m) => m.uuid === uuid)?.name ?? uuid;
   const warnings = [...network.problems];
 
+  const hasAdminKey = existsSync(adminKeyFile(configDir));
   const machines = everyone.map((m): AllowedMachineView => {
     if (m.uuid === self.uuid) {
       const fillCommand = network.policyMode === 'local' ? 'machine policy allow -- <command>' : `machine admin allow ${m.name} -- <command>`;
@@ -103,19 +126,21 @@ export function allowedAnswer(configDir: string, nowSeconds: number): AllowedAns
         policy: body === undefined || shownLists === undefined ? null : { version: body.version, issuedAt: body.issuedAt, lists: shownLists },
         ...(lastUse === undefined ? {} : { lastUse }),
         fillCommand,
+        ...editRights({ source: 'installed', mode: network.policyMode, hasAdminKey, hasPolicy: body !== undefined && shownLists !== undefined }),
       };
     }
     const base = { uuid: m.uuid, name: m.name, isSelf: false, source: 'signed-here' as const, mode: 'admin' as const, fillCommand: `machine admin allow ${m.name} -- <command>` };
+    const nothing = { canEdit: false, editNote: '' };
     try {
       const record = recordedPolicy(configDir, m.uuid);
       if (record === undefined) {
-        return { ...base, policy: null };
+        return { ...base, policy: null, ...nothing };
       }
       const { body } = record;
-      return { ...base, policy: { version: body.version, issuedAt: body.issuedAt, lists: allowedLists(body, nameOf, nowSeconds) }, remoteViewLine: REMOTE_VIEW_LINE(m.name) };
+      return { ...base, policy: { version: body.version, issuedAt: body.issuedAt, lists: allowedLists(body, nameOf, nowSeconds) }, remoteViewLine: REMOTE_VIEW_LINE(m.name), ...editRights({ source: 'signed-here', mode: 'admin', hasAdminKey, hasPolicy: true }) };
     } catch (e) {
       // A record that cannot be read names its file and the fix (readPolicyRecord): shown on its machine, never as "no policy".
-      return { ...base, policy: null, problem: (e as Error).message };
+      return { ...base, policy: null, problem: (e as Error).message, ...nothing };
     }
   });
   return { initialized: true, ok: true, self: { uuid: self.uuid, name: self.name }, now: nowSeconds, machines, warnings };

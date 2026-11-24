@@ -10,10 +10,11 @@ type MachineRow = AllowedPageData['machines'][number];
 type EntryRow = MachineRow['entries'][number];
 
 const LIST_DEFAULT = 'Default list (every trusted peer without a list of its own)';
+const NOT_HERE = 'This machine does not hold the admin key (policy mode admin): only the admin machine signs this list.';
 const NOT_KNOWN = 'The audit log that records the uses is on laptop: only that machine knows when this command last ran.';
 
 const entry = (index: number, over: Partial<EntryRow> = {}): EntryRow => ({
-  key: `0:${index}`, listLabel: 'default', listTitle: LIST_DEFAULT, peerName: '', index, shell: 'sh', text: `echo ${index}`, typed: false, lifetimeText: 'permanent', limited: false, limitNote: '',
+  key: `default|sh|echo ${index}`, listLabel: 'default', listTitle: LIST_DEFAULT, peerName: '', peerUuid: '', maxCalls: null, expiresAt: null, index, shell: 'sh', text: `echo ${index}`, typed: false, lifetimeText: 'permanent', limited: false, limitNote: '',
   lastUsedAt: null, lastUsedSort: -1, lastUsedText: 'never', lastUsedNote: 'No accepted use in the audit log of this machine (10 lines read).', removeCommand: `machine admin allow desktop --remove --index ${index}`, ...over,
 });
 
@@ -24,7 +25,7 @@ const installed: MachineRow = {
     entry(2, { shell: 'cmd', text: 'dir /b', lifetimeText: '3 of 5 calls left', limited: true }),
     entry(3, { text: 'echo recent', lastUsedAt: 1_700_500_000, lastUsedSort: 1_700_500_000, lastUsedText: '2 h ago', lastUsedNote: '' }),
   ],
-  deliveryNote: '', problem: '', emptyText: '', fillCommand: 'machine admin allow desktop -- <command>',
+  deliveryNote: '', problem: '', emptyText: '', fillCommand: 'machine admin allow desktop -- <command>', canEdit: false, editNote: NOT_HERE,
 };
 const signed: MachineRow = {
   uuid: 'u2', name: 'laptop', isSelf: false, source: 'signed-here', sourceText: 'Signed here, may differ from what laptop has installed until it is delivered', mode: 'admin', version: 2, signedText: 'signed 2 h ago', signedIso: '2026-11-22T08:00:00.000Z',
@@ -32,9 +33,9 @@ const signed: MachineRow = {
     entry(1, { text: '<img src=x onerror=alert(1)>', lifetimeText: '3 calls', limited: true, limitNote: 'calls left: not shown, the counter is kept on laptop', lastUsedText: 'not known here', lastUsedNote: NOT_KNOWN, removeCommand: 'machine admin allow laptop --remove --index 1' }),
     entry(1, { key: '1:0', listLabel: 'only for desktop', listTitle: 'Only for desktop (its own list, it replaces the default)', peerName: 'desktop', text: 'orch logs <j:name>', typed: true, lastUsedText: 'not known here', lastUsedNote: NOT_KNOWN, removeCommand: '' }),
   ],
-  deliveryNote: 'as installed on laptop: ask there with machine policy allow --list (remote view: machine requests/policy views are not built yet)', problem: '', emptyText: '', fillCommand: 'machine admin allow laptop -- <command>',
+  deliveryNote: 'as installed on laptop: ask there with machine policy allow --list (remote view: machine requests/policy views are not built yet)', problem: '', emptyText: '', fillCommand: 'machine admin allow laptop -- <command>', canEdit: false, editNote: NOT_HERE,
 };
-const empty: MachineRow = { uuid: 'u3', name: 'nas', isSelf: false, source: 'signed-here', sourceText: 'Signed here, may differ from what nas has installed until it is delivered', mode: 'admin', version: null, signedText: '', signedIso: '', entries: [], deliveryNote: '', problem: '', emptyText: 'No policy was signed on this machine for "nas": nothing is known here about what it allows (only policies signed on this machine are on record).', fillCommand: 'machine admin allow nas -- <command>' };
+const empty: MachineRow = { uuid: 'u3', name: 'nas', isSelf: false, source: 'signed-here', sourceText: 'Signed here, may differ from what nas has installed until it is delivered', mode: 'admin', version: null, signedText: '', signedIso: '', entries: [], deliveryNote: '', problem: '', emptyText: 'No policy was signed on this machine for "nas": nothing is known here about what it allows (only policies signed on this machine are on record).', fillCommand: 'machine admin allow nas -- <command>', canEdit: false, editNote: '' };
 const broken: MachineRow = { ...empty, uuid: 'u4', name: 'box', emptyText: '', problem: '/x/44.json is not a valid policy record (bad json): delete it, the next policy is then built from nothing', fillCommand: 'machine admin allow box -- <command>' };
 
 function page(over: Partial<AllowedPageData> = {}): AllowedPageData {
@@ -217,7 +218,7 @@ describe('the details of a row', () => {
   });
 });
 
-describe('read-only', () => {
+describe('where this machine cannot sign (the page is read-only there, and says why)', () => {
   it('has no edit, delete or batch control: no row checkbox, no batch bar, no button that changes a list', async () => {
     render(<AllowedList />);
     await ready();
@@ -227,11 +228,11 @@ describe('read-only', () => {
     expect(names.filter((n) => /edit|delete|remove|revoke|allow|save|change/i.test(n))).toEqual([]);
   });
 
-  it('says in ONE line that the page is read-only and how to add, with the exact command of the machine', async () => {
+  it('says in ONE line why nothing can be changed here and how to add, with the exact command of the machine', async () => {
     render(<AllowedList />);
     await ready();
-    const hint = screen.getByText(/Read-only/);
-    expect(hint).toHaveTextContent('machine admin allow desktop -- <command>');
+    const why = screen.getByText(NOT_HERE);
+    expect(why.parentElement).toHaveTextContent('machine admin allow desktop -- <command>');
   });
 });
 

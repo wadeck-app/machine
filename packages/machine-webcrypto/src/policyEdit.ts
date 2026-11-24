@@ -229,3 +229,133 @@ export function nextPolicyBodyMany(current: PolicyBody | undefined, ctx: EditCon
   const base = current?.version ?? 0;
   return { changed: true, body: { ...working, version: base + 1, baseVersion: base }, added, renewed, skipped, peersWithOwnList };
 }
+
+/**
+ * One entry of one list, named by its place (1-based, as `machine allowed` shows it) AND by what must be there (shell and text). The text is checked
+ * against the list the edit starts from: a list that moved since the person read it is refused, never edited at the wrong place.
+ */
+export interface EntryRef {
+  index: number;
+  shell: Shell;
+  /** The command, or the template of a typed entry, as signed. */
+  text: string;
+  /** A machine UUID: the own list of that peer. Absent: the default list. */
+  peer?: string;
+}
+
+export interface PolicyEditEntries {
+  /** ONE version (current + 1) holding every change. */
+  body: PolicyBody;
+  /** The entries as they were before a removal, in the order of the selection (de-duplicated). */
+  removed: PolicyEntry[];
+  /** A new lifetime only: the entry as it was, and as it is now (new limits, generation + 1). */
+  renewed: Array<{ before: PolicyEntry; after: PolicyEntry }>;
+  /** Peers whose own list is now EMPTY: the default list does not apply to them, so they may run nothing. */
+  emptiedPeerLists: string[];
+  /** The default list is now empty. */
+  emptiedDefaults: boolean;
+  peersWithOwnList: string[];
+}
+
+const MOVED = 'changed since it was read. Refresh the page and select the entries again. Nothing was signed';
+
+/** The entries the references name, from the list they start from; throws (with the fix) when one is not where it was read. */
+function resolveRefs(current: PolicyBody | undefined, ctx: EditContext, refs: EntryRef[]): Array<{ ref: EntryRef; entry: PolicyEntry }> {
+  if (refs.length === 0) {
+    throw new Error('nothing to sign: give at least one entry');
+  }
+  if (current === undefined) {
+    throw new Error('this machine has no policy yet: there is nothing to edit. Nothing was signed');
+  }
+  if (current.target !== ctx.target) {
+    throw new Error(`the current policy is written for another machine (${current.target}), not for ${ctx.target}: it cannot be edited here`);
+  }
+  const seen = new Set<string>();
+  const resolved: Array<{ ref: EntryRef; entry: PolicyEntry }> = [];
+  for (const ref of refs) {
+    const where = ref.peer === undefined ? 'the default list' : `the own list of ${ref.peer}`;
+    if (ref.peer !== undefined && !Object.hasOwn(current.peers, ref.peer)) {
+      throw new Error(`${ref.peer} has no list of its own in this policy: the policy ${MOVED}`);
+    }
+    const list = ref.peer === undefined ? current.defaults : (current.peers[ref.peer] as PolicyEntry[]);
+    if (!Number.isInteger(ref.index) || ref.index < 1 || ref.index > list.length) {
+      throw new Error(`${where} has ${list.length} entries, there is no #${ref.index}: the list ${MOVED}`);
+    }
+    const entry = list[ref.index - 1] as PolicyEntry;
+    if (entry.shell !== ref.shell || entryText(entry) !== ref.text) {
+      throw new Error(`#${ref.index} of ${where} is no longer ${ref.shell} ${JSON.stringify(ref.text)}: the list ${MOVED}`);
+    }
+    const id = `${ref.peer ?? ''}:${ref.index}`;
+    if (!seen.has(id)) {
+      seen.add(id);
+      resolved.push({ ref, entry });
+    }
+  }
+  return resolved;
+}
+
+/** The next version built from lists already edited (the same fields, dates and policy version rule as nextPolicyBody). */
+function editedBody(current: PolicyBody, ctx: EditContext, defaults: PolicyEntry[], peers: PolicyBody['peers']): PolicyBody {
+  const lists = [defaults, ...Object.values(peers)];
+  return {
+    v: hasTypedEntry(lists) || lists.some((list) => list.some((e) => e.limits?.renewals !== undefined)) ? 2 : 1,
+    target: ctx.target,
+    version: current.version + 1,
+    baseVersion: current.version,
+    adminKeyId: ctx.adminKeyId,
+    issuedAt: ctx.now,
+    notBefore: ctx.now,
+    notAfter: ctx.now + (ctx.windowSeconds ?? DEFAULT_APPLY_WINDOW_SECONDS),
+    defaults,
+    peers,
+  };
+}
+
+/**
+ * Several entries removed in ONE version (the Allowed page: select rows, delete, sign once). The indexes are those of the list the edit starts from
+ * (no shift between two removals of one list). An entry that is not where it was read throws with the fix; nothing is built. A removal only restricts.
+ */
+export function nextPolicyBodyRemoveMany(current: PolicyBody | undefined, ctx: EditContext, refs: EntryRef[]): PolicyEditEntries {
+  const resolved = resolveRefs(current, ctx, refs);
+  const base = current as PolicyBody;
+  const without = (list: PolicyEntry[], peer: string | undefined): PolicyEntry[] => {
+    const gone = new Set(resolved.filter((r) => r.ref.peer === peer).map((r) => r.ref.index));
+    return (JSON.parse(JSON.stringify(list)) as PolicyEntry[]).filter((_, i) => !gone.has(i + 1));
+  };
+  const defaults = without(base.defaults, undefined);
+  const peers = Object.fromEntries(Object.entries(base.peers).map(([peer, list]) => [peer, without(list, peer)])) as PolicyBody['peers'];
+  const touched = new Set(resolved.map((r) => r.ref.peer).filter((p): p is string => p !== undefined));
+  return {
+    body: editedBody(base, ctx, defaults, peers),
+    removed: resolved.map((r) => r.entry),
+    renewed: [],
+    emptiedPeerLists: [...touched].filter((p) => (peers[p] as PolicyEntry[]).length === 0),
+    emptiedDefaults: resolved.some((r) => r.ref.peer === undefined) && defaults.length === 0,
+    peersWithOwnList: Object.keys(peers),
+  };
+}
+
+/**
+ * Several entries given a new lifetime in ONE version: each entry named is REPLACED by itself with the new limits (a renewal: its counter starts again,
+ * `limits.renewals` goes up by one). `limits` undefined: permanent. A change that widens (longer, more calls, permanent) needs the same admin signature
+ * as an Allow: the warning is the caller's to show, this function only builds the body.
+ */
+export function nextPolicyBodyRenewMany(current: PolicyBody | undefined, ctx: EditContext, refs: EntryRef[], limits: Limits | undefined): PolicyEditEntries {
+  const resolved = resolveRefs(current, ctx, refs);
+  const base = current as PolicyBody;
+  const renewed: Array<{ before: PolicyEntry; after: PolicyEntry }> = [];
+  const replace = (list: PolicyEntry[], peer: string | undefined): PolicyEntry[] =>
+    (JSON.parse(JSON.stringify(list)) as PolicyEntry[]).map((entry, i) => {
+      const hit = resolved.find((r) => r.ref.peer === peer && r.ref.index === i + 1);
+      if (hit === undefined) {
+        return entry;
+      }
+      const { limits: _old, ...rest } = entry;
+      const after = withGeneration({ ...rest, ...(limits === undefined ? {} : { limits: { ...limits } }) } as PolicyEntry, (hit.entry.limits?.renewals ?? 0) + 1);
+      renewed.push({ before: hit.entry, after });
+      return after;
+    });
+  const defaults = replace(base.defaults, undefined);
+  const peers = Object.fromEntries(Object.entries(base.peers).map(([peer, list]) => [peer, replace(list, peer)])) as PolicyBody['peers'];
+  return { body: editedBody(base, ctx, defaults, peers), removed: [], renewed, emptiedPeerLists: [], emptiedDefaults: false, peersWithOwnList: Object.keys(peers) };
+}
