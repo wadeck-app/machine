@@ -1,5 +1,8 @@
 import { join } from 'node:path';
-import { allowedLists, type AllowedListView, type PolicyMode } from '@wadeck-app/machine-core';
+import { existsSync } from 'node:fs';
+import { allowedLists, lastAcceptedUses, useKey, ACTIVITY_MAX_COUNT_LINES, type AllowedEntryView, type AllowedListView, type PolicyMode } from '@wadeck-app/machine-core';
+import { reverseLines } from './activityLogs.js';
+import { auditLogFile } from './requestsView.js';
 import { FileUsageStore } from './stores.js';
 import { recordedPolicy, REMOTE_VIEW_LINE } from './allowedView.js';
 import { NotInitializedError } from './errors.js';
@@ -10,6 +13,23 @@ import { loadNetwork } from './network.js';
 // Same readers as the CLI: this machine reads its INSTALLED policy (and its call counters), another machine the last policy SIGNED HERE
 // (the target never sends its list, T-03). Nothing is asked, sent, signed or written; no signature leaves this file.
 
+/** An entry of the allow list; `lastUsedAt` (epoch seconds) only for the installed policy, and only when the audit log has an accepted use of it. */
+export interface AllowedEntryUseView extends AllowedEntryView {
+  lastUsedAt?: number;
+}
+
+export interface AllowedListUseView extends Omit<AllowedListView, 'entries'> {
+  entries: AllowedEntryUseView[];
+}
+
+/** What the scan of the audit log of THIS machine read; absent on a policy signed here for another machine (its audit log is on that machine). */
+export interface AllowedLastUse {
+  scanned: number;
+  damaged: number;
+  /** False: the bound stopped the scan, an entry without a date was not used in the lines read, not necessarily never. */
+  complete: boolean;
+}
+
 export interface AllowedMachineView {
   uuid: string;
   name: string;
@@ -19,7 +39,8 @@ export interface AllowedMachineView {
   /** Installed: who manages the list of this machine. Signed here: always the admin. */
   mode: PolicyMode;
   /** Null: nothing is known here (no policy installed, or none signed here). */
-  policy: { version: number; issuedAt: number; lists: AllowedListView[] } | null;
+  policy: { version: number; issuedAt: number; lists: AllowedListUseView[] } | null;
+  lastUse?: AllowedLastUse;
   /** A policy that could not be read, with its file and the fix. The machine has no list shown, never an empty one. */
   problem?: string;
   /** Signed here only: the line that says the target may differ (same wording as `machine allowed`). */
@@ -59,13 +80,28 @@ export function allowedAnswer(configDir: string, nowSeconds: number): AllowedAns
       } catch (e) {
         warnings.push(`${(e as Error).message}; the calls left are not shown`);
       }
+      const lists = body === undefined ? undefined : allowedLists(body, nameOf, nowSeconds, counters);
+      // The audit log of this machine says when each installed entry was last accepted. An unreadable log is said, the page still shows the lists.
+      let lastUse: AllowedLastUse | undefined;
+      let shownLists: AllowedListUseView[] | undefined = lists;
+      if (lists !== undefined) {
+        const file = auditLogFile(configDir);
+        try {
+          const uses = lastAcceptedUses(existsSync(file) ? reverseLines(file, () => undefined) : [], lists, ACTIVITY_MAX_COUNT_LINES);
+          lastUse = { scanned: uses.scanned, damaged: uses.damaged, complete: uses.complete };
+          shownLists = lists.map((l) => ({ ...l, entries: l.entries.map((e) => { const at = uses.at.get(useKey(l, e.index)); return at === undefined ? e : { ...e, lastUsedAt: at }; }) }));
+        } catch (e) {
+          warnings.push(`${(e as Error).message}; the last use of the allowed commands is not shown`);
+        }
+      }
       return {
         uuid: m.uuid,
         name: m.name,
         isSelf: true,
         source: 'installed',
         mode: network.policyMode,
-        policy: body === undefined ? null : { version: body.version, issuedAt: body.issuedAt, lists: allowedLists(body, nameOf, nowSeconds, counters) },
+        policy: body === undefined || shownLists === undefined ? null : { version: body.version, issuedAt: body.issuedAt, lists: shownLists },
+        ...(lastUse === undefined ? {} : { lastUse }),
         fillCommand,
       };
     }

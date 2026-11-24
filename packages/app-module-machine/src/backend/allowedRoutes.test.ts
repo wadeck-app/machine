@@ -100,46 +100,94 @@ function daemonAnswer(over: Record<string, unknown> = {}): Record<string, unknow
 }
 
 describe('allowedPage', () => {
-  it('one block per machine: name, version, mode, when signed, the lists and the entries as text', () => {
+  it('one row per entry, flat per machine (the table of its tab): shell, text as signed, lifetime, the list it belongs to and its place', () => {
     const page = allowedPage(daemonAnswer(), NOW);
     expect(page.machine).toEqual(SELF);
     const [self, peer] = page.machines;
     expect(self).toMatchObject({ name: 'desktop', isSelf: true, source: 'installed', mode: 'admin', version: 4, signedText: expect.stringMatching(/10 min ago/) });
-    expect(self?.lists[0]?.entries.map((e) => [e.index, e.shell, e.text, e.lifetimeText])).toEqual([[1, 'sh', 'echo 1', 'permanent'], [2, 'sh', 'echo 2', '3 of 5 calls left']]);
+    expect(self?.entries.map((e) => [e.index, e.shell, e.text, e.lifetimeText])).toEqual([[1, 'sh', 'echo 1', 'permanent'], [2, 'sh', 'echo 2', '3 of 5 calls left']]);
+    expect(peer?.entries.map((e) => [e.listLabel, e.index])).toEqual([['default', 1], ['only for desktop', 1]]);
+    expect(peer?.entries.map((e) => e.key)).toEqual(['0:0', '1:0']);
+    expect(peer?.entries[1]?.listTitle).toBe('Only for desktop (its own list, it replaces the default)');
     expect(peer).toMatchObject({ name: 'laptop', source: 'signed-here', version: 2, signedText: expect.stringMatching(/2 h ago/) });
-    expect(peer?.lists.map((l) => l.title)).toEqual(['Default list (every trusted peer without a list of its own)', 'Only for desktop (its own list, it replaces the default)']);
   });
 
-  it('says the list is what the admin signed here when it is, with the wording of `machine allowed`; says "not shown" with the reason for the calls left of such a list', () => {
+  it('has no summary and no change note any more: the page carries only counts', () => {
+    const page = allowedPage(daemonAnswer(), NOW) as unknown as Record<string, unknown>;
+    expect(page).toMatchObject({ entryCount: 4, machineCount: 2 });
+    expect(page['summary']).toBeUndefined();
+    expect(page['changeNote']).toBeUndefined();
+  });
+
+  it('a list signed here: the short source line says it may differ, the delivery note is kept for the expansion, and the calls left are not shown with the reason', () => {
     const peer = allowedPage(daemonAnswer(), NOW).machines[1];
     expect(peer?.deliveryNote).toBe(REMOTE_LINE);
-    expect(peer?.sourceText).toMatch(/signed here by the admin.*may differ from what is installed on laptop/);
-    const limited = peer?.lists[0]?.entries[0];
-    expect(limited).toMatchObject({ lifetimeText: '3 calls', limitNote: 'calls left: not shown, the counter is kept on laptop' });
-    // An installed list shows the calls left and needs no note.
-    expect(allowedPage(daemonAnswer(), NOW).machines[0]?.lists[0]?.entries[1]?.limitNote).toBe('');
+    expect(peer?.sourceText).toBe('Signed here, may differ from what laptop has installed until it is delivered');
+    expect(peer?.entries[0]).toMatchObject({ lifetimeText: '3 calls', limitNote: 'calls left: not shown, the counter is kept on laptop' });
+    expect(allowedPage(daemonAnswer(), NOW).machines[0]?.entries[1]?.limitNote).toBe('');
+    expect(allowedPage(daemonAnswer(), NOW).machines[0]?.sourceText).toBe('In force on this machine (mode admin)');
   });
 
-  it('counts the entries and the machines that hold a list', () => {
+  it('last use of an installed entry: the date (seconds), the age text and a sort key; the sort key of an unknown value is -1 (the oldest)', () => {
+    const answer = daemonAnswer() as any;
+    answer.machines[0].lastUse = { scanned: 10, damaged: 0, complete: true };
+    answer.machines[0].policy.lists[0].entries[0].lastUsedAt = NOW - 7200;
+    const [first, second] = allowedPage(answer, NOW).machines[0]?.entries ?? [];
+    expect(first).toMatchObject({ lastUsedAt: NOW - 7200, lastUsedSort: NOW - 7200, lastUsedText: '2 h ago', lastUsedNote: '' });
+    expect(second).toMatchObject({ lastUsedAt: null, lastUsedSort: -1, lastUsedText: 'never' });
+    expect(second?.lastUsedNote).toBe('No accepted use in the audit log of this machine (10 lines read).');
+  });
+
+  it('a scan stopped by its bound does not say "never": it says how far it looked', () => {
+    const answer = daemonAnswer() as any;
+    answer.machines[0].lastUse = { scanned: 400000, damaged: 0, complete: false };
+    const second = allowedPage(answer, NOW).machines[0]?.entries[1];
+    expect(second?.lastUsedText).toBe('not in the last 400000 lines');
+    expect(second?.lastUsedNote).toMatch(/older uses are not read/);
+  });
+
+  it('damaged audit lines are said in the note of an unused entry, never skipped silently', () => {
+    const answer = daemonAnswer() as any;
+    answer.machines[0].lastUse = { scanned: 10, damaged: 2, complete: true };
+    expect(allowedPage(answer, NOW).machines[0]?.entries[1]?.lastUsedNote).toMatch(/2 damaged line\(s\) were skipped/);
+  });
+
+  it('installed policy without a scan result (audit log unreadable, or an older daemon): "not read", with the two causes and their fix', () => {
+    const second = allowedPage(daemonAnswer(), NOW).machines[0]?.entries[1];
+    expect(second).toMatchObject({ lastUsedAt: null, lastUsedSort: -1, lastUsedText: 'not read' });
+    expect(second?.lastUsedNote).toMatch(/no reading of the audit log.*warnings.*older than this page.*machine cli update/);
+  });
+
+  it('a list signed here for another machine: "not known here" with the reason, never a date', () => {
+    const entries = allowedPage(daemonAnswer(), NOW).machines[1]?.entries ?? [];
+    expect(entries.every((e) => e.lastUsedAt === null && e.lastUsedSort === -1 && e.lastUsedText === 'not known here')).toBe(true);
+    expect(entries[0]?.lastUsedNote).toBe('The audit log that records the uses is on laptop: only that machine knows when this command last ran.');
+  });
+
+  it('the terminal command that withdraws an entry, today: admin mode names the admin machine, local mode this one, a per-peer list of an admin policy has none', () => {
     const page = allowedPage(daemonAnswer(), NOW);
-    expect(page).toMatchObject({ entryCount: 4, machineCount: 2, summary: '4 entries on 2 machines' });
-    expect(allowedPage(daemonAnswer({ machines: [] }), NOW).summary).toBe('0 entries on 0 machines');
-    const single = daemonAnswer();
-    (single['machines'] as any[]).splice(1);
-    (single['machines'] as any[])[0].policy.lists[0].entries.splice(1);
-    expect(allowedPage(single, NOW).summary).toBe('1 entry on 1 machine');
+    expect(page.machines[0]?.entries[1]?.removeCommand).toBe('machine admin allow desktop --remove --index 2');
+    expect(page.machines[1]?.entries[0]?.removeCommand).toBe('machine admin allow laptop --remove --index 1');
+    expect(page.machines[1]?.entries[1]?.removeCommand).toBe('');
+    const local = daemonAnswer() as any;
+    local.machines[0].mode = 'local';
+    local.machines[0].fillCommand = 'machine policy allow -- <command>';
+    local.machines[0].policy.lists.push({ scope: 'peer', peer: { uuid: PEER.uuid, name: 'laptop' }, entries: [entry(1)] });
+    const mine = allowedPage(local, NOW).machines[0];
+    expect(mine?.entries[1]?.removeCommand).toBe('machine policy allow --remove --index 2');
+    expect(mine?.entries[2]?.removeCommand).toBe('machine policy allow --peer laptop --remove --index 1');
   });
 
   it('an empty machine says why and gives the exact command that fills it; an unreadable record says its problem instead of looking empty', () => {
     const [, , nas, box] = allowedPage(daemonAnswer(), NOW).machines;
-    expect(nas).toMatchObject({ version: null, lists: [], fillCommand: 'machine admin allow nas -- <command>' });
+    expect(nas).toMatchObject({ version: null, entries: [], fillCommand: 'machine admin allow nas -- <command>' });
     expect(nas?.emptyText).toMatch(/No policy was signed on this machine for "nas".*only policies signed on this machine are on record/);
     expect(box?.problem).toMatch(/delete it/);
     expect(box?.emptyText).toBe('');
   });
 
   it('shows the entry text as text, unchanged (the component never renders HTML)', () => {
-    expect(allowedPage(daemonAnswer(), NOW).machines[1]?.lists[0]?.entries[0]?.text).toBe('<img src=x onerror=alert(1)>');
+    expect(allowedPage(daemonAnswer(), NOW).machines[1]?.entries[0]?.text).toBe('<img src=x onerror=alert(1)>');
   });
 
   it('keeps only the fields of the page: a signature, a key or any other field of the daemon answer is not copied', () => {
@@ -157,12 +205,6 @@ describe('allowedPage', () => {
   it('refuses an answer that is not the allowed command of this version, with the fix', () => {
     expect(() => allowedPage({ unexpected: true }, NOW)).toThrow(/older version.*machine cli update/);
   });
-
-  it('a list with a peer and an installed policy of mode local says who manages it', () => {
-    const answer = daemonAnswer() as any;
-    answer.machines[0].mode = 'local';
-    expect(allowedPage(answer, NOW).machines[0]?.sourceText).toMatch(/installed on this machine.*mode local/);
-  });
 });
 
 describe('GET /allowed', () => {
@@ -172,13 +214,13 @@ describe('GET /allowed', () => {
     expect(route?.options === undefined || (route.options as { effect?: string }).effect === 'read').toBe(true);
   });
 
-  it('asks the daemon command allowed once and answers the page, with the one-line note on how to change the list today', async () => {
+  it('asks the daemon command allowed once and answers the page', async () => {
     const seen = await withDaemon(daemonAnswer());
     const r = await call();
     expect(r.status).toBe(200);
     expect(seen).toEqual(['allowed']);
-    expect(r.body.summary).toBe('4 entries on 2 machines');
-    expect(r.body.changeNote).toBe('Read-only. To change a list today: `machine admin allow <machine> -- <command>` on the admin machine, `machine policy allow -- <command>` on a machine that manages its own list, or the Requests page for a request that is held.');
+    expect(r.body).toMatchObject({ entryCount: 4, machineCount: 2 });
+    expect(r.body.changeNote).toBeUndefined();
   });
 
   it('the page never contains the raw policy signature or a secret, even when the daemon answer carries them', async () => {

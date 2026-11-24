@@ -13,7 +13,15 @@ export class AllowedAnswerError extends Error {
 }
 
 export interface AllowedEntryRow {
+  /** Unique inside its machine: list number, entry number. */
   key: string;
+  /** Short name of the list the entry belongs to: `default` or `only for <peer>`. */
+  listLabel: string;
+  /** The list in words (what it covers and that a per-peer list replaces the default). */
+  listTitle: string;
+  /** The name of the peer the list is for; empty for the default list. */
+  peerName: string;
+  /** Place in its list, from 1. */
   index: number;
   shell: string;
   text: string;
@@ -23,14 +31,16 @@ export interface AllowedEntryRow {
   limited: boolean;
   /** Why a value is not shown (the calls left of a list signed here), empty when there is nothing to say. */
   limitNote: string;
-}
-
-export interface AllowedListRow {
-  key: string;
-  title: string;
-  /** The name of the peer the list is for; empty for the default list. */
-  peerName: string;
-  entries: AllowedEntryRow[];
+  /** Epoch seconds of the last accepted use, null when it is not known (see lastUsedText). */
+  lastUsedAt: number | null;
+  /** The sort key of the last use: its seconds, or -1 when unknown (sorts as the oldest). */
+  lastUsedSort: number;
+  /** Age text of the last use, or why there is none ("never", "not known here", "not read", "not in the last N lines"). */
+  lastUsedText: string;
+  /** The reason behind lastUsedText when it is not a date; empty for a date. */
+  lastUsedNote: string;
+  /** The terminal command that withdraws this entry today; empty when none is known. */
+  removeCommand: string;
 }
 
 export interface AllowedMachineRow {
@@ -38,12 +48,14 @@ export interface AllowedMachineRow {
   name: string;
   isSelf: boolean;
   source: 'installed' | 'signed-here';
+  /** One short line: where the list comes from. */
   sourceText: string;
   mode: 'admin' | 'local';
   version: number | null;
   signedText: string;
   signedIso: string;
-  lists: AllowedListRow[];
+  /** Every entry of every list of the machine, one row each. */
+  entries: AllowedEntryRow[];
   /** The line that says the list may differ from what is installed there (same wording as `machine allowed`); empty for an installed list. */
   deliveryNote: string;
   /** A record that could not be read, with its file and the fix. */
@@ -57,13 +69,9 @@ export interface AllowedPage {
   machine: { uuid: string; name: string };
   entryCount: number;
   machineCount: number;
-  summary: string;
   machines: AllowedMachineRow[];
   warnings: string[];
-  changeNote: string;
 }
-
-export const CHANGE_NOTE = 'Read-only. To change a list today: `machine admin allow <machine> -- <command>` on the admin machine, `machine policy allow -- <command>` on a machine that manages its own list, or the Requests page for a request that is held.';
 
 const OLDER = 'the daemon answered something that is not the `allowed` command of this version: it is an older version, update it with `machine cli update` and restart it';
 
@@ -72,39 +80,81 @@ const text = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v :
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
-function entryRow(raw: unknown, key: string, machine: { name: string; source: string }): AllowedEntryRow {
+interface MachineContext {
+  name: string;
+  source: 'installed' | 'signed-here';
+  mode: 'admin' | 'local';
+  fillCommand: string;
+  lastUse: { scanned: number; damaged: number; complete: boolean } | undefined;
+  now: number;
+}
+
+function lastUseOf(at: number | undefined, m: MachineContext): Pick<AllowedEntryRow, 'lastUsedAt' | 'lastUsedSort' | 'lastUsedText' | 'lastUsedNote'> {
+  if (at !== undefined) {
+    return { lastUsedAt: at, lastUsedSort: at, lastUsedText: m.now - at < 5 ? 'just now' : `${ageText(m.now - at)} ago`, lastUsedNote: '' };
+  }
+  const unknown = (lastUsedText: string, lastUsedNote: string) => ({ lastUsedAt: null, lastUsedSort: -1, lastUsedText, lastUsedNote });
+  // The audit log of a machine is on that machine: for a list signed here nothing is known, and the page says so rather than show a date it does not have.
+  if (m.source === 'signed-here') {
+    return unknown('not known here', `The audit log that records the uses is on ${m.name}: only that machine knows when this command last ran.`);
+  }
+  if (m.lastUse === undefined) {
+    return unknown('not read', 'The daemon gave no reading of the audit log of this machine: either it could not be read (see the warnings at the top of the page) or the daemon is older than this page (update it with `machine cli update` and restart it).');
+  }
+  const damaged = m.lastUse.damaged > 0 ? ` ${m.lastUse.damaged} damaged line(s) were skipped.` : '';
+  if (!m.lastUse.complete) {
+    return unknown(`not in the last ${m.lastUse.scanned} lines`, `No accepted use in the last ${m.lastUse.scanned} lines of the audit log of this machine; older uses are not read.${damaged}`);
+  }
+  return unknown('never', `No accepted use in the audit log of this machine (${plural(m.lastUse.scanned, 'line', 'lines')} read).${damaged}`);
+}
+
+/** The terminal command that withdraws the entry today (the page itself does not edit). Empty when no command is known for it. */
+function removeCommandOf(m: MachineContext, peerName: string, index: number): string {
+  if (m.mode === 'local' && m.source === 'installed') {
+    return `machine policy allow${peerName === '' ? '' : ` --peer ${peerName}`} --remove --index ${index}`;
+  }
+  // `machine admin allow` edits the default list only: a per-peer list of an admin policy has no command of that kind.
+  return peerName === '' ? `${m.fillCommand.replace(/ -- <command>$/, '')} --remove --index ${index}` : '';
+}
+
+function entryRow(raw: unknown, key: string, list: { label: string; title: string; peerName: string }, m: MachineContext): AllowedEntryRow {
   if (!isObject(raw)) {
     throw new AllowedAnswerError(OLDER);
   }
   const maxCalls = num(raw['maxCalls']);
   const expiresAt = num(raw['expiresAt']);
   const used = num(raw['used']);
-  const limited = maxCalls !== undefined || expiresAt !== undefined;
+  const index = num(raw['index']) ?? 0;
   return {
     key,
-    index: num(raw['index']) ?? 0,
+    listLabel: list.label,
+    listTitle: list.title,
+    peerName: list.peerName,
+    index,
     shell: text(raw['shell']),
     text: text(raw['text']),
     typed: raw['typed'] === true,
     lifetimeText: text(raw['lifetime'], 'permanent'),
-    limited,
+    limited: maxCalls !== undefined || expiresAt !== undefined,
     // The counter of an entry lives on the target: for a list signed here the calls left are not known, and the page says so rather than guess.
-    limitNote: maxCalls !== undefined && used === undefined && machine.source === 'signed-here' ? `calls left: not shown, the counter is kept on ${machine.name}` : '',
+    limitNote: maxCalls !== undefined && used === undefined && m.source === 'signed-here' ? `calls left: not shown, the counter is kept on ${m.name}` : '',
+    ...lastUseOf(num(raw['lastUsedAt']), m),
+    removeCommand: removeCommandOf(m, list.peerName, index),
   };
 }
 
-function listRow(raw: unknown, machine: { name: string; source: string }, at: number): AllowedListRow {
+function listEntries(raw: unknown, m: MachineContext, at: number): AllowedEntryRow[] {
   if (!isObject(raw) || !Array.isArray(raw['entries'])) {
     throw new AllowedAnswerError(OLDER);
   }
   const peer = isObject(raw['peer']) ? text(raw['peer']['name']) : '';
   const isPeer = raw['scope'] === 'peer';
-  return {
-    key: isPeer ? `peer:${text(isObject(raw['peer']) ? raw['peer']['uuid'] : undefined, String(at))}` : 'default',
+  const list = {
+    label: isPeer ? `only for ${peer}` : 'default',
     title: isPeer ? `Only for ${peer} (its own list, it replaces the default)` : 'Default list (every trusted peer without a list of its own)',
     peerName: isPeer ? peer : '',
-    entries: raw['entries'].map((e, i) => entryRow(e, `${at}:${i}`, machine)),
   };
+  return raw['entries'].map((e, i) => entryRow(e, `${at}:${i}`, list, m));
 }
 
 function machineRow(raw: unknown, now: number): AllowedMachineRow {
@@ -118,7 +168,11 @@ function machineRow(raw: unknown, now: number): AllowedMachineRow {
   const policy = isObject(raw['policy']) ? raw['policy'] : undefined;
   const issuedAt = policy === undefined ? undefined : num(policy['issuedAt']);
   const problem = text(raw['problem']);
-  const lists = policy !== undefined && Array.isArray(policy['lists']) ? policy['lists'].map((l, i) => listRow(l, { name, source }, i)) : [];
+  const fillCommand = text(raw['fillCommand']);
+  const scan = isObject(raw['lastUse']) ? raw['lastUse'] : undefined;
+  const lastUse = scan === undefined ? undefined : { scanned: num(scan['scanned']) ?? 0, damaged: num(scan['damaged']) ?? 0, complete: scan['complete'] === true };
+  const context: MachineContext = { name, source, mode, fillCommand, lastUse, now };
+  const entries = policy !== undefined && Array.isArray(policy['lists']) ? policy['lists'].flatMap((l, i) => listEntries(l, context, i)) : [];
   let emptyText = '';
   if (policy === undefined && problem === '') {
     emptyText = source === 'installed'
@@ -130,18 +184,16 @@ function machineRow(raw: unknown, now: number): AllowedMachineRow {
     name,
     isSelf,
     source,
-    sourceText: source === 'installed'
-      ? `installed on this machine, in force now (mode ${mode})`
-      : `signed here by the admin: may differ from what is installed on ${name} until it is delivered`,
+    sourceText: source === 'installed' ? `In force on this machine (mode ${mode})` : `Signed here, may differ from what ${name} has installed until it is delivered`,
     mode,
     version: policy === undefined ? null : (num(policy['version']) ?? null),
     signedText: issuedAt === undefined ? '' : `signed ${now - issuedAt < 5 ? 'now' : `${ageText(now - issuedAt)} ago`}`,
     signedIso: issuedAt === undefined ? '' : new Date(issuedAt * 1000).toISOString(),
-    lists,
+    entries,
     deliveryNote: source === 'signed-here' && policy !== undefined ? text(raw['remoteViewLine']) : '',
     problem,
     emptyText,
-    fillCommand: text(raw['fillCommand']),
+    fillCommand,
   };
 }
 
@@ -152,14 +204,11 @@ export function allowedPage(answer: unknown, now: number): AllowedPage {
   }
   const machines = answer['machines'].map((m) => machineRow(m, now));
   const holding = machines.filter((m) => m.version !== null);
-  const entryCount = holding.reduce((n, m) => n + m.lists.reduce((k, l) => k + l.entries.length, 0), 0);
   return {
     machine: { uuid: text(answer['self']['uuid']), name: text(answer['self']['name']) },
-    entryCount,
+    entryCount: holding.reduce((n, m) => n + m.entries.length, 0),
     machineCount: holding.length,
-    summary: `${plural(entryCount, 'entry', 'entries')} on ${plural(holding.length, 'machine', 'machines')}`,
     machines,
     warnings: Array.isArray(answer['warnings']) ? answer['warnings'].filter((w): w is string => typeof w === 'string') : [],
-    changeNote: CHANGE_NOTE,
   };
 }

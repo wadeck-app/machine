@@ -6,6 +6,6 @@ $type: PageContent
 sections:
   - $type: PageHeader
     title: Allowed
-    subtitle: The commands approved for each machine, as `machine allowed <machine>` shows them. Read-only.
+    subtitle: The commands approved for each machine, one tab per machine. Read-only.
   - $type: machine:AllowedList
     refreshSeconds: 15

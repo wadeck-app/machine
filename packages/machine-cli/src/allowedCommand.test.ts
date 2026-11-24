@@ -61,6 +61,32 @@ describe('daemon command allowed', () => {
     expect(laptop.problem).toContain('delete it');
   });
 
+  describe('last use, from the audit log of this machine', () => {
+    const accepted = (ts: string, source: string, command: string): string => JSON.stringify({ seq: 0, prev: 'p', hash: 'h', entry: { ts, event: 'accepted', source, id: 'i', shell: 'sh', command } });
+
+    it('the installed entries carry their last accepted use, the scan says it is complete, an unused entry has none', async () => {
+      const admin = readMachine(a).uuid;
+      writeFileSync(join(b, 'audit.log'), `${accepted('2026-11-10T10:00:00.000Z', admin, 'ls')}
+${accepted('2026-11-20T10:00:00.000Z', admin, 'ls')}
+`);
+      const laptop = ((await makeCommands(b, 'test').allowed()) as any).machines.find((m: any) => m.isSelf);
+      expect(laptop.policy.lists[0].entries[0].lastUsedAt).toBe(Date.parse('2026-11-20T10:00:00.000Z') / 1000);
+      expect(laptop.policy.lists[0].entries[1].lastUsedAt).toBeUndefined();
+      expect(laptop.lastUse).toMatchObject({ complete: true, damaged: 0, scanned: 2 });
+    });
+
+    it('no audit log yet: nothing was used, said as a fact of the scan', async () => {
+      const laptop = ((await makeCommands(b, 'test').allowed()) as any).machines.find((m: any) => m.isSelf);
+      expect(laptop.lastUse).toMatchObject({ complete: true, scanned: 0 });
+    });
+
+    it('a policy signed here for another machine has no last use: the audit of that machine is on that machine', async () => {
+      const laptop = ((await makeCommands(a, 'test').allowed()) as any).machines.find((m: any) => m.name === 'laptop');
+      expect(laptop.lastUse).toBeUndefined();
+      expect(laptop.policy.lists[0].entries[0].lastUsedAt).toBeUndefined();
+    });
+  });
+
   it('not initialized: says so with the fix instead of an empty page', async () => {
     const empty = join(root, 'empty');
     mkdirSync(empty);
