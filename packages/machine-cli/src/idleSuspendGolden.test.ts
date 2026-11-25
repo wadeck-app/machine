@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appendAudit, GENESIS_HASH, IDLE_SSH_RATE_UNKNOWN, idleDecision, idleSuspendScript, type IdleFacts, type IdleSshConnection, type Json } from '@wadeck-app/machine-core';
+import { appendAudit, findInstallable, GENESIS_HASH, IDLE_RESUME_CAUSE, IDLE_SSH_RATE_UNKNOWN, idleDecision, idleGapSeconds, idleResume, idleSuspendInstalledCadenceSeconds, idleSuspendScript, idleSuspendTimerUnit, type IdleFacts, type IdleResumeRecord, type IdleSshConnection, type Json } from '@wadeck-app/machine-core';
 
 // GOLDEN TEST (idle-suspend.md): the generated shell script, run with `sh` on a fake root (fake /proc, fake ss, fake systemd-inhibit, fake audit log,
 // fake keep-awake files, a fake clock), must reach the SAME decision as `idleDecision` on the table below. Each row states the world twice: as files
@@ -43,6 +43,12 @@ interface World {
   rdpMinutes?: number;
   /** Decision 111: the input idle time of the tty from which an ssh session no longer counts (default 20). */
   sshMinutes?: number;
+  /** Decision 113: how long the script does not suspend after a resume (default 5). */
+  wakeGraceMinutes?: number;
+  /** Decision 113: the kernel counter file (`/sys/power/suspend_stats/success`): its text, 'absent' (no file) or 'unreadable' (a folder). */
+  resumeCounter?: string | 'absent' | 'unreadable';
+  /** Decision 113: the record of the previous pass in /run/machine-idle-suspend/resume: its text, 'absent' or 'unreadable' (a folder). */
+  resume?: string | 'absent' | 'unreadable';
   /** The sshd processes of the fake /proc ('derive': a [priv] and a notty login per ssh socket of `ss`) and the pts files they imply (atime = now - idle). */
   sshProcs?: SshProc[] | 'derive';
   /** /dev/pts/N files that no sshd process owns (a stale pts): their atime is now - idle. */
@@ -74,6 +80,10 @@ const DEFAULT_WORLD: Required<World> = {
   minutes: 30,
   rdpMinutes: 20,
   sshMinutes: 20,
+  wakeGraceMinutes: 5,
+  // The counter did not move for 3 hours: no resume to protect.
+  resumeCounter: '40\n',
+  resume: `40 ${NOW - 3 * 3600}\n`,
   sshProcs: 'derive',
   stalePts: [],
   sshNet: [],
@@ -113,6 +123,7 @@ const DEFAULT_FACTS: IdleFacts = {
   // What the default world's display says (7200000 ms).
   inputIdleSeconds: 7200,
   ignoredDisplays: [],
+  resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * 3600 } },
 };
 
 /** A logind session of the fake box (loginctl show-session): defaults Class=user, State=active, Type=x11. */
@@ -196,8 +207,14 @@ const ROWS: Row[] = [
   { name: 'exactly 30 minutes: suspends', world: { state: `${NOW - 30 * M} ${NOW - 120}` }, facts: { state: { since: NOW - 30 * M, last: NOW - 120 } } },
   { name: '29 min 59 s: still waiting', world: { state: `${NOW - 30 * M + 1} ${NOW - 120}` }, facts: { state: { since: NOW - 30 * M + 1, last: NOW - 120 } } },
   { name: '47 minutes: suspends', world: { state: `${NOW - 47 * M} ${NOW - 120}` }, facts: { state: { since: NOW - 47 * M, last: NOW - 120 } } },
-  { name: 'last check 301 s ago (the box slept): restarts', world: { state: `${NOW - 3 * H} ${NOW - 301}` }, facts: { state: { since: NOW - 3 * H, last: NOW - 301 } } },
-  { name: 'last check exactly 300 s ago: same run', world: { state: `${NOW - 31 * M} ${NOW - 300}` }, facts: { state: { since: NOW - 31 * M, last: NOW - 300 } } },
+  { name: 'last check 601 s ago (the box slept, cadence 1 min, gap 600 s): restarts', world: { state: `${NOW - 3 * H} ${NOW - 601}` }, facts: { state: { since: NOW - 3 * H, last: NOW - 601 } } },
+  { name: 'last check exactly 600 s ago (cadence 1 min): same run', world: { state: `${NOW - 31 * M} ${NOW - 600}` }, facts: { state: { since: NOW - 31 * M, last: NOW - 600 } } },
+  { name: 'cadence 30 s (minutes 5): last check 301 s ago restarts, the message says 5 min', world: { minutes: 5, state: `${NOW - 3 * H} ${NOW - 301}` }, facts: { state: { since: NOW - 3 * H, last: NOW - 301 } } },
+  { name: 'cadence 30 s (minutes 5): last check exactly 300 s ago: same run', world: { minutes: 5, state: `${NOW - 31 * M} ${NOW - 300}` }, facts: { state: { since: NOW - 31 * M, last: NOW - 300 } } },
+  { name: 'cadence 2 min (31/31/31): last check 1201 s ago restarts, the message says 20 min', world: { minutes: 31, rdpMinutes: 31, sshMinutes: 31, state: `${NOW - 3 * H} ${NOW - 1201}` }, facts: { state: { since: NOW - 3 * H, last: NOW - 1201 } } },
+  { name: 'cadence 2 min (31/31/31): last check exactly 1200 s ago: same run', world: { minutes: 31, rdpMinutes: 31, sshMinutes: 31, state: `${NOW - 40 * M} ${NOW - 1200}` }, facts: { state: { since: NOW - 40 * M, last: NOW - 1200 } } },
+  { name: 'cadence 2 min: 12 min of 31 is counted in time', world: { minutes: 31, rdpMinutes: 31, sshMinutes: 31, state: `${NOW - 12 * M} ${NOW - 120}` }, facts: { state: { since: NOW - 12 * M, last: NOW - 120 } } },
+  { name: 'cadence 30 s (minutes 5): 4 of 5 minutes is counted in time, the last pass 30 s ago', world: { minutes: 5, state: `${NOW - 4 * M} ${NOW - 30}` }, facts: { state: { since: NOW - 4 * M, last: NOW - 30 } } },
   { name: 'clock went back (since in the future)', world: { state: `${NOW + 10} ${NOW + 10}` }, facts: { state: { since: NOW + 10, last: NOW + 10 } } },
   { name: 'clock went back (last in the future)', world: { state: `${NOW - 3600} ${NOW + 1}` }, facts: { state: { since: NOW - 3600, last: NOW + 1 } } },
   { name: 'state file with garbage', world: { state: 'abc def\n' }, facts: { state: null } },
@@ -310,8 +327,11 @@ const ROWS: Row[] = [
   { name: 'rdp, input 25 min ago (more than R, less than N = 30): suspends', world: { ss: [rdp], displays: [disp(1500000)] }, facts: { connections: onRdp, inputIdleSeconds: 1500 } },
   { name: 'rdp, input 6 h ago, a 12-minute-old state: suspends (the timer minutes do not matter)', world: { ss: [rdp], displays: [disp(21600000)] }, facts: { connections: onRdp, inputIdleSeconds: 21600 } },
   { name: 'rdp, input idle, no state file (first pass or a wake): confirms at the next check, does not suspend', world: { ss: [rdp], displays: [disp(3600000)], state: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: 'absent' } },
-  { name: 'rdp, input idle, the box slept (gap 301 s): confirms again', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 301}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 301 } } },
-  { name: 'rdp, input idle, last check exactly 300 s ago: same run, suspends', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 300}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 300 } } },
+  { name: 'rdp, input idle, the box slept (gap 601 s, cadence 1 min): confirms again', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 601}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 601 } } },
+  { name: 'rdp, input idle, last check exactly 600 s ago: same run, suspends', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW - 3 * H} ${NOW - 600}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 3 * H, last: NOW - 600 } } },
+  { name: 'rdp, cadence 30 s (9/9/9), input idle: the pass after the confirming one (30 s ago) suspends', world: { minutes: 9, rdpMinutes: 9, sshMinutes: 9, ss: [rdp], displays: [disp(3600000)], state: `${NOW - 30} ${NOW - 30}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW - 30, last: NOW - 30 } } },
+  { name: 'rdp, cadence 30 s (9/9/9), input idle, no state: confirming at the next check', world: { minutes: 9, rdpMinutes: 9, sshMinutes: 9, ss: [rdp], displays: [disp(3600000)], state: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: 'absent' } },
+  { name: 'rdp, cadence 2 min (31/31/31), input idle, last pass 2 min ago: suspends', world: { minutes: 31, rdpMinutes: 31, sshMinutes: 31, ss: [rdp], displays: [disp(7200000)], state: `${NOW - 120} ${NOW - 120}` }, facts: { connections: onRdp, inputIdleSeconds: 7200, state: { since: NOW - 120, last: NOW - 120 } } },
   { name: 'rdp, input idle, state file with garbage: confirms again, says why', world: { ss: [rdp], displays: [disp(3600000)], state: 'abc def\n' }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: null } },
   { name: 'rdp, input idle, clock went back: confirms again, says why', world: { ss: [rdp], displays: [disp(3600000)], state: `${NOW + 10} ${NOW + 10}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, state: { since: NOW + 10, last: NOW + 10 } } },
   { name: 'rdp-minutes 5: input 4 min 59 s ago is activity', world: { rdpMinutes: 5, ss: [rdp], displays: [disp(299999)] }, facts: { connections: onRdp, inputIdleSeconds: 299 } },
@@ -421,6 +441,45 @@ const ROWS: Row[] = [
   { name: 'a word "sleep" in the name of a delay inhibitor is not a block', world: { inhibit: ['sleep-helper 0 root 1 helper shutdown waiting delay'] } },
   { name: 'systemd-inhibit fails', world: { inhibit: 'fail' }, facts: { inhibitors: null } },
 
+  // ---- decision 113: resume detection and the wake grace (the kernel counter /sys/power/suspend_stats/success and the record of the previous pass)
+  { name: 'resume: the counter moved (41 after 40): wake grace, 5 min left, every other reading says idle', world: { resumeCounter: '41\n' }, facts: { resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'resume: two suspends since the last pass (counter 42 after 40): one grace from now', world: { resumeCounter: '42\n' }, facts: { resume: { counter: 42, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'resume: the counter is LOWER than the record (a reset): treated as a resume', world: { resumeCounter: '3\n' }, facts: { resume: { counter: 3, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'resume: no record yet (first pass or a reboot cleared /run): grace', world: { resume: 'absent' }, facts: { resume: { counter: 40, stored: 'absent' } } },
+  { name: 'resume: the record is garbage: grace', world: { resume: 'abc def\n' }, facts: { resume: { counter: 40, stored: null } } },
+  { name: 'resume: the record has a third field: unusable, grace', world: { resume: `40 ${NOW - 100} 7\n` }, facts: { resume: { counter: 40, stored: null } } },
+  { name: 'resume: the record is empty: unusable, grace', world: { resume: '' }, facts: { resume: { counter: 40, stored: null } } },
+  { name: 'grace: the counter was seen 100 s ago: 4 min left (rounded up)', world: { resume: `40 ${NOW - 100}\n` }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 100 } } } },
+  { name: 'grace: seen 299 s ago: 1 min left', world: { resume: `40 ${NOW - 299}\n` }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 299 } } } },
+  { name: 'grace over exactly at 300 s: the timer restarts (the grace had cleared the state)', world: { resume: `40 ${NOW - 300}\n`, state: 'absent' }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 300 } }, state: 'absent' } },
+  { name: 'grace over, a 31 min old state: suspends (the other checks passed on the previous pass too)', world: { resume: `40 ${NOW - 301}\n`, state: `${NOW - 31 * M} ${NOW - 60}` }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 301 } }, state: { since: NOW - 31 * M, last: NOW - 60 } } },
+  { name: 'grace in rdp mode: input idle for an hour, a fresh state: no suspend inside the grace', world: { ss: [rdp], displays: [disp(3600000)], resume: `40 ${NOW - 60}\n`, state: `${NOW - 3 * H} ${NOW - 30}` }, facts: { connections: onRdp, inputIdleSeconds: 3600, resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 60 } }, state: { since: NOW - 3 * H, last: NOW - 30 } } },
+  { name: 'grace over in rdp mode, no state: confirming at the next check', world: { ss: [rdp], displays: [disp(3600000)], resume: `40 ${NOW - 300}\n`, state: 'absent' }, facts: { connections: onRdp, inputIdleSeconds: 3600, resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 300 } }, state: 'absent' } },
+  { name: 'grace: a record from the future (the clock went back): restarts from now, 5 min left', world: { resume: `40 ${NOW + 7200}\n` }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW + 7200 } } } },
+  { name: 'grace of 1 minute (the lower bound): 1 min left', world: { wakeGraceMinutes: 1, resumeCounter: '41\n' }, facts: { resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace of 60 minutes (the upper bound): 60 min left', world: { wakeGraceMinutes: 60, resumeCounter: '41\n' }, facts: { resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace of 60 minutes, seen 59 min ago: 1 min left', world: { wakeGraceMinutes: 60, resume: `40 ${NOW - 59 * M}\n` }, facts: { resume: { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 59 * M } } } },
+  { name: 'grace: a high load keeps its own reason (the grace is checked after the others)', world: { resumeCounter: '41\n', load: '0.01 5.00 0.01 1/2 3\n' }, facts: { load5Hundredths: 500, resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace: a sleep inhibitor keeps its own reason', world: { resumeCounter: '41\n', inhibit: ['Steam 1000 alice 9 steam sleep Playing block'] }, facts: { inhibitors: 1, resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace: a recent input keeps its own reason (no rdp)', world: { resumeCounter: '41\n', displays: RECENT }, facts: { inputIdleSeconds: 600, resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace: keep-awake keeps its own reason, and the record is still updated', world: { resumeCounter: '41\n', keepRun: '' }, facts: { keepAwake: [{ present: true, untilEpoch: null }, { present: false }], resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace: unreadable connections keep their own reason, and the record is still updated', world: { resumeCounter: '41\n', ss: 'fail' }, facts: { connections: null, resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'grace with an established ssh connection that is quiet: still the grace, the ssh note is not on a not-idle line', world: { resumeCounter: '41\n', ss: [ssh6], sshProcs: [priv(1), pts(1, 7200)] }, facts: { connections: onSsh(), sshConnections: [t(1, 7200)], resume: { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'counter file missing, no record: grace once, the cause on the line', world: { resumeCounter: 'absent', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: 'absent' } } },
+  { name: 'counter file is a folder (unreadable), no record: grace once, the cause on the line', world: { resumeCounter: 'unreadable', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: 'absent' } } },
+  { name: 'counter file holds text: not a number, grace once', world: { resumeCounter: 'abc\n', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.notNumber }, stored: 'absent' } } },
+  { name: 'counter file is empty: not a number', world: { resumeCounter: '', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.notNumber }, stored: 'absent' } } },
+  { name: 'counter file holds a negative number: not a number', world: { resumeCounter: '-3\n', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.notNumber }, stored: 'absent' } } },
+  { name: 'counter file holds a number with a leading zero: not a whole number the kernel writes', world: { resumeCounter: '037\n', resume: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.notNumber }, stored: 'absent' } } },
+  { name: 'counter unreadable for 100 s already: 4 min of the one grace left, same record start', world: { resumeCounter: 'absent', resume: `unreadable ${NOW - 100}\n` }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'unreadable', seenAt: NOW - 100 } } } },
+  { name: 'counter unreadable for an hour: the grace is over, it no longer blocks, the cause stays on the line (suspending)', world: { resumeCounter: 'absent', resume: `unreadable ${NOW - 3600}\n`, state: `${NOW - 31 * M} ${NOW - 60}` }, facts: { state: { since: NOW - 31 * M, last: NOW - 60 }, resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'unreadable', seenAt: NOW - 3600 } } } },
+  { name: 'counter unreadable for an hour, timer at 12 of 30: the cause is on the timer line too', world: { resumeCounter: 'absent', resume: `unreadable ${NOW - 3600}\n`, state: `${NOW - 12 * M} ${NOW - 60}` }, facts: { state: { since: NOW - 12 * M, last: NOW - 60 }, resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'unreadable', seenAt: NOW - 3600 } } } },
+  { name: 'counter unreadable for an hour, a high load: the cause is on a not-idle line too', world: { resumeCounter: 'absent', resume: `unreadable ${NOW - 3600}\n`, load: '0.01 5.00 0.01 1/2 3\n' }, facts: { load5Hundredths: 500, resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'unreadable', seenAt: NOW - 3600 } } } },
+  { name: 'counter readable again after an unreadable record: adopted without a new grace (window of the record kept)', world: { resumeCounter: '40\n', resume: `unreadable ${NOW - 3600}\n` }, facts: { resume: { counter: 40, stored: { kind: 'unreadable', seenAt: NOW - 3600 } } } },
+  { name: 'counter readable again 100 s after the unreadable record: its grace goes on (4 min left)', world: { resumeCounter: '40\n', resume: `unreadable ${NOW - 100}\n` }, facts: { resume: { counter: 40, stored: { kind: 'unreadable', seenAt: NOW - 100 } } } },
+  { name: 'counter that was readable and is not any more: a new grace once', world: { resumeCounter: 'absent' }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * H } } } },
+  { name: 'counter unreadable, an unreadable record in the future: restarts the grace from now', world: { resumeCounter: 'absent', resume: `unreadable ${NOW + 7200}\n` }, facts: { resume: { counter: { unreadable: IDLE_RESUME_CAUSE.unreadable }, stored: { kind: 'unreadable', seenAt: NOW + 7200 } } } },
+
   // ---- precedence: the first failing check names the reason
   { name: 'RDP connected AND load high AND a request: rdp first', world: { ss: [rdp], displays: RECENT, load: '0.01 5.00 0.01 1/2 3\n', audit: audit(accepted(1 * M)) }, facts: { connections: onRdp, inputIdleSeconds: 600, load5Hundredths: 500, audit: { lastActivityEpoch: NOW - M, openHolds: 0 } } },
   { name: 'keep-awake wins over everything', world: { keepUser: 'x', ss: 'fail', audit: 'missing', load: 'missing', inhibit: 'fail' }, facts: { keepAwake: [{ present: false }, { present: true, untilEpoch: null }], connections: null, audit: null, load5Hundredths: null, inhibitors: null } },
@@ -482,6 +541,9 @@ function build(dir: string, w: Required<World>): void {
   fill(`${root}/run/machine-keep-awake`, w.keepRun);
   fill(`${root}${CONFIG}/keep-awake`, w.keepUser);
   fill(`${root}/run/machine-idle-suspend/since`, w.state);
+  // Decision 113: the kernel counter of the successful suspends and the record of the previous pass.
+  fill(`${root}/sys/power/suspend_stats/success`, w.resumeCounter);
+  fill(`${root}/run/machine-idle-suspend/resume`, w.resume);
   // Decision 105: the X sockets, the logind sessions (derived from the displays that have a session unless the row lists them), the passwd file and the tools of the input check.
   put(`${root}/etc/passwd`, w.passwd);
   folder(`${root}/tmp/.X11-unix`);
@@ -575,14 +637,14 @@ function build(dir: string, w: Required<World>): void {
   }
   // The config folder exists even when a file is missing (a missing audit log is a missing FILE).
   folder(`${root}${CONFIG}`);
-  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, rdpMinutes: w.rdpMinutes, sshMinutes: w.sshMinutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
+  writeFileSync(join(dir, 'machine-idle-suspend.sh'), idleSuspendScript({ minutes: w.minutes, rdpMinutes: w.rdpMinutes, sshMinutes: w.sshMinutes, wakeGraceMinutes: w.wakeGraceMinutes, root, configDir: CONFIG, tools: TOOLS }), { mode: 0o755 });
 }
 
 describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides like idleDecision', () => {
   it.each(ROWS.map((r) => [r.name, r] as const))('%s', (_name, row) => {
     const world: Required<World> = { ...DEFAULT_WORLD, ...row.world };
     const facts: IdleFacts = { ...DEFAULT_FACTS, ...row.facts };
-    const expected = idleDecision(facts, world.now, world.minutes, world.rdpMinutes, world.sshMinutes);
+    const expected = idleDecision(facts, world.now, world.minutes, world.rdpMinutes, world.sshMinutes, world.wakeGraceMinutes);
     const dir = mkdtempSync(join(base, 'run-'));
     cleanup.push(dir);
     build(dir, world);
@@ -599,6 +661,10 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
     if (expected.suspend) {
       expect(readFileSync(suspendedFile, 'utf8').trim()).toBe('--no-block suspend');
     }
+    // Decision 113: the record of the resume detection left behind (written at EVERY pass, whatever the verdict) is the one idleResume computes.
+    const resumeFile = join(dir, 'fakeroot/run/machine-idle-suspend/resume');
+    const wantRecord: IdleResumeRecord = idleResume(facts.resume, world.now, world.wakeGraceMinutes).record;
+    expect(readFileSync(resumeFile, 'utf8')).toBe(wantRecord.kind === 'counter' ? `${wantRecord.counter} ${wantRecord.seenAt}\n` : `unreadable ${wantRecord.seenAt}\n`);
     // The state file left behind.
     const stateFile = join(dir, 'fakeroot/run/machine-idle-suspend/since');
     if (expected.state === null) {
@@ -616,6 +682,42 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/^cannot write \/run\/machine-idle-suspend\/since: not suspending$/m);
     expect(existsSync(join(dir, 'suspended'))).toBe(false);
+  });
+
+  it('decision 113: a resume record that cannot be written (a folder) never suspends: it logs why and exits 1, before any check', () => {
+    const dir = mkdtempSync(join(base, 'run-'));
+    cleanup.push(dir);
+    build(dir, { ...DEFAULT_WORLD, resume: 'unreadable', state: `${NOW - 40 * M} ${NOW - 60}` });
+    const r = spawnSync('sh', ['machine-idle-suspend.sh'], { cwd: dir, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/^cannot write \/run\/machine-idle-suspend\/resume: not suspending$/m);
+    expect(r.stderr).toBe('');
+    expect(existsSync(join(dir, 'suspended'))).toBe(false);
+  });
+
+  it('decision 113: the cadence is in the unit text AND in the script (the gap), from the same three options: the plan of the registry writes both', () => {
+    const def = findInstallable('idle-suspend');
+    if (def === undefined) {
+      throw new Error('idle-suspend is not registered');
+    }
+    const facts = { platform: 'linux', userName: 'alice', systemctlPath: '/usr/bin/systemctl', sudoPath: '/usr/bin/sudo', configDir: CONFIG, tools: { date: TOOLS.date, ss: TOOLS.ss, systemdInhibit: TOOLS.systemdInhibit, logger: TOOLS.logger } };
+    const table: Array<[number, number, number, number]> = [
+      [9, 9, 9, 30],
+      [30, 20, 20, 60],
+      [10, 10, 10, 60],
+      [31, 31, 31, 120],
+      [60, 45, 40, 120],
+      [9, 45, 45, 30],
+    ];
+    for (const [minutes, rdpMinutes, sshMinutes, cadence] of table) {
+      const plan = def.plan({ ...facts, minutes, rdpMinutes, sshMinutes, wakeGraceMinutes: 7 });
+      const timer = plan.files.find((f) => f.id === 'timer')?.content ?? '';
+      const script = plan.files.find((f) => f.id === 'script')?.content ?? '';
+      expect(idleSuspendInstalledCadenceSeconds(timer), `${minutes}/${rdpMinutes}/${sshMinutes}`).toBe(cadence);
+      expect(timer).toBe(idleSuspendTimerUnit(cadence));
+      expect(script).toContain(`\nGAP_SECONDS=${idleGapSeconds(cadence)}\n`);
+      expect(script).toContain('\nWAKE_GRACE_MINUTES=7\n');
+    }
   });
 
   it('a clock that cannot be read never suspends', () => {
@@ -692,9 +794,9 @@ describe.skipIf(SKIPPED_ON_PURPOSE)('idleSuspendScript on a fake root decides li
 
   it('the table covers every decision kind of idleDecision (suspend, wait, each not-idle reason, each restart)', () => {
     const reasons = new Set(
-      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20, r.world?.sshMinutes ?? 20).reason.replace(/\d+(\.\d+)?/g, '#')),
+      ROWS.map((r) => idleDecision({ ...DEFAULT_FACTS, ...r.facts }, NOW, r.world?.minutes ?? 30, r.world?.rdpMinutes ?? 20, r.world?.sshMinutes ?? 20, r.world?.wakeGraceMinutes ?? 5).reason.replace(/\d+(\.\d+)?/g, '#')),
     );
-    for (const needle of ['ssh session pts/# active (input # min ago, needs #)', '(ssh session pts/# idle for # min, needs #)', 'B/s, needs #)', 'rate unknown (first check of this connection', 'quiet: # B/s, under #)', 'ssh connected (cannot read the ssh state: cannot read the idle time of pts/# (stat /dev/pts/# failed))', 'cannot read the ssh state: no sshd login process', 'suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
+    for (const needle of ['ssh session pts/# active (input # min ago, needs #)', '(ssh session pts/# idle for # min, needs #)', 'B/s, needs #)', 'rate unknown (first check of this connection', 'quiet: # B/s, under #)', 'ssh connected (cannot read the ssh state: cannot read the idle time of pts/# (stat /dev/pts/# failed))', 'cannot read the ssh state: no sshd login process', 'suspending: idle # min', 'idle #/# min', 'keep-awake requested', 'cannot read the keep-awake files', 'rdp connected', 'ssh connected', 'machine peer connected', 'cannot read the connections', 'machine request in the last # min', 'machine request on hold', 'rdp connected (input # min ago, needs #)', 'suspending: rdp connected but no input for # min (needs #)', 'confirming at the next check', 'not idle: input # min ago (needs #)', 'input idleness not checked: xprintidle is not installed', 'input idleness not checked: no user session found', 'rdp connected but no user session found', '(ignored display :#: no user session)', 'rdp connected (xprintidle is not installed: sudo apt install xprintidle)', 'rdp connected (input idle unreadable: xprintidle failed on :# as alice)','cannot read the machine audit log', 'wake grace (# min left)', 'resume detection off: cannot read /sys/power/suspend_stats/success (missing or unreadable)', 'resume detection off: /sys/power/suspend_stats/success does not hold a whole number', 'no check for more than # min', 'load # (limit #)', 'cannot read the load average', 'sleep inhibitor held', 'cannot list the sleep inhibitors', 'the clock went back', 'the state file is unreadable', 'no check for more than # min']) {
       expect([...reasons].some((x) => x.includes(needle)), needle).toBe(true);
     }
   });

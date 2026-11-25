@@ -16,6 +16,12 @@ import {
   IDLE_SUSPEND_TIMER_PATH,
   IDLE_SUSPEND_TIMER_UNIT,
   IDLE_SUSPEND_VERSION,
+  IDLE_WAKE_GRACE_DEFAULT_MINUTES,
+  IDLE_WAKE_GRACE_MAX_MINUTES,
+  IDLE_WAKE_GRACE_MIN_MINUTES,
+  idleCadenceSeconds,
+  idleCadenceText,
+  idleSuspendDelayText,
   idleSuspendScript,
   idleSuspendServiceUnit,
   idleSuspendTimerUnit,
@@ -52,6 +58,11 @@ export interface InstallFacts {
   /** `--ssh-minutes` of `machine install idle-suspend` (decision 109), and the one written in the script already installed. */
   sshMinutes?: number;
   installedSshMinutes?: number;
+  /** `--wake-grace-minutes` of `machine install idle-suspend` (decision 113), and the one written in the script already installed. */
+  wakeGraceMinutes?: number;
+  installedWakeGraceMinutes?: number;
+  /** The cadence written in the timer already installed (30, 60 or 120 s); absent when there is none or it cannot be read. */
+  installedCadenceSeconds?: number;
   /** Absolute paths of optional tools (`command -v`), absent when not found. */
   tools?: { date?: string; ss?: string; systemdInhibit?: string; logger?: string; journalctl?: string; xprintidle?: string; runuser?: string; loginctl?: string };
 }
@@ -371,9 +382,12 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
   const minutes = facts.minutes ?? facts.installedMinutes ?? IDLE_DEFAULT_MINUTES;
   const rdpMinutes = facts.rdpMinutes ?? facts.installedRdpMinutes ?? IDLE_RDP_DEFAULT_MINUTES;
   const sshMinutes = facts.sshMinutes ?? facts.installedSshMinutes ?? IDLE_SSH_DEFAULT_MINUTES;
-  const script = idleSuspendScript({ minutes, rdpMinutes, sshMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, loginctl: t.loginctl ?? IDLE_DEFAULT_LOGINCTL, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
+  const wakeGraceMinutes = facts.wakeGraceMinutes ?? facts.installedWakeGraceMinutes ?? IDLE_WAKE_GRACE_DEFAULT_MINUTES;
+  const cadence = idleCadenceSeconds(minutes, rdpMinutes, sshMinutes);
+  const cadenceText = idleCadenceText(cadence);
+  const script = idleSuspendScript({ minutes, rdpMinutes, sshMinutes, wakeGraceMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, loginctl: t.loginctl ?? IDLE_DEFAULT_LOGINCTL, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
   const service = idleSuspendServiceUnit();
-  const timer = idleSuspendTimerUnit();
+  const timer = idleSuspendTimerUnit(cadence);
   const file = (id: string, path: string, mode: string, content: string, describe: string): PlannedFile => ({ id, installable: 'idle-suspend', path, mode, owner: 'root', group: 'root', content, sha256: sha256Hex(content), describe, rootOnly: false });
   const sudo = facts.sudoPath;
   const systemctl = facts.systemctlPath;
@@ -384,9 +398,9 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     version: IDLE_SUSPEND_VERSION,
     platform: facts.platform,
     files: [
-      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every 2 minutes it suspends this machine when it has been idle for ${minutes} min (no machine peer connection, no ssh session with a terminal that had input in the last ${sshMinutes} min, no ssh connection without a terminal at ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s or more, the keyboard/mouse input idle for ${minutes} min (${rdpMinutes} min when an RDP connection is open), no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
+      file('script', IDLE_SUSPEND_SCRIPT_PATH, '0755', script, `the check: every ${cadenceText} it suspends this machine when it has been idle for ${minutes} min, and never within ${wakeGraceMinutes} min after a resume (no machine peer connection, no ssh session with a terminal that had input in the last ${sshMinutes} min, no ssh connection without a terminal at ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s or more, the keyboard/mouse input idle for ${minutes} min (${rdpMinutes} min when an RDP connection is open), no machine request, load under 0.30, no sleep inhibitor, no keep-awake file)`),
       file('service', IDLE_SUSPEND_SERVICE_PATH, '0644', service, 'the systemd service that runs the script once (as root)'),
-      file('timer', IDLE_SUSPEND_TIMER_PATH, '0644', timer, 'the systemd timer that starts the service 2 minutes after boot and every 2 minutes after'),
+      file('timer', IDLE_SUSPEND_TIMER_PATH, '0644', timer, `the systemd timer that starts the service 2 minutes after boot and then every ${cadenceText}`),
     ],
     steps: [
       { kind: 'stage', file: 'script', describe: 'write the script to a temporary file (nothing is changed yet)' },
@@ -410,17 +424,17 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
     tools: { sudo, systemctl },
     service: { unit: IDLE_SUSPEND_TIMER_UNIT },
     configDir: facts.configDir,
-    summary: `suspends after ${minutes} min idle (RDP: ${rdpMinutes} min, SSH: ${sshMinutes} min, no tty: ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s)`,
-    // Read-only: the install never installs xprintidle (an RDP connection counts as activity until it is there).
-    notes: [t.xprintidle === undefined ? 'xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle' : `xprintidle found at ${t.xprintidle}: the input idle time is checked (${minutes} min, ${rdpMinutes} min with an RDP connection)`],
+    summary: `suspends after ${minutes} min idle (RDP: ${rdpMinutes} min, SSH: ${sshMinutes} min, no tty: ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s, wake grace: ${wakeGraceMinutes} min, checked every ${cadenceText})`,
+    // Read-only: the install never installs xprintidle (an RDP connection counts as activity until it is there). Then the computed delay, and a timer that does not run at the cadence these options give.
+    notes: [t.xprintidle === undefined ? 'xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle' : `xprintidle found at ${t.xprintidle}: the input idle time is checked (${minutes} min, ${rdpMinutes} min with an RDP connection)`, idleSuspendDelayText(minutes, rdpMinutes, sshMinutes), ...(facts.installedCadenceSeconds === undefined || facts.installedCadenceSeconds === cadence ? [] : [`the installed timer runs every ${idleCadenceText(facts.installedCadenceSeconds)} but these options give every ${cadenceText}: the timer is outdated, run \`machine install idle-suspend --refresh\``])],
     ...(t.journalctl === undefined ? {} : { lastDecisionArgv: [t.journalctl, '-t', IDLE_LOG_TAG, '-n', '1', '--no-pager', '-q', '-o', 'short-iso'] }),
   };
 }
 
 const IDLE_SUSPEND: Installable = {
   id: 'idle-suspend',
-  description: `suspend this machine by itself when it is really idle (a root systemd timer every 2 min: no machine peer connection, no ssh session with a terminal that had input in the last --ssh-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), no ssh connection without a terminal at ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s or more, keyboard/mouse input idle (needs xprintidle: --minutes without an RDP connection, --rdp-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}, default ${IDLE_RDP_DEFAULT_MINUTES}, when one is open), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); a disconnected desktop session does not count; wake it with \`machine wake\``,
-  summaryLine: 'suspends this box by itself when really idle (root timer, every 2 min)',
+  description: `suspend this machine by itself when it is really idle (a root systemd timer every 30 s, 1 min or 2 min, from the smallest of the three minutes options: no machine peer connection, no ssh session with a terminal that had input in the last --ssh-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), no ssh connection without a terminal at ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s or more, keyboard/mouse input idle (needs xprintidle: --minutes without an RDP connection, --rdp-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}, default ${IDLE_RDP_DEFAULT_MINUTES}, when one is open), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); --wake-grace-minutes ${IDLE_WAKE_GRACE_MIN_MINUTES}..${IDLE_WAKE_GRACE_MAX_MINUTES} (default ${IDLE_WAKE_GRACE_DEFAULT_MINUTES}): no automatic suspend for that long after every resume; a disconnected desktop session does not count; wake it with \`machine wake\``,
+  summaryLine: 'suspends this box by itself when really idle (root timer, every 30 s to 2 min)',
   platforms: ['linux'],
   consequence:
     'This only RESTRICTS uptime: the box suspends itself when idle. It adds no network surface and no right for any peer (a peer keeps the box awake only by sending commands, as before). To keep it awake on purpose: touch /run/machine-keep-awake or <config dir>/keep-awake (content "keep awake until <epoch>" for a limited time); remove the file to release it.',
@@ -431,15 +445,15 @@ const IDLE_SUSPEND: Installable = {
       'installed:',
       ...plan.files.map((f) => `  ${f.path}   (root-owned, mode ${f.mode})`),
       '',
-      `${plan.summary ?? 'idle-suspend'}: checked every 2 minutes; every decision is written to the journal:`,
+      `${plan.summary ?? 'idle-suspend'}: every decision is written to the journal, one line per check (2880 lines a day at 30 s, 1440 at 1 min, 720 at 2 min):`,
       `  journalctl -t ${IDLE_LOG_TAG} -n 20      (sudo journalctl ... when your user cannot read the journal)`,
       '',
       'keep the box awake on purpose (a local control of the owner, an orchestrator job can touch it too):',
       `  touch ${IDLE_KEEP_AWAKE_RUN}   or   touch ${configDir}/keep-awake    (remove it to release)`,
       `  echo "keep awake until $(( $(date +%s) + 3600 ))" > ${configDir}/keep-awake    (one more hour, then it is ignored)`,
       '',
-      'a disconnected desktop session (xrdp) is NOT counted as activity; an established machine peer connection is; every established ssh connection is tested: a session WITH A TERMINAL (tty) counts while its last input is more recent than --ssh-minutes (its traffic is ignored); a connection WITHOUT a tty (scp, rsync, `ssh host command`, the permanent Herdr stream) counts while its average traffic (sent + received) between two checks is at least ' + IDLE_SSH_NOTTY_BYTES_PER_SECOND + ' B/s (an idle Herdr stream is about 200 B/s) and on the first check of a connection (the suspend is delayed by one check); a slow job under ' + IDLE_SSH_NOTTY_BYTES_PER_SECOND + ' B/s with a low load can still be cut by the suspend: run it in a terminal (ssh -t, tmux), under systemd-inhibit --what=sleep, or write the keep-awake file; anything unreadable counts as activity and the journal says why; an established RDP connection counts only while the X input of the session is more recent than --rdp-minutes (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why); without an RDP connection the input must be idle for --minutes when xprintidle can be read, otherwise the journal says that input idleness is not checked.',
-      'to test quickly: machine install idle-suspend --minutes 5 --refresh, then leave the box alone for 5-7 minutes (the timer checks every 2 minutes); wake it with machine wake.',
+      'a disconnected desktop session (xrdp) is NOT counted as activity; an established machine peer connection is; every established ssh connection is tested: a session WITH A TERMINAL (tty) counts while its last input is more recent than --ssh-minutes (its traffic is ignored); a connection WITHOUT a tty (scp, rsync, `ssh host command`, the permanent Herdr stream) counts while its average traffic (sent + received) between two checks is at least ' + IDLE_SSH_NOTTY_BYTES_PER_SECOND + ' B/s (an idle Herdr stream is about 200 B/s) and on the first check of a connection (the suspend is delayed by one check); a slow job under ' + IDLE_SSH_NOTTY_BYTES_PER_SECOND + ' B/s with a low load can still be cut by the suspend: run it in a terminal (ssh -t, tmux), under systemd-inhibit --what=sleep, or write the keep-awake file; anything unreadable counts as activity and the journal says why; an established RDP connection counts only while the X input of the session is more recent than --rdp-minutes (xprintidle: sudo apt install xprintidle; without it, or when it cannot be read, RDP counts as activity and the journal says why); without an RDP connection the input must be idle for --minutes when xprintidle can be read, otherwise the journal says that input idleness is not checked; after every resume (the kernel counter /sys/power/suspend_stats/success moved) nothing suspends the box for --wake-grace-minutes (default 5): xprintidle counts the sleep, so right after a wake every reading says idle (journal: `not idle: wake grace (N min left)`).',
+      'to test quickly: machine install idle-suspend --minutes 5 --rdp-minutes 5 --ssh-minutes 5 --wake-grace-minutes 1 --refresh, then leave the box alone: it suspends 5.5 to 6 min after the last input with an RDP connection, 10 to 10.5 min without one (the delays printed by --dry-run); wake it with machine wake.',
       '',
       `[warn] ${IDLE_SUSPEND.consequence}`,
     ];

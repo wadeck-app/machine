@@ -146,7 +146,7 @@ describe('statusBlock: one compact block per item', () => {
     const time = parseDecision('2026-11-22T18:13:56+00:00 h t[1]: r')?.time as string;
     expect(lines).toEqual([
       'idle-suspend  installed, up to date  (suspends after 5 min idle)',
-      '  suspends this box by itself when really idle (root timer, every 2 min)',
+      '  suspends this box by itself when really idle (root timer, every 30 s to 2 min)',
       `  last: ${time} not idle: rdp connected (3 min ago)`,
     ]);
   });

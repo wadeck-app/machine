@@ -47,13 +47,13 @@ describe('machine install (list)', () => {
     expect(r.err).toBe('');
     expect(r.out).toMatch(/^suspend {2}not installed$/m);
     // The configuration does not fit the 80 columns of the first line: it wraps under it, never cut (decision 109).
-    expect(r.out).toMatch(/^idle-suspend {2}not installed\n {2}\(suspends after 30 min idle \(RDP: 20 min, SSH: 20 min, no tty: 2048 B\/s\)\)$/m);
+    expect(r.out).toMatch(/^idle-suspend {2}not installed\n {2}\(suspends after 30 min idle \(RDP: 20 min, SSH: 20 min, no tty: 2048 B\/s, wake\n {4}grace: 5 min, checked every 1 min\)\)$/m);
     expect(r.out).not.toContain('SSH: 2...');
     // One compact block per item: no generic text repeated, the long description stays in --dry-run.
     expect(r.out).not.toMatch(/platforms: linux|supported on this machine|state:/);
     expect(r.out).not.toContain('a root-owned script and a sudoers rule');
     for (const line of r.out.split('\n').filter((l) => /^ {2}\S/.test(l) && !l.includes('machine install'))) expect(line.length, line).toBeLessThanOrEqual(80);
-    expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>] [--json]');
+    expect(r.out).toContain('machine install <id> [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>] [--wake-grace-minutes <n>] [--json]');
     // The only sudo call of the list is the listing that never prompts.
     expect(r.fake.calls.filter((c) => c.startsWith('/usr/bin/sudo'))).toEqual(['/usr/bin/sudo -n -l /usr/bin/systemctl suspend']);
     expect(r.fake.staged.size).toBe(0);

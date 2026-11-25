@@ -189,6 +189,8 @@ export interface Parsed {
   rdpMinutes?: string;
   /** `machine install idle-suspend --ssh-minutes <1..1440>`: the input idle time of the tty of an ssh session from which it no longer keeps the box awake (decision 111). */
   sshMinutes?: string;
+  /** `machine install idle-suspend --wake-grace-minutes <1..60>`: after every resume the box is not suspended automatically for that long (decision 113). */
+  wakeGraceMinutes?: string;
   promptTimeout?: string;
   policy?: string;
   yesFinalCode?: string;

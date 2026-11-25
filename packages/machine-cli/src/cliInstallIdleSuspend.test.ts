@@ -68,6 +68,15 @@ describe('--minutes: usage errors (exit 2), nothing run', () => {
     [['idle-suspend', '--remove', '--ssh-minutes', '30'], /not with --remove/],
     [['suspend', '--ssh-minutes', '30'], /--ssh-minutes only applies to `machine install idle-suspend`/],
     [['status', '--ssh-minutes', '30'], /--ssh-minutes only applies to `machine install idle-suspend`/],
+    [['idle-suspend', '--wake-grace-minutes', '0'], /--wake-grace-minutes must be a whole number of minutes from 1 to 60 \(default 5\), got "0": for example `machine install idle-suspend --wake-grace-minutes 5`/],
+    [['idle-suspend', '--wake-grace-minutes', '61'], /--wake-grace-minutes must be a whole number of minutes from 1 to 60/],
+    [['idle-suspend', '--wake-grace-minutes', '5m'], /--wake-grace-minutes must be a whole number/],
+    [['idle-suspend', '--wake-grace-minutes', 'abc'], /--wake-grace-minutes must be a whole number/],
+    [['idle-suspend', '--wake-grace-minutes'], /--wake-grace-minutes needs a value/],
+    [['idle-suspend', '--check', '--wake-grace-minutes', '5'], /--wake-grace-minutes sets what is installed.*not with --check/],
+    [['idle-suspend', '--remove', '--wake-grace-minutes', '5'], /not with --remove/],
+    [['suspend', '--wake-grace-minutes', '5'], /--wake-grace-minutes only applies to `machine install idle-suspend`/],
+    [['status', '--wake-grace-minutes', '5'], /--wake-grace-minutes only applies to `machine install idle-suspend`/],
   ])('%j', async (args, message) => {
     const b = box();
     const r = await b.go(args as string[]);
@@ -90,7 +99,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(r.code, r.err).toBe(0);
     for (const p of [SCRIPT, SERVICE, TIMER]) expect(r.out).toContain(p);
     expect(r.out).toContain('| MINUTES=45');
-    expect(r.out).toContain('| # managed by machine install idle-suspend, version 7');
+    expect(r.out).toContain('| # managed by machine install idle-suspend, version 8');
     expect(r.out).toContain('$ /usr/bin/sudo /usr/bin/systemctl enable machine-idle-suspend.timer');
     expect(r.out).toMatch(/only RESTRICTS uptime/);
     expect(b.sudoCalls()).toEqual([]);
@@ -102,7 +111,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(r.out).toContain('| MINUTES=30');
   });
 
-  it('decision 106: 1 is accepted for both flags (9 and 3 too), 0 is not, and the help says the timer checks every 2 min', async () => {
+  it('decision 106: 1 is accepted for both flags (9 and 3 too), 0 is not, and the help says the timer checks every 30 s, 1 min or 2 min', async () => {
     const r = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--minutes', '1', '--rdp-minutes', '1']);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('| MINUTES=1');
@@ -116,7 +125,7 @@ describe('machine install idle-suspend --dry-run', () => {
     expect(bad.err).toContain('--rdp-minutes must be a whole number of minutes from 1 to 1440 (default 20), got "0"');
     const help = await cli(dir, ['install', 'idle-suspend', '--help']);
     expect(help.out).toContain('--minutes <1..1440>');
-    expect(help.out).toMatch(/timer runs every 2 min, so a value below 2 acts at the first check/);
+    expect(help.out).toMatch(/timer runs every 30 s, 1 min or 2 min.*a value below the cadence acts at the first check/s);
     expect(help.out).toMatch(/only restricts uptime/);
   });
 
@@ -151,13 +160,14 @@ describe('machine install idle-suspend --ssh-minutes (decision 111)', () => {
   it('is stored like --rdp-minutes: shown by --check, kept when only another flag changes, a script of version 4 is outdated', async () => {
     const b = box();
     expect((await b.go(['idle-suspend', '--minutes', '5', '--ssh-minutes', '45'])).code).toBe(0);
-    expect((await b.go(['idle-suspend', '--check'])).out).toContain('suspends after 5 min idle (RDP: 20 min, SSH: 45 min, no tty: 2048 B/s)');
+    expect((await b.go(['idle-suspend', '--check'])).out).toContain('suspends after 5 min idle (RDP: 20 min, SSH: 45 min, no tty: 2048 B/s, wake grace: 5 min, checked every 30 s)');
     expect((await b.go(['idle-suspend', '--rdp-minutes', '60'])).code).toBe(0);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^SSH_MINUTES=45$/m);
     expect((await b.go(['idle-suspend', '--ssh-minutes', '7'])).code).toBe(0);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^SSH_MINUTES=7$/m);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^RDP_MINUTES=60$/m);
-    expect((await b.go(['status'])).out).toContain('(suspends after 5 min idle (RDP: 60 min, SSH: 7 min, no tty: 2048 B/s))');
+    // The list wraps long lines: compare the text with the line breaks folded.
+    expect((await b.go(['status'])).out.replace(/\s*\n\s*/g, ' ')).toContain('(suspends after 5 min idle (RDP: 60 min, SSH: 7 min, no tty: 2048 B/s, wake grace: 5 min, checked every 30 s))');
     const old = (b.fake.userFiles.get(SCRIPT) ?? '').replace('version 7', 'version 4').replace(/^SSH_MINUTES=.*\n/m, '');
     b.fake.userFiles.set(SCRIPT, old);
     const check = await b.go(['idle-suspend', '--check']);
@@ -254,13 +264,13 @@ describe('machine install idle-suspend: install, status, refresh, remove', () =>
     const r = await b.go(['idle-suspend', '--check']);
     expect(r.code, r.out + r.err).toBe(0);
     expect(r.out).toContain('idle-suspend on linux: installed, up to date');
-    expect(r.out).toContain('suspends after 45 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s)');
+    expect(r.out).toContain('suspends after 45 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s, wake grace: 5 min, checked every 1 min)');
     // Parsed: no host, tag or pid; local time and the age.
     expect(r.out).toMatch(/^last decision: \d\d:\d\d:\d\d idle 12\/45 min \((just now|\d+ (s|min|h|d) ago)\)$/m);
     expect(r.out).not.toContain('machine-idle-suspend[42]');
     const json = JSON.parse((await b.go(['idle-suspend', '--check', '--json'])).out) as { state: string; details: string[] };
     expect(json.state).toBe('installed');
-    expect(json.details[0]).toBe('suspends after 45 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s)');
+    expect(json.details[0]).toBe('suspends after 45 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s, wake grace: 5 min, checked every 1 min)');
   });
 
   it('a journal the user cannot read is reported, never an error', async () => {
@@ -290,7 +300,7 @@ describe('machine install idle-suspend: install, status, refresh, remove', () =>
     const b = box();
     expect((await b.go(['idle-suspend', '--minutes', '5', '--rdp-minutes', '45'])).code).toBe(0);
     const check = await b.go(['idle-suspend', '--check']);
-    expect(check.out).toContain('suspends after 5 min idle (RDP: 45 min, SSH: 20 min, no tty: 2048 B/s)');
+    expect(check.out).toContain('suspends after 5 min idle (RDP: 45 min, SSH: 20 min, no tty: 2048 B/s, wake grace: 5 min, checked every 30 s)');
     expect((await b.go(['idle-suspend', '--minutes', '10'])).code).toBe(0);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^MINUTES=10$/m);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^RDP_MINUTES=45$/m);
@@ -298,7 +308,7 @@ describe('machine install idle-suspend: install, status, refresh, remove', () =>
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^MINUTES=10$/m);
     expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^RDP_MINUTES=60$/m);
     const list = await b.go(['status']);
-    expect(list.out).toContain('(suspends after 10 min idle (RDP: 60 min, SSH: 20 min, no tty: 2048 B/s))');
+    expect(list.out.replace(/\s*\n\s*/g, ' ')).toContain('(suspends after 10 min idle (RDP: 60 min, SSH: 20 min, no tty: 2048 B/s, wake grace: 5 min, checked every 1 min))');
   });
 
   it('a second install with another --minutes replaces the script only, after saying so', async () => {
@@ -433,7 +443,7 @@ describe('machine status: the line of the installed items', () => {
     await b.go(['idle-suspend', '--minutes', '15']);
     const mark = b.sudoCalls().length;
     const r = await statusOf(b);
-    expect(r.out).toMatch(/^installed: idle-suspend \(up to date; suspends after 15 min idle \(RDP: 20 min, SSH: 20 min, no tty: 2048 B\/s\); note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle; last decision: x machine-idle-suspend\[1\]: not idle: rdp connected\)$/m);
+    expect(r.out).toMatch(/^installed: idle-suspend \(up to date; suspends after 15 min idle \(RDP: 20 min, SSH: 20 min, no tty: 2048 B\/s, wake grace: 5 min, checked every 1 min\); note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity: sudo apt install xprintidle; note: suspends 21 to 22 min after the last input with an RDP connection, 30 to 31 min without one \(checked every 1 min\); last decision: x machine-idle-suspend\[1\]: not idle: rdp connected\)$/m);
     expect(b.sudoCalls().length).toBe(mark);
   });
 
@@ -448,5 +458,82 @@ describe('machine status: the line of the installed items', () => {
   it('nothing about it when it is not installed', async () => {
     const r = await statusOf(box());
     expect(r.out).not.toMatch(/idle-suspend/);
+  });
+});
+
+// Decision 113: the cadence of the timer (30 s, 1 min, 2 min from the smallest of the three minutes), --wake-grace-minutes, the delay printed.
+describe('machine install idle-suspend: cadence and wake grace (decision 113)', () => {
+  it('--dry-run: the timer text carries the cadence of the options, the script the wake grace (default 5), and the computed delay is printed', async () => {
+    const def = await box({ tty: false }).go(['idle-suspend', '--dry-run']);
+    expect(def.code, def.err).toBe(0);
+    expect(def.out).toContain('| OnUnitActiveSec=1min');
+    expect(def.out).toContain('| AccuracySec=1s');
+    expect(def.out).toContain('| TimeoutStartSec=25');
+    expect(def.out).toContain('| WAKE_GRACE_MINUTES=5');
+    expect(def.out).toContain('note: suspends 21 to 22 min after the last input with an RDP connection, 60 to 61 min without one (checked every 1 min)');
+    const fast = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--minutes', '9', '--rdp-minutes', '9', '--ssh-minutes', '9', '--wake-grace-minutes', '12']);
+    expect(fast.code, fast.err).toBe(0);
+    expect(fast.out).toContain('| OnUnitActiveSec=30s');
+    expect(fast.out).toContain('| WAKE_GRACE_MINUTES=12');
+    expect(fast.out).toContain('note: suspends 9.5 to 10 min after the last input with an RDP connection, 18 to 18.5 min without one (checked every 30 s)');
+    const slow = await box({ tty: false }).go(['idle-suspend', '--dry-run', '--minutes', '60', '--rdp-minutes', '45', '--ssh-minutes', '40']);
+    expect(slow.out).toContain('| OnUnitActiveSec=2min');
+    expect(slow.out).toContain('note: suspends 47 to 49 min after the last input with an RDP connection, 120 to 122 min without one (checked every 2 min)');
+  });
+
+  it('--wake-grace-minutes is stored like the other options: shown by --check, kept when only another flag changes, 1 and 60 accepted', async () => {
+    const b = box();
+    expect((await b.go(['idle-suspend', '--wake-grace-minutes', '12'])).code).toBe(0);
+    expect((await b.go(['idle-suspend', '--check'])).out).toContain('wake grace: 12 min');
+    expect((await b.go(['idle-suspend', '--minutes', '10'])).code).toBe(0);
+    expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^WAKE_GRACE_MINUTES=12$/m);
+    expect((await b.go(['idle-suspend', '--wake-grace-minutes', '1'])).code).toBe(0);
+    expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^WAKE_GRACE_MINUTES=1$/m);
+    expect((await b.go(['idle-suspend', '--wake-grace-minutes', '60'])).code).toBe(0);
+    expect(b.fake.userFiles.get(SCRIPT)).toMatch(/^WAKE_GRACE_MINUTES=60$/m);
+    expect((await b.go(['status'])).out.replace(/\s*\n\s*/g, ' ')).toContain('wake grace: 60 min');
+  });
+
+  it('changing an option that changes the cadence rewrites the timer (--refresh), and --check says why it is outdated when the installed timer differs', async () => {
+    const b = box();
+    expect((await b.go(['idle-suspend'])).code).toBe(0);
+    expect(b.fake.userFiles.get(TIMER)).toContain('OnUnitActiveSec=1min');
+    // The timer of the previous build: every 2 min, 10 s accuracy.
+    b.fake.userFiles.set(TIMER, (b.fake.userFiles.get(TIMER) ?? '').replace('OnUnitActiveSec=1min', 'OnUnitActiveSec=2min').replace('AccuracySec=1s', 'AccuracySec=10s'));
+    const check = await b.go(['idle-suspend', '--check']);
+    expect(check.code).toBe(1);
+    expect(check.out).toMatch(/outdated/);
+    expect(check.out).toContain('the installed timer runs every 2 min but these options give every 1 min: the timer is outdated, run `machine install idle-suspend --refresh`');
+    const list = await b.go(['status']);
+    expect(list.out).toContain('the installed timer runs every 2 min but these options give every 1 min');
+    const json = JSON.parse((await b.go(['idle-suspend', '--check', '--json'])).out) as { state: string; details: string[] };
+    expect(json.state).toBe('outdated');
+    expect(json.details.join('\n')).toContain('the installed timer runs every 2 min but these options give every 1 min');
+    const fix = await b.go(['idle-suspend', '--refresh']);
+    expect(fix.code, fix.out + fix.err).toBe(0);
+    expect(b.fake.userFiles.get(TIMER)).toContain('OnUnitActiveSec=1min');
+    expect((await b.go(['idle-suspend', '--check'])).code).toBe(0);
+  });
+
+  it('a new --minutes below 10 changes the cadence: the timer is replaced with the script, said before it is done', async () => {
+    const b = box();
+    await b.go(['idle-suspend']);
+    const r = await b.go(['idle-suspend', '--minutes', '5']);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.out).toMatch(new RegExp(`the installed ${TIMER} .* will be REPLACED`));
+    expect(b.fake.userFiles.get(TIMER)).toContain('OnUnitActiveSec=30s');
+    expect((await b.go(['idle-suspend', '--check'])).code).toBe(0);
+  });
+
+  it('the help names --wake-grace-minutes, its range and default, the three cadences and the delay', async () => {
+    const help = await cli(dir, ['install', 'idle-suspend', '--help']);
+    expect(help.out).toMatch(/--wake-grace-minutes <1\.\.60>/);
+    expect(help.out).toMatch(/default 5/);
+    expect(help.out).toMatch(/30 s.*1 min.*2 min/s);
+    expect(help.out).toMatch(/ONE line to the journal \(2880 lines a day at 30 s\)/);
+    expect(help.out).not.toMatch(/every 2 minutes\)/);
+    expect(help.out).not.toMatch(/2 min apart/);
+    const summary = await cli(dir, ['install', '--help']);
+    expect(summary.out).toMatch(/--wake-grace-minutes <1\.\.60>/);
   });
 });

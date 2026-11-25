@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   IDLE_DEFAULT_MINUTES,
   IDLE_GAP_SECONDS,
+  IDLE_WAKE_GRACE_DEFAULT_MINUTES,
+  IDLE_WAKE_GRACE_MAX_MINUTES,
+  IDLE_WAKE_GRACE_MIN_MINUTES,
+  IDLE_RESUME_COUNTER_FILE,
+  idleCadenceSeconds,
+  idleGapSeconds,
+  idleResume,
+  idleSuspendDelaySeconds,
+  idleSuspendInstalledCadenceSeconds,
+  idleSuspendInstalledWakeGraceMinutes,
+  idleSuspendServiceUnit,
+  idleSuspendTimerUnit,
+  parseIdleWakeGraceMinutes,
   IDLE_MAX_MINUTES,
   IDLE_MIN_MINUTES,
   IDLE_RDP_DEFAULT_MINUTES,
@@ -17,12 +30,16 @@ import {
   parseIdleSshMinutes,
   parseLoadHundredths,
   type IdleFacts,
+  type IdleResumeFacts,
   type IdleSshConnection,
 } from './idleSuspend.js';
 import { InstallError } from './install.js';
 
 const NOW = 1_800_000_000;
 const MIN = 30;
+
+/** No resume to protect: the kernel counter did not move for 3 hours (decision 113). */
+const QUIET_RESUME: IdleResumeFacts = { counter: 40, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3 * 3600 } };
 
 /** Everything idle, a timer that started `elapsedMin` minutes ago and was checked 2 minutes ago. */
 const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
@@ -37,6 +54,7 @@ const idle = (over: Partial<IdleFacts> = {}, elapsedMin = 12): IdleFacts => ({
   // A long quiet keyboard: the input check passes (decision 103); the tests of the input rules set it.
   inputIdleSeconds: 99999,
   ignoredDisplays: [],
+  resume: QUIET_RESUME,
   ...over,
 });
 
@@ -114,12 +132,13 @@ describe('idleDecision: idle (the timer)', () => {
   });
 
   it('the last check older than the gap: the box slept or was off, the timer restarts (never suspends)', () => {
-    const f = idle({ state: { since: NOW - 3 * 3600, last: NOW - IDLE_GAP_SECONDS - 1 } });
-    expect(idleDecision(f, NOW, MIN)).toEqual({ suspend: false, reason: 'idle 0/30 min (timer restarted: no check for more than 5 min, the box slept or was off)', state: { since: NOW, last: NOW } });
+    const gap = idleGapSeconds(idleCadenceSeconds(MIN, 20, 20));
+    const f = idle({ state: { since: NOW - 3 * 3600, last: NOW - gap - 1 } });
+    expect(idleDecision(f, NOW, MIN)).toEqual({ suspend: false, reason: 'idle 0/30 min (timer restarted: no check for more than 10 min, the box slept or was off)', state: { since: NOW, last: NOW } });
   });
 
   it('a gap of exactly the limit is still the same run', () => {
-    const f = idle({ state: { since: NOW - 31 * 60, last: NOW - IDLE_GAP_SECONDS } });
+    const f = idle({ state: { since: NOW - 31 * 60, last: NOW - idleGapSeconds(60) } });
     expect(idleDecision(f, NOW, MIN).suspend).toBe(true);
   });
 
@@ -187,6 +206,7 @@ describe('idleSuspendScript (the generated shell)', () => {
     minutes: 30,
     rdpMinutes: 20,
     sshMinutes: 20,
+    wakeGraceMinutes: 5,
     root: '',
     configDir: '/home/alice/.config/machine',
     tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' },
@@ -196,7 +216,7 @@ describe('idleSuspendScript (the generated shell)', () => {
   it('starts with the shebang, carries the marker and the minutes, ends with a newline', () => {
     const s = script();
     expect(s.split('\n')[0]).toBe('#!/bin/sh');
-    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 7');
+    expect(s.split('\n')).toContain('# managed by machine install idle-suspend, version 8');
     expect(s).toMatch(/^MINUTES=30$/m);
     expect(s.endsWith('\n')).toBe(true);
     expect(idleSuspendInstalledMinutes(s)).toBe(30);
@@ -315,14 +335,14 @@ describe('idleDecision: RDP connected (decision 103): the input idle time agains
     expect(decide(withRdp(R * 60 + 5 * 60, { state: { since: NOW - 120, last: NOW - 120 } })).reason).toBe('suspending: rdp connected but no input for 25 min (needs 20)');
     expect(decide(withRdp(R * 60 + 5 * 60, { state: { since: NOW - 40 * 60, last: NOW - 120 } })).reason).toBe('suspending: rdp connected but no input for 25 min (needs 20)');
   });
-  it('after a wake or a first pass the other checks must pass ONCE before the suspend: no state, unusable, clock back, gap > 300 s all restart', () => {
+  it('after a wake or a first pass the other checks must pass ONCE before the suspend: no state, unusable, clock back, gap > the gap limit all restart', () => {
     const base = 'idle: rdp connected but no input for 30 min (needs 20), confirming at the next check';
     const r = (state: IdleFacts['state']): ReturnType<typeof idleDecision> => decide(withRdp(30 * 60, { state }));
     expect(r('absent')).toEqual({ suspend: false, reason: base, state: { since: NOW, last: NOW } });
     expect(r(null).reason).toBe(`${base} (timer restarted: the state file is unreadable)`);
     expect(r({ since: NOW + 10, last: NOW + 10 }).reason).toBe(`${base} (timer restarted: the clock went back)`);
-    expect(r({ since: NOW - 3600, last: NOW - 301 }).reason).toBe(`${base} (timer restarted: no check for more than 5 min, the box slept or was off)`);
-    expect(r({ since: NOW - 3600, last: NOW - 300 }).suspend).toBe(true);
+    expect(r({ since: NOW - 3600, last: NOW - 601 }).reason).toBe(`${base} (timer restarted: no check for more than 10 min, the box slept or was off)`);
+    expect(r({ since: NOW - 3600, last: NOW - 600 }).suspend).toBe(true);
   });
   it('the other checks still gate it: load, request in the last N min, inhibitor, keep-awake', () => {
     expect(decide(withRdp(3600, { load5Hundredths: 99 })).reason).toBe('not idle: load 0.99 (limit 0.30)');
@@ -457,7 +477,7 @@ describe('minimum of 1 minute (decision 106)', () => {
     expect(idleDecision(f(180), NOW, 9, 3).reason).toBe('suspending: rdp connected but no input for 3 min (needs 3)');
   });
   it('the installed values 1 are read back from the script', () => {
-    const s = idleSuspendScript({ minutes: 1, rdpMinutes: 1, sshMinutes: 1, root: '', configDir: '/home/alice/.config/machine', tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' } });
+    const s = idleSuspendScript({ minutes: 1, rdpMinutes: 1, sshMinutes: 1, wakeGraceMinutes: 5, root: '', configDir: '/home/alice/.config/machine', tools: { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' } });
     expect(idleSuspendInstalledMinutes(s)).toBe(1);
     expect(idleSuspendInstalledRdpMinutes(s)).toBe(1);
   });
@@ -563,7 +583,7 @@ describe('idleDecision: ssh connected (decision 111): pts input idle time agains
   });
   it('the script reads the per-connection counters of ss, the process titles and the file of samples (not the traffic fields of decision 109)', () => {
     const tools = { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' };
-    const s = idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes: 20, root: '', configDir: '/home/alice/.config/machine', tools });
+    const s = idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes: 20, wakeGraceMinutes: 5, root: '', configDir: '/home/alice/.config/machine', tools });
     expect(s).not.toMatch(/lastsnd|lastrcv/);
     expect(s).toContain('-Htinp state established');
     expect(s).toContain('bytes_acked');
@@ -586,11 +606,346 @@ describe('parseIdleSshMinutes (--ssh-minutes) and the script (decision 111)', ()
   });
   it('SSH_MINUTES=<n> is in the script, read back, undefined for an older script', () => {
     const tools = { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' };
-    const mk = (sshMinutes: number): string => idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes, root: '', configDir: '/home/alice/.config/machine', tools });
+    const mk = (sshMinutes: number): string => idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes, wakeGraceMinutes: 5, root: '', configDir: '/home/alice/.config/machine', tools });
     expect(mk(20)).toMatch(/^SSH_MINUTES=20$/m);
     expect(idleSuspendInstalledSshMinutes(mk(45))).toBe(45);
     expect(idleSuspendInstalledSshMinutes('#!/bin/sh\nMINUTES=30\n')).toBeUndefined();
     expect(idleSuspendInstalledSshMinutes('SSH_MINUTES=9999\n')).toBeUndefined();
     for (const bad of [0, 1441, 20.5, NaN]) expect(() => mk(bad), String(bad)).toThrow(InstallError);
+  });
+});
+
+// ---------------------------------------------------------------- decision 113: cadence, grace after a resume
+
+const TOOLS = { date: '/usr/bin/date', ss: '/usr/bin/ss', systemdInhibit: '/usr/bin/systemd-inhibit', logger: '/usr/bin/logger', systemctl: '/usr/bin/systemctl', loginctl: '/usr/bin/loginctl', runuser: '/usr/sbin/runuser', xprintidle: '/usr/bin/xprintidle' };
+
+describe('idleCadenceSeconds (decision 113): from the SMALLEST of --minutes, --rdp-minutes, --ssh-minutes', () => {
+  // [minutes, rdp, ssh, seconds]: below 10 min: 30 s; 10 to 30 inclusive: 1 min; above 30: 2 min.
+  const table: Array<[number, number, number, number]> = [
+    [1, 1, 1, 30],
+    [9, 9, 9, 30],
+    [10, 10, 10, 60],
+    [30, 30, 30, 60],
+    [31, 31, 31, 120],
+    [1440, 1440, 1440, 120],
+    [30, 20, 20, 60],
+    [9, 7, 20, 30],
+    [45, 20, 20, 60],
+    [60, 45, 40, 120],
+    [9, 45, 45, 30],
+    [45, 9, 45, 30],
+    [45, 45, 9, 30],
+    [31, 30, 45, 60],
+    [31, 31, 30, 60],
+    [31, 45, 31, 120],
+  ];
+  it.each(table)('minutes %i, rdp %i, ssh %i: every %i s', (minutes, rdp, ssh, seconds) => {
+    expect(idleCadenceSeconds(minutes, rdp, ssh)).toBe(seconds);
+  });
+  it('the boundaries 9, 10, 30 and 31: the smallest one decides', () => {
+    expect(idleCadenceSeconds(9, 60, 60)).toBe(30);
+    expect(idleCadenceSeconds(10, 60, 60)).toBe(60);
+    expect(idleCadenceSeconds(30, 60, 60)).toBe(60);
+    expect(idleCadenceSeconds(31, 60, 60)).toBe(120);
+  });
+  it('refuses a value out of range or not whole, loudly', () => {
+    for (const bad of [0, 1441, 2.5, NaN, -1]) {
+      expect(() => idleCadenceSeconds(bad, 20, 20), String(bad)).toThrow(InstallError);
+      expect(() => idleCadenceSeconds(20, bad, 20), String(bad)).toThrow(InstallError);
+      expect(() => idleCadenceSeconds(20, 20, bad), String(bad)).toThrow(InstallError);
+    }
+  });
+});
+
+describe('idleGapSeconds (decision 113): a gap above max(300 s, 10 x cadence) restarts the confirmation', () => {
+  it('300 s at 30 s, 600 s at 1 min, 1200 s at 2 min; the floor stays IDLE_GAP_SECONDS', () => {
+    expect(IDLE_GAP_SECONDS).toBe(300);
+    expect(idleGapSeconds(30)).toBe(300);
+    expect(idleGapSeconds(60)).toBe(600);
+    expect(idleGapSeconds(120)).toBe(1200);
+  });
+  it('refuses a cadence that is not one of the three', () => {
+    for (const bad of [0, 29, 45, 121, NaN]) expect(() => idleGapSeconds(bad), String(bad)).toThrow(InstallError);
+  });
+});
+
+describe('parseIdleWakeGraceMinutes (--wake-grace-minutes)', () => {
+  it('accepts whole numbers 1 to 60 only, the error names the flag, the range, the default and the fix', () => {
+    expect([IDLE_WAKE_GRACE_MIN_MINUTES, IDLE_WAKE_GRACE_MAX_MINUTES, IDLE_WAKE_GRACE_DEFAULT_MINUTES]).toEqual([1, 60, 5]);
+    expect(parseIdleWakeGraceMinutes('1')).toBe(1);
+    expect(parseIdleWakeGraceMinutes('5')).toBe(5);
+    expect(parseIdleWakeGraceMinutes('60')).toBe(60);
+    for (const bad of ['0', '61', '', ' 5', '5m', '2.5', '2e1', '-5', 'abc', '007']) {
+      expect(() => parseIdleWakeGraceMinutes(bad), bad).toThrow(/--wake-grace-minutes must be a whole number of minutes from 1 to 60 \(default 5\)/);
+    }
+    expect(() => parseIdleWakeGraceMinutes('0')).toThrow('for example `machine install idle-suspend --wake-grace-minutes 5`');
+  });
+});
+
+describe('idleResume (decision 113): the kernel counter of /sys/power/suspend_stats/success tells a resume', () => {
+  const G = 5;
+  const counter = (c: number, seenAt: number): IdleResumeFacts['stored'] => ({ kind: 'counter', counter: c, seenAt });
+  const unreadableRecord = (seenAt: number): IdleResumeFacts['stored'] => ({ kind: 'unreadable', seenAt });
+  const CAUSE = 'cannot read /sys/power/suspend_stats/success (missing or unreadable)';
+
+  it('the counter did not move: the record is kept and the grace is over', () => {
+    expect(idleResume({ counter: 40, stored: counter(40, NOW - 3600) }, NOW, G)).toEqual({ record: counter(40, NOW - 3600), graceLeftSeconds: 0, note: '' });
+  });
+  it('a counter greater than the stored one is a resume NOW: the grace starts at this pass', () => {
+    expect(idleResume({ counter: 41, stored: counter(40, NOW - 3600) }, NOW, G)).toEqual({ record: counter(41, NOW), graceLeftSeconds: 300, note: '' });
+  });
+  it('two suspends between two passes (37 to 39): one grace, from this pass', () => {
+    expect(idleResume({ counter: 39, stored: counter(37, NOW - 3600) }, NOW, G)).toEqual({ record: counter(39, NOW), graceLeftSeconds: 300, note: '' });
+  });
+  it('no stored record (first pass, or a reboot cleared /run): a resume now', () => {
+    expect(idleResume({ counter: 40, stored: 'absent' }, NOW, G)).toEqual({ record: counter(40, NOW), graceLeftSeconds: 300, note: '' });
+  });
+  it('an unusable stored record: a resume now', () => {
+    expect(idleResume({ counter: 40, stored: null }, NOW, G)).toEqual({ record: counter(40, NOW), graceLeftSeconds: 300, note: '' });
+  });
+  it('a counter LOWER than the stored one (reset, replaced file): treated as a resume, never ignored', () => {
+    expect(idleResume({ counter: 3, stored: counter(40, NOW - 3600) }, NOW, G)).toEqual({ record: counter(3, NOW), graceLeftSeconds: 300, note: '' });
+  });
+  it('the grace counts from the first pass that saw the new value, whole seconds, ends exactly at G minutes', () => {
+    const left = (ago: number): number => idleResume({ counter: 41, stored: counter(41, NOW - ago) }, NOW, G).graceLeftSeconds;
+    expect(left(0)).toBe(300);
+    expect(left(100)).toBe(200);
+    expect(left(299)).toBe(1);
+    expect(left(300)).toBe(0);
+    expect(left(301)).toBe(0);
+  });
+  it('G follows the parameter (1 and 60)', () => {
+    expect(idleResume({ counter: 41, stored: counter(40, NOW - 3600) }, NOW, 1).graceLeftSeconds).toBe(60);
+    expect(idleResume({ counter: 41, stored: counter(40, NOW - 3600) }, NOW, 60).graceLeftSeconds).toBe(3600);
+  });
+  it('a record from the future (the clock went back): the grace restarts from now, bounded by G', () => {
+    expect(idleResume({ counter: 41, stored: counter(41, NOW + 7200) }, NOW, G)).toEqual({ record: counter(41, NOW), graceLeftSeconds: 300, note: '' });
+    expect(idleResume({ counter: { unreadable: CAUSE }, stored: unreadableRecord(NOW + 7200) }, NOW, G).record).toEqual(unreadableRecord(NOW));
+  });
+  it('an unreadable counter with no usable record: a resume now (fail closed), the cause is said on the line', () => {
+    const r = idleResume({ counter: { unreadable: CAUSE }, stored: 'absent' }, NOW, G);
+    expect(r).toEqual({ record: unreadableRecord(NOW), graceLeftSeconds: 300, note: ` (resume detection off: ${CAUSE})` });
+  });
+  it('an unreadable counter that stays unreadable does NOT restart the grace on every pass: the first pass starts it, the next ones keep its start', () => {
+    const r = (ago: number): ReturnType<typeof idleResume> => idleResume({ counter: { unreadable: CAUSE }, stored: unreadableRecord(NOW - ago) }, NOW, G);
+    expect(r(30).record).toEqual(unreadableRecord(NOW - 30));
+    expect(r(30).graceLeftSeconds).toBe(270);
+    expect(r(299).graceLeftSeconds).toBe(1);
+  });
+  it('after G minutes a permanently unreadable counter no longer blocks, and the cause is still on EVERY pass', () => {
+    const r = idleResume({ counter: { unreadable: CAUSE }, stored: unreadableRecord(NOW - 300) }, NOW, G);
+    expect(r.graceLeftSeconds).toBe(0);
+    expect(r.note).toBe(` (resume detection off: ${CAUSE})`);
+    expect(idleResume({ counter: { unreadable: CAUSE }, stored: unreadableRecord(NOW - 86400) }, NOW, G).graceLeftSeconds).toBe(0);
+  });
+  it('a counter that was readable and no longer is: one new grace (a resume cannot be excluded), then the same bound', () => {
+    expect(idleResume({ counter: { unreadable: CAUSE }, stored: counter(40, NOW - 3600) }, NOW, G)).toEqual({ record: unreadableRecord(NOW), graceLeftSeconds: 300, note: ` (resume detection off: ${CAUSE})` });
+  });
+  it('a counter readable again after an unreadable record: adopted as the baseline, NO new grace (the window of the unreadable record is kept)', () => {
+    expect(idleResume({ counter: 40, stored: unreadableRecord(NOW - 400) }, NOW, G)).toEqual({ record: counter(40, NOW - 400), graceLeftSeconds: 0, note: '' });
+    expect(idleResume({ counter: 40, stored: unreadableRecord(NOW - 100) }, NOW, G)).toEqual({ record: counter(40, NOW - 100), graceLeftSeconds: 200, note: '' });
+  });
+  it('refuses a counter that is not a whole number, and a grace out of range, as a programming error', () => {
+    for (const bad of [-1, 1.5, NaN]) expect(() => idleResume({ counter: bad, stored: 'absent' }, NOW, G), String(bad)).toThrow(InstallError);
+    for (const bad of [0, 61, 2.5, NaN]) expect(() => idleResume({ counter: 1, stored: 'absent' }, NOW, bad), String(bad)).toThrow(/wake grace/);
+  });
+  it('the counter file is the one of the kernel', () => {
+    expect(IDLE_RESUME_COUNTER_FILE).toBe('/sys/power/suspend_stats/success');
+  });
+});
+
+describe('idleDecision (decision 113): no automatic suspend during the wake grace', () => {
+  const resumedNow: IdleResumeFacts = { counter: 41, stored: { kind: 'counter', counter: 40, seenAt: NOW - 3600 } };
+  const inGrace = (ago: number): IdleResumeFacts => ({ counter: 41, stored: { kind: 'counter', counter: 41, seenAt: NOW - ago } });
+  const longIdle = (over: Partial<IdleFacts> = {}): IdleFacts => idle(over, 600);
+
+  it('a resume detected at this pass: not idle, wake grace (5 min left), the timer state is cleared, even when every reading says idle for hours', () => {
+    expect(idleDecision(longIdle({ resume: resumedNow }), NOW, MIN)).toEqual({ suspend: false, reason: 'not idle: wake grace (5 min left)', state: null });
+  });
+  it('the minutes left are rounded UP: 299 s left is 5 min, 60 s left is 1 min', () => {
+    const left = (ago: number): string => idleDecision(longIdle({ resume: inGrace(ago) }), NOW, MIN).reason;
+    expect(left(1)).toBe('not idle: wake grace (5 min left)');
+    expect(left(60)).toBe('not idle: wake grace (4 min left)');
+    expect(left(240)).toBe('not idle: wake grace (1 min left)');
+    expect(left(299)).toBe('not idle: wake grace (1 min left)');
+  });
+  it('the grace ends at exactly G minutes; the pass after it only restarts the confirmation (the grace cleared the state)', () => {
+    const over = longIdle({ resume: inGrace(300), state: 'absent' });
+    expect(idleDecision(over, NOW, MIN)).toEqual({ suspend: false, reason: 'idle 0/30 min', state: { since: NOW, last: NOW } });
+  });
+  it('in RDP mode: input idle for hours, a fresh state, still no suspend inside the grace; right after it the confirmation restarts, then it suspends', () => {
+    const rdpFacts = (resume: IdleResumeFacts, state: IdleFacts['state']): IdleFacts => idle({ connections: { rdp: 1, ssh: 0, peer: 0 }, inputIdleSeconds: 3 * 3600, resume, state });
+    const fresh = { since: NOW - 30, last: NOW - 30 };
+    expect(idleDecision(rdpFacts(inGrace(100), fresh), NOW, MIN)).toEqual({ suspend: false, reason: 'not idle: wake grace (4 min left)', state: null });
+    const first = idleDecision(rdpFacts(inGrace(300), 'absent'), NOW, MIN);
+    expect(first.reason).toBe('idle: rdp connected but no input for 180 min (needs 20), confirming at the next check');
+    expect(first.suspend).toBe(false);
+    expect(idleDecision(rdpFacts(inGrace(330), first.state), NOW + 30, MIN).suspend).toBe(true);
+  });
+  it('the grace only restricts: an earlier failing check keeps its own reason (load, input, inhibitor, keep-awake)', () => {
+    expect(idleDecision(longIdle({ resume: resumedNow, load5Hundredths: 99 }), NOW, MIN).reason).toBe('not idle: load 0.99 (limit 0.30)');
+    expect(idleDecision(longIdle({ resume: resumedNow, inhibitors: 1 }), NOW, MIN).reason).toBe('not idle: sleep inhibitor held (block)');
+    expect(idleDecision(longIdle({ resume: resumedNow, inputIdleSeconds: 60 }), NOW, MIN).reason).toBe('not idle: input 1 min ago (needs 30)');
+    expect(idleDecision(longIdle({ resume: resumedNow, keepAwake: null }), NOW, MIN).reason).toBe('not idle: cannot read the keep-awake files');
+  });
+  it('--wake-grace-minutes is the sixth parameter; 1 and 60 are the bounds, anything else is refused', () => {
+    expect(idleDecision(longIdle({ resume: resumedNow }), NOW, MIN, 20, 20, 1).reason).toBe('not idle: wake grace (1 min left)');
+    expect(idleDecision(longIdle({ resume: resumedNow }), NOW, MIN, 20, 20, 60).reason).toBe('not idle: wake grace (60 min left)');
+    for (const bad of [0, 61, 2.5, NaN]) expect(() => idleDecision(longIdle(), NOW, MIN, 20, 20, bad), String(bad)).toThrow(/wake grace/);
+  });
+  it('the counter is unreadable at the first pass: the grace applies once, and the line says why', () => {
+    const cause = 'cannot read /sys/power/suspend_stats/success (missing or unreadable)';
+    const d = idleDecision(longIdle({ resume: { counter: { unreadable: cause }, stored: 'absent' } }), NOW, MIN);
+    expect(d).toEqual({ suspend: false, reason: `not idle: wake grace (5 min left) (resume detection off: ${cause})`, state: null });
+  });
+  it('a counter that stays unreadable never blocks for ever: after the grace the suspend works and EVERY line (not idle, idle, suspending) names the cause', () => {
+    const cause = 'cannot read /sys/power/suspend_stats/success (missing or unreadable)';
+    const resume: IdleResumeFacts = { counter: { unreadable: cause }, stored: { kind: 'unreadable', seenAt: NOW - 3600 } };
+    const note = ` (resume detection off: ${cause})`;
+    expect(idleDecision(longIdle({ resume }), NOW, MIN)).toEqual({ suspend: true, reason: `suspending: idle 600 min${note}`, state: null });
+    expect(idleDecision(idle({ resume }, 12), NOW, MIN).reason).toBe(`idle 12/30 min${note}`);
+    expect(idleDecision(idle({ resume, load5Hundredths: 99 }, 12), NOW, MIN).reason).toBe(`not idle: load 0.99 (limit 0.30)${note}`);
+  });
+  it('a quiet counter leaves every other line untouched (no note, no grace)', () => {
+    expect(idleDecision(longIdle(), NOW, MIN)).toEqual({ suspend: true, reason: 'suspending: idle 600 min', state: null });
+  });
+});
+
+describe('the cadence changes nothing but the delay (decision 113): the same behaviour at 30 s, 1 min and 2 min', () => {
+  // [minutes, rdp, ssh, cadence]: one triple per cadence, plus triples whose cadence comes from another option than the one in use.
+  const triples: Array<[number, number, number, number]> = [
+    [9, 9, 9, 30],
+    [20, 9, 45, 30],
+    [15, 15, 15, 60],
+    [45, 20, 20, 60],
+    [45, 45, 45, 120],
+    [60, 45, 40, 120],
+    [33, 31, 35, 120],
+  ];
+  const PHASES = [0, 1, 7, 15, 29];
+
+  /** Runs idleDecision on every pass of the timer (`phase` seconds after the last input, then every cadence) until it suspends; the delay since the last input. */
+  function firstSuspend(minutes: number, rdp: number, ssh: number, rdpConnected: boolean, phase: number): { delay: number; reasons: string[] } {
+    const cadence = idleCadenceSeconds(minutes, rdp, ssh);
+    const lastInput = NOW;
+    let state: IdleFacts['state'] = 'absent';
+    const reasons: string[] = [];
+    for (let k = -3; k < 100000; k += 1) {
+      const t = lastInput + phase + k * cadence;
+      const input = Math.max(0, t - lastInput);
+      const d = idleDecision(idle({ connections: { rdp: rdpConnected ? 1 : 0, ssh: 0, peer: 0 }, inputIdleSeconds: input, state, audit: { lastActivityEpoch: NOW - 10 * 86400, openHolds: 0 } }), t, minutes, rdp, ssh);
+      reasons.push(d.reason);
+      if (d.suspend) {
+        return { delay: t - lastInput, reasons };
+      }
+      state = d.state === null ? 'absent' : d.state;
+    }
+    throw new Error('never suspended');
+  }
+
+  describe.each(triples)('minutes %i, rdp %i, ssh %i: every %i s', (minutes, rdp, ssh, cadence) => {
+    it('RDP connected: suspends N+cadence to N+2 x cadence after the last input (N = --rdp-minutes), whatever the phase of the timer', () => {
+      expect(idleCadenceSeconds(minutes, rdp, ssh)).toBe(cadence);
+      for (const phase of PHASES) {
+        const { delay, reasons } = firstSuspend(minutes, rdp, ssh, true, phase % cadence);
+        expect(delay, `phase ${phase}`).toBeGreaterThanOrEqual(rdp * 60 + cadence);
+        expect(delay, `phase ${phase}`).toBeLessThan(rdp * 60 + 2 * cadence);
+        expect(reasons.filter((r) => r.startsWith('idle: rdp connected')), 'one confirming pass, then the suspend').toHaveLength(1);
+        const range = idleSuspendDelaySeconds(minutes, rdp, ssh, true);
+        expect(delay).toBeGreaterThanOrEqual(range.fromSeconds);
+        expect(delay).toBeLessThan(range.toSeconds);
+      }
+    });
+    it('no RDP connection: the input must be N min old, then the N-minute timer (about 2N), the same range at every phase', () => {
+      for (const phase of PHASES) {
+        const { delay } = firstSuspend(minutes, rdp, ssh, false, phase % cadence);
+        const range = idleSuspendDelaySeconds(minutes, rdp, ssh, false);
+        expect(delay, `phase ${phase}`).toBeGreaterThanOrEqual(range.fromSeconds);
+        expect(delay, `phase ${phase}`).toBeLessThan(range.toSeconds);
+        expect(delay).toBeGreaterThanOrEqual(2 * minutes * 60);
+      }
+    });
+    it('the N-minute timer is counted in TIME, not in passes: the whole minutes shown are the same at any cadence', () => {
+      const state = { since: NOW - 12 * 60, last: NOW - cadence };
+      expect(idleDecision(idle({ state }), NOW, minutes, rdp, ssh).reason).toBe(minutes <= 12 ? 'suspending: idle 12 min' : `idle 12/${minutes} min`);
+    });
+    it('one missed pass (2 x cadence since the last one) is the same run; a gap above max(300 s, 10 x cadence) restarts the confirmation', () => {
+      const gap = idleGapSeconds(cadence);
+      expect(gap).toBe(Math.max(300, 10 * cadence));
+      const rdpFacts = (last: number): IdleFacts => idle({ connections: { rdp: 1, ssh: 0, peer: 0 }, inputIdleSeconds: 99999, state: { since: NOW - 7200, last } });
+      expect(idleDecision(rdpFacts(NOW - 2 * cadence), NOW, minutes, rdp, ssh).suspend).toBe(true);
+      expect(idleDecision(rdpFacts(NOW - gap), NOW, minutes, rdp, ssh).suspend).toBe(true);
+      const late = idleDecision(rdpFacts(NOW - gap - 1), NOW, minutes, rdp, ssh);
+      expect(late.suspend).toBe(false);
+      expect(late.reason).toContain(`(timer restarted: no check for more than ${gap / 60} min, the box slept or was off)`);
+    });
+  });
+
+  it('idleSuspendDelaySeconds: the exact ranges of the table of the spec', () => {
+    // RDP: [R + c, R + 2c). No RDP: [N + ceil(N*60/c)*c, ... + c).
+    expect(idleSuspendDelaySeconds(30, 20, 20, true)).toEqual({ fromSeconds: 20 * 60 + 60, toSeconds: 20 * 60 + 120 });
+    expect(idleSuspendDelaySeconds(9, 9, 9, true)).toEqual({ fromSeconds: 9 * 60 + 30, toSeconds: 9 * 60 + 60 });
+    expect(idleSuspendDelaySeconds(60, 45, 40, true)).toEqual({ fromSeconds: 45 * 60 + 120, toSeconds: 45 * 60 + 240 });
+    expect(idleSuspendDelaySeconds(9, 9, 9, false)).toEqual({ fromSeconds: 18 * 60, toSeconds: 18 * 60 + 30 });
+    expect(idleSuspendDelaySeconds(30, 20, 20, false)).toEqual({ fromSeconds: 60 * 60, toSeconds: 60 * 60 + 60 });
+    // Cadence 2 min and an odd N: the timer needs the next pass of an even number of minutes.
+    expect(idleSuspendDelaySeconds(45, 45, 45, false)).toEqual({ fromSeconds: 91 * 60, toSeconds: 91 * 60 + 120 });
+    expect(idleSuspendDelaySeconds(60, 45, 40, false)).toEqual({ fromSeconds: 120 * 60, toSeconds: 120 * 60 + 120 });
+  });
+});
+
+describe('the units (decision 113): the cadence is part of the timer text', () => {
+  it('OnUnitActiveSec follows the cadence, AccuracySec=1s keeps systemd from coalescing the 30 s timer, the boot delay stays 2 min', () => {
+    expect(idleSuspendTimerUnit(30)).toContain('OnUnitActiveSec=30s');
+    expect(idleSuspendTimerUnit(60)).toContain('OnUnitActiveSec=1min');
+    expect(idleSuspendTimerUnit(120)).toContain('OnUnitActiveSec=2min');
+    for (const c of [30, 60, 120]) {
+      const text = idleSuspendTimerUnit(c);
+      expect(text).toContain('AccuracySec=1s');
+      expect(text).toContain('OnBootSec=2min');
+      expect(text).toContain('WantedBy=timers.target');
+      expect(text).not.toContain('AccuracySec=10s');
+    }
+    expect(idleSuspendTimerUnit(30)).toContain('check every 30 s');
+    expect(idleSuspendTimerUnit(60)).toContain('check every 1 min');
+    expect(idleSuspendTimerUnit(120)).toContain('check every 2 min');
+    expect(idleSuspendTimerUnit(30)).not.toBe(idleSuspendTimerUnit(60));
+    expect(() => idleSuspendTimerUnit(45)).toThrow(InstallError);
+  });
+  it('the service has an explicit TimeoutStartSec under the shortest cadence (a hung pass cannot block the next ones)', () => {
+    const text = idleSuspendServiceUnit();
+    expect(text).toMatch(/^TimeoutStartSec=25$/m);
+    expect(text).toContain('Type=oneshot');
+  });
+  it('the installed cadence is read back from the timer text, undefined when it cannot be', () => {
+    for (const c of [30, 60, 120] as const) expect(idleSuspendInstalledCadenceSeconds(idleSuspendTimerUnit(c))).toBe(c);
+    expect(idleSuspendInstalledCadenceSeconds('[Timer]\nOnUnitActiveSec=2min\n')).toBe(120);
+    expect(idleSuspendInstalledCadenceSeconds('[Timer]\nOnBootSec=2min\n')).toBeUndefined();
+    expect(idleSuspendInstalledCadenceSeconds('[Timer]\nOnUnitActiveSec=7h\n')).toBeUndefined();
+    expect(idleSuspendInstalledCadenceSeconds('')).toBeUndefined();
+  });
+});
+
+describe('the script (decision 113): version 8, the wake grace and the gap in its text', () => {
+  const mk = (over: Partial<Parameters<typeof idleSuspendScript>[0]> = {}): string => idleSuspendScript({ minutes: 30, rdpMinutes: 20, sshMinutes: 20, wakeGraceMinutes: 5, root: '', configDir: '/home/alice/.config/machine', tools: TOOLS, ...over });
+  it('the marker says version 8, WAKE_GRACE_MINUTES=<n> is read back (undefined for an older script)', () => {
+    expect(mk()).toContain('# managed by machine install idle-suspend, version 8');
+    expect(mk()).toMatch(/^WAKE_GRACE_MINUTES=5$/m);
+    expect(idleSuspendInstalledWakeGraceMinutes(mk({ wakeGraceMinutes: 45 }))).toBe(45);
+    expect(idleSuspendInstalledWakeGraceMinutes('#!/bin/sh\nMINUTES=30\n')).toBeUndefined();
+    expect(idleSuspendInstalledWakeGraceMinutes('WAKE_GRACE_MINUTES=99\n')).toBeUndefined();
+    for (const bad of [0, 61, 2.5, NaN]) expect(() => mk({ wakeGraceMinutes: bad }), String(bad)).toThrow(InstallError);
+  });
+  it('the script has no sleep, reads the kernel counter and keeps its record next to the timer state', () => {
+    const s = mk();
+    expect(s).not.toMatch(/(^|[^A-Za-z_-])sleep [0-9]/m);
+    expect(s).toContain('/sys/power/suspend_stats/success');
+    expect(s).toContain('/run/machine-idle-suspend/resume');
+    expect(s).toContain('wake grace');
+  });
+  it('the gap of the state is the one of the cadence (300 s, 600 s, 1200 s), written as a validated integer', () => {
+    expect(mk({ minutes: 9, rdpMinutes: 9, sshMinutes: 9 })).toMatch(/^GAP_SECONDS=300$/m);
+    expect(mk()).toMatch(/^GAP_SECONDS=600$/m);
+    expect(mk({ minutes: 60, rdpMinutes: 45, sshMinutes: 40 })).toMatch(/^GAP_SECONDS=1200$/m);
   });
 });

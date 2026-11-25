@@ -6,7 +6,10 @@ import {
   deriveInstallState,
   idleSuspendInstalledMinutes,
   idleSuspendInstalledRdpMinutes,
+  idleSuspendInstalledCadenceSeconds,
   idleSuspendInstalledSshMinutes,
+  idleSuspendInstalledWakeGraceMinutes,
+  IDLE_SUSPEND_TIMER_PATH,
   findInstallable,
   stateLabel,
   stateNextSteps,
@@ -80,18 +83,30 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
   let installedRdpMinutes: number | undefined;
   // The same for --ssh-minutes (decisions 109, 111); a script of an older version has none (the default applies).
   let installedSshMinutes: number | undefined;
-  if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined || env.context.sshMinutes === undefined) {
+  // The same for --wake-grace-minutes (decision 113); a script of an older version has none (the default applies).
+  let installedWakeGraceMinutes: number | undefined;
+  if (env.context?.minutes === undefined || env.context.rdpMinutes === undefined || env.context.sshMinutes === undefined || env.context.wakeGraceMinutes === undefined) {
     try {
       const text = env.fs.readText(IDLE_SUSPEND_SCRIPT_PATH);
       installedMinutes = text === undefined ? undefined : idleSuspendInstalledMinutes(text);
       installedRdpMinutes = text === undefined ? undefined : idleSuspendInstalledRdpMinutes(text);
       installedSshMinutes = text === undefined ? undefined : idleSuspendInstalledSshMinutes(text);
+      installedWakeGraceMinutes = text === undefined ? undefined : idleSuspendInstalledWakeGraceMinutes(text);
     } catch {
       // Unreadable: the status of the item reports it, with its cause.
       installedMinutes = undefined;
       installedRdpMinutes = undefined;
       installedSshMinutes = undefined;
+      installedWakeGraceMinutes = undefined;
     }
+  }
+  // The cadence of the timer already installed (decision 113): the plan says when it differs from the one the options give. Unreadable or absent: nothing to compare (the file status says so).
+  let installedCadenceSeconds: number | undefined;
+  try {
+    const timerText = env.fs.readText(IDLE_SUSPEND_TIMER_PATH);
+    installedCadenceSeconds = timerText === undefined ? undefined : idleSuspendInstalledCadenceSeconds(timerText);
+  } catch {
+    installedCadenceSeconds = undefined;
   }
   return {
     ...base,
@@ -103,6 +118,9 @@ export async function measure(env: InstallEnv): Promise<InstallFacts> {
     ...(installedRdpMinutes === undefined ? {} : { installedRdpMinutes }),
     ...(env.context?.sshMinutes === undefined ? {} : { sshMinutes: env.context.sshMinutes }),
     ...(installedSshMinutes === undefined ? {} : { installedSshMinutes }),
+    ...(env.context?.wakeGraceMinutes === undefined ? {} : { wakeGraceMinutes: env.context.wakeGraceMinutes }),
+    ...(installedWakeGraceMinutes === undefined ? {} : { installedWakeGraceMinutes }),
+    ...(installedCadenceSeconds === undefined ? {} : { installedCadenceSeconds }),
   };
 }
 

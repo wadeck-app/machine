@@ -4,14 +4,22 @@ import { InstallError } from './install.js';
 // desktop sessions. Pure: no file, no process. `idleDecision` is the specification of the decision; `idleSuspendScript` generates the shell that
 // takes the same decision on the box (the golden test in machine-cli runs the script on fake inputs and compares it with `idleDecision`).
 
-/** Lower bound of --minutes and --rdp-minutes (decision 106). The timer fires every 2 min, so a value below 2 acts at the first check after it is reached. */
+/** Lower bound of --minutes, --rdp-minutes and --ssh-minutes (decision 106). The timer fires every 30 s, 1 min or 2 min (decision 113): a value below the cadence acts at the first check after it is reached. */
 export const IDLE_MIN_MINUTES = 1;
 export const IDLE_MAX_MINUTES = 1440;
 export const IDLE_DEFAULT_MINUTES = 30;
-/** The timer fires every 2 minutes. */
-export const IDLE_CHECK_SECONDS = 120;
-/** Longer than this since the last check: the box slept or was off (or the timer stopped), the idle timer restarts from zero. */
+/** The three cadences of the timer (decision 113): below 10 min, 10 to 30 min inclusive, above 30 min (the SMALLEST of the three minutes options decides). */
+export type IdleCadenceSeconds = 30 | 60 | 120;
+/** The floor of the gap: longer than max(this, 10 x cadence) since the last check, the box slept or was off (or the timer stopped), the confirmation restarts. Also the age from which an ssh rate sample is stale. */
 export const IDLE_GAP_SECONDS = 300;
+/** `--wake-grace-minutes` (decision 113): after every resume the box is not suspended automatically for that long. */
+export const IDLE_WAKE_GRACE_MIN_MINUTES = 1;
+export const IDLE_WAKE_GRACE_MAX_MINUTES = 60;
+export const IDLE_WAKE_GRACE_DEFAULT_MINUTES = 5;
+/** The kernel counter of the successful suspends (validated on the box: it incremented by 1 per suspend). */
+export const IDLE_RESUME_COUNTER_FILE = '/sys/power/suspend_stats/success';
+/** TimeoutStartSec of the service: under the shortest cadence, so a hung pass is killed before the next one is due (a oneshot has no timeout by default). */
+export const IDLE_SERVICE_TIMEOUT_SECONDS = 25;
 /** The 5-minute load average (hundredths) from which the box is busy. */
 export const IDLE_LOAD_LIMIT_HUNDREDTHS = 30;
 /** A `held` audit entry without its `hold-ended` counts as an open hold for this long (the longest wait of a hold is 1 h). */
@@ -22,8 +30,10 @@ export const IDLE_RDP_PORT = 3389;
 export const IDLE_SSH_PORT = 22;
 export const IDLE_STATE_DIR = '/run/machine-idle-suspend';
 export const IDLE_STATE_FILE = `${IDLE_STATE_DIR}/since`;
+/** The record of the resume detection (decision 113): `<counter> <epoch it was first seen>` or `unreadable <epoch>`. NOT cleared by a not-idle verdict. */
+export const IDLE_RESUME_FILE = `${IDLE_STATE_DIR}/resume`;
 export const IDLE_KEEP_AWAKE_RUN = '/run/machine-keep-awake';
-export const IDLE_SUSPEND_VERSION = 7;
+export const IDLE_SUSPEND_VERSION = 8;
 /** `--rdp-minutes` default: the input idle time from which an established RDP connection no longer counts as activity (decision 103). */
 export const IDLE_RDP_DEFAULT_MINUTES = 20;
 /** `--ssh-minutes` default: the input idle time of the TTY of an ssh session from which it no longer counts as activity (decision 111). */
@@ -93,7 +103,25 @@ export interface IdleFacts {
    * `'no-session'`: loginctl lists no such session.
    */
   ignoredDisplays: number[];
+  /** Decision 113: what the resume detection read (read at EVERY pass, before any check). */
+  resume: IdleResumeFacts;
 }
+
+/** The record the resume detection leaves in IDLE_RESUME_FILE. */
+export type IdleResumeRecord = { kind: 'counter'; counter: number; seenAt: number } | { kind: 'unreadable'; seenAt: number };
+
+export interface IdleResumeFacts {
+  /** The kernel counter of the successful suspends, or why it cannot be read (missing, not a whole number): then a resume is assumed once (fail closed). */
+  counter: number | { unreadable: string };
+  /** The record of the previous pass: `absent` (first pass, or /run was cleared by a reboot), `null` when it exists but cannot be used. */
+  stored: IdleResumeRecord | 'absent' | null;
+}
+
+/** The causes of an unreadable counter, shared by the script and the tests. */
+export const IDLE_RESUME_CAUSE = {
+  unreadable: `cannot read ${IDLE_RESUME_COUNTER_FILE} (missing or unreadable)`,
+  notNumber: `${IDLE_RESUME_COUNTER_FILE} does not hold a whole number`,
+} as const;
 
 export interface IdleDecision {
   suspend: boolean;
@@ -125,8 +153,106 @@ export const IDLE_REASON = {
 const RESTART = {
   unreadable: ' (timer restarted: the state file is unreadable)',
   clock: ' (timer restarted: the clock went back)',
-  gap: ' (timer restarted: no check for more than 5 min, the box slept or was off)',
+  gap: (gapSeconds: number): string => ` (timer restarted: no check for more than ${gapSeconds / 60} min, the box slept or was off)`,
 } as const;
+
+/** The cadence of the timer from the SMALLEST of the three minutes options (decision 113): below 10 min every 30 s, 10 to 30 inclusive every 1 min, above 30 every 2 min. */
+export function idleCadenceSeconds(minutes: number, rdpMinutes: number, sshMinutes: number): IdleCadenceSeconds {
+  checkMinutes(minutes);
+  checkMinutes(rdpMinutes);
+  checkMinutes(sshMinutes);
+  const smallest = Math.min(minutes, rdpMinutes, sshMinutes);
+  return smallest < 10 ? 30 : smallest <= 30 ? 60 : 120;
+}
+
+/** A gap above this many seconds since the last pass restarts the confirmation: max(300 s, 10 x cadence), so 300, 600 or 1200 s. */
+export function idleGapSeconds(cadenceSeconds: number): number {
+  if (cadenceSeconds !== 30 && cadenceSeconds !== 60 && cadenceSeconds !== 120) {
+    throw new InstallError(`internal: the cadence must be 30, 60 or 120 seconds, got ${String(cadenceSeconds)}`);
+  }
+  return Math.max(IDLE_GAP_SECONDS, 10 * cadenceSeconds);
+}
+
+/** `30 s`, `1 min`, `2 min`. */
+export function idleCadenceText(cadenceSeconds: number): string {
+  return cadenceSeconds < 60 ? `${cadenceSeconds} s` : `${cadenceSeconds / 60} min`;
+}
+
+/**
+ * The delay between the last input and the suspend, as a half-open range in seconds, for a box that stays idle from then on. With an RDP connection
+ * (N = --rdp-minutes): the first pass at or after N is the confirming one, the next suspends: [N + c, N + 2c). Without one the input must be N = --minutes old,
+ * then the N-minute timer starts at that first pass and ends at the first pass at or after N minutes: [N + ceil(N / c) x c, + c).
+ */
+export function idleSuspendDelaySeconds(minutes: number, rdpMinutes: number, sshMinutes: number, rdpConnected: boolean): { fromSeconds: number; toSeconds: number } {
+  const c = idleCadenceSeconds(minutes, rdpMinutes, sshMinutes);
+  if (rdpConnected) {
+    return { fromSeconds: rdpMinutes * 60 + c, toSeconds: rdpMinutes * 60 + 2 * c };
+  }
+  const n = minutes * 60;
+  const from = n + Math.ceil(n / c) * c;
+  return { fromSeconds: from, toSeconds: from + c };
+}
+
+const minutesText = (seconds: number): string => {
+  const m = seconds / 60;
+  return Number.isInteger(m) ? String(m) : m.toFixed(1);
+};
+
+/** `suspends 20.5 to 21 min after the last input with an RDP connection, 60 to 61 min without one (checked every 1 min)`: what `--dry-run`, `--check` and the status print. */
+export function idleSuspendDelayText(minutes: number, rdpMinutes: number, sshMinutes: number): string {
+  const rdp = idleSuspendDelaySeconds(minutes, rdpMinutes, sshMinutes, true);
+  const local = idleSuspendDelaySeconds(minutes, rdpMinutes, sshMinutes, false);
+  return `suspends ${minutesText(rdp.fromSeconds)} to ${minutesText(rdp.toSeconds)} min after the last input with an RDP connection, ${minutesText(local.fromSeconds)} to ${minutesText(local.toSeconds)} min without one (checked every ${idleCadenceText(idleCadenceSeconds(minutes, rdpMinutes, sshMinutes))})`;
+}
+
+/** `--wake-grace-minutes` as typed: whole decimal digits, 1 to 60, no leading zero (decision 113). */
+export function parseIdleWakeGraceMinutes(text: string): number {
+  const n = /^[1-9][0-9]?$/.test(text) ? Number(text) : NaN;
+  if (!Number.isInteger(n) || n < IDLE_WAKE_GRACE_MIN_MINUTES || n > IDLE_WAKE_GRACE_MAX_MINUTES) {
+    throw new InstallError(`--wake-grace-minutes must be a whole number of minutes from ${IDLE_WAKE_GRACE_MIN_MINUTES} to ${IDLE_WAKE_GRACE_MAX_MINUTES} (default ${IDLE_WAKE_GRACE_DEFAULT_MINUTES}), got ${JSON.stringify(text.slice(0, 20))}: for example \`machine install idle-suspend --wake-grace-minutes 5\``);
+  }
+  return n;
+}
+
+function checkWakeGrace(minutes: number): void {
+  if (!Number.isInteger(minutes) || minutes < IDLE_WAKE_GRACE_MIN_MINUTES || minutes > IDLE_WAKE_GRACE_MAX_MINUTES) {
+    throw new InstallError(`the wake grace must be a whole number of minutes from ${IDLE_WAKE_GRACE_MIN_MINUTES} to ${IDLE_WAKE_GRACE_MAX_MINUTES}, got ${String(minutes)}`);
+  }
+}
+
+/**
+ * Resume detection (decision 113). A kernel counter greater than the stored one (or lower: a reset), no usable record, or a counter that cannot be read is
+ * a resume NOW: the grace starts at this pass (at most one cadence after the real wake). Unreadable counter: the grace applies ONCE (the record
+ * `unreadable` keeps the start of that grace, so a permanently unreadable counter blocks for the grace only and is said on every line afterwards); a counter
+ * readable again after it is adopted as the baseline without a new grace. A record from the future (the clock went back) restarts the grace from now.
+ */
+export function idleResume(facts: IdleResumeFacts, now: number, wakeGraceMinutes: number): { record: IdleResumeRecord; graceLeftSeconds: number; note: string } {
+  checkWakeGrace(wakeGraceMinutes);
+  if (!Number.isInteger(now) || now < 0) {
+    throw new InstallError(`the clock must be a whole number of seconds since 1970, got ${String(now)}`);
+  }
+  const { counter, stored } = facts;
+  if (typeof counter === 'number' && (!Number.isInteger(counter) || counter < 0)) {
+    throw new InstallError(`the suspend counter must be a whole number, got ${String(counter)}`);
+  }
+  const usable = stored === 'absent' || stored === null ? undefined : stored;
+  let record: IdleResumeRecord;
+  let note = '';
+  if (typeof counter === 'object') {
+    record = { kind: 'unreadable', seenAt: usable?.kind === 'unreadable' ? usable.seenAt : now };
+    note = ` (resume detection off: ${counter.unreadable})`;
+  } else if (usable === undefined) {
+    record = { kind: 'counter', counter, seenAt: now };
+  } else if (usable.kind === 'unreadable') {
+    record = { kind: 'counter', counter, seenAt: usable.seenAt };
+  } else {
+    record = { kind: 'counter', counter, seenAt: counter === usable.counter ? usable.seenAt : now };
+  }
+  if (record.seenAt > now) {
+    record = { ...record, seenAt: now };
+  }
+  return { record, graceLeftSeconds: Math.max(0, record.seenAt + wakeGraceMinutes * 60 - now), note };
+}
 
 const hundredths = (h: number): string => `${Math.floor(h / 100)}.${String(h % 100).padStart(2, '0')}`;
 
@@ -172,16 +298,23 @@ export function parseLoadHundredths(text: string): number | null {
 
 /**
  * THE decision. The checks run in a fixed order and the first that fails names the reason; every unreadable input is "not idle". When all pass the
- * timer runs: it starts at 0, restarts when the clock went back, when the last check is older than IDLE_GAP_SECONDS (the box slept: a wake for a short
- * run must not suspend again at once) or when the state file is unusable, and suspends once `minutes` whole minutes have passed.
+ * timer runs: it starts at 0, restarts when the clock went back, when the last check is older than idleGapSeconds(cadence) = max(300 s, 10 x cadence) (the box
+ * slept or the timer stopped: a wake for a short run must not suspend again at once) or when the state file is unusable, and suspends once `minutes` whole
+ * minutes have passed. Decision 113: the resume itself is detected by the kernel counter (idleResume) and nothing suspends during the wake grace; the
+ * confirmation is the NEXT pass, whatever the cadence (every count is in seconds, never in passes).
  */
-export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdpMinutes: number = IDLE_RDP_DEFAULT_MINUTES, sshMinutes: number = IDLE_SSH_DEFAULT_MINUTES): IdleDecision {
-  checkMinutes(minutes);
-  checkMinutes(rdpMinutes);
-  checkMinutes(sshMinutes);
+export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdpMinutes: number = IDLE_RDP_DEFAULT_MINUTES, sshMinutes: number = IDLE_SSH_DEFAULT_MINUTES, wakeGraceMinutes: number = IDLE_WAKE_GRACE_DEFAULT_MINUTES): IdleDecision {
+  const cadence = idleCadenceSeconds(minutes, rdpMinutes, sshMinutes);
   if (!Number.isInteger(now) || now < 0) {
     throw new InstallError(`the clock must be a whole number of seconds since 1970, got ${String(now)}`);
   }
+  // Decision 113: the resume detection runs at EVERY pass; its note (an unreadable counter) ends every line, the grace is checked after the other checks.
+  const resume = idleResume(facts.resume, now, wakeGraceMinutes);
+  const d = decide(facts, now, minutes, rdpMinutes, sshMinutes, resume.graceLeftSeconds, idleGapSeconds(cadence));
+  return resume.note === '' ? d : { ...d, reason: `${d.reason}${resume.note}` };
+}
+
+function decide(facts: IdleFacts, now: number, minutes: number, rdpMinutes: number, sshMinutes: number, graceLeftSeconds: number, gapSeconds: number): IdleDecision {
   const notIdle = (reason: string): IdleDecision => ({ suspend: false, reason: `not idle: ${reason}`, state: null });
   if (facts.keepAwake === null) {
     return notIdle(IDLE_REASON.keepAwakeUnreadable);
@@ -292,6 +425,10 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   if (facts.inhibitors > 0) {
     return notIdle(IDLE_REASON.inhibitor);
   }
+  // Decision 113: after a resume (xprintidle counts the sleep, so every reading says idle) nothing suspends for the grace; the state is cleared like any not-idle verdict.
+  if (graceLeftSeconds > 0) {
+    return notIdle(`wake grace (${Math.ceil(graceLeftSeconds / 60)} min left)`);
+  }
 
   // RDP mode: the input idle time is the clock, so there is no timer on top; the state only proves that the other checks passed on the previous check too.
   const rdpIdle = `rdp connected but no input for ${typeof input === 'number' ? Math.floor(input / 60) : 0} min (needs ${rdpMinutes})`;
@@ -310,8 +447,8 @@ export function idleDecision(facts: IdleFacts, now: number, minutes: number, rdp
   if (s.since > now || s.last > now) {
     return restart(RESTART.clock);
   }
-  if (now - s.last > IDLE_GAP_SECONDS) {
-    return restart(RESTART.gap);
+  if (now - s.last > gapSeconds) {
+    return restart(RESTART.gap(gapSeconds));
   }
   if (rdpMode) {
     return { suspend: true, reason: `suspending: ${rdpIdle}${ignored}${sshNote}`, state: null };
@@ -331,6 +468,8 @@ export interface IdleScriptOptions {
   rdpMinutes: number;
   /** The input idle time of an ssh tty from which the session no longer counts as activity (decision 111). */
   sshMinutes: number;
+  /** Decision 113: after every resume the script does not suspend for that long (1 to 60). */
+  wakeGraceMinutes: number;
   /** '' in the shipped script. A relative prefix put before EVERY path the script reads or runs: only the golden test sets it. */
   root: string;
   /** The configuration folder of machine of the owner: the audit log, the daemon port file and the keep-awake file are read there. */
@@ -369,10 +508,19 @@ export function idleSuspendInstalledRdpMinutes(script: string): number | undefin
   return Number.isInteger(n) && n >= IDLE_MIN_MINUTES && n <= IDLE_MAX_MINUTES ? n : undefined;
 }
 
+/** The wake grace minutes the installed script was generated with; undefined for a script of an older version (no `WAKE_GRACE_MINUTES=` line). */
+export function idleSuspendInstalledWakeGraceMinutes(script: string): number | undefined {
+  const m = /^WAKE_GRACE_MINUTES=([0-9]{1,2})$/m.exec(script);
+  const n = m === null ? NaN : Number(m[1]);
+  return Number.isInteger(n) && n >= IDLE_WAKE_GRACE_MIN_MINUTES && n <= IDLE_WAKE_GRACE_MAX_MINUTES ? n : undefined;
+}
+
 export function idleSuspendScript(o: IdleScriptOptions): string {
   checkMinutes(o.minutes);
   checkMinutes(o.rdpMinutes);
   checkMinutes(o.sshMinutes);
+  checkWakeGrace(o.wakeGraceMinutes);
+  const gapSeconds = idleGapSeconds(idleCadenceSeconds(o.minutes, o.rdpMinutes, o.sshMinutes));
   if (!isSafeRoot(o.root)) {
     throw new InstallError(`internal: the test root ${JSON.stringify(o.root.slice(0, 40))} is not a safe relative path`);
   }
@@ -388,13 +536,15 @@ export function idleSuspendScript(o: IdleScriptOptions): string {
   const ts = String.raw`\{"seq":[0-9]+,"prev":"[0-9a-f]+","entry":\{"ts":"([^"]*)","event":"`;
   return String.raw`#!/bin/sh
 ${marker}
-# Suspends this box once it has been idle for MINUTES minutes. Run as root by machine-idle-suspend.timer every 2 minutes.
+# Suspends this box once it has been idle for MINUTES minutes. Run as root by machine-idle-suspend.timer every 30 s, 1 min or 2 min (the smallest of the three minutes below decides, decision 113).
 # Generated by "machine install idle-suspend --minutes <n>": do not edit (the next install rewrites it). See idle-suspend.md.
 # EVERY input that cannot be read means "not idle": this script never suspends on an error.
 ROOT='${o.root}'
 MINUTES=${o.minutes}
 RDP_MINUTES=${o.rdpMinutes}
 SSH_MINUTES=${o.sshMinutes}
+WAKE_GRACE_MINUTES=${o.wakeGraceMinutes}
+GAP_SECONDS=${gapSeconds}
 DATE='${t.date}'
 SS='${t.ss}'
 INHIBIT='${t.systemdInhibit}'
@@ -409,16 +559,64 @@ KEEP_AWAKE_USER='${o.configDir}/keep-awake'
 KEEP_AWAKE_RUN='${IDLE_KEEP_AWAKE_RUN}'
 STATE_DIR='${IDLE_STATE_DIR}'
 STATE_FILE='${IDLE_STATE_FILE}'
+RESUME_FILE='${IDLE_RESUME_FILE}'
+RESUME_COUNTER='${IDLE_RESUME_COUNTER_FILE}'
 
+# resume_note ends every line of the pass once the resume detection is off (decision 113): the cause is never silent.
+resume_note=''
 log() {
-  printf '%s\n' "$1"
-  "$ROOT$LOGGER" -t ${IDLE_LOG_TAG} -- "$1" >/dev/null 2>&1
+  printf '%s\n' "$1$resume_note"
+  "$ROOT$LOGGER" -t ${IDLE_LOG_TAG} -- "$1$resume_note" >/dev/null 2>&1
 }
 clear_state() { rm -f -- "$ROOT$STATE_FILE"; }
 not_idle() { clear_state; log "not idle: $1"; exit 0; }
 
 now=$("$ROOT$DATE" +%s 2>/dev/null)
 case $now in ''|*[!0-9]*) log "cannot read the clock (date failed): not suspending"; exit 1 ;; esac
+
+# (r) Decision 113: resume detection, at EVERY pass before any check. The kernel counter of the successful suspends is compared with the record of the previous pass
+# (<counter> <epoch it was first seen>, or "unreadable <epoch>"). A greater, lower or unrecorded counter is a resume NOW: the wake grace starts at this pass (at most one cadence
+# after the real wake). An unreadable counter is a resume ONCE: the record "unreadable" keeps the start of that grace, so it never blocks for ever, and the cause ends every line.
+resume_cause=''
+resume_counter=$(cat -- "$ROOT$RESUME_COUNTER" 2>/dev/null) || resume_cause="${IDLE_RESUME_CAUSE.unreadable}"
+if [ -z "$resume_cause" ]; then
+  printf '%s\n' "$resume_counter" | grep -Eq '^(0|[1-9][0-9]{0,11})$' || resume_cause="${IDLE_RESUME_CAUSE.notNumber}"
+fi
+stored_kind=absent
+stored_counter=''
+stored_seen=''
+if [ -e "$ROOT$RESUME_FILE" ]; then
+  stored_kind=bad
+  if stored_text=$(cat -- "$ROOT$RESUME_FILE" 2>/dev/null); then
+    if printf '%s\n' "$stored_text" | grep -Eq '^[0-9]{1,12} [0-9]{1,12}$'; then
+      read -r stored_counter stored_seen <<EOF
+$stored_text
+EOF
+      stored_kind=counter
+    elif printf '%s\n' "$stored_text" | grep -Eq '^unreadable [0-9]{1,12}$'; then
+      read -r stored_word stored_seen <<EOF
+$stored_text
+EOF
+      stored_kind=unreadable
+    fi
+  fi
+fi
+if [ -n "$resume_cause" ]; then
+  resume_note=" (resume detection off: $resume_cause)"
+  if [ "$stored_kind" = unreadable ]; then resume_seen=$stored_seen; else resume_seen=$now; fi
+  resume_record=unreadable
+else
+  case $stored_kind in
+    counter) if [ "$resume_counter" -eq "$stored_counter" ]; then resume_seen=$stored_seen; else resume_seen=$now; fi ;;
+    unreadable) resume_seen=$stored_seen ;;
+    *) resume_seen=$now ;;
+  esac
+  resume_record=$resume_counter
+fi
+if [ "$resume_seen" -gt "$now" ]; then resume_seen=$now; fi
+mkdir -p -- "$ROOT$STATE_DIR" 2>/dev/null || { log "cannot create $STATE_DIR: not suspending"; exit 1; }
+{ printf '%s %s\n' "$resume_record" "$resume_seen" > "$ROOT$RESUME_FILE"; } 2>/dev/null || { log "cannot write $RESUME_FILE: not suspending"; exit 1; }
+grace_left=$((resume_seen + WAKE_GRACE_MINUTES * 60 - now))
 
 # (a) keep-awake files: any content keeps the box awake; "until <epoch>" (or "keep awake until <epoch>") only until then.
 check_keep_awake() {
@@ -698,6 +896,8 @@ fi
 inhibitors=$("$ROOT$INHIBIT" --list --no-legend --no-pager 2>/dev/null) || not_idle "${IDLE_REASON.inhibitorsUnreadable}"
 blocking=$(printf '%s\n' "$inhibitors" | grep -Ec '(^|[^[:alnum:]_-])sleep([^[:alnum:]_-]|$).*[[:space:]]block[[:space:]]*$')
 [ "$blocking" = 0 ] || not_idle "${IDLE_REASON.inhibitor}"
+# Decision 113: no automatic suspend during the wake grace (xprintidle counts the sleep, so every reading says idle right after a wake).
+if [ "$grace_left" -gt 0 ]; then not_idle "wake grace ($(( (grace_left + 59) / 60 )) min left)"; fi
 
 # Idle now: the timer. The state file holds "<since> <last check>" in epoch seconds.
 mkdir -p -- "$ROOT$STATE_DIR" 2>/dev/null || { log "cannot create $STATE_DIR: not suspending"; exit 1; }
@@ -729,7 +929,7 @@ case $state in
   bad) restart '${RESTART.unreadable}' ;;
 esac
 if [ "$state_since" -gt "$now" ] || [ "$state_last" -gt "$now" ]; then restart '${RESTART.clock}'; fi
-if [ $((now - state_last)) -gt ${IDLE_GAP_SECONDS} ]; then restart '${RESTART.gap}'; fi
+if [ $((now - state_last)) -gt $GAP_SECONDS ]; then restart '${RESTART.gap(gapSeconds)}'; fi
 suspend_now() {
   clear_state
   log "$1"
@@ -755,6 +955,8 @@ export function idleSuspendServiceUnit(): string {
     '[Service]',
     'Type=oneshot',
     `ExecStart=${IDLE_SUSPEND_SCRIPT_PATH}`,
+    // A oneshot has no start timeout by default: a hung pass (a stuck xprintidle) would stop every later pass. Under the shortest cadence (30 s), so the next pass can start.
+    `TimeoutStartSec=${IDLE_SERVICE_TIMEOUT_SECONDS}`,
     // The script writes its decision to the journal itself (logger -t).
     'StandardOutput=null',
     'Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -762,20 +964,34 @@ export function idleSuspendServiceUnit(): string {
   ].join('\n');
 }
 
-export function idleSuspendTimerUnit(): string {
+/** `30s`, `1min`, `2min`: the systemd spelling of a cadence. */
+const systemdSpan = (cadenceSeconds: number): string => (cadenceSeconds < 60 ? `${cadenceSeconds}s` : `${cadenceSeconds / 60}min`);
+
+/**
+ * The timer (decision 113). OnUnitActiveSec is relative to the last time the service was activated (systemd.timer(5)), so the passes are one cadence apart from start to start;
+ * OnBootSec=2min runs the first pass after the boot. AccuracySec=1s: systemd may delay an elapse by up to AccuracySec to coalesce wakeups, and the default of 1 min would swallow the 30 s cadence.
+ */
+export function idleSuspendTimerUnit(cadenceSeconds: number): string {
+  idleGapSeconds(cadenceSeconds);
   return [
     marker,
     '# Written by `machine install idle-suspend`; `machine install idle-suspend --remove` removes it.',
     '[Unit]',
-    'Description=machine: check every 2 minutes whether this box is idle',
+    `Description=machine: check every ${idleCadenceText(cadenceSeconds)} whether this box is idle`,
     '',
     '[Timer]',
     'OnBootSec=2min',
-    `OnUnitActiveSec=${IDLE_CHECK_SECONDS / 60}min`,
-    'AccuracySec=10s',
+    `OnUnitActiveSec=${systemdSpan(cadenceSeconds)}`,
+    'AccuracySec=1s',
     '',
     '[Install]',
     'WantedBy=timers.target',
     '',
   ].join('\n');
+}
+
+/** The cadence written in the installed timer (`OnUnitActiveSec=30s|1min|2min`); undefined when the text has none of the three. */
+export function idleSuspendInstalledCadenceSeconds(timer: string): IdleCadenceSeconds | undefined {
+  const m = /^OnUnitActiveSec=(30s|1min|2min)$/m.exec(timer);
+  return m === null ? undefined : m[1] === '30s' ? 30 : m[1] === '1min' ? 60 : 120;
 }

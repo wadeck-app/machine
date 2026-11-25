@@ -185,14 +185,14 @@ Commands:
                                      running (--no-start: register only); disable removes it; status shows
                                      whether the daemon runs, whether the job exists, its command, the form registered (staged launcher, staged launcher through a wscript wrapper on Windows, or development node + bundle) and whether it is up to date (exit 0 either way).
                                      It never runs \`orch install\`: if orch does not start at login, run it yourself
-  install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <1..1440>] [--rdp-minutes <1..1440>] [--ssh-minutes <1..1440>]
+  install [<id> | status] [--dry-run | --check | --refresh | --remove] [--yes] [--minutes <1..1440>] [--rdp-minutes <1..1440>] [--ssh-minutes <1..1440>] [--wake-grace-minutes <1..60>]
                                      set up an item on THIS machine, a LOCAL command run in a terminal on it (never remote, never by the daemon).
                                      Without an id (or \`install status\`): lists what can be installed, where, and its state here. \`install suspend\` (Linux only): the root-owned script
                                      /usr/local/bin/machine-suspend and a sudoers rule for the ONE command \`systemctl suspend\`, written through sudo with
                                      YOUR password (typed to sudo, never read by machine); prints every file and command, then runs them (no y/N question: sudo's password is the confirmation); idempotent;
                                      --dry-run changes nothing, --check reports the state (exit 0 only when installed and up to date), --refresh writes
                                      everything again (repairs a file changed by hand), --remove removes exactly what it installed and checks it. Once allowed in the default list, every trusted peer can suspend this machine
-                                     \`install idle-suspend [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>]\` (Linux only): a root systemd timer that suspends this machine by itself after n minutes (default 30; 20 min of no input when an RDP connection is open, 20 min of no input on the tty of an ssh session) with no
+                                     \`install idle-suspend [--minutes <n>] [--rdp-minutes <n>] [--ssh-minutes <n>] [--wake-grace-minutes <n>]\` (Linux only): a root systemd timer (every 30 s, 1 min or 2 min from the smallest of the three minutes) that suspends this machine by itself after n minutes (default 30; 20 min of no input when an RDP connection is open, 20 min of no input on the tty of an ssh session; never within 5 min after a resume) with no
                                      machine peer connection, keyboard/mouse input idle (needs xprintidle), no machine request, low load, no sleep inhibitor and no keep-awake file; a disconnected desktop session does not count; decisions in the journal (journalctl -t machine-idle-suspend)
   join --resume [--timeout <seconds>] [--yes-final-code "<security code>"]   (quote the code: it has spaces)
                                      continue after Ctrl-C or a timeout with the saved token (posts a new
@@ -463,6 +463,7 @@ function parse(argv: string[]): Parsed {
     else if (a === '--minutes') out.minutes = valueOf('--minutes');
     else if (a === '--rdp-minutes') out.rdpMinutes = valueOf('--rdp-minutes');
     else if (a === '--ssh-minutes') out.sshMinutes = valueOf('--ssh-minutes');
+    else if (a === '--wake-grace-minutes') out.wakeGraceMinutes = valueOf('--wake-grace-minutes');
     else if (a === '--prompt-timeout') out.promptTimeout = valueOf('--prompt-timeout');
     else if (a === '--yes-final-code') {
       // The security code has five groups of five digits: typed without quotes the shell splits it, the groups are one value again.

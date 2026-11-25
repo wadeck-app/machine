@@ -28,21 +28,22 @@ State first, no generic text repeated, lines cut to the terminal width (the `mac
 suspend  installed, up to date
   lets `machine run` suspend this box (one sudoers rule); wake: `machine wake`
 idle-suspend  installed, up to date
-  (suspends after 5 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s))
-  suspends this box by itself when really idle (root timer, every 2 min)
+  (suspends after 5 min idle (RDP: 20 min, SSH: 20 min, no tty: 2048 B/s, wake grace: 5 min, checked every 30 s))
+  suspends this box by itself when really idle (root timer, every 30 s to 2 min)
   note: xprintidle missing, input idleness is not checked, and an RDP connection counts as activity:
     sudo apt install xprintidle
+  note: suspends 5.5 to 6 min after the last input with an RDP connection, 10 to 10.5 min without one (checked every 30 s)
   last: 18:13:56 not idle: rdp connected (input 3 min ago, needs 20) (3 min ago)
 ```
 
 - `last:` and `last decision:` are wrapped on indented lines, never cut (the cause is at the end of the line; a word longer than the width is broken).
-- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decisions 102 to 105); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
+- `note:` lines are what this machine lacks for the item to work fully (idle-suspend: xprintidle, decisions 102 to 105; the computed delay; an installed timer whose cadence differs from the one the options give, decision 113); read-only probe (`command -v`), never installed by `machine install`. Also in `--dry-run`, `--check` and `--json` (`details`).
 
 - `last:` is the journal line without host, tag and pid, in local time with its age; a line that does not parse is shown whole; an unreadable journal says so and names the `sudo` command. `--check` and `machine status` use the same parsed text.
 - `not installed`, `partial`, `outdated`, `foreign` add `next:` (and `missing:`). A platform that cannot run it is one line: `<id>  not supported here (platforms: linux)`; a supported platform whose plan cannot be built (missing tool) adds the cause and the fix, wrapped.
 - The one-line summary is `Installable.summaryLine` (machine-core, at most 80 characters, tested).
 
-`--minutes <n>`, `--rdp-minutes <n>` (decision 103, default 20) and `--ssh-minutes <n>` (decisions 109 and 111, default 20: input idle time of an ssh tty; a login without a tty is judged by its rate, fixed threshold 2048 B/s) (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside 1..1440) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
+`--minutes <n>`, `--rdp-minutes <n>` (decision 103, default 20), `--ssh-minutes <n>` (decisions 109 and 111, default 20: input idle time of an ssh tty; a login without a tty is judged by its rate, fixed threshold 2048 B/s) and `--wake-grace-minutes <n>` (decision 113, default 5, 1..60: no automatic suspend for that long after a resume; the timer cadence of 30 s, 1 min or 2 min follows the smallest of the three minutes, see `idle-suspend.md`) (`idle-suspend` only; usage error 2 elsewhere, with `--check`, `--remove`, `status`, or outside the range) goes with install, `--refresh` and `--dry-run`. `--check` cannot be combined with another flag; `--refresh` and `--remove` exclude each other; `--dry-run` goes with install, `--refresh` and `--remove`. `status` takes only `--json`.
 
 Unsupported platform: `not supported on <platform> yet (supported: linux)`, exit 1, nothing run. Unknown id: exit 2.
 
