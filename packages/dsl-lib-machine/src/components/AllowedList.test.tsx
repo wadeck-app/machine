@@ -42,21 +42,11 @@ function page(over: Partial<AllowedPageData> = {}): AllowedPageData {
   return { machine: { uuid: 'u1', name: 'desktop' }, entryCount: 5, machineCount: 2, machines: [installed, signed, empty, broken], warnings: [], ...over };
 }
 
-let urls: string[];
-let answer: () => unknown;
+// The page (allowed.yaml) reads the route and passes the data: the component is given it as a prop.
+let answer: () => AllowedPageData;
 
 beforeEach(() => {
-  urls = [];
   answer = () => page();
-  const fetcher = async (url: string) => {
-    urls.push(url);
-    const result = answer();
-    if (result instanceof Error) {
-      throw result;
-    }
-    return result;
-  };
-  Object.defineProperty(globalThis, '__APP_CORE_SHELL__', { value: { elevate: async () => undefined, fetcher }, configurable: true, writable: true });
 });
 afterEach(() => {
   Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
@@ -70,10 +60,9 @@ const ready = async (): Promise<void> => {
 const commands = (): string[] => within(screen.getByRole('table')).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[1]?.textContent ?? '');
 
 describe('the tabs', () => {
-  it('asks the allowed route once and shows one tab per machine, named with its entry count; no machine filter, no summary, no change note', async () => {
-    render(<AllowedList />);
+  it('shows one tab per machine, named with its entry count; no machine filter, no summary, no change note', async () => {
+    render(<AllowedList data={answer()} />);
     await ready();
-    expect(urls).toEqual(['GET /api/modules/machine/allowed']);
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['desktop (3)', 'laptop (2)', 'nas (0)', 'box (0) - unreadable policy']);
     expect(screen.queryByRole('combobox', { name: 'Machine' })).toBeNull();
     expect(screen.queryByText(/entries on/)).toBeNull();
@@ -81,7 +70,7 @@ describe('the tabs', () => {
   });
 
   it('shows ONE table at a time, the one of the first machine that has entries; the tab is selected', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(screen.getAllByRole('table')).toHaveLength(1);
     expect(tab(/^desktop/)).toHaveAttribute('aria-selected', 'true');
@@ -90,7 +79,7 @@ describe('the tabs', () => {
 
   it('arrow keys move between tabs and show the table of the focused one', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     tab(/^desktop/).focus();
     await user.keyboard('{ArrowRight}');
@@ -99,40 +88,39 @@ describe('the tabs', () => {
     expect(screen.queryByText('echo recent')).toBeNull();
   });
 
-  it('keeps the chosen tab when the page is re-read', async () => {
+  it('keeps the chosen tab when the page is re-read (new data)', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    const { rerender } = render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^laptop/));
-    await user.click(screen.getByRole('button', { name: 'Refresh' }));
-    await waitFor(() => expect(urls).toHaveLength(2));
+    rerender(<AllowedList data={page()} />);
     expect(tab(/^laptop/)).toHaveAttribute('aria-selected', 'true');
   });
 });
 
 describe('the table of a machine', () => {
   it('has the primary columns only: command, shell, lifetime, last used', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent?.trim()).filter((t) => t !== '')).toEqual(['Command', 'Shell', 'Lifetime', 'Last used']);
   });
 
   it('is sorted by last use, most recent first, and an entry with no known use comes last', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(commands()).toEqual(['echo recent', 'echo old', 'dir /b']);
   });
 
   it('the sort button of a column re-sorts the table (command: ascending)', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(screen.getByRole('button', { name: 'Sort by Command' }));
     expect(commands()).toEqual(['dir /b', 'echo old', 'echo recent']);
   });
 
   it('shows the last use as text, with the exact moment as tooltip; an unknown one says why in words and in its tooltip', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     const recent = screen.getByText('2 h ago');
     expect(recent.closest('td')?.getAttribute('title')).toBeTruthy();
@@ -141,7 +129,7 @@ describe('the table of a machine', () => {
 
   it('for a list signed here every last use is "not known here" with the reason: never a date', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^laptop/));
     const cells = await screen.findAllByText('not known here');
@@ -151,7 +139,7 @@ describe('the table of a machine', () => {
 
   it('shows the lifetime, with the reason of a missing "calls left" in the tooltip AND in the details', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(screen.getByText('3 of 5 calls left')).toBeInTheDocument();
     await user.click(tab(/^laptop/));
@@ -162,7 +150,7 @@ describe('the table of a machine', () => {
 
   it('one compact line per tab: where the list comes from, its version and when it was signed (exact date as tooltip)', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(screen.getByText('In force on this machine (mode admin)')).toBeInTheDocument();
     expect(screen.getByText('version 4')).toBeInTheDocument();
@@ -173,7 +161,7 @@ describe('the table of a machine', () => {
 
   it('shows a command as text: markup in it is never rendered, a typed entry is tagged', async () => {
     const user = userEvent.setup();
-    const { container } = render(<AllowedList />);
+    const { container } = render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^laptop/));
     expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
@@ -185,7 +173,7 @@ describe('the table of a machine', () => {
 describe('the details of a row', () => {
   it('the toggle opens the list, the place, the reason of the last use and the terminal command that withdraws it', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     const toggle = screen.getAllByRole('button', { name: 'Show details' })[0] as HTMLElement;
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -199,7 +187,7 @@ describe('the details of a row', () => {
 
   it('a row without a known last use gives the reason in the details (not only in a tooltip)', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(screen.getAllByRole('button', { name: 'Show details' })[2] as HTMLElement);
     expect(within(screen.getByRole('group', { name: 'Details of dir /b' })).getByText(/Last used: No accepted use in the audit log of this machine \(10 lines read\)\./)).toBeInTheDocument();
@@ -207,7 +195,7 @@ describe('the details of a row', () => {
 
   it('a list signed here: the details carry the delivery note; an entry with no known command says so', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^laptop/));
     const toggles = await screen.findAllByRole('button', { name: 'Show details' });
@@ -220,7 +208,7 @@ describe('the details of a row', () => {
 
 describe('where this machine cannot sign (the page is read-only there, and says why)', () => {
   it('has no edit, delete or batch control: no row checkbox, no batch bar, no button that changes a list', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     expect(screen.queryAllByRole('checkbox')).toEqual([]);
     expect(screen.queryByRole('toolbar', { name: 'Batch actions' })).toBeNull();
@@ -229,7 +217,7 @@ describe('where this machine cannot sign (the page is read-only there, and says 
   });
 
   it('says in ONE line why nothing can be changed here and how to add, with the exact command of the machine', async () => {
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     const why = screen.getByText(NOT_HERE);
     expect(why.parentElement).toHaveTextContent('machine admin allow desktop -- <command>');
@@ -239,7 +227,7 @@ describe('where this machine cannot sign (the page is read-only there, and says 
 describe('machines without a list', () => {
   it('an empty machine says why and shows the exact command that fills it, with no table', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^nas/));
     expect(await screen.findByText(/No policy was signed on this machine for "nas"/)).toBeInTheDocument();
@@ -249,7 +237,7 @@ describe('machines without a list', () => {
 
   it('an unreadable record is an alert with its fix', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     await ready();
     await user.click(tab(/^box/));
     expect(await screen.findByRole('alert')).toHaveTextContent(/delete it, the next policy is then built from nothing/);
@@ -257,56 +245,49 @@ describe('machines without a list', () => {
 
   it('a policy with no entry says every command is refused', async () => {
     answer = () => page({ machines: [{ ...installed, entries: [] }] });
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} />);
     expect(await screen.findByText(/this policy has no entry, so every command is refused/)).toBeInTheDocument();
   });
 });
 
-describe('search', () => {
+describe('search (the word comes from the search field of the page)', () => {
   it('a word filters the rows of the shown table (command, shell, peer, lifetime), updates the tab counts and says how many are shown', async () => {
-    const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<AllowedList data={answer()} search="recent" />);
     await ready();
-    await user.type(screen.getByRole('searchbox', { name: /search/i }), 'recent');
-    await waitFor(() => expect(commands()).toEqual(['echo recent']));
+    expect(commands()).toEqual(['echo recent']);
     expect(tab(/^desktop/)).toHaveTextContent('desktop (1)');
     expect(tab(/^laptop/)).toHaveTextContent('laptop (0)');
     expect(screen.getByText('1 of 5 entries shown')).toBeInTheDocument();
   });
 
   it('a search that matches nothing says so and how to clear it', async () => {
-    const user = userEvent.setup();
-    render(<AllowedList />);
-    await ready();
-    await user.type(screen.getByRole('searchbox', { name: /search/i }), 'zzz-nothing');
+    render(<AllowedList data={answer()} search="zzz-nothing" />);
     expect(await screen.findByText('No entry matches "zzz-nothing" on desktop. Clear the search to see all 3.')).toBeInTheDocument();
+  });
+
+  it('has no search field and no Refresh button of its own: the page owns them', async () => {
+    render(<AllowedList data={answer()} />);
+    await ready();
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
   });
 });
 
 describe('failures', () => {
-  it('shows the error of the page with its fix and a retry, never an empty list', async () => {
-    answer = () => new Error('the machine daemon is not running (no /x/daemon.port.json): start it with `machine daemon`');
+  it('without data once loaded: says the list could not be read, where the reason is and what to do, never an empty list', () => {
     render(<AllowedList />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/start it with `machine daemon`/);
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/could not be read.*notification of the page.*press Refresh/s);
     expect(screen.queryByRole('tab')).toBeNull();
   });
 
   it('shows the loading state before the first answer', () => {
-    render(<AllowedList />);
+    render(<AllowedList loading />);
     expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('shows the warnings of the daemon', async () => {
-    answer = () => page({ warnings: ['usage.json is corrupt; the calls left are not shown'] });
-    render(<AllowedList />);
+    render(<AllowedList data={page({ warnings: ['usage.json is corrupt; the calls left are not shown'] })} />);
     expect(await screen.findByText('usage.json is corrupt; the calls left are not shown')).toBeInTheDocument();
-  });
-});
-
-describe('the view settings', () => {
-  it('a refreshSeconds outside 5 to 600 is said on the page, never silently replaced', async () => {
-    render(<AllowedList refreshSeconds={1} />);
-    expect(await screen.findByText(/refreshSeconds must be from 5 to 600, got 1/)).toBeInTheDocument();
   });
 });

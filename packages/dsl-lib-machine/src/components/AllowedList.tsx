@@ -1,10 +1,8 @@
-import { ButtonAction, ChipButton, SearchBar, Tabs, type SortDir } from '@wadeck-app/dsl-ui';
-import { RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Tabs, type SortDir } from '@wadeck-app/dsl-ui';
+import { useMemo, useRef, useState } from 'react';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { EditOutcome } from '../lib/allowedEdit.js';
-import { appFetcher } from '../lib/shellApi.js';
-import { NOTICE_SUCCESS, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { NOTICE_SUCCESS, NOTICE_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowedMachineBlock, matches } from './AllowedMachineBlock.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useSaferMode } from './useSaferMode.js';
@@ -74,80 +72,56 @@ export interface AllowedPageData {
 }
 
 export interface AllowedListProps {
-  /** Seconds between two re-reads of the page (5 to 600; default 15). */
-  refreshSeconds?: number;
+  /** The answer of `GET /api/modules/machine/allowed` (`$sources.allowed`, polled by the page). Absent: not read yet, or the read failed (the page's notifier says why). */
+  data?: AllowedPageData;
+  /** The search word (`$urlParam.search`, typed in the SearchBar of the page). */
+  search?: string;
+  /**
+   * True until the first read of the page's sources has finished.
+   * @ctxDefault $initialLoading
+   */
+  loading?: boolean;
+  /**
+   * A re-read is in flight while the rows are shown.
+   * @ctxDefault $refreshing
+   */
+  refreshing?: boolean;
+  /**
+   * Re-runs the page's sources, so the list is the daemon's own after a change. Defaults to the page's `$refresh`.
+   * @ctxDefault $refresh
+   */
+  onRefresh?: (source?: string) => Promise<void>;
 }
 
 const LOAD_ERROR = 'flex flex-col items-start gap-2 rounded border border-danger bg-danger-bg p-3 text-sm text-danger-text';
-const URL = 'GET /api/modules/machine/allowed';
-// ChipButton marks itself as a toggle (aria-pressed); Refresh is an action, so the attribute is dropped (a spread, because the prop type only takes a boolean).
-const NOT_A_TOGGLE = { 'aria-pressed': undefined } as unknown as object;
+const NOT_READ = 'The list of allowed commands could not be read: the reason is in the notification of the page (the machine daemon or the module is not running, or this machine is not initialized). Fix it, then press Refresh.';
 
 /** The tab label: name and entries (the entries that match the search while one is typed), and a word when the policy could not be read. */
 const labelOf = (m: AllowedMachineData, count: number): string => `${m.name} (${count})${m.problem === '' ? '' : ' - unreadable policy'}`;
 
 /**
- * The Allowed page: the commands approved for each machine, the same lists `machine allowed <machine>` prints. One tab per machine, one table per tab.
+ * The Allowed page: the commands approved for each machine, the same lists `machine allowed <machine>` prints. One tab per machine, one table per tab. The page
+ * (allowed.yaml) reads the route, polls it, owns the search field and the Refresh button; this component shows what it is given.
  * Where this machine can sign (the admin machine, policy mode admin), a row can be deleted or given another lifetime, one by one or by a selection of the
  * shared table (decision 112): the confirmation names the exact commands, the signature is made IN THE BROWSER with the unlocked admin key like Allow. Elsewhere
- * it is read-only and says why. It asks one route of the module and shows what that route says, errors included (they name the fix). A command is shown as text, never as HTML.
+ * it is read-only and says why. A command is shown as text, never as HTML.
  *
  * @registryCategory composite
  * @registryTags allowed whitelist allow list policy commands approved machines
  */
-export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
-  // A value outside 5 to 600 is a typo in the view: the default is used AND the page says so (never silently).
-  const badRefresh = !(Number.isFinite(refreshSeconds) && refreshSeconds >= 5 && refreshSeconds <= 600);
-  const refreshMs = (badRefresh ? 15 : refreshSeconds) * 1000;
-  const [data, setData] = useState<AllowedPageData | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const [reload, setReload] = useState(0);
-  const [search, setSearch] = useState('');
+export function AllowedList({ data, search = '', loading = false, refreshing = false, onRefresh }: AllowedListProps) {
   const [chosen, setChosen] = useState<string | undefined>(undefined);
   // Most recent use first; kept here so that the choice survives a change of tab and a re-read.
   const [sortCol, setSortCol] = useState('lastUsedSort');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const latest = useRef(0);
   // What the last change did (signed, delivered or not), kept until the next one.
   const [outcome, setOutcome] = useState<EditOutcome | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
   const safer = useSaferMode();
 
-  useEffect(() => {
-    const mine = ++latest.current;
-    setLoading(true);
-    // appFetcher throws at once (not a rejected promise) when the shell offers none: the same path as a failed request.
-    Promise.resolve()
-      .then(() => appFetcher(URL))
-      .then((answer) => {
-        // A slower, older answer never replaces a newer one.
-        if (mine === latest.current) {
-          setData(answer as AllowedPageData);
-          setError(undefined);
-        }
-      })
-      .catch((e: unknown) => {
-        if (mine === latest.current) {
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      })
-      .finally(() => {
-        if (mine === latest.current) {
-          setLoading(false);
-        }
-      });
-  }, [reload]);
-
-  useEffect(() => {
-    const timer = setInterval(() => setReload((n) => n + 1), refreshMs);
-    return () => clearInterval(timer);
-  }, [refreshMs]);
-
   const needle = search.trim().toLowerCase();
-  const known = data !== undefined && error === undefined;
-  const machines = useMemo(() => (known ? data.machines : []), [known, data]);
+  const machines = useMemo(() => data?.machines ?? [], [data]);
   const shown = useMemo(() => machines.map((m) => ({ machine: m, rows: m.entries.filter((e) => matches(needle, e)) })), [machines, needle]);
   const shownEntries = shown.reduce((n, s) => n + s.rows.length, 0);
   // The tab of the user, else the first machine that holds entries (the others are one click away), else the first.
@@ -156,24 +130,7 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
   return (
     <section className="flex flex-col gap-3" aria-label="Allowed commands">
       <UnlockedKeyBar variant="chip" />
-      <div className="flex flex-wrap items-center gap-3">
-        <SearchBar value={search} onChange={setSearch} placeholder="Search" debounceMs={0} focusExpand size="sm" />
-        <ChipButton active={false} onClick={() => setReload((n) => n + 1)} {...NOT_A_TOGGLE}>
-          <span className="inline-flex items-center gap-1.5">
-            <RefreshCw className="h-3 w-3" aria-hidden="true" />
-            Refresh
-          </span>
-        </ChipButton>
-        {known && needle !== '' ? <span className={TEXT_MUTED_SM} aria-live="polite">{`${shownEntries} of ${data.entryCount} entries shown`}</span> : null}
-      </div>
-
-      {badRefresh ? <p className={NOTICE_WARNING}>{`refreshSeconds must be from 5 to 600, got ${String(refreshSeconds)}: the page is re-read every 15 s. Fix it in the view (allowed.yaml).`}</p> : null}
-      {error !== undefined ? (
-        <div role="alert" className={LOAD_ERROR}>
-          <span className={TEXT_ERROR}>{error}</span>
-          <ButtonAction label="Retry" variant="secondary" size="sm" onClick={() => setReload((n) => n + 1)} />
-        </div>
-      ) : null}
+      {data !== undefined && needle !== '' ? <span className={TEXT_MUTED_SM} aria-live="polite">{`${shownEntries} of ${data.entryCount} entries shown`}</span> : null}
 
       {outcome !== null ? (
         <div role={outcome.tone === 'danger' ? 'alert' : 'status'} aria-label="Last change" className={outcome.tone === 'success' ? NOTICE_SUCCESS : outcome.tone === 'warning' ? NOTICE_WARNING : LOAD_ERROR}>
@@ -181,7 +138,7 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
         </div>
       ) : null}
 
-      {known ? (
+      {data !== undefined ? (
         <>
           {data.warnings.map((w) => (
             <p key={w} className={NOTICE_WARNING}>{w}</p>
@@ -202,13 +159,13 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
                     sortDir={sortDir}
                     onSortColChange={setSortCol}
                     onSortDirChange={setSortDir}
-                    refreshing={loading}
+                    refreshing={refreshing}
                     api={api.current as AllowApi}
                     saferMode={safer.on}
                     onEdited={(done) => {
                       setOutcome(done);
                       // The list is the daemon's own again (a signed change is recorded here even when its delivery failed).
-                      setReload((n) => n + 1);
+                      void onRefresh?.('allowed');
                     }}
                   />
                 ),
@@ -216,9 +173,11 @@ export function AllowedList({ refreshSeconds = 15 }: AllowedListProps) {
             />
           ) : null}
         </>
-      ) : loading && error === undefined ? (
+      ) : loading ? (
         <p className={TEXT_MUTED_SM} aria-live="polite">Loading...</p>
-      ) : null}
+      ) : (
+        <div role="alert" className={LOAD_ERROR}>{NOT_READ}</div>
+      )}
     </section>
   );
 }

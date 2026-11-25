@@ -1,11 +1,26 @@
 # The commands approved for each machine (the allow list, "whitelist"): the same lists `machine allowed <machine>` prints, in the browser.
-# machine:AllowedList reads GET /api/modules/machine/allowed itself (one daemon command, local files only: the policy installed on THIS
-# machine and the policies signed on this machine for the others; nothing is asked of a peer). A list signed here may differ from the one installed on
-# its target until delivered, and the page says so.
+# One daemon command, local files only: the policy installed on THIS machine and the policies signed on this machine for the others; nothing is asked of a peer.
+# A list signed here may differ from the one installed on its target until delivered, and the page says so. The page polls the route; the search word
+# is the `search` URL parameter; machine:AllowedList shows the data and, where this machine holds the admin key, signs a delete or a new lifetime (decision 112).
+$sources:
+  allowed:
+    url: GET /api/modules/machine/allowed
+    poll: 15s
+
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Allowed
     subtitle: The commands approved for each machine, one tab per machine. Delete or change the lifetime where this machine holds the admin key.
+  - $type: HorizontalStack
+    gap: gap-3
+    align: items-center
+    items:
+      - $type: SearchBar
+        urlParam: search
+        placeholder: Search
+      - $type: RefreshButton
+        source: allowed
   - $type: machine:AllowedList
-    refreshSeconds: 15
+    data: $sources.allowed
+    search: $urlParam.search

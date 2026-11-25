@@ -1,10 +1,13 @@
 import { encryptAdminKey, generateSigningKeyPair, keyId, signPolicy as coreSignPolicy, type PolicyBody, type PolicyEntry, type SignedPolicy } from '@wadeck-app/machine-core';
 import { unlockAdminKey } from '@wadeck-app/machine-webcrypto';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { useEffect, useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { signingsSettled } from '../lib/allowFlow.js';
+import { appFetcher } from '../lib/shellApi.js';
 import { AllowedList, type AllowedEntryData, type AllowedMachineData, type AllowedPageData } from './AllowedList.js';
 
 // The Allowed page is ACTIONABLE (decision 112): delete and change of lifetime, one row or a selection, signed in the browser with the unlocked admin key
@@ -56,6 +59,22 @@ const machineOf = (uuid: string, name: string, policy: SignedPolicy, over: Parti
   uuid, name, isSelf: uuid === SELF, source: uuid === SELF ? 'installed' : 'signed-here', sourceText: 'x', mode: 'admin', version: policy.body.version, signedText: 'signed 1 min ago', signedIso: '',
   entries: rowsOf(policy), deliveryNote: '', problem: '', emptyText: '', fillCommand: `machine admin allow ${name} -- <command>`, canEdit: true, editNote: '', ...over,
 });
+
+/** The page of allowed.yaml in miniature: the source (read at mount and at each refresh), a Refresh button, and the component fed with the data. */
+function Host() {
+  const [data, setData] = useState<AllowedPageData | undefined>(undefined);
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    void Promise.resolve(appFetcher('GET /api/modules/machine/allowed')).then((answer) => setData(answer as AllowedPageData));
+  }, [reads]);
+  const refresh = async (): Promise<void> => setReads((n) => n + 1);
+  return (
+    <>
+      <ButtonAction label="Refresh" onClick={() => void refresh()} />
+      <AllowedList data={data} onRefresh={refresh} />
+    </>
+  );
+}
 
 let desktop: SignedPolicy;
 let laptop: SignedPolicy;
@@ -134,7 +153,7 @@ const defaultsOf = (p: SignedPolicy): string[] => p.body.defaults.map((e) => e.c
 
 describe('the actions are offered only where this machine can sign', () => {
   it('a machine this machine signs for: a Delete and a Change lifetime button per row, each named with its command, and a checkbox per row', async () => {
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     expect(screen.getByRole('button', { name: 'Delete echo a' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Change lifetime of echo a' })).toBeInTheDocument();
@@ -144,7 +163,7 @@ describe('the actions are offered only where this machine can sign', () => {
   it('a machine this machine cannot sign for (mode local, no admin key): no button, no checkbox, ONE line that says why and the terminal command', async () => {
     const note = 'This machine manages its own list (policy mode local): no admin signature is used here. Change it from a terminal on this machine with `machine policy allow`.';
     pageOver = (m) => [{ ...(m[0] as AllowedMachineData), canEdit: false, editNote: note }, m[1] as AllowedMachineData];
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     expect(screen.queryByRole('button', { name: /^Delete / })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Change lifetime of / })).toBeNull();
@@ -155,7 +174,7 @@ describe('the actions are offered only where this machine can sign', () => {
   it('a daemon that predates the actions says so with the fix, never a silent read-only table', async () => {
     const note = 'the daemon is older than this page and does not say whether this machine can sign a change of this list, so no action is offered: update it with `machine cli update` and restart it';
     pageOver = (m) => [{ ...(m[0] as AllowedMachineData), canEdit: false, editNote: note }, m[1] as AllowedMachineData];
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     expect(screen.getByText(note)).toBeInTheDocument();
   });
@@ -164,7 +183,7 @@ describe('the actions are offered only where this machine can sign', () => {
 describe('delete one row', () => {
   it('opens a confirmation that names the machine, the shell, the exact command and what happens; Cancel and Escape sign nothing', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     const d = await screen.findByRole('dialog');
@@ -186,7 +205,7 @@ describe('delete one row', () => {
   it('with the admin key unlocked ONE click signs a `remove` of exactly that entry: version 5 edited from 4, the other lists untouched, only signed documents posted', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     await screen.findByRole('dialog');
@@ -203,7 +222,7 @@ describe('delete one row', () => {
   it('after success: the page is read again, the dialog is gone, and a line says what was signed (version) and how it was delivered', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     const reads = () => calls.filter((c) => c.url === 'GET /api/modules/machine/allowed').length;
     expect(reads()).toBe(1);
@@ -218,7 +237,7 @@ describe('delete one row', () => {
 
   it('a locked key asks the passphrase in the dialog (never anywhere else) and signs with it', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     await screen.findByRole('dialog');
@@ -232,7 +251,7 @@ describe('delete one row', () => {
   it('the entry of an own list of a peer is removed from THAT list (the per-peer lists of an admin policy are editable from the page)', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete peer two' }));
     await user.click(await screen.findByRole('button', { name: 'Delete and sign' }));
@@ -245,7 +264,7 @@ describe('delete one row', () => {
     const user = userEvent.setup();
     await unlock();
     postAnswer = { ok: true, target: { uuid: LAPTOP, name: 'laptop' }, version: 3, delivery: 'inbox', deliveryText: { tone: 'warning', text: 'laptop is not reachable directly: stored in the relay inbox' } };
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('tab', { name: /^laptop/ }));
     await user.click(await screen.findByRole('button', { name: 'Delete df -h' }));
@@ -262,7 +281,7 @@ describe('change the lifetime', () => {
   it('shows the old and the new lifetime, flags a WIDENING with the warning badge, and signs a renewal of that entry', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Change lifetime of echo b' }));
     const d = await screen.findByRole('dialog');
@@ -279,7 +298,7 @@ describe('change the lifetime', () => {
   it('a stricter lifetime is not flagged, and the counter restarting is said', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Change lifetime of echo a' }));
     const d = await screen.findByRole('dialog');
@@ -296,7 +315,7 @@ describe('change the lifetime', () => {
   it('an invalid custom lifetime is refused in the dialog with the fix and nothing is signed', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Change lifetime of echo a' }));
     const d = await screen.findByRole('dialog');
@@ -310,7 +329,7 @@ describe('change the lifetime', () => {
     const user = userEvent.setup();
     window.localStorage.setItem('machine:requests:saferMode', 'on');
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Change lifetime of echo b' }));
     const d = await screen.findByRole('dialog');
@@ -326,7 +345,7 @@ describe('change the lifetime', () => {
   it('Safer mode OFF (the default): the same permanent lifetime signs without the acknowledgement', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Change lifetime of echo b' }));
     const d = await screen.findByRole('dialog');
@@ -347,7 +366,7 @@ describe('batch editing with the shared table', () => {
   it('a selection shows the floating Batch actions bar; Delete selected confirms with the count and the list of commands, then signs ONE policy', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await select(user, 'default|sh|echo a', 'default|sh|echo c', `${PEER}|sh|peer one`);
     const bar = screen.getByRole('toolbar', { name: 'Batch actions' });
@@ -367,7 +386,7 @@ describe('batch editing with the shared table', () => {
   it('Change lifetime on a selection signs ONE renewal of every selected entry', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await select(user, 'default|sh|echo a', 'default|sh|echo d');
     await user.click(within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name: 'Change lifetime' }));
@@ -380,7 +399,7 @@ describe('batch editing with the shared table', () => {
 
   it('a long list scrolls in the dialog (bounded height) instead of pushing the buttons away', async () => {
     const user = userEvent.setup();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await select(user, 'default|sh|echo a', 'default|sh|echo b');
     await user.click(within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name: 'Delete selected' }));
@@ -392,7 +411,7 @@ describe('batch editing with the shared table', () => {
   it('the selection survives the re-read of the page (the 15 s poll or Refresh) and a row that vanished is dropped from the action', async () => {
     const user = userEvent.setup();
     await unlock();
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await select(user, 'default|sh|echo a', 'default|sh|echo c');
     expect(screen.getByRole('toolbar', { name: 'Batch actions' })).toHaveTextContent('2 selected');
@@ -415,7 +434,7 @@ describe('failures say the cause and the fix', () => {
     await unlock();
     // The page still shows version 4, the machine is at 6 now.
     contextOver = (uuid, c) => (uuid === SELF ? { ...c, current: signed(SELF, 6, [exact('echo a'), exact('echo c')]) } : c);
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     const d = await screen.findByRole('dialog');
@@ -429,7 +448,7 @@ describe('failures say the cause and the fix', () => {
     const user = userEvent.setup();
     await unlock();
     postAnswer = new Error('the policy of "desktop" is at version 5, and this one was edited from version 4: reload the page and allow it again. Nothing was stored or sent');
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     await user.click(await screen.findByRole('button', { name: 'Delete and sign' }));
@@ -441,7 +460,7 @@ describe('failures say the cause and the fix', () => {
     await unlock();
     const retry = 'the policy is signed and recorded (version 3) but the relay did not store it for "laptop": relay down. Run `machine admin distribute --policy C:/cfg/policies/33.json` to send it again; it is safe to run again';
     postAnswer = new Error(retry);
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('tab', { name: /^laptop/ }));
     await user.click(await screen.findByRole('button', { name: 'Delete df -h' }));
@@ -457,7 +476,7 @@ describe('failures say the cause and the fix', () => {
     const user = userEvent.setup();
     await unlock();
     vi.spyOn(adminKeyHolder, 'current').mockReturnValueOnce(adminKeyHolder.current()).mockReturnValue(null);
-    render(<AllowedList />);
+    render(<Host />);
     await opened();
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     await user.click(await screen.findByRole('button', { name: 'Delete and sign' }));

@@ -1883,8 +1883,12 @@ export const AllowedListEntry: ComponentRegistryEntry = {
 	name: 'AllowedList', category: 'composite', tags: ["allowed","whitelist","allow","list","policy","commands","approved","machines"],
 	nodeSchema: null as never,
 	render: ({ node, ctx }: RegistryRenderProps) => {
-		const refreshSeconds = coerceProp(resolveExpressionValue(node['refreshSeconds'], ctx), 'AllowedList.refreshSeconds', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['refreshSeconds']
-		return <AllowedList refreshSeconds={refreshSeconds} />
+		const data = coerceProp(resolveExpressionValue(node['data'], ctx), 'AllowedList.data', 'object', false) as import('../components/AllowedList.js').AllowedListProps['data']
+		const search = coerceProp(resolveExpressionValue(node['search'], ctx), 'AllowedList.search', 'string', false) as import('../components/AllowedList.js').AllowedListProps['search']
+		const loading = coerceProp(resolveExpressionValue(node['loading'], ctx) ?? ctx['$initialLoading'], 'AllowedList.loading', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['loading']
+		const refreshing = coerceProp(resolveExpressionValue(node['refreshing'], ctx) ?? ctx['$refreshing'], 'AllowedList.refreshing', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['refreshing']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'AllowedList.onRefresh', 'function', false) as import('../components/AllowedList.js').AllowedListProps['onRefresh']
+		return <AllowedList data={data} search={search} loading={loading} refreshing={refreshing} onRefresh={onRefresh} />
 	},
 }
 
@@ -2201,7 +2205,7 @@ SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["debounceMs"
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
-AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["refreshSeconds"] : [];
+AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","loading","onRefresh","refreshing","search"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
