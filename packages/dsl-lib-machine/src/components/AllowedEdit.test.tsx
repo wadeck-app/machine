@@ -1,6 +1,6 @@
 import { encryptAdminKey, generateSigningKeyPair, keyId, signPolicy as coreSignPolicy, type PolicyBody, type PolicyEntry, type SignedPolicy } from '@wadeck-app/machine-core';
 import { unlockAdminKey } from '@wadeck-app/machine-webcrypto';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { useEffect, useState } from 'react';
 import userEvent from '@testing-library/user-event';
@@ -136,6 +136,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await signingsSettled();
+  // Unmount BEFORE the shell is removed: a signing that ended after the test body re-reads the page (Host effect -> appFetcher) and must still find the fetcher.
+  cleanup();
   adminKeyHolder.reset();
   Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
 });
@@ -395,6 +397,41 @@ describe('batch editing with the shared table', () => {
     await user.click(await within(d).findByRole('button', { name: 'Change lifetime and sign' }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(posted().policy.body.defaults.map((e) => e.limits?.maxCalls)).toEqual([1, 2, undefined, 1]);
+  });
+
+  it('cancelling the confirmation keeps the selection, for both batch actions (keepSelection)', async () => {
+    const user = userEvent.setup();
+    await unlock();
+    render(<Host />);
+    await opened();
+    await select(user, 'default|sh|echo a', 'default|sh|echo c');
+    for (const name of ['Delete selected', 'Change lifetime']) {
+      await user.click(within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name }));
+      const d = await screen.findByRole('dialog');
+      await user.click(within(d).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(screen.getByRole('toolbar', { name: 'Batch actions' })).toHaveTextContent('2 selected');
+      expect(screen.getByRole('checkbox', { name: 'Select row default|sh|echo a' })).toBeChecked();
+    }
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('standard variants only: the row delete icon is a red outline (danger-outline), never solid; the batch buttons are neutral; no custom width on the actions column', async () => {
+    const user = userEvent.setup();
+    render(<Host />);
+    await opened();
+    const del = screen.getByRole('button', { name: 'Delete echo a' });
+    expect(del.className).toMatch(/border-danger/);
+    expect(del.className).toMatch(/text-danger/);
+    expect(del.className).not.toMatch(/(^|\s)bg-(danger|warning|orange)/);
+    expect(screen.getByRole('button', { name: 'Change lifetime of echo a' }).className).not.toMatch(/danger/);
+    await select(user, 'default|sh|echo a');
+    for (const name of ['Delete selected', 'Change lifetime']) {
+      const b = within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name });
+      expect(b.className).not.toMatch(/(^|\s)bg-(danger|warning|orange|primary)(\s|$)|border-danger/);
+    }
+    const th = screen.getAllByRole('columnheader').at(-1) as HTMLElement;
+    expect(th.style.width).toBe('');
   });
 
   it('a long list scrolls in the dialog (bounded height) instead of pushing the buttons away', async () => {

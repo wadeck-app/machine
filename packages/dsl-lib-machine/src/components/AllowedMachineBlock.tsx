@@ -52,26 +52,23 @@ const COLUMNS: Array<TableColumn<AllowedEntryData>> = [
 function actionsColumn(begin: (action: EditAction['kind'], rows: AllowedEntryData[]) => void): TableColumn<AllowedEntryData> {
   return {
     key: '_edit',
-    // No header text: like the actions column of the other tables, it hugs the right edge (a header word would set its width). The buttons carry the names.
+    // No header text: DataTable right-aligns the actions column and sizes it to its icons by default (a header word would widen it). The buttons carry the names.
     label: '',
     nowrap: true,
-    // Narrow, like the actions columns of the other tables (DataTable gives a column `width` x 4 px): two icon buttons plus the cell padding, so the column hugs the right edge.
-    width: ACTIONS_WIDTH,
     render: (r) => (
       <span className="flex items-center gap-1">
         <IconButton icon={<Pencil className="h-3 w-3" aria-hidden="true" />} aria-label={`Change lifetime of ${r.text}`} size="icon-xs" onClick={() => begin('lifetime', [r])} />
-        <IconButton icon={<Trash2 className="h-3 w-3" aria-hidden="true" />} aria-label={`Delete ${r.text}`} size="icon-xs" onClick={() => begin('delete', [r])} />
+        <IconButton icon={<Trash2 className="h-3 w-3" aria-hidden="true" />} aria-label={`Delete ${r.text}`} size="icon-xs" variant="danger-outline" onClick={() => begin('delete', [r])} />
       </span>
     ),
   };
 }
 
-// Neutral on purpose: the danger signals (widening, an empty list) are in the confirmation dialog, not in the table.
-const BATCH_ACTIONS: Array<{ label: string; action: string; variant: 'ghost' }> = [
-  { label: 'Change lifetime', action: 'lifetime', variant: 'ghost' },
-  { label: 'Delete selected', action: 'delete', variant: 'ghost' },
+// Default variant (neutral) on purpose: the danger signals (widening, an empty list) are in the confirmation dialog. keepSelection: Cancel in that dialog must not lose the selection.
+const BATCH_ACTIONS: Array<{ label: string; action: string; keepSelection: boolean }> = [
+  { label: 'Change lifetime', action: 'lifetime', keepSelection: true },
+  { label: 'Delete selected', action: 'delete', keepSelection: true },
 ];
-const ACTIONS_WIDTH = 14;
 
 export interface AllowedMachineBlockProps {
   machine: AllowedMachineData;
