@@ -14,3 +14,10 @@ afterEach(async () => {
   adminKeyHolder.reset();
   lifetimeMemory.reset();
 });
+
+// Radix primitives (the dsl-ui Switch and RadioGroup) measure their elements with ResizeObserver, which jsdom does not provide.
+(globalThis as typeof globalThis & { ResizeObserver: unknown }).ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};

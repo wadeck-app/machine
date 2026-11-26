@@ -18,6 +18,7 @@ sections:
     items:
       - $type: SearchBar
         urlParam: search
+        size: sm
         placeholder: Search
       - $type: RefreshButton
         source: allowed

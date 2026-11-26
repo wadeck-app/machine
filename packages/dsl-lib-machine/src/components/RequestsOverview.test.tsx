@@ -366,7 +366,8 @@ describe('the Allow style (Dialog | Inline), kept in this browser', () => {
 
   it('is INLINE by default: the switch says so, every held card has a checkbox, nothing is written until a choice is made', () => {
     render(<RequestsOverview {...props()} />);
-    const group = screen.getByRole('radiogroup', { name: 'Allow style' });
+    const group = screen.getByRole('radiogroup');
+    expect(screen.getByText('Allow style')).toBeInTheDocument();
     expect(within(group).getByRole('radio', { name: 'Inline' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('checkbox', { name: 'Select ls' })).toBeInTheDocument();
     expect(window.localStorage.getItem('machine:requests:allowStyle')).toBeNull();

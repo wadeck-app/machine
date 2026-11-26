@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ButtonAction, CompactSelect } from '@wadeck-app/dsl-ui';
+import { ButtonAction, CompactSelect, IconButton } from '@wadeck-app/dsl-ui';
+import { Lock } from 'lucide-react';
 import { adminKeyHolder, formatCountdown, KEEP_CHOICES, type KeepChoice } from '../lib/adminKeyHolder.js';
 import { KEY_PILL, NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
@@ -129,10 +130,8 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
           {`Key unlocked ${formatCountdown(remaining)}`}
         </span>
         {/* The time the key stays unlocked after the last signature: a longer choice applies from now (the holder restarts the countdown). */}
-        <CompactSelect ariaLabel="Keep unlocked for" value={keep} onChange={(v) => adminKeyHolder.setKeep(v as KeepChoice)} options={KEEP_OPTIONS} />
-        <button type="button" onClick={() => adminKeyHolder.lock()} className="rounded px-1 text-xs font-medium text-content underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-          Lock
-        </button>
+        <CompactSelect ariaLabel="Keep unlocked for" size="sm" value={keep} onChange={(v) => adminKeyHolder.setKeep(v as KeepChoice)} options={KEEP_OPTIONS} />
+        <IconButton icon={<Lock className="h-3 w-3" aria-hidden="true" />} aria-label="Lock" size="icon-xs" onClick={() => adminKeyHolder.lock()} />
       </div>
     );
   }
