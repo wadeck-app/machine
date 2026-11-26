@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UnlockedAdminKey } from '@wadeck-app/machine-webcrypto';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
+import { HeaderActionsHost } from '../testHeaderActions.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 
 // The badge of the held admin key and the "Keep unlocked for" choice (decision 92).
@@ -115,10 +116,10 @@ describe('KeepUnlockedSelect', () => {
   });
 });
 
-describe('UnlockedKeyBar as a floating pill (the Requests page)', () => {
+describe('UnlockedKeyBar as a pill in the header actions of the page (the Requests page)', () => {
   // User request 2026-11-24: lengthen the time from the badge itself, without going to the dialog.
   it('has a "Keep unlocked for" choice on the pill: picking a longer time extends the key from now and the countdown follows', () => {
-    render(<UnlockedKeyBar variant="chip" />);
+    render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
     act(() => void adminKeyHolder.hold(fakeKey()));
     advance(3 * MIN);
     expect(screen.getByTestId('unlocked-key-chip')).toHaveTextContent('Key unlocked 2:00');
@@ -132,12 +133,12 @@ describe('UnlockedKeyBar as a floating pill (the Requests page)', () => {
 
 
   it('is nothing while the key is locked', () => {
-    const { container } = render(<UnlockedKeyBar variant="chip" />);
-    expect(container).toBeEmptyDOMElement();
+    render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
+    expect(screen.getByTestId('header-actions-slot')).toBeEmptyDOMElement();
   });
 
   it('shows "Key unlocked 5:00" counting down, with a labelled Lock button that locks the key', () => {
-    render(<UnlockedKeyBar variant="chip" />);
+    render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
     act(() => void adminKeyHolder.hold(fakeKey()));
     const pill = screen.getByTestId('unlocked-key-chip');
     expect(pill).toHaveTextContent('Key unlocked 5:00');
@@ -149,62 +150,35 @@ describe('UnlockedKeyBar as a floating pill (the Requests page)', () => {
     expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
   });
 
-  it('takes no room in the flow: it is fixed at the top right, above the page content, as a small pill', () => {
-    render(<UnlockedKeyBar variant="chip" />);
+  it('is drawn in the slot of the host (the header actions), not where it is written, and with no custom positioning', () => {
+    render(
+      <section data-testid="page">
+        <UnlockedKeyBar variant="chip" />
+      </section>,
+      { wrapper: HeaderActionsHost },
+    );
     act(() => void adminKeyHolder.hold(fakeKey()));
-    const classes = screen.getByTestId('unlocked-key-chip').className.split(/\s+/);
-    expect(classes).toContain('fixed');
-    expect(classes.some((c) => /^right-/.test(c))).toBe(true);
-    expect(classes.some((c) => /^top-/.test(c))).toBe(true);
-    expect(classes.some((c) => /^z-/.test(c))).toBe(true);
-    expect(classes).toContain('rounded-full');
-    expect(classes).not.toContain('border-2');
+    const pill = screen.getByTestId('unlocked-key-chip');
+    expect(screen.getByTestId('header-actions-slot')).toContainElement(pill);
+    expect(screen.getByTestId('page')).not.toContainElement(pill);
+    expect(pill.className).toBe('');
+    expect(pill.getAttribute('style')).toBeNull();
   });
 
-  it('follows the row of the page title, then stays on the breadcrumb row when the title scrolls away (never over the content)', () => {
-    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
-    const nav = document.createElement('nav');
-    nav.setAttribute('aria-label', 'Breadcrumb');
-    const h1 = document.createElement('h1');
-    document.body.append(nav, h1);
-    let titleTop = 113;
-    let navTop = 44;
-    nav.getBoundingClientRect = () => rect(navTop, 28);
-    h1.getBoundingClientRect = () => rect(titleTop, 32);
+  it('without a host (no provider, no slot) it shows nothing and does not throw', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      render(<UnlockedKeyBar variant="chip" />);
-      act(() => void adminKeyHolder.hold(fakeKey()));
-      const pill = screen.getByTestId('unlocked-key-chip');
-      // centred on the title row (26 px pill, 32 px title)
-      expect(pill.style.top).toBe('116px');
-      titleTop = 60;
-      act(() => void window.dispatchEvent(new Event('scroll')));
-      advance(20);
-      expect(pill.style.top).toBe('63px');
-      titleTop = -200;
-      act(() => void window.dispatchEvent(new Event('scroll')));
-      advance(20);
-      // the title is gone: the pill stays centred on the breadcrumb row
-      expect(pill.style.top).toBe('45px');
-      // the sticky header collapses with a transition: the pill follows its final place
-      navTop = 24;
-      act(() => void window.dispatchEvent(new Event('transitionend')));
-      advance(20);
-      expect(pill.style.top).toBe('25px');
+      const { container } = render(<UnlockedKeyBar variant="chip" />);
+      expect(() => act(() => void adminKeyHolder.hold(fakeKey()))).not.toThrow();
+      expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
+      expect(container).toBeEmptyDOMElement();
     } finally {
-      nav.remove();
-      h1.remove();
+      warn.mockRestore();
     }
   });
 
-  it('without a title on the page it keeps its default place (no inline offset)', () => {
-    render(<UnlockedKeyBar variant="chip" />);
-    act(() => void adminKeyHolder.hold(fakeKey()));
-    expect(screen.getByTestId('unlocked-key-chip').style.top).toBe('');
-  });
-
   it('the time is a role=status that does not announce every second; the lock itself is announced once', () => {
-    render(<UnlockedKeyBar variant="chip" />);
+    render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
     act(() => void adminKeyHolder.hold(fakeKey()));
     const time = screen.getByRole('status');
     expect(time).toHaveAttribute('aria-live', 'off');
@@ -218,16 +192,16 @@ describe('UnlockedKeyBar as a floating pill (the Requests page)', () => {
     expect(announced).toHaveTextContent('Admin key locked');
   });
 
-  it('the dot is green, and amber when less than 60 seconds remain', () => {
-    render(<UnlockedKeyBar variant="chip" />);
+  it('the badge is green, and amber when less than 60 seconds remain', () => {
+    render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
     act(() => void adminKeyHolder.hold(fakeKey()));
     advance(4 * MIN);
     expect(screen.getByTestId('unlocked-key-chip')).toHaveTextContent('Key unlocked 1:00');
-    expect(screen.getByTestId('unlocked-key-dot').className).toMatch(/bg-success/);
+    expect(screen.getByText('Key unlocked 1:00').className).toMatch(/bg-success/);
     advance(1_000);
     expect(screen.getByTestId('unlocked-key-chip')).toHaveTextContent('Key unlocked 0:59');
-    expect(screen.getByTestId('unlocked-key-dot').className).toMatch(/bg-warning/);
-    expect(screen.getByTestId('unlocked-key-dot').className).not.toMatch(/bg-success/);
+    expect(screen.getByText('Key unlocked 0:59').className).toMatch(/bg-warning/);
+    expect(screen.getByText('Key unlocked 0:59').className).not.toMatch(/bg-success/);
   });
 });
 
@@ -238,6 +212,7 @@ describe('one indicator per page', () => {
         <UnlockedKeyBar variant="chip" />
         <UnlockedKeyBar />
       </>,
+      { wrapper: HeaderActionsHost },
     );
     act(() => void adminKeyHolder.hold(fakeKey()));
     expect(screen.getAllByText(/key unlocked/i)).toHaveLength(1);
@@ -254,7 +229,7 @@ describe('one indicator per page', () => {
   });
 
   it('when the pill goes away the bar is the indicator again', () => {
-    const pill = render(<UnlockedKeyBar variant="chip" />);
+    const pill = render(<UnlockedKeyBar variant="chip" />, { wrapper: HeaderActionsHost });
     render(<UnlockedKeyBar />);
     act(() => void adminKeyHolder.hold(fakeKey()));
     expect(screen.queryByTestId('unlocked-key-bar')).toBeNull();

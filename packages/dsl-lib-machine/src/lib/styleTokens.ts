@@ -61,9 +61,6 @@ export const OUTCOME_WARNING = 'inline-block whitespace-nowrap rounded border bo
 export const OUTCOME_DANGER = 'inline-block whitespace-nowrap rounded border border-danger bg-danger-bg px-2 py-0.5 text-xs text-danger-text';
 export const OUTCOME_NEUTRAL = 'inline-block whitespace-nowrap rounded border border-border px-2 py-0.5 text-xs text-muted';
 
-/** The unlocked-key pill of the Requests page: fixed at the top right on the row of the page title (the h1 of app-core starts 113 px below the top of the viewport, measured on the real page at 1500 and 1100 px), so it takes no room in the flow. */
-export const KEY_PILL = 'fixed right-4 top-[116px] z-30 inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted shadow-sm';
-
 /** Activity page (activity-paging): the exit code cell, green for 0, red for any other code, a timeout or a kill, muted when no command ran. */
 export const EXIT_OK = 'whitespace-nowrap font-medium tabular-nums text-success-text';
 export const EXIT_FAIL = 'whitespace-nowrap font-medium tabular-nums text-danger-text';

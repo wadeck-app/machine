@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NoticeData } from '../lib/noticeRows.js';
+import { HeaderActionsHost } from '../testHeaderActions.js';
 import { RequestsOverview, type RequestsOverviewProps } from './RequestsOverview.js';
 
 // The Requests page for ALL trusted machines: this machine's own requests come from the page, the others are loaded by the admin machine with a request
@@ -117,7 +118,7 @@ describe('the passphrase hint of the load dialog', () => {
 
 describe('the admin key kept in the page (decision 92)', () => {
   it('after the first load the page shows the chip "Key unlocked 4:59" with Lock, once, and the NEXT load asks no passphrase and signs with the held key', async () => {
-    render(<RequestsOverview {...props()} />);
+    render(<RequestsOverview {...props()} />, { wrapper: HeaderActionsHost });
     expect(screen.queryByTestId('unlocked-key-chip')).toBeNull();
     await load();
     const bar = await screen.findByTestId('unlocked-key-chip');

@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ButtonAction, CompactSelect, IconButton } from '@wadeck-app/dsl-ui';
+import { Badge, ButtonAction, CompactSelect, HeaderActions, HorizontalStack, IconButton } from '@wadeck-app/dsl-ui';
 import { Lock } from 'lucide-react';
 import { adminKeyHolder, formatCountdown, KEEP_CHOICES, type KeepChoice } from '../lib/adminKeyHolder.js';
-import { KEY_PILL, NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
-const PILL = KEY_PILL;
 const KEEP_OPTIONS = KEEP_CHOICES.map((c) => ({ value: c.value, label: c.label }));
 // The indicator exists once per page: while a pill is mounted, a bar (the dialogs and inline prompts) only says that no passphrase is needed.
 let pillsMounted = 0;
@@ -16,8 +15,6 @@ const subscribePills = (l: () => void) => {
 };
 const hasPill = () => pillsMounted > 0;
 
-// Height of the pill in px (text-xs line 16 + py-1 8 + border 2), used to centre it on a row.
-const PILL_HEIGHT = 26;
 const PILL_TIP = 'The admin key stays in this page only; it locks when the time runs out, on Lock, or on reload';
 import { useAdminKey } from './useAdminKey.js';
 
@@ -56,48 +53,6 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
     return () => clearInterval(id);
   }, [unlocked, expiresAt]);
 
-  // The pill (chip variant) is fixed, so it takes no room in the flow. Its vertical place follows the title row of the page (the first h1, rendered by
-  // app-core) and, once the title scrolled away, stays on the breadcrumb row, so it never covers the content (the Allow style and Safer mode switches
-  // included). Without an h1 on the page it keeps the default offset of its class.
-  const [top, setTop] = useState<number | null>(null);
-  const shown = variant === 'chip' && unlocked;
-  useEffect(() => {
-    if (!shown) {
-      return undefined;
-    }
-    let frame = 0;
-    const place = () => {
-      frame = 0;
-      const title = document.querySelector('h1');
-      if (title === null) {
-        setTop(null);
-        return;
-      }
-      const t = title.getBoundingClientRect();
-      const wanted = t.top + (t.height - PILL_HEIGHT) / 2;
-      const crumb = document.querySelector('nav[aria-label="Breadcrumb"]')?.getBoundingClientRect();
-      const floor = crumb === undefined ? 0 : crumb.top + (crumb.height - PILL_HEIGHT) / 2;
-      setTop(Math.round(Math.max(wanted, floor)));
-    };
-    const schedule = () => {
-      if (frame === 0) {
-        frame = requestAnimationFrame(place);
-      }
-    };
-    place();
-    // Capture: the page may scroll in the window or in an inner container.
-    window.addEventListener('scroll', schedule, true);
-    window.addEventListener('resize', schedule);
-    // The sticky header of app-core collapses with a CSS transition: its final place is known only when the transition ends.
-    window.addEventListener('transitionend', schedule, true);
-    return () => {
-      window.removeEventListener('scroll', schedule, true);
-      window.removeEventListener('resize', schedule);
-      window.removeEventListener('transitionend', schedule, true);
-      cancelAnimationFrame(frame);
-    };
-  }, [shown]);
-
   // The pill tells a screen reader once that the key locked (the countdown itself is not announced).
   const wasUnlocked = useRef(false);
   const [lockedSinceMount, setLockedSinceMount] = useState(false);
@@ -123,17 +78,20 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
   }
   if (variant === 'chip') {
     const remaining = expiresAt - now;
+    // The pill lives in the header actions slot of the host (the breadcrumb row of app-core): no measuring, no fixed offset.
     return (
-      // TODO(dsl-ui): this container (KEY_PILL: fixed position, placed against the page title) stays custom until dsl-ui offers a page header slot; the controls inside are already standard components.
-      <div data-testid="unlocked-key-chip" title={PILL_TIP} className={PILL} style={top === null ? undefined : { top }}>
-        <span role="status" aria-live="off" className="inline-flex items-center gap-1.5">
-          <span data-testid="unlocked-key-dot" aria-hidden="true" className={`h-2 w-2 rounded-full ${remaining < 60_000 ? 'bg-warning' : 'bg-success'}`} />
-          {`Key unlocked ${formatCountdown(remaining)}`}
-        </span>
-        {/* The time the key stays unlocked after the last signature: a longer choice applies from now (the holder restarts the countdown). */}
-        <CompactSelect ariaLabel="Keep unlocked for" size="sm" value={keep} onChange={(v) => adminKeyHolder.setKeep(v as KeepChoice)} options={KEEP_OPTIONS} />
-        <IconButton icon={<Lock className="h-3 w-3" aria-hidden="true" />} aria-label="Lock" size="icon-xs" onClick={() => adminKeyHolder.lock()} />
-      </div>
+      <HeaderActions>
+        <div data-testid="unlocked-key-chip" title={PILL_TIP}>
+          <HorizontalStack gap="gap-2" align="items-center">
+            <span role="status" aria-live="off">
+              <Badge label={`Key unlocked ${formatCountdown(remaining)}`} variant={remaining < 60_000 ? 'warning' : 'success'} tone="subtle" size="sm" />
+            </span>
+            {/* The time the key stays unlocked after the last signature: a longer choice applies from now (the holder restarts the countdown). */}
+            <CompactSelect ariaLabel="Keep unlocked for" size="sm" value={keep} onChange={(v) => adminKeyHolder.setKeep(v as KeepChoice)} options={KEEP_OPTIONS} />
+            <IconButton icon={<Lock className="h-3 w-3" aria-hidden="true" />} aria-label="Lock" size="icon-xs" onClick={() => adminKeyHolder.lock()} />
+          </HorizontalStack>
+        </div>
+      </HeaderActions>
     );
   }
   if (pageHasPill) {
