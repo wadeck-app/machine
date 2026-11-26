@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { CompactSelect, RefreshButton } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
 import { COMMAND_TEXT, EXIT_FAIL, EXIT_NONE, EXIT_OK, INPUT, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, PAGE_BUTTON, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
@@ -89,6 +90,11 @@ interface Filters {
   text: string;
 }
 
+/** The options, plus the filter of the address when it is not one of them (a hand-edited link or a machine that left the log): the select shows it instead of a wrong choice. */
+function withCurrent(options: Array<{ value: string; label: string }>, current: string): Array<{ value: string; label: string }> {
+  return current === '' || options.some((o) => o.value === current) ? options : [...options, { value: current, label: current }];
+}
+
 const NO_FILTERS: Filters = { direction: '', machine: '', outcome: '', since: '', text: '' };
 const FILTER_KEYS = Object.keys(NO_FILTERS) as Array<keyof Filters>;
 
@@ -163,7 +169,7 @@ const COLUMNS: Array<{ label: string; className: string }> = [
  */
 export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) {
   const defaultSize = PAGE_SIZES.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE;
-  const ids = { direction: useId(), machine: useId(), outcome: useId(), period: useId(), search: useId(), size: useId() };
+  const searchId = useId();
   const [initial] = useState(() => stateFromAddress(defaultSize));
   const [filters, setFilters] = useState<Filters>(initial.filters);
   const [searchText, setSearchText] = useState(initial.filters.text);
@@ -245,49 +251,16 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
   return (
     <section className="flex flex-col gap-3" aria-label="Activity">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-xs text-muted" htmlFor={ids.direction}>
-          Direction
-          <select id={ids.direction} className={INPUT} value={filters.direction} onChange={(e) => change('direction', e.target.value)}>
-            {DIRECTIONS.map((d) => (
-              <option key={d.value} value={d.value}>{d.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-muted" htmlFor={ids.machine}>
-          Machine
-          <select id={ids.machine} className={INPUT} value={filters.machine} onChange={(e) => change('machine', e.target.value)}>
-            <option value="">All machines</option>
-            {filters.machine !== '' && !(data?.machines ?? []).includes(filters.machine) ? <option value={filters.machine} style={MONO_STYLE}>{filters.machine}</option> : null}
-            {(data?.machines ?? []).map((m) => (
-              <option key={m} value={m} style={MONO_STYLE}>{m}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-muted" htmlFor={ids.outcome}>
-          Outcome
-          <select id={ids.outcome} className={INPUT} value={filters.outcome} onChange={(e) => change('outcome', e.target.value)}>
-            <option value="">All outcomes</option>
-            {(data?.outcomes ?? []).map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-            {filters.outcome !== '' && !(data?.outcomes ?? []).includes(filters.outcome) ? <option value={filters.outcome}>{filters.outcome}</option> : null}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-muted" htmlFor={ids.period}>
-          Period
-          <select id={ids.period} className={INPUT} value={filters.since} onChange={(e) => change('since', e.target.value)}>
-            {PERIODS.map((p) => (
-              <option key={p.since} value={p.since}>{p.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-muted" htmlFor={ids.search}>
+        {/* The toolbar selects carry no visible label (CompactSelect names them for a screen reader): each default option says what it filters. */}
+        <CompactSelect size="sm" ariaLabel="Direction" value={filters.direction} options={DIRECTIONS} onChange={(v) => change('direction', v)} />
+        <CompactSelect size="sm" ariaLabel="Machine" value={filters.machine} options={withCurrent([{ value: '', label: 'All machines' }, ...(data?.machines ?? []).map((m) => ({ value: m, label: m }))], filters.machine)} onChange={(v) => change('machine', v)} />
+        <CompactSelect size="sm" ariaLabel="Outcome" value={filters.outcome} options={withCurrent([{ value: '', label: 'All outcomes' }, ...(data?.outcomes ?? []).map((o) => ({ value: o, label: o }))], filters.outcome)} onChange={(v) => change('outcome', v)} />
+        <CompactSelect size="sm" ariaLabel="Period" value={filters.since} options={PERIODS.map((p) => ({ value: p.since, label: p.label }))} onChange={(v) => change('since', v)} />
+        <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-muted" htmlFor={searchId}>
           Search
-          <input id={ids.search} type="search" className={INPUT} placeholder="a word of the command, a machine, an outcome" maxLength={100} value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+          <input id={searchId} type="search" className={INPUT} placeholder="a word of the command, a machine, an outcome" maxLength={100} value={searchText} onChange={(e) => setSearchText(e.target.value)} />
         </label>
-        <button type="button" className={PAGE_BUTTON} onClick={() => setReload((n) => n + 1)}>
-          Refresh
-        </button>
+        <RefreshButton loading={loading} onClick={() => setReload((n) => n + 1)} />
       </div>
 
       {error !== undefined ? (
@@ -361,13 +334,9 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         <button type="button" className={PAGE_BUTTON} aria-label="Last page" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)}>
           Last
         </button>
-        <label className="ml-auto flex items-center gap-2 text-xs text-muted" htmlFor={ids.size}>
+        <label className="ml-auto flex items-center gap-2 text-xs text-muted">
           Rows per page
-          <select id={ids.size} className={INPUT} value={size} onChange={(e) => { setSize(Number(e.target.value)); setPage(1); }}>
-            {(data?.pageSizes ?? PAGE_SIZES).map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
+          <CompactSelect size="sm" ariaLabel="Rows per page" value={String(size)} options={(data?.pageSizes ?? PAGE_SIZES).map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => { setSize(Number(v)); setPage(1); }} />
         </label>
       </nav>
     </section>

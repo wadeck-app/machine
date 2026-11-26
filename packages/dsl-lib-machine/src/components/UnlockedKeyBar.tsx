@@ -124,6 +124,7 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
   if (variant === 'chip') {
     const remaining = expiresAt - now;
     return (
+      // TODO(dsl-ui): this container (KEY_PILL: fixed position, placed against the page title) stays custom until dsl-ui offers a page header slot; the controls inside are already standard components.
       <div data-testid="unlocked-key-chip" title={PILL_TIP} className={PILL} style={top === null ? undefined : { top }}>
         <span role="status" aria-live="off" className="inline-flex items-center gap-1.5">
           <span data-testid="unlocked-key-dot" aria-hidden="true" className={`h-2 w-2 rounded-full ${remaining < 60_000 ? 'bg-warning' : 'bg-success'}`} />

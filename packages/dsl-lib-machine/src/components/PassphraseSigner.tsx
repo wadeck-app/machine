@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { adminKeyHint, signRegistration, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
-import { INPUT, TEXT_ERROR } from '../lib/styleTokens.js';
+import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
+import { TEXT_ERROR } from '../lib/styleTokens.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { PassphraseHint } from './PassphraseHint.js';
@@ -52,7 +52,7 @@ async function readKeyFile(url: string): Promise<string> {
  * @registryTags passphrase signing admin
  */
 export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSigned, onUnlocked }: PassphraseSignerProps) {
-  const passphraseInput = useRef<HTMLInputElement>(null);
+  const passphraseInput = useRef<FieldSecretHandle>(null);
   const { unlocked } = useAdminKey();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +85,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
   }, [keyFileUrl]);
 
   const unlock = async () => {
-    const passphrase = passphraseInput.current?.value ?? '';
+    const passphrase = passphraseInput.current?.read() ?? '';
     if (passphrase === '') {
       setError('Enter the admin passphrase to unlock the key.');
       return;
@@ -101,9 +101,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      if (passphraseInput.current) {
-        passphraseInput.current.value = '';
-      }
+      passphraseInput.current?.clear();
       setBusy(false);
     }
   };
@@ -150,11 +148,8 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
           {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
           <PassphraseHint hint={hint} />
-          <label className="flex flex-col gap-1 text-sm">
-            Admin passphrase
-            {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied at submit); FieldText keeps its value in React state, which the passphrase rule forbids */}
-            <input ref={passphraseInput} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase" autoComplete="current-password" className={INPUT} />
-          </label>
+          {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read at submit and cleared at once. */}
+          <FieldSecret ref={passphraseInput} label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" />
           <KeepUnlockedSelect busy={busy} />
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeResolution } from '../lib/lifetimeChoice.js';
-import { INPUT, NOTICE_WARNING, TEXT_ERROR } from '../lib/styleTokens.js';
+import { NOTICE_WARNING, TEXT_ERROR } from '../lib/styleTokens.js';
 import { LifetimePicker } from './LifetimePicker.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
@@ -41,7 +41,7 @@ export interface InlineAllowFormProps {
 export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', defaultChoice, fixedChoice, busy = false, error = null, onSubmit, onCancel, cancelLabel = 'Cancel' }: InlineAllowFormProps) {
   const [choice, setChoice] = useState<LifetimeChoice>(defaultChoice ?? { kind: defaultKind, customKind: 'duration', customText: '' });
   const [localError, setLocalError] = useState<string | null>(null);
-  const passphrase = useRef<HTMLInputElement>(null);
+  const passphrase = useRef<FieldSecretHandle>(null);
   const { unlocked } = useAdminKey();
 
   // The form opens to be signed: the cursor is in the passphrase field (an Enter on an empty field signs nothing).
@@ -68,15 +68,15 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
       onSubmit(resolution, () => null);
       return;
     }
-    const input = passphrase.current;
-    if (input === null || input.value === '') {
+    const field = passphrase.current;
+    if (field === null || field.read() === '') {
       setLocalError('Enter the admin passphrase to sign. Nothing was signed.');
       return;
     }
     setLocalError(null);
     onSubmit(resolution, () => {
-      const value = input.value;
-      input.value = '';
+      const value = field.read();
+      field.clear();
       return value;
     });
   };
@@ -103,11 +103,10 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
           <PassphraseHint hint={hint} />
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex min-w-48 flex-1 flex-col gap-1 text-sm">
-              Admin passphrase
-              {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
-              <input ref={passphrase} type="password" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} className={INPUT} />
-            </label>
+            <div className="min-w-48 flex-1">
+              {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
+              <FieldSecret ref={passphrase} label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+            </div>
             <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
           </div>
         </>

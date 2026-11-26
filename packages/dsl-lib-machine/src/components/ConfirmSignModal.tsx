@@ -1,11 +1,11 @@
 import React, { useEffect, useId, useRef } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { PassphraseHint } from './PassphraseHint.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
-import { INPUT, MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
 // approve and revoke later). It is NOT a registry component on purpose (no @registryCategory): it can never be wired from a view, so the passphrase
@@ -47,7 +47,7 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([di
 export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, hint = null, needsPassphrase = true, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
-  const passphrase = useRef<HTMLInputElement>(null);
+  const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
   const { unlocked } = useAdminKey();
 
@@ -91,15 +91,15 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
       onConfirm(() => null);
       return;
     }
-    const input = passphrase.current;
-    if (input === null || input.value === '') {
+    const field = passphrase.current;
+    if (field === null || field.read() === '') {
       setLocalError('Enter the admin passphrase to sign. Nothing was signed.');
       return;
     }
     setLocalError(null);
     onConfirm(() => {
-      const value = input.value;
-      input.value = '';
+      const value = field.read();
+      field.clear();
       return value;
     });
   };
@@ -131,11 +131,10 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
               <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
               <PassphraseHint hint={hint} />
               <div className="flex flex-wrap items-end gap-3">
-                <label className="flex min-w-48 flex-1 flex-col gap-1 text-sm">
-                  Admin passphrase
-                  {/* violations-suppress: react/no-raw-input the passphrase must live only in this uncontrolled element (read and emptied by take()); FieldText keeps its value in React state, which the passphrase rule forbids */}
-                  <input ref={passphrase} type="password" name="machine-admin-passphrase" id="machine-admin-passphrase-confirm" autoComplete="current-password" disabled={busy} className={INPUT} />
-                </label>
+                <div className="min-w-48 flex-1">
+                  {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
+                  <FieldSecret ref={passphrase} label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+                </div>
               <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
               </div>
             </>

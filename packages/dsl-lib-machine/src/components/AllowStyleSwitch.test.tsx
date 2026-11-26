@@ -7,8 +7,7 @@ import { AllowStyleSwitch } from './AllowStyleSwitch.js';
 describe('AllowStyleSwitch', () => {
   it('is a radiogroup with Dialog and Inline (the dsl-ui RadioGroup), the current one checked', () => {
     render(<AllowStyleSwitch value="inline" onChange={() => undefined} />);
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
-    expect(screen.getByText('Allow style')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Allow style' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Inline' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Dialog' })).not.toBeChecked();
   });

@@ -1,7 +1,7 @@
 import React from 'react';
-import { FieldText } from '@wadeck-app/dsl-ui';
+import { CompactSelect, FieldText } from '@wadeck-app/dsl-ui';
 import { LIFETIME_PRESETS, lifetimeInput, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
-import { INPUT, TEXT_ERROR } from '../lib/styleTokens.js';
+import { TEXT_ERROR } from '../lib/styleTokens.js';
 
 // The lifetime of an Allow as ONE small select on the row of the buttons of a card (the default is visible, changeable before the click). "Custom" adds a
 // kind select and a field next to it. The long explanation of each lifetime is not here: it is in the Details of the card.
@@ -16,6 +16,8 @@ export interface CompactLifetimeProps {
   problem?: string | null;
 }
 
+const PRESET_OPTIONS = LIFETIME_PRESETS.map((p) => ({ value: p.kind, label: p.label }));
+
 const CUSTOM_KINDS = [
   { value: 'duration', label: 'A duration' },
   { value: 'calls', label: 'A number of calls' },
@@ -27,20 +29,10 @@ export function CompactLifetime({ label = 'Lifetime', choice, onChange, disabled
   const shown = problem ?? typed;
   return (
     <>
-      {/* violations-suppress: react/no-raw-input a one-line select on the row of the buttons: FieldSelect always stacks a visible label above the control, which doubles the height of the card */}
-      <select aria-label={label} title="How long the entry is allowed" className={INPUT} value={choice.kind} disabled={disabled} onChange={(e) => onChange({ ...choice, kind: e.target.value as LifetimeKind })}>
-        {LIFETIME_PRESETS.map((p) => (
-          <option key={p.kind} value={p.kind}>{p.label}</option>
-        ))}
-      </select>
+      <CompactSelect size="sm" ariaLabel={label} value={choice.kind} options={PRESET_OPTIONS} disabled={disabled} onChange={(v) => onChange({ ...choice, kind: v as LifetimeKind })} />
       {choice.kind === 'custom' && (
         <>
-          {/* violations-suppress: react/no-raw-input same as above: the kind of the custom limit, on the same row */}
-          <select aria-label="Limit by" className={INPUT} value={choice.customKind} disabled={disabled} onChange={(e) => onChange({ ...choice, customKind: e.target.value as 'calls' | 'duration', customText: '' })}>
-            {CUSTOM_KINDS.map((k) => (
-              <option key={k.value} value={k.value}>{k.label}</option>
-            ))}
-          </select>
+          <CompactSelect size="sm" ariaLabel="Limit by" value={choice.customKind} options={CUSTOM_KINDS} disabled={disabled} onChange={(v) => onChange({ ...choice, customKind: v as 'calls' | 'duration', customText: '' })} />
           <div className="w-32">
             <FieldText
               label={choice.customKind === 'calls' ? 'Number of calls (1 to 10000)' : 'Duration (like 30m, 2h, 7d; at most 365d)'}
