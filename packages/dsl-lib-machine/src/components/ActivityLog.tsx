@@ -237,10 +237,10 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
     <section className="flex flex-col gap-3" aria-label="Activity">
       <div className="flex flex-wrap items-end gap-3">
         {/* The toolbar selects carry no visible label (CompactSelect names them for a screen reader): each default option says what it filters. */}
-        <CompactSelect size="sm" ariaLabel="Direction" value={filters.direction} options={DIRECTIONS} onChange={(v) => change('direction', v)} />
-        <CompactSelect size="sm" ariaLabel="Machine" value={filters.machine} options={withCurrent([{ value: '', label: 'All machines' }, ...(data?.machines ?? []).map((m) => ({ value: m, label: m }))], filters.machine)} onChange={(v) => change('machine', v)} />
-        <CompactSelect size="sm" ariaLabel="Outcome" value={filters.outcome} options={withCurrent([{ value: '', label: 'All outcomes' }, ...(data?.outcomes ?? []).map((o) => ({ value: o, label: o }))], filters.outcome)} onChange={(v) => change('outcome', v)} />
-        <CompactSelect size="sm" ariaLabel="Period" value={filters.since} options={PERIODS.map((p) => ({ value: p.since, label: p.label }))} onChange={(v) => change('since', v)} />
+        <CompactSelect size="sm" ariaLabel="Direction" tooltip="Direction" value={filters.direction} options={DIRECTIONS} onChange={(v) => change('direction', v)} />
+        <CompactSelect size="sm" ariaLabel="Machine" tooltip="Machine" value={filters.machine} options={withCurrent([{ value: '', label: 'All machines' }, ...(data?.machines ?? []).map((m) => ({ value: m, label: m }))], filters.machine)} onChange={(v) => change('machine', v)} />
+        <CompactSelect size="sm" ariaLabel="Outcome" tooltip="Outcome" value={filters.outcome} options={withCurrent([{ value: '', label: 'All outcomes' }, ...(data?.outcomes ?? []).map((o) => ({ value: o, label: o }))], filters.outcome)} onChange={(v) => change('outcome', v)} />
+        <CompactSelect size="sm" ariaLabel="Period" tooltip="Period" value={filters.since} options={PERIODS.map((p) => ({ value: p.since, label: p.label }))} onChange={(v) => change('since', v)} />
         <SearchBar size="sm" placeholder="Search commands, machines, outcomes" value={filters.text} onChange={(v) => change('text', v.slice(0, 100))} />
         <RefreshButton loading={loading} onClick={() => setReload((n) => n + 1)} />
       </div>
@@ -308,7 +308,7 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         <ButtonAction label="Last" ariaLabel="Last page" variant="secondary" size="xs" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)} />
         <label className="ml-auto flex items-center gap-2 text-xs text-muted">
           Rows per page
-          <CompactSelect size="sm" ariaLabel="Rows per page" value={String(size)} options={(data?.pageSizes ?? PAGE_SIZES).map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => { setSize(Number(v)); setPage(1); }} />
+          <CompactSelect size="sm" ariaLabel="Rows per page" tooltip="Rows per page" value={String(size)} options={(data?.pageSizes ?? PAGE_SIZES).map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => { setSize(Number(v)); setPage(1); }} />
         </label>
       </nav>
     </section>

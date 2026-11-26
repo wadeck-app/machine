@@ -32,6 +32,7 @@ import { FigureRow } from '@wadeck-app/dsl-ui/dist/components/display/FigureRow.
 import { JsonViewer } from '@wadeck-app/dsl-ui/dist/components/display/JsonViewer.js'
 const MarkdownLazy = React.lazy(() => import('@wadeck-app/dsl-ui/dist/components/display/Markdown.js').then(m => ({ default: m.Markdown })))
 const Markdown = (props: React.ComponentProps<typeof MarkdownLazy>) => <LazyBoundary><MarkdownLazy {...props} /></LazyBoundary>
+import { Notice } from '@wadeck-app/dsl-ui/dist/components/display/Notice.js'
 import { PageHeader } from '@wadeck-app/dsl-ui/dist/components/display/PageHeader.js'
 import { Progress } from '@wadeck-app/dsl-ui/dist/components/display/Progress.js'
 import { RelativeDate } from '@wadeck-app/dsl-ui/dist/components/display/RelativeDate.js'
@@ -77,6 +78,7 @@ import { PageContent } from '@wadeck-app/dsl-ui/dist/components/layout/PageConte
 import { PageSection } from '@wadeck-app/dsl-ui/dist/components/layout/PageSection.js'
 import { ScrollArea } from '@wadeck-app/dsl-ui/dist/components/layout/ScrollArea.js'
 import { Section } from '@wadeck-app/dsl-ui/dist/components/layout/Section.js'
+import { SplitLayout } from '@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js'
 import { StatTile } from '@wadeck-app/dsl-ui/dist/components/layout/StatTile.js'
 import { TableRowActions } from '@wadeck-app/dsl-ui/dist/components/layout/TableRowActions.js'
 import { ThemeScope } from '@wadeck-app/dsl-ui/dist/components/layout/ThemeScope.js'
@@ -893,6 +895,19 @@ export const MarkdownEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const NoticeEntry: ComponentRegistryEntry = {
+	name: 'Notice', category: 'atomic', tags: ["notice","message","feedback","alert","banner"],
+	nodeSchema: null as never,
+	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['NoticeNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'Notice.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/display/Notice.js').NoticeProps['label']
+		const variant = coerceProp(resolveExpressionValue(node['variant'], ctx), 'Notice.variant', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/display/Notice.js').NoticeProps['variant']
+		const showMoreLabel = coerceProp(resolveExpressionValue(node['showMoreLabel'], ctx), 'Notice.showMoreLabel', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/display/Notice.js').NoticeProps['showMoreLabel']
+		const showLessLabel = coerceProp(resolveExpressionValue(node['showLessLabel'], ctx), 'Notice.showLessLabel', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/display/Notice.js').NoticeProps['showLessLabel']
+		return <Notice label={label} variant={variant} showMoreLabel={showMoreLabel} showLessLabel={showLessLabel} />
+	},
+}
+
 export const PageHeaderEntry: ComponentRegistryEntry = {
 	name: 'PageHeader', category: 'composite', tags: ["header"],
 	nodeSchema: null as never,
@@ -1418,6 +1433,23 @@ export const SectionEntry: ComponentRegistryEntry = {
 				{items ? renderChildren(items, registry, ctx) : null}
 			</Section>
 		)
+	},
+}
+
+export const SplitLayoutEntry: ComponentRegistryEntry = {
+	name: 'SplitLayout', category: 'disposition', tags: ["layout","split","sidebar","responsive"],
+	nodeSchema: null as never,
+	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['SplitLayoutNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
+	render: ({ node, registry, ctx }: RegistryRenderProps) => {
+		const main = node['main'] as unknown[] | undefined
+		const side = node['side'] as unknown[] | undefined
+		const sidePosition = coerceProp(resolveExpressionValue(node['sidePosition'], ctx), 'SplitLayout.sidePosition', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['sidePosition']
+		const sideWidth = coerceProp(resolveExpressionValue(node['sideWidth'], ctx), 'SplitLayout.sideWidth', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['sideWidth']
+		const sticky = coerceProp(resolveExpressionValue(node['sticky'], ctx), 'SplitLayout.sticky', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['sticky']
+		const stickyTop = coerceProp(resolveExpressionValue(node['stickyTop'], ctx), 'SplitLayout.stickyTop', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['stickyTop']
+		const gap = coerceProp(resolveExpressionValue(node['gap'], ctx), 'SplitLayout.gap', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['gap']
+		const sideFirstWhenStacked = coerceProp(resolveExpressionValue(node['sideFirstWhenStacked'], ctx), 'SplitLayout.sideFirstWhenStacked', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/SplitLayout.js').SplitLayoutProps['sideFirstWhenStacked']
+		return <SplitLayout main={main ? renderChildren(main, registry, ctx) : null} side={side ? renderChildren(side, registry, ctx) : null} sidePosition={sidePosition} sideWidth={sideWidth} sticky={sticky} stickyTop={stickyTop} gap={gap} sideFirstWhenStacked={sideFirstWhenStacked} />
 	},
 }
 
@@ -2003,6 +2035,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	FigureRowEntry,
 	JsonViewerEntry,
 	MarkdownEntry,
+	NoticeEntry,
 	PageHeaderEntry,
 	ProgressEntry,
 	RelativeDateEntry,
@@ -2046,6 +2079,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	PageSectionEntry,
 	ScrollAreaEntry,
 	SectionEntry,
+	SplitLayoutEntry,
 	StatTileEntry,
 	TableRowActionsEntry,
 	ThemeScopeEntry,
@@ -2116,6 +2150,7 @@ FetchSpinnerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["loading"
 FigureRowEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items"] : [];
 JsonViewerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["field","maxHeight","row"] : [];
 MarkdownEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allowImages","collapsed","maxHeight","text"] : [];
+NoticeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","showLessLabel","showMoreLabel","variant"] : [];
 PageHeaderEntry.allowedChildren = {"headerActions":["button","action"]};
 PageHeaderEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["headerActions","icon","size","subtitle","title"] : [];
 ProgressEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","layout","max","showValue","size","value","valueLabel","variant"] : [];
@@ -2177,6 +2212,7 @@ PageSectionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actions",
 ScrollAreaEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["axis","fill","items","scheme"] : [];
 SectionEntry.allowedChildren = {"items":["layout","table","form","display","composite"]};
 SectionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["fill","items","title"] : [];
+SplitLayoutEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["gap","main","side","sideFirstWhenStacked","sidePosition","sideWidth","sticky","stickyTop"] : [];
 StatTileEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["compact","external","fill","href","icon","label","loading","nowrap","trend","value"] : [];
 TableRowActionsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items"] : [];
 TableRowActionsEntry.providesContext = ["ButtonContext"];
