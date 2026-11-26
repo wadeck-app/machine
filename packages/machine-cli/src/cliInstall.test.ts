@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { INSTALLABLES, findInstallable, type Installable } from '@wadeck-app/machine-core';
+import { INSTALLABLES, findInstallable, unsupportedMessage, type Installable } from '@wadeck-app/machine-core';
 import { groupHelpText } from './cliHelp.js';
 import { fakeInstall, type FakeInstallOptions } from './installTesting.js';
 import { cli } from './testing.js';
@@ -108,7 +108,8 @@ describe('machine install (list)', () => {
         platforms: d.platforms,
         supportedHere: false,
         state: 'unsupported here',
-        reason: 'not supported on macos yet (supported: linux)',
+        // idle-suspend on macOS says WHY (its probes are not validated on a real Mac); the other item keeps the generic text.
+        reason: unsupportedMessage(d, 'darwin'),
         files: [],
         missing: [],
         nextSteps: [],

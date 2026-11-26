@@ -537,3 +537,33 @@ describe('machine install idle-suspend: cadence and wake grace (decision 113)', 
     expect(summary.out).toMatch(/--wake-grace-minutes <1\.\.60>/);
   });
 });
+
+describe('on macOS (darwin): not available yet, with the reason', () => {
+  const REASON = /idle-suspend is not available on macOS yet: its probes .* are not validated on a real Mac/;
+
+  it.each([[[]], [['--dry-run']], [['--check']], [['--remove']], [['--refresh']], [['--minutes', '5', '--rdp-minutes', '5', '--ssh-minutes', '5', '--wake-grace-minutes', '1', '--dry-run']], [['--json']]])('idle-suspend %j: exit 1, the cause and the fix, nothing run', async (flags) => {
+    const b = box({ platform: 'darwin' });
+    const r = await b.go(['idle-suspend', ...flags]);
+    expect(r.code, r.out + r.err).toBe(1);
+    expect(r.err).toMatch(/^\[fail\] not supported on macos yet \(supported: linux\): /);
+    expect(r.err).toMatch(REASON);
+    expect(r.err).toContain('macos-idle-suspend-wake.md');
+    expect(r.err).toContain('Nothing was changed');
+    expect(b.fake.calls).toEqual([]);
+    expect(b.sudoCalls()).toEqual([]);
+  });
+
+  it('a bad option is still the usage error (the options are validated the same on every platform)', async () => {
+    const r = await box({ platform: 'darwin' }).go(['idle-suspend', '--minutes', '0']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--minutes must be a whole number/);
+  });
+
+  it('the list shows the cause under the item (the generic text is not repeated)', async () => {
+    const r = await box({ platform: 'darwin' }).go([]);
+    const text = r.out.replace(/\s+/g, ' ');
+    expect(text).toContain('idle-suspend not supported here (platforms: linux)');
+    expect(text).toMatch(REASON);
+    expect(text.match(/not supported on macos yet/g) ?? []).toHaveLength(0);
+  });
+});

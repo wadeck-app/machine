@@ -22,19 +22,18 @@ import {
   idleCadenceSeconds,
   idleCadenceText,
   idleSuspendDelayText,
-  idleSuspendScript,
-  idleSuspendServiceUnit,
-  idleSuspendTimerUnit,
   isSafeAbsolutePath,
 } from './idleSuspend.js';
+import { IDLE_DARWIN_UNAVAILABLE } from './idleSuspendDarwin.js';
+import { idleSuspendSchedulerFor, idleSuspendScriptFor } from './idleSuspendPlatform.js';
+import { InstallError } from './installError.js';
 
 // `machine install <id>` (install.md): the registry of what `machine` can install on the machine it runs on, and for each item a PLAN function.
 // Pure: no file, no process, no prompt. A plan is DATA (the files to write with their exact content, the commands to run, what the owner does
 // next) built from facts the caller measured (platform, user name, absolute tool paths). The executor in machine-cli runs it with an injected
 // fs and exec. To add an installable: write its `Installable` (one `plan` function per platform it supports) and push it to INSTALLABLES.
 
-/** A refusal with its cause and fix in the message: printed as is by the command. */
-export class InstallError extends Error {}
+export { InstallError };
 
 /** Facts about the machine, measured by the executor (never read here). */
 export interface InstallFacts {
@@ -145,6 +144,8 @@ export interface Installable {
   summaryLine: string;
   /** `process.platform` values this build can install on. */
   platforms: string[];
+  /** Why a platform that is NOT in `platforms` is refused, with the fix: appended to the unsupported message (a platform without an entry gets the generic message). */
+  unavailable?: Record<string, string>;
   /** What the owner accepts by installing AND allowing it: printed in the help and in the output. */
   consequence: string;
   /** Throws `InstallError` on an unsupported platform or a fact that cannot be written safely. */
@@ -173,7 +174,8 @@ const FRIENDLY: Record<string, string> = { win32: 'windows', darwin: 'macos' };
 export const platformName = (platform: string): string => FRIENDLY[platform] ?? platform;
 
 export function unsupportedMessage(def: Installable, platform: string): string {
-  return `not supported on ${platformName(platform)} yet (supported: ${def.platforms.map(platformName).join(', ')})`;
+  const why = def.unavailable?.[platform];
+  return `not supported on ${platformName(platform)} yet (supported: ${def.platforms.map(platformName).join(', ')})${why === undefined ? '' : `: ${why}`}`;
 }
 
 /** Exit code of `rootReadArgv` for a file that does not exist (sudo itself answers 1 when it fails: the two never mix). */
@@ -362,10 +364,20 @@ const SUSPEND: Installable = {
 const missingTool = (what: string, pkg: string): InstallError =>
   new InstallError(`${what} was not found on this machine (\`command -v ${what}\` found nothing): \`machine install idle-suspend\` needs it to take its decision (it is part of ${pkg}). Install it with your package manager and run the command again. Nothing was changed`);
 
+// The plan is selected by platform. Only linux is registered (IDLE_SUSPEND.platforms): the darwin probes are not validated on a real Mac, so a darwin host is refused
+// above with the reason (IDLE_DARWIN_UNAVAILABLE) before any darwin code runs. The script and the scheduler files come from the platform dispatchers.
 function idleSuspendPlan(facts: InstallFacts): InstallPlan {
   if (!IDLE_SUSPEND.platforms.includes(facts.platform)) {
     throw new InstallError(unsupportedMessage(IDLE_SUSPEND, facts.platform));
   }
+  return idleSuspendLinuxPlan(facts);
+}
+
+const failMissing = (id: string): never => {
+  throw new InstallError(`internal: the scheduler of this platform has no ${id} file`);
+};
+
+function idleSuspendLinuxPlan(facts: InstallFacts): InstallPlan {
   for (const [what, value] of [['systemctl', facts.systemctlPath], ['sudo', facts.sudoPath]] as const) {
     if (!isSafeAbsolutePath(value)) {
       throw new InstallError(`the path of ${what} ${JSON.stringify(value.slice(0, 80))} cannot be written into a script and a command (it must be absolute, with letters, digits and . _ + - / only): check \`command -v ${what}\``);
@@ -385,9 +397,10 @@ function idleSuspendPlan(facts: InstallFacts): InstallPlan {
   const wakeGraceMinutes = facts.wakeGraceMinutes ?? facts.installedWakeGraceMinutes ?? IDLE_WAKE_GRACE_DEFAULT_MINUTES;
   const cadence = idleCadenceSeconds(minutes, rdpMinutes, sshMinutes);
   const cadenceText = idleCadenceText(cadence);
-  const script = idleSuspendScript({ minutes, rdpMinutes, sshMinutes, wakeGraceMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, loginctl: t.loginctl ?? IDLE_DEFAULT_LOGINCTL, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
-  const service = idleSuspendServiceUnit();
-  const timer = idleSuspendTimerUnit(cadence);
+  const script = idleSuspendScriptFor(facts.platform, { minutes, rdpMinutes, sshMinutes, wakeGraceMinutes, root: '', configDir: facts.configDir, tools: { date, ss, systemdInhibit, logger, systemctl: facts.systemctlPath, loginctl: t.loginctl ?? IDLE_DEFAULT_LOGINCTL, runuser: t.runuser ?? IDLE_DEFAULT_RUNUSER, xprintidle: t.xprintidle ?? IDLE_DEFAULT_XPRINTIDLE } });
+  const scheduler = idleSuspendSchedulerFor(facts.platform, { cadenceSeconds: cadence });
+  const service = (scheduler.find((f) => f.id === 'service') ?? failMissing('service')).content;
+  const timer = (scheduler.find((f) => f.id === 'timer') ?? failMissing('timer')).content;
   const file = (id: string, path: string, mode: string, content: string, describe: string): PlannedFile => ({ id, installable: 'idle-suspend', path, mode, owner: 'root', group: 'root', content, sha256: sha256Hex(content), describe, rootOnly: false });
   const sudo = facts.sudoPath;
   const systemctl = facts.systemctlPath;
@@ -436,6 +449,7 @@ const IDLE_SUSPEND: Installable = {
   description: `suspend this machine by itself when it is really idle (a root systemd timer every 30 s, 1 min or 2 min, from the smallest of the three minutes options: no machine peer connection, no ssh session with a terminal that had input in the last --ssh-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES} (default ${IDLE_SSH_DEFAULT_MINUTES}), no ssh connection without a terminal at ${IDLE_SSH_NOTTY_BYTES_PER_SECOND} B/s or more, keyboard/mouse input idle (needs xprintidle: --minutes without an RDP connection, --rdp-minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}, default ${IDLE_RDP_DEFAULT_MINUTES}, when one is open), no machine request, low load, no sleep inhibitor, no keep-awake file for ${IDLE_DEFAULT_MINUTES} min by default, --minutes ${IDLE_MIN_MINUTES}..${IDLE_MAX_MINUTES}); --wake-grace-minutes ${IDLE_WAKE_GRACE_MIN_MINUTES}..${IDLE_WAKE_GRACE_MAX_MINUTES} (default ${IDLE_WAKE_GRACE_DEFAULT_MINUTES}): no automatic suspend for that long after every resume; a disconnected desktop session does not count; wake it with \`machine wake\``,
   summaryLine: 'suspends this box by itself when really idle (root timer, every 30 s to 2 min)',
   platforms: ['linux'],
+  unavailable: { darwin: IDLE_DARWIN_UNAVAILABLE },
   consequence:
     'This only RESTRICTS uptime: the box suspends itself when idle. It adds no network surface and no right for any peer (a peer keeps the box awake only by sending commands, as before). To keep it awake on purpose: touch /run/machine-keep-awake or <config dir>/keep-awake (content "keep awake until <epoch>" for a limited time); remove the file to release it.',
   plan: idleSuspendPlan,

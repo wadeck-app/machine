@@ -386,8 +386,10 @@ export function statusBlock(s: ItemStatus, options: BlockOptions): string[] {
   if (!s.supportedHere) {
     const lines = [`${s.id}  not supported here (platforms: ${s.platforms.join(', ')})`];
     // A platform that is supported but where the plan cannot be built has a cause the user can fix.
-    if (s.reason !== undefined && !/^not supported on \S+ yet/.test(s.reason)) {
-      lines.push(...wrap(s.reason, width, '  '));
+    // The generic "not supported on <os> yet (supported: ...)" is already said by the first line; what follows it (the cause of a platform with a known blocker) is shown.
+    const cause = s.reason?.replace(/^not supported on \S+ yet \(supported: [^)]*\)(: )?/, '');
+    if (cause !== undefined && cause !== '') {
+      lines.push(...wrap(cause, width, '  '));
     }
     return lines;
   }
