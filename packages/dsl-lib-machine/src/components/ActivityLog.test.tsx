@@ -212,7 +212,7 @@ describe('the filters', () => {
     render(<ActivityLog />);
     await screen.findByText('echo 1');
     const before = urls.length;
-    await user.type(screen.getByLabelText('Search'), 'df');
+    await user.type(screen.getByLabelText('Search commands, machines, outcomes'), 'df');
     await waitFor(() => expect(query(urls.at(-1) as string).get('text')).toBe('df'));
     // One request for the whole word, not one per key.
     expect(urls.length - before).toBe(1);
@@ -313,7 +313,7 @@ describe('the pages', () => {
     expect(await screen.findByText('echo 101')).toBeInTheDocument();
     const q = query(urls[0] as string);
     expect(Object.fromEntries(q)).toMatchObject({ page: '3', pageSize: '50', outcome: 'ran', machine: 'nas', since: '7d', text: 'df', direction: 'sent' });
-    expect(screen.getByLabelText('Search')).toHaveValue('df');
+    expect(screen.getByLabelText('Search commands, machines, outcomes')).toHaveValue('df');
     expect(screen.getByLabelText('Outcome')).toHaveValue('ran');
     expect(screen.getByLabelText('Rows per page')).toHaveValue('50');
   });

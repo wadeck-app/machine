@@ -149,7 +149,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
           <PassphraseHint hint={hint} />
           {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read at submit and cleared at once. */}
-          <FieldSecret ref={passphraseInput} label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" />
+          <FieldSecret ref={passphraseInput} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" />
           <KeepUnlockedSelect busy={busy} />
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />

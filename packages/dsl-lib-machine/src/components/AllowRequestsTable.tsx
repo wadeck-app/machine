@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ButtonAction } from '@wadeck-app/dsl-ui';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { dismissFailureMessage, dismissNotice } from '../lib/dismissNotice.js';
-import { ALLOW_BUTTON, NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
 import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
@@ -152,10 +152,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
                   <td className="px-2 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                     {rowCanAllow(r) ? (
-                      // violations-suppress: react/no-raw-button ButtonAction has no aria-label and dsl-ui's Button is not exported: the name "Allow <command>" tells the rows apart for a screen reader (looks like dsl-ui's primary Button, same tokens as its Badge)
-                      <button type="button" aria-label={`Allow ${r.command}`} onClick={() => setSelected(r)} className={ALLOW_BUTTON}>
-                        Allow
-                      </button>
+                      <ButtonAction label="Allow" ariaLabel={`Allow ${r.command}`} size="xs" onClick={() => setSelected(r)} />
                     ) : (
                       <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>
                     )}

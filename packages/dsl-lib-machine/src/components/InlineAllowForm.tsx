@@ -105,7 +105,7 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-48 flex-1">
               {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
-              <FieldSecret ref={passphrase} label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+              <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
             </div>
             <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
           </div>

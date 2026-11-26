@@ -39,8 +39,6 @@ export const TABLE_BODY_ROW = 'border-b border-border align-top';
 /** A body row whose cells are all centred vertically (the Allow table: one-line cells and the button sit on the middle of a two-line row). */
 export const TABLE_ROW_MIDDLE = 'border-b border-border align-middle';
 
-/** The Allow button of a table row: dsl-ui's primary solid fill (same pair as its Badge) with a visible keyboard focus ring. */
-export const ALLOW_BUTTON = 'inline-flex items-center rounded bg-primary px-3 py-1 text-xs font-medium text-on-solid transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1';
 
 /** A held request (a caller waits for the answer): a card that stands out from the table below it. */
 export const HELD_ITEM = 'flex flex-col gap-1.5 rounded-lg border border-warning bg-warning-bg px-3 py-2 text-warning-text';
@@ -57,9 +55,6 @@ export const HELD_COUNTDOWN_URGENT = 'whitespace-nowrap text-sm font-semibold ta
 export const PASSPHRASE_HINT = 'rounded border border-border bg-surface p-2 text-base text-content';
 export const PASSPHRASE_HINT_LABEL = 'font-semibold text-muted';
 
-/** Text input (same look as dsl-ui's Field* inputs). */
-export const INPUT = 'rounded border border-border bg-surface px-2 py-1 text-sm text-content focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50';
-
 /** Activity page (run-log): the outcome of a command, one pair of tokens per tone (same pairs as dsl-ui's Badge). */
 export const OUTCOME_SUCCESS = 'inline-block whitespace-nowrap rounded border border-success bg-success-bg px-2 py-0.5 text-xs text-success-text';
 export const OUTCOME_WARNING = 'inline-block whitespace-nowrap rounded border border-warning bg-warning-bg px-2 py-0.5 text-xs text-warning-text';
@@ -74,9 +69,8 @@ export const EXIT_OK = 'whitespace-nowrap font-medium tabular-nums text-success-
 export const EXIT_FAIL = 'whitespace-nowrap font-medium tabular-nums text-danger-text';
 export const EXIT_NONE = 'whitespace-nowrap text-muted';
 
-/** Activity page: the command column and the pager buttons. */
+/** Activity page: the command column. */
 export const COMMAND_TEXT = 'break-all text-sm text-content';
-export const PAGE_BUTTON = 'inline-flex items-center rounded border border-border bg-surface px-3 py-1 text-xs font-medium text-content transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 disabled:opacity-40';
 
 // @formatter:on
 

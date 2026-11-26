@@ -29,7 +29,7 @@ export function CompactLifetime({ label = 'Lifetime', choice, onChange, disabled
   const shown = problem ?? typed;
   return (
     <>
-      <CompactSelect size="sm" ariaLabel={label} value={choice.kind} options={PRESET_OPTIONS} disabled={disabled} onChange={(v) => onChange({ ...choice, kind: v as LifetimeKind })} />
+      <CompactSelect size="sm" ariaLabel={label} tooltip="How long the entry is allowed" value={choice.kind} options={PRESET_OPTIONS} disabled={disabled} onChange={(v) => onChange({ ...choice, kind: v as LifetimeKind })} />
       {choice.kind === 'custom' && (
         <>
           <CompactSelect size="sm" ariaLabel="Limit by" value={choice.customKind} options={CUSTOM_KINDS} disabled={disabled} onChange={(v) => onChange({ ...choice, customKind: v as 'calls' | 'duration', customText: '' })} />

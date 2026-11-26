@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { CompactSelect, RefreshButton } from '@wadeck-app/dsl-ui';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ButtonAction, CompactSelect, RefreshButton, SearchBar } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
-import { COMMAND_TEXT, EXIT_FAIL, EXIT_NONE, EXIT_OK, INPUT, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, PAGE_BUTTON, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
+import { COMMAND_TEXT, EXIT_FAIL, EXIT_NONE, EXIT_OK, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
 
 export interface ActivityRowData {
@@ -77,7 +77,6 @@ const EXIT_TONES: Record<ActivityRowData['exitTone'], string> = { ok: EXIT_OK, f
 
 /** The page is re-read this often while its first page is shown: a command sent from a terminal shows up without a click. */
 const REFRESH_MS = 15_000;
-const SEARCH_DELAY_MS = 300;
 /** The sizes the backend accepts (machine-core ACTIVITY_PAGE_SIZES). */
 const PAGE_SIZES = [25, 50, 100];
 const DEFAULT_PAGE_SIZE = 25;
@@ -169,10 +168,8 @@ const COLUMNS: Array<{ label: string; className: string }> = [
  */
 export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) {
   const defaultSize = PAGE_SIZES.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE;
-  const searchId = useId();
   const [initial] = useState(() => stateFromAddress(defaultSize));
   const [filters, setFilters] = useState<Filters>(initial.filters);
-  const [searchText, setSearchText] = useState(initial.filters.text);
   const [page, setPage] = useState(initial.page);
   const [size, setSize] = useState(initial.pageSize);
   const [data, setData] = useState<ActivityPageData | undefined>(undefined);
@@ -180,18 +177,6 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   const latest = useRef(0);
-
-  // The word typed is searched once the person stops typing: one request for a word, not one per key.
-  useEffect(() => {
-    if (searchText === filters.text) {
-      return undefined;
-    }
-    const timer = setTimeout(() => {
-      setFilters((f) => ({ ...f, text: searchText }));
-      setPage(1);
-    }, SEARCH_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [searchText, filters.text]);
 
   // The address follows the state (replace, not push: the Back button leaves the page, it does not replay every click).
   useEffect(() => {
@@ -256,19 +241,14 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         <CompactSelect size="sm" ariaLabel="Machine" value={filters.machine} options={withCurrent([{ value: '', label: 'All machines' }, ...(data?.machines ?? []).map((m) => ({ value: m, label: m }))], filters.machine)} onChange={(v) => change('machine', v)} />
         <CompactSelect size="sm" ariaLabel="Outcome" value={filters.outcome} options={withCurrent([{ value: '', label: 'All outcomes' }, ...(data?.outcomes ?? []).map((o) => ({ value: o, label: o }))], filters.outcome)} onChange={(v) => change('outcome', v)} />
         <CompactSelect size="sm" ariaLabel="Period" value={filters.since} options={PERIODS.map((p) => ({ value: p.since, label: p.label }))} onChange={(v) => change('since', v)} />
-        <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-muted" htmlFor={searchId}>
-          Search
-          <input id={searchId} type="search" className={INPUT} placeholder="a word of the command, a machine, an outcome" maxLength={100} value={searchText} onChange={(e) => setSearchText(e.target.value)} />
-        </label>
+        <SearchBar size="sm" placeholder="Search commands, machines, outcomes" value={filters.text} onChange={(v) => change('text', v.slice(0, 100))} />
         <RefreshButton loading={loading} onClick={() => setReload((n) => n + 1)} />
       </div>
 
       {error !== undefined ? (
         <div role="alert" className="flex flex-col items-start gap-2 rounded border border-danger bg-danger-bg p-3 text-sm text-danger-text">
           <span className={TEXT_ERROR}>{error}</span>
-          <button type="button" className={PAGE_BUTTON} onClick={() => setReload((n) => n + 1)}>
-            Retry
-          </button>
+          <ButtonAction label="Retry" variant="secondary" size="xs" onClick={() => setReload((n) => n + 1)} />
         </div>
       ) : null}
       {data?.chainText ? <p className={NOTICE_WARNING}>{data.chainText}</p> : null}
@@ -321,19 +301,11 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
       ) : null}
 
       <nav aria-label="Pages of the activity" className="flex flex-wrap items-center gap-2">
-        <button type="button" className={PAGE_BUTTON} aria-label="First page" disabled={page <= 1} onClick={() => goTo(1)}>
-          First
-        </button>
-        <button type="button" className={PAGE_BUTTON} aria-label="Previous page" disabled={page <= 1} onClick={() => goTo(page - 1)}>
-          Previous
-        </button>
+        <ButtonAction label="First" ariaLabel="First page" variant="secondary" size="xs" disabled={page <= 1} onClick={() => goTo(1)} />
+        <ButtonAction label="Previous" ariaLabel="Previous page" variant="secondary" size="xs" disabled={page <= 1} onClick={() => goTo(page - 1)} />
         <span className={TEXT_MUTED_SM}>{known ? `Page ${data.page} of ${grouped(pageCount)}${data.totalExact ? '' : '+'}` : `Page ${page}`}</span>
-        <button type="button" className={PAGE_BUTTON} aria-label="Next page" disabled={atLast} onClick={() => goTo(page + 1)}>
-          Next
-        </button>
-        <button type="button" className={PAGE_BUTTON} aria-label="Last page" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)}>
-          Last
-        </button>
+        <ButtonAction label="Next" ariaLabel="Next page" variant="secondary" size="xs" disabled={atLast} onClick={() => goTo(page + 1)} />
+        <ButtonAction label="Last" ariaLabel="Last page" variant="secondary" size="xs" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)} />
         <label className="ml-auto flex items-center gap-2 text-xs text-muted">
           Rows per page
           <CompactSelect size="sm" ariaLabel="Rows per page" value={String(size)} options={(data?.pageSizes ?? PAGE_SIZES).map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => { setSize(Number(v)); setPage(1); }} />
