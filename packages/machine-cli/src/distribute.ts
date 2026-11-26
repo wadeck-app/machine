@@ -112,6 +112,9 @@ export function adminMachineUuid(configDir: string): string | null {
   return adminMachineIdentity(configDir)?.uuid ?? null;
 }
 
+/** The machines whose clock skew was already told, per distribution report. */
+const skewTold = new WeakMap<DistributionReport, Set<string>>();
+
 /** Build and send one document. Returns false when the rest must not be attempted (the relay cannot be used at all). */
 async function put(sender: Sender, report: DistributionReport, to: Recipient, kind: DocumentKind, build: () => SignedDocument): Promise<boolean> {
   let document: SignedDocument;
@@ -131,7 +134,11 @@ async function put(sender: Sender, report: DistributionReport, to: Recipient, ki
     }
     // The target says its own clock in its answer: a skew above 30 s is told once (decision 88). A refusal already carries it in its cause.
     const skew = attempt.ok ? clockSkewProblem(to.name, attempt.peerNow, sender.now()) : undefined;
-    if (skew !== undefined && !(report.warnings ?? []).includes(skew)) {
+    // Once per machine, not per text: the text carries seconds of the sender clock, so two documents of one distribution can word it differently.
+    const told = skewTold.get(report) ?? new Set<string>();
+    if (skew !== undefined && !told.has(to.uuid)) {
+      told.add(to.uuid);
+      skewTold.set(report, told);
       (report.warnings ??= []).push(skew);
     }
     if (attempt.ok) {

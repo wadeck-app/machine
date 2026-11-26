@@ -113,6 +113,17 @@ describe('direct delivery first', () => {
     expect(text.out).toMatch(/\[warn\] laptop's clock is/);
   });
 
+  it('warns once per machine even when the sender clock moves between the documents (the text of the warning carries seconds)', async () => {
+    // Fixed clock reported by the target, a sender clock that advances by one second at every call: the two documents of one distribution give two different texts.
+    const reported = nowSeconds() - 200;
+    const skewed: DirectDelivery = async () => ({ ok: true, outcome: 'installed', ms: 10, peerNow: reported });
+    const { sender } = await senderWith(skewed);
+    let tick = nowSeconds();
+    const report = await distributePolicy(await signedPolicy(), { ...sender, now: () => tick++ });
+    expect(report.direct?.length).toBeGreaterThan(0);
+    expect(report.warnings).toHaveLength(1);
+  });
+
   it('says nothing for a skew of a few seconds, or when the target reported no clock', async () => {
     for (const peerNow of [nowSeconds() - 5, undefined]) {
       const direct: DirectDelivery = async () => ({ ok: true, outcome: 'installed', ms: 10, ...(peerNow !== undefined ? { peerNow } : {}) });
