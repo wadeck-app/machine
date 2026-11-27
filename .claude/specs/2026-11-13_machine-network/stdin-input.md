@@ -89,7 +89,7 @@ A meta family adds a parse check, and the parse must never interpret or execute 
 | Output cap (1 MiB, 60 s) | D4: unchanged for now; task-owner paginates. A per-entry declared `maxOutput` and `timeout` is the later option. |
 | Machine-readable "unreachable" | D5: a stable code in `--json` and a distinct exit code for refused vs unreachable; not requested yet, offered. |
 
-## Threat deltas (to add to threat-model.md as T-69 when approved)
+## Threat deltas (to add to threat-model.md as T-70 when approved)
 
 | Threat | Mitigation |
 |---|---|
