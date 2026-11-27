@@ -11,8 +11,8 @@ import type { PeerSession } from '@wadeck-app/machine-transport';
 export const DEFAULT_CATCHUP_TIMEOUT_MS = 10_000;
 /** Lists accepted in one frame: the bound of the set a machine keeps. */
 export const MAX_LISTS_PER_FRAME = 32;
-/** Exchanges a peer may start per minute on a server. */
-export const MAX_CATCHUPS_PER_MINUTE = 6;
+/** Exchanges a peer may start per minute on a server (flood guard, T-34). 30: a task project makes several `machine run` per minute, each one is an exchange. */
+export const MAX_CATCHUPS_PER_MINUTE = 30;
 /** The only text about a failure that is sent to a peer: nothing local (paths, system errors) ever leaves the machine. */
 export const UNAVAILABLE_FRAME_MESSAGE = 'the revocation lists of this machine do not fit its frame limit';
 export const RATE_LIMITED_MESSAGE = 'too many revocation exchanges from this peer: try again in a minute';

@@ -11,7 +11,7 @@ import { installRevocation, loadNetwork, recordRevocationSeen, revocationState, 
 import { startInboxLoop, type InboxLoop, type InboxTimer } from './inboxLoop.js';
 import { HoldTable } from '@wadeck-app/machine-core';
 import { createHoldLimitsReader } from './holdLimitsStore.js';
-import { startPeerListener, type ServicedPeerListener } from './peerService.js';
+import { startPeerListener, type PeerServiceDeps, type ServicedPeerListener } from './peerService.js';
 import { createRelayClient, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 import { removeDaemonPortFile, writeDaemonPortFile } from './daemonPortFile.js';
@@ -59,6 +59,8 @@ export interface DaemonStart {
   notices?: { allowLocal?: boolean };
   /** Tests only: the update manager, the bundle path and the periodic timer of the update check. */
   updates?: DaemonUpdates;
+  /** Tests only: the executor of allowed commands and its limits (default: machine-exec with the limits of peerService.ts). */
+  exec?: Pick<PeerServiceDeps, 'run' | 'timeoutMs' | 'maxOutputBytes'>;
   /** Tests only: replaces the registration of the module with app-core (the default one writes into the real app-core folder). */
   register?: (options: RegisterOnStartOptions) => Promise<void>;
 }
@@ -210,6 +212,7 @@ export async function startMachineDaemon(configDir: string, options: DaemonStart
         // A machine of the notice-recipients list may refuse a held request (decision 85).
         remoteDeny: { recipients: makeNoticeRecipients(configDir) },
         documents: { apply: applyDocument },
+        ...options.exec,
         onConnectionRejected: (reason) => log(`connection refused: ${reason}`),
         onProblem: log,
       },

@@ -207,6 +207,31 @@ UNKNOWN, to settle on the user's Mac: whether a wired, AC, lid-closed, no-displa
 
 ## 5. Idle-suspend design for macOS
 
+### 5.00 Final design (2026-11-27, decision 114c, option C; supersedes 5.0 to 5.3 and U1 to U3)
+
+- Sleep: the native macOS sleep timer (`pmset sleep`, already `1` min on this Mac, measured 2a). No root script, no LaunchDaemon, no `idleDecision` port.
+- Wake: a network connection (ping, ssh, keepalive) wakes the sleeping Mac into a dark wake of about 45 s with the display off (2c, over Wi-Fi, AC, lid open). No magic packet needed.
+- Job: every command run through `machine-exec` on darwin is started as `/usr/bin/caffeinate -s <shell and args>` (`withKeepAwake`, `runCommand`). The assertion ends with the child; the Mac sleeps again 3 s later (measured 2c). `-i` is not enough, `-u` and `-d` are not used (the display stays off).
+- Daemon: holds no assertion.
+- `machine-exec` fails the run when `/usr/bin/caffeinate` is missing or not executable (never runs unwrapped). Everything else (exit code, output cap, timeout tree kill, argv) is unchanged. Threat model: T-71.
+- `machine install idle-suspend` stays refused on macOS; the message points here.
+- Caveat: `-s` has no effect on battery (man page), so on battery the Mac can still sleep under a job.
+
+Open points to measure on the Mac (none done):
+
+| # | Question |
+|---|---|
+| M1 | Battery: does a job survive a dark wake end without AC? Expected no (man page); how long does it run, and does the job die or freeze? |
+| M2 | Held request while asleep: a `run --wait` or detached job started at a dark wake, then the connection idle: does the Mac sleep when the job ends, and does a held request (no child) wake it? |
+| M3 | Lid closed (AC, no display): does a connection wake it, and does `caffeinate -s` keep it up? |
+| M4 | Delay from the first packet to a usable ssh/peer connection; whether peer port (not 22) wakes it. |
+| M5 | `caffeinate -s <path> <args>` without `--` with a real `/bin/sh -c "<cmd starting with ->"`: confirm the utility's args are never parsed as options (argv is passed after the utility; unverified on macOS). |
+| M6 | Real run on macOS of `runCommand` (exit code, tree kill on timeout, output cap) through the real `caffeinate`; the tests use a fake wrapper. |
+
+Superseded sections below stay as the record of the alternative (A/B, root script).
+
+### 5.0x Original principle
+
 Principle: the decision is the same pure function `idleDecision` of `machine-core` (checks 1 to 5, the state file, the 300 s gap rule, `N` minutes). Only the FACT sources and the actuator change. Parity with `idle-suspend.md`; nothing below is built.
 
 ### 5.0 First check: is it needed at all?

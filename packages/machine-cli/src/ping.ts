@@ -199,7 +199,7 @@ async function recordCheck(deps: RelayPingDeps, client: RelayClient): Promise<Ch
 // ---------------------------------------------------------------------------------------------------------------------
 // Peer form
 
-/** The peer allows 6 revocation exchanges per machine per minute (revocationSync.ts MAX_CATCHUPS_PER_MINUTE): four leave room for a `run` right after. */
+/** The peer allows 30 revocation exchanges per machine per minute (revocationSync.ts MAX_CATCHUPS_PER_MINUTE): four leave room for a `run` right after. */
 export const PING_HELLO_ROUNDS = 4;
 export const PING_INTERVAL_MS = 1000;
 
@@ -323,7 +323,7 @@ export async function pingPeer(deps: PeerPingDeps): Promise<PeerPingReport> {
     deps.say(`[ok] address: ${target.addresses.length} address(es) from the relay record of "${deps.name}" (seq ${target.seq ?? '?'}${published}${presence}): ${list}`);
   }
   if (deps.count > PING_HELLO_ROUNDS) {
-    deps.say(`[info] the hello is sent in the first ${PING_HELLO_ROUNDS} rounds only (a peer allows 6 revocation exchanges per minute per machine); the other rounds measure the handshake`);
+    deps.say(`[info] the hello is sent in the first ${PING_HELLO_ROUNDS} rounds only (a peer allows 30 revocation exchanges per minute per machine); the other rounds measure the handshake`);
   }
 
   const handshakes: number[] = [];

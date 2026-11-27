@@ -381,9 +381,9 @@ describe('revocation catch-up, server side (raw frames)', () => {
     expect(await s.next()).toMatchObject({ type: 'refused', reason: 'unknown-message' });
   });
 
-  it('limits a peer to 6 catch-up exchanges per minute, answers the rest with a short refusal and audits it once per minute', async () => {
+  it('limits a peer to 30 catch-up exchanges per minute, answers the rest with a short refusal and audits it once per minute', async () => {
     const w = await world();
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 30; i++) {
       const s = await w.connect();
       s.send(hello(w.client.state()));
       expect(await s.next()).toMatchObject({ type: 'hello' });
@@ -531,7 +531,7 @@ describe('revocation catch-up, client side', () => {
 
   it('reports a rate-limited exchange as a warning and still serves the request', async () => {
     const w = await world();
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 30; i++) {
       const s = await w.connect();
       s.send(hello(w.client.state()));
       await s.next();

@@ -119,7 +119,7 @@ machine ping <machine> [--count 3] [--address host:port] [--json]
 - `[fail]` lines go to stderr with cause and fix; a stopped local daemon fails the first form (it publishes the address and receives commands) although `machine run` does not need it.
 - First form: the relay time includes DNS and TLS setup (first request); the token time is on the warm connection. A full-access token is a `[warn]` (a machine never needs it); a loopback-only address record is a `[warn]` (peers refuse it).
 - Second form, a failure names each address with its error: nothing listens (daemon stopped there), no answer (firewall, asleep), another key answers (wrong address), refused during authentication (not registered there, revoked, clocks, pair secret), no record on the relay (`machine startup enable` there). Exit 1; unknown or ambiguous machine 3; usage 2.
-- `--count n` (1 to 10) opens n connections one second apart and prints min/avg/max; the hello is sent in the first 4 only (a peer allows 6 revocation exchanges per minute).
+- `--count n` (1 to 10) opens n connections one second apart and prints min/avg/max; the hello is sent in the first 4 only (a peer allows 30 revocation exchanges per minute).
 
 ## Waking a sleeping machine (decision 62)
 

@@ -84,7 +84,7 @@ A meta family adds a parse check, and the parse must never interpret or execute 
 
 | Item | Proposal |
 |---|---|
-| Revocation catch-up limit | Raise 6 to 30 per minute per peer (`MAX_CATCHUPS_PER_MINUTE`), shared with ping, keep the limit (flood guard, T-34). Reversible constant. |
+| Revocation catch-up limit | Done: raised from 6 to 30 per minute per peer (`MAX_CATCHUPS_PER_MINUTE`), shared with ping, limit kept (flood guard, T-34). Reversible constant. |
 | `run --json` shape | Pinned by a full-shape test (type, id, exitCode, stdout, stderr, timedOut, truncated, outputNotUtf8, decodedFrom, durationMs). |
 | Output cap (1 MiB, 60 s) | D4: unchanged for now; task-owner paginates. A per-entry declared `maxOutput` and `timeout` is the later option. |
 | Machine-readable "unreachable" | D5: a stable code in `--json` and a distinct exit code for refused vs unreachable; not requested yet, offered. |

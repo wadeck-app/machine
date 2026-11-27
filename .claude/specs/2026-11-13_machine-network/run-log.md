@@ -58,6 +58,23 @@ The command line is stored as typed. Commands must never carry a secret, the sam
 - `--json`: one JSON event per line (the fields of `machine log --json` items), no header, every event (`--all` and the width do not apply).
 - Known gaps: lines appended to the run log between the last poll and its rotation stay in the rotated file and are not shown; an entry written between the history read and the start of the follow can show twice.
 
+## `machine run --json` shape
+
+`machine run --json` prints the peer's answer as is (one document on stdout; the process exit code is the command's, 255 for a failure of machine). A refusal is not this document: it is an error on stderr, exit 255. Pinned by `runJsonShape.test.ts` (exact key set and types): adding, removing or retyping a field fails it, and changes this table.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `type` | string | always `"result"` |
+| `id` | string | request id (uuid), the one of the audit and the run log |
+| `exitCode` | number or null | exit code of the command; `null` when it was killed (timeout, output cap) |
+| `stdout` | string | output, possibly cut (see `truncated`) |
+| `stderr` | string | error output, possibly cut |
+| `timedOut` | boolean | the command exceeded the time limit of the peer (60 s) and was stopped |
+| `truncated` | boolean | the output exceeded the limit of the peer (1 MiB) and was cut |
+| `outputNotUtf8` | boolean | the output was not valid UTF-8 and was decoded lossily |
+| `decodedFrom` | string, optional | code page the output was converted from (`cp850`); absent otherwise and from a peer older than decision 70 |
+| `durationMs` | number | run time of the command measured by the peer |
+
 ## Not covered
 
 - Received entries after a break of the audit chain are flagged `UNVERIFIED`; a completion merged into an earlier verified acceptance keeps the verified flag (existing behaviour of `summarizeRequests`).

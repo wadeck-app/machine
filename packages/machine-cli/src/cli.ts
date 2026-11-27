@@ -138,12 +138,12 @@ Commands:
                                      hello (the same one run sends first) is answered; no command is sent, so nothing is executed, no
                                      allowlist entry is needed and the peer audits nothing when the hello is answered. The hello is the real
                                      revocation catch-up: admin-signed revocation lists may be installed here, the peer's version is recorded
-                                     here and yours there, and it uses one of the peer's 6 revocation exchanges per minute (shared with run).
+                                     here and yours there, and it uses one of the peer's 30 revocation exchanges per minute (shared with run).
                                      Reports each address tried, the handshake time,
                                      the hello round trip, the registration (serial, admin key id) and whether the revocation lists matched
                                      (a refused hello is "not compared", not a difference).
                                      --count <n> (1 to 10, default 1) opens n connections one second apart and prints min/avg/max (the
-                                     hello is sent in the first 4 only: a peer allows 6 revocation exchanges per minute). Exit 0 ok, 1
+                                     hello is sent in the first 4 only: a peer allows 30 revocation exchanges per minute). Exit 0 ok, 1
                                      failure, 2 usage, 3 unknown or ambiguous machine. --wake / --no-wake as for run (one wake per ping)
   daemon [--api-port <n>] [--peer-port <n>] [--peer-host <host>] [--advertise <host[:port]>]...
                                      run the daemon in the foreground (started by orch). With a relay (after join)
@@ -390,6 +390,8 @@ Everything after "--" in \`run\` is the command, sent exactly as written.
 Exit codes: 0 ok, 1 failure (relay failures included, reason on stderr), 2 usage error, 3 unknown or ambiguous machine reference.
 \`run\` returns the exit code of the remote command; its own failures (refused by the peer, unknown machine,
 no connection) are 255 with the reason on stderr.
+\`run --json\` prints the peer's answer: type "result", id, exitCode (number, null when timed out or cut), stdout, stderr,
+timedOut, truncated, outputNotUtf8, decodedFrom (only when converted from a code page), durationMs (shape pinned by a test).
 `;
 
 /** The revoked machines of `machine status`, apart from the peers: not trusted here, each with the uuid that names it for `forget-relay-record`. */
