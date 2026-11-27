@@ -108,6 +108,15 @@ Conclusion so far: a magic packet to this USB Ethernet adapter does not wake thi
 
 Full wake from a dark wake (15:25:08, lid open, AC): over ssh, `caffeinate -u -t 12` (man page: "declare that user is active; if the display is off, turns the display on") produced `DarkWake to FullWake from Deep Idle [CDNVA] : due to HID Activity` and `Display is turned on`; `powerd` then held `PreventUserIdleSystemSleep` "Prevent sleep while display is on". So a connection (dark wake) plus `caffeinate -u` is a way to a full wake without any magic packet. Not measured: lid closed, how long the Mac stays up afterwards.
 
+Run commands with the display OFF (owner goal 2026-11-27: the point is to run commands, a dark display is a perk), lid open, AC:
+
+| Assertion held over ssh after the dark wake | Result |
+|---|---|
+| `caffeinate -i -t 100` (PreventUserIdleSystemSleep) | NOT enough: the Mac still went to `Maintenance Sleep` 45 s after the wake (15:31:06 to 15:31:51) and the ssh stalled |
+| `caffeinate -s -t 100` (PreventSystemSleep, AC only) | WORKS: `DarkWake ... 126 secs` (15:35:09 to 15:37:15), the ssh session stayed alive the whole time (checks every 18 s), no `Display is turned on` in the log; `Maintenance Sleep` came 3 s after the assertion ended |
+
+So: connection (dark wake, display off) plus `caffeinate -s` for the duration of the job keeps the Mac usable with the display off, and it sleeps again by itself right after. `-s` has no effect on battery power (man page), so on battery the Mac can still sleep under a job. Also seen: keepalive packets of an open ssh session wake a sleeping Mac (dark wake) the same way as a first connection.
+
 Two observations, same cause string both times: wake for network access works over Wi-Fi for this Mac (lid open, AC). Not yet measured: the delay from the first packet to a usable ssh, lid closed, and whether a port other than 22 (the machine peer port) triggers the wake.
 
 ## 3. Facts from sources (power management, launchd)
