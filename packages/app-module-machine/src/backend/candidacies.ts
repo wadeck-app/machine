@@ -300,3 +300,61 @@ export async function listCandidacies(configDir: string, nowSeconds: number, doF
   if (!Array.isArray(list)) throw new RelayRequestError(res.status, 'the relay answer has no "candidacies" list: it may be an incompatible version');
   return list.map((entry) => review(entry, nowSeconds));
 }
+
+// A relay candidacy id is an opaque token: it goes into a URL path, so only this alphabet is sent (nothing from the page can add a path segment or a query).
+const CANDIDACY_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** The id can be sent to the relay (the page offers Reject only for these). */
+export const isCandidacyId = (id: string): boolean => CANDIDACY_ID.test(id);
+
+/**
+ * Reject a pending candidacy with the admin token: `PUT /api/machines/candidacies/{id}/decision {decision: "reject"}`. A rejection only restricts (hard rule 4:
+ * no signature, nothing is enrolled), so it needs no passphrase. Approving is NOT done here: it needs the admin signature made in the page (not built yet).
+ * Resolves on 204; every other answer is a RelayRequestError that names the cause and the fix; the token is never in a message.
+ */
+export async function rejectCandidacy(configDir: string, id: string, doFetch: typeof fetch = globalThis.fetch, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  if (!CANDIDACY_ID.test(id)) {
+    throw new RelayRequestError(400, 'the candidacy id must be 1 to 128 letters, digits, "-" or "_" (it is the id the relay listed): reload the page and press Reject on the row again');
+  }
+  const insecure = insecureTlsProblem(env);
+  if (insecure !== undefined) {
+    throw new RelayNotConfiguredError(`refusing to talk to the relay: ${insecure}`);
+  }
+  const { relayUrl, token } = readAdminConfig(configDir);
+  let res: Response;
+  try {
+    res = await doFetch(`${relayUrl}/api/machines/candidacies/${id}/decision`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ decision: 'reject' }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new RelayRequestError(0, `the relay is unreachable at ${relayUrl} (${printable((e as Error).message)}): nothing was rejected; check the network and that the relay runs, then press Reject again`);
+  }
+  if (res.status === 204) return;
+  const text = await readLimited(res);
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = undefined;
+  }
+  const o = asObject(body);
+  if (res.status === 401) {
+    throw new RelayRequestError(401, `the relay refused the admin token (invalid or revoked): nothing was rejected. ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
+  }
+  const gateText = res.status === 403 && typeof o['error'] === 'string' && !['not_owner', 'not_registered', 'forbidden'].includes(o['error']);
+  if (o['error'] === 'full_access_required' || o['error'] === 'scope_denied' || gateText) {
+    throw new RelayRequestError(res.status, `the token saved by \`machine admin login\` is a plain machine token, so it cannot decide on candidacies (${ADMIN_TOKEN_WHY}). ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
+  }
+  if (res.status === 409) {
+    throw new RelayRequestError(409, 'the candidacy is no longer pending (it was already approved or rejected, or it expired): nothing was changed here. Reload the page to see its current state');
+  }
+  if (res.status === 404) {
+    throw new RelayRequestError(404, 'the relay does not know this candidacy (it expired, 15 minutes after it was posted, or the relay restarted): nothing was rejected. The candidate can run `machine join --resume` to post a new one');
+  }
+  const why = typeof o['message'] === 'string' ? o['message'] : typeof o['error'] === 'string' ? o['error'] : 'no detail';
+  throw new RelayRequestError(res.status, `the relay answered ${res.status} to the rejection (${printable(why)}): nothing was rejected; retry, and run \`machine admin approve <id> --reject\` if it persists`);
+}

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { candidacyCode, generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pathToFileURL } from 'node:url';
-import { ADMIN_TOKEN_WHY, LOGIN_ADVICE, PAIRING_CLICK_PATH, RelayNotConfiguredError, RelayRequestError, listCandidacies } from './candidacies.js';
+import { ADMIN_TOKEN_WHY, LOGIN_ADVICE, PAIRING_CLICK_PATH, RelayNotConfiguredError, RelayRequestError, listCandidacies, rejectCandidacy } from './candidacies.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
 const TOKEN = 'admin-token-secret-value';
@@ -396,5 +396,99 @@ describe('the advice sentences stay in step with machine-cli adminAccess.ts', ()
     expect(ADMIN_TOKEN_WHY).toBe(cli.ADMIN_TOKEN_WHY);
     expect(PAIRING_CLICK_PATH).toBe(cli.PAIRING_CLICK_PATH);
     expect(LOGIN_ADVICE).toBe(cli.adminLoginFix({ force: true }));
+  });
+});
+
+describe('rejectCandidacy', () => {
+  it('sends PUT .../decision {decision: "reject"} with the admin token and resolves on 204', async () => {
+    const bodies: string[] = [];
+    const server = createServer((req, res) => {
+      let text = '';
+      req.on('data', (c: Buffer) => { text += c.toString(); });
+      req.on('end', () => {
+        bodies.push(`${req.method} ${req.url} ${req.headers.authorization} ${req.headers['content-type']} ${text}`);
+        res.writeHead(204);
+        res.end();
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    writeAdminConfig(`http://127.0.0.1:${address.port}`);
+    await expect(rejectCandidacy(configDir, 'cand-1')).resolves.toBeUndefined();
+    expect(bodies).toEqual([`PUT /api/machines/candidacies/cand-1/decision Bearer ${TOKEN} application/json {"decision":"reject"}`]);
+  });
+
+  it('refuses an id that is not a plain token BEFORE any request (nothing travels in the path)', async () => {
+    const relay = await fakeRelay(() => ({ status: 204, body: {} }));
+    writeAdminConfig(relay.url);
+    for (const id of ['', '../x', 'a/b', 'a?b', 'a b', 'x'.repeat(129)]) {
+      await expect(rejectCandidacy(configDir, id)).rejects.toThrow(/candidacy id/);
+    }
+    expect(relay.seen).toEqual([]);
+  });
+
+  it('409: says the candidacy is no longer pending (already decided or expired) and what to do', async () => {
+    const relay = await fakeRelay(() => ({ status: 409, body: { error: 'not_pending' } }));
+    writeAdminConfig(relay.url);
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect(e).toBeInstanceOf(RelayRequestError);
+    expect((e as RelayRequestError).status).toBe(409);
+    expect((e as RelayRequestError).message).toMatch(/no longer pending/);
+    expect((e as RelayRequestError).message).toMatch(/refresh|reload/i);
+  });
+
+  it('404: says the candidacy is unknown or expired, and that the candidate posts a new one', async () => {
+    const relay = await fakeRelay(() => ({ status: 404, body: { error: 'not_found' } }));
+    writeAdminConfig(relay.url);
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect((e as RelayRequestError).status).toBe(404);
+    expect((e as RelayRequestError).message).toContain('machine join --resume');
+  });
+
+  it('401: the token is refused, with the login advice; the token is never in the message', async () => {
+    const relay = await fakeRelay(() => ({ status: 401, body: { error: 'invalid_token' } }));
+    writeAdminConfig(relay.url);
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect((e as RelayRequestError).message).toContain('machine admin login --force');
+    expect((e as RelayRequestError).message).not.toContain(TOKEN);
+  });
+
+  it('403 of the scope gate: a plain machine token cannot decide, with the login advice', async () => {
+    const relay = await fakeRelay(() => ({ status: 403, body: { success: false, error: 'This token is limited to the scope machine.' } }));
+    writeAdminConfig(relay.url);
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect((e as RelayRequestError).message).toMatch(/plain machine token/);
+    expect((e as RelayRequestError).message).toContain('machine admin login --force');
+  });
+
+  it('any other status names the status and the relay detail, never the token', async () => {
+    const relay = await fakeRelay(() => ({ status: 500, body: { error: 'boom' } }));
+    writeAdminConfig(relay.url);
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect((e as RelayRequestError).message).toContain('500');
+    expect((e as RelayRequestError).message).toContain('boom');
+    expect((e as RelayRequestError).message).not.toContain(TOKEN);
+  });
+
+  it('an unreachable relay is status 0 with the URL and the fix', async () => {
+    writeAdminConfig('http://127.0.0.1:1');
+    const e = await rejectCandidacy(configDir, 'cand-1').then(() => undefined, (err: unknown) => err);
+    expect(e).toBeInstanceOf(RelayRequestError);
+    expect((e as RelayRequestError).status).toBe(0);
+    expect((e as RelayRequestError).message).toContain('http://127.0.0.1:1');
+    expect((e as RelayRequestError).message).not.toContain(TOKEN);
+  });
+
+  it('refuses to talk to the relay when certificate validation is off (the token would be exposed)', async () => {
+    const relay = await fakeRelay(() => ({ status: 204, body: {} }));
+    writeAdminConfig(relay.url);
+    await expect(rejectCandidacy(configDir, 'cand-1', globalThis.fetch, { NODE_TLS_REJECT_UNAUTHORIZED: '0' })).rejects.toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0/);
+    expect(relay.seen).toEqual([]);
+  });
+
+  it('without an admin token file: RelayNotConfiguredError with the login advice', async () => {
+    await expect(rejectCandidacy(configDir, 'cand-1')).rejects.toBeInstanceOf(RelayNotConfiguredError);
   });
 });

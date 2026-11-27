@@ -1,5 +1,5 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
-import { ageText, listCandidacies,RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
+import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
@@ -296,7 +296,7 @@ async function reachabilityColumns(dir: string): Promise<{ decorate: <R extends 
   };
 }
 
-function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
+function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyListView & { ageText: string; bindingText: string; statusText: string; canDecide: boolean } {
   let binding: string;
   if (view.rebind) {
     const which = view.boundTokenLabel !== undefined ? `the token labelled "${view.boundTokenLabel}"` : 'another token (the relay did not say which)';
@@ -320,8 +320,10 @@ function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyLis
     '',
     binding,
     '',
-    'To approve or reject it, run `machine admin approve` in a terminal: this page is read-only.',
+    'Reject refuses the candidate here (no passphrase needed). To approve it, run `machine admin approve` in a terminal: approving from this page is not built yet.',
   ].join('\n');
+  // Reject is offered only where the relay can still take a decision: pending (or no status stated) and not expired. A candidacy with problems can still be rejected.
+  const canDecide = isCandidacyId(view.id) && (view.relayStatus === undefined || view.relayStatus === 'pending') && (view.expiresAt === undefined || view.expiresAt > nowSeconds);
   const statusText = view.problems.length > 0
     ? `Cannot be approved: ${view.problems.join('; ')}`
     : view.relayStatus === 'approved'
@@ -331,7 +333,7 @@ function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyLis
         : view.rebind
       ? 'Warning: uuid already bound to a token'
       : 'Pending';
-  return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText };
+  return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText, canDecide };
 }
 
 /**
@@ -536,6 +538,23 @@ export default function register(ctx: ModuleContextLike): void {
   registerActivityRoute(ctx, configDir); // run-log
   // The Allowed page (what every machine allows), a plain read route in its own file
   registerAllowedRoute(ctx, configDir);
+
+  // The Reject button of the Candidacies page. A rejection only restricts (hard rule 4): no signature, no passphrase. It spends the relay admin token, so
+  // the route is `sensitive` (the app-core PIN). The `x-machine-module` header is NOT required: the row action of the DSL view cannot send a custom header,
+  // so the PIN is the gate. No body is read: the id is the path and the decision is fixed in `rejectCandidacy`, so this route can never approve.
+  const REJECT_KINDS: Record<number, string> = { 400: 'bad_request', 404: 'not_found', 409: 'not_pending' };
+  ctx.registerRoute('POST', '/candidacies/:id/reject', async (req, reply) => {
+    const id = typeof req === 'object' && req !== null ? (req as { params?: { id?: unknown } }).params?.id : undefined;
+    try {
+      await rejectCandidacy(configDir(), typeof id === 'string' ? id : '');
+      return reply.code(200).send({ ok: true, id, message: `Candidacy ${String(id)} rejected: the candidate is told on its next check` });
+    } catch (err) {
+      const kind = err instanceof RelayRequestError ? REJECT_KINDS[err.status] : undefined;
+      if (err instanceof RelayRequestError && kind !== undefined) return reply.code(err.status).send(errorBody(err.status, kind, err.message));
+      const failure = failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  }, SENSITIVE);
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

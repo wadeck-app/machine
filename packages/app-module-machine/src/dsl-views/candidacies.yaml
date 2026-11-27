@@ -3,8 +3,17 @@ $sources:
     url: GET /api/modules/machine/candidacies
     poll: 30s
 
-# Read-only slice: no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature happen in
-# the page, never in the backend). The timeline on the left lists the approval procedure; the route computes its steps (texts and
+# Reject is a row action of the standard DataTable (a restricting action: no signature, no passphrase; the route is sensitive, the app-core PIN is asked by
+# the shell). Approving is NOT built in this page yet: it needs the admin signature made in the browser, the daemon import of the new peer and the
+# distribution of the signed documents (admin-ui.md, "Approve from the page"); `machine admin approve` does it. No custom component, no styling here.
+$actions:
+  reject:
+    url: POST /api/modules/machine/candidacies/{id}/reject
+    confirm: Reject this candidacy? The machine is refused and must post a new candidacy (machine join --resume) to ask again.
+    reloadSources: [candidacies]
+    errorPrefix: Could not reject the candidacy
+
+# The timeline on the left lists the approval procedure; the route computes its steps (texts and
 # statuses, candidacyTimeline.ts) from the relay data of the oldest pending candidacy and marks a step done only when that data
 # proves it. Decision 55: the candidacy code is not displayed (the human compares
 # the security code after signing). The route still answers `code`, recomputed by the module from the key and random it received,
@@ -13,7 +22,7 @@ $type: PageContent
 sections:
   - $type: PageHeader
     title: Candidacies
-    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Read-only; the passphrase, security code and distribution steps happen in `machine admin approve` and are not observable here.
+    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Reject refuses a candidate here; approving, the passphrase, security code and distribution steps happen in `machine admin approve` and are not observable here.
   # The candidacy the timeline follows (the oldest pending one) and what the relay says about it.
   - $type: Card
     $if: $sources.candidacies.timelineNote
@@ -41,3 +50,9 @@ sections:
           - { key: "observedIp", label: "Seen from", nowrap: true }
           - { key: "ageText", label: "Age", nowrap: true }
           - { key: "statusText", label: "Status", nowrap: true }
+          - type: actions
+            items:
+              - label: Reject
+                action: reject
+                variant: danger-outline
+                condition: canDecide

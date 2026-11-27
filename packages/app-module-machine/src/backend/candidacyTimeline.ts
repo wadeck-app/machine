@@ -1,6 +1,6 @@
 import { ageText, type CandidacyListView } from './candidacies.js';
 
-// The timeline of the Candidacies page, computed from what the relay list proves (this page is read-only). A step is "done" only when the
+// The timeline of the Candidacies page, computed from what the relay list proves (this page can reject but not approve yet). A step is "done" only when the
 // relay data proves it; the passphrase, the security code and the distribution happen in `machine admin approve` and are never observable here.
 
 export type TimelineStatus = 'done' | 'current' | 'todo';
@@ -16,7 +16,7 @@ export interface TimelineStepRow {
 const STEPS: readonly { id: string; title: string; info: string }[] = [
   { id: 'received', title: 'Candidacy received', info: 'Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here.' },
   { id: 'checked', title: 'Details checked', info: 'Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect.' },
-  { id: 'signed', title: 'Passphrase and signature', info: 'Threat: a local process signing for you. The passphrase is typed in this page only and the signature is made in your browser, never by the daemon or the module backend.' },
+  { id: 'signed', title: 'Passphrase and signature', info: 'Threat: a local process signing for you. Today the passphrase is typed in the terminal that runs `machine admin approve`, never in this page, and the signature is made there, never by the daemon or the module backend.' },
   { id: 'final-code', title: 'Security code compared', info: 'Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay.' },
   { id: 'distributed', title: 'Documents distributed', info: 'Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one.' },
 ];

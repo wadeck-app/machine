@@ -32,14 +32,14 @@ The page only UNLOCKS the admin key: it applies no length rule to the passphrase
 | Page | Source of data | Actions |
 |---|---|---|
 | Machines | backend route to the daemon (`list`, presence, addresses, aliases) | alias set and remove |
-| Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | approve (unlock, sign in the page, post decision through the backend, then distribution documents), reject |
+| Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | reject (built: row action, PIN, no signature); approve (unlock, sign in the page, post decision through the backend, then distribution documents) NOT built, see "Approve from the page" |
 | Requests (decisions 73, 74) | daemon command `requests` (audit log of this machine, same reader as `machine requests`) | read-only: pending (exact command to allow), history, chain state. The remote section needs a browser-signed `requests-list` document posted to `POST /requests/remote` (route built, sensitive); the signing component is not built |
 | Allowed (decision 104) | daemon command `allowed`: the policy installed here with its call counters, the policies signed here for the others (the readers of `machine allowed`) | read-only: per machine version, mode, when signed, entries by shell with lifetime, text and machine filters, `N entries on M machines`; edit and remove are part 2 (needs a signature design) |
 | Policy | local policy files through the daemon | edit allowlists and limits, sign in the page, install and distribute |
 | Audit | daemon audit log | view and verify the hash chain |
 | Unlock | none (page memory only) | passphrase, unlock duration, lock now |
 
-The Candidacies page shows a vertical timeline on the left (candidacy received, details checked, passphrase and signature, final code compared, documents distributed) with an "i" tooltip per step naming the threat it answers. The route computes the steps (`candidacyTimeline.ts`) for the oldest pending candidacy and a step is done only when the relay data proves it: none -> all to do; pending -> received done, checked current; approved (relay status) -> received, checked, signed done; rejected, expired or unknown status -> received only. Security code and distribution are never done here (they happen in `machine admin approve`; the subtitle says so); a note names the followed candidacy. The tab shows a badge with the number of pending candidacies (module indicator).
+The Candidacies page (Reject built, approve not: see "Approve from the page") shows a vertical timeline on the left (candidacy received, details checked, passphrase and signature, final code compared, documents distributed) with an "i" tooltip per step naming the threat it answers. The route computes the steps (`candidacyTimeline.ts`) for the oldest pending candidacy and a step is done only when the relay data proves it: none -> all to do; pending -> received done, checked current; approved (relay status) -> received, checked, signed done; rejected, expired or unknown status -> received only. Security code and distribution are never done here (they happen in `machine admin approve`; the subtitle says so); a note names the followed candidacy. The tab shows a badge with the number of pending candidacies (module indicator).
 
 ## Work breakdown
 
@@ -92,3 +92,20 @@ Facts found in slice 1:
 - The daemon `list` carries only uuid, name and aliases. Presence and addresses are added by machine-cli (`addRelayView`, not exported): the Machines page does not show them yet and says so (`presenceNote`).
 - The `x-machine-module` header cannot be required on read routes: DSL `$sources` and the manifest tab count send no custom header. `guard.ts` exists and is tested for the signing and spending routes (later slices). Any local process can call every route of the module; read routes only return what that process could read from the user's files, apart from the relay query made with the admin token.
 - `machine-cli` exports neither the relay client, `reviewCandidacy`, nor the config dir resolution: their minimal pure logic is copied in the module (`candidacies.ts`, `configDir.ts`), to keep in step.
+
+## Approve from the page (request #146; status 2026-11-27)
+
+Built: Reject only. The Candidacies table has a `Reject` row action (standard DataTable actions column, `$actions.reject` with a confirm, no custom component or style): `POST /candidacies/:id/reject` (sensitive, `rejectCandidacy` in `backend/candidacies.ts`, `PUT .../decision {decision:"reject"}`), shown only where `canDecide` (pending, unexpired, usable id). Threat notes: threat-model.md, "Reject button".
+
+NOT built: approve. Lots, in order; each stands alone and none is wired to a button until the last:
+
+| Lot | Content | Where |
+|---|---|---|
+| 1 | The list answer carries `identityPublicKey` and `random` to the page; the page recomputes the candidacy code and the final code (WebCrypto `candidacyCode` / `finalCode`, already exported) | module backend, dsl-lib |
+| 2 | Pure builder, no I/O: signed registrations (candidate, admin machine), pair secret V2, sealed bundles, sealed approval (v2), byte-for-byte equal to `machine-cli approval.ts` on fixed vectors, opened by `checkApproval` | `machine-webcrypto` |
+| 3 | Daemon command `importCandidate`: opens a pair secret sealed to this machine, verifies the registration against the pinned admin key, `importPeer` | `machine-cli` (commands.ts) |
+| 4 | Backend `POST /candidacies/:id/approve` accepting exactly `{ approval }` (sealed v2, at most 16 KiB, `random` equal to the listed one) after lot 3 succeeded, then `PUT .../decision` | module backend |
+| 5 | Distribution: peer documents built in the page, daemon command verifies and delivers them (reuse of `put`, direct then inbox, same report as `machine admin distribute`) | machine-webcrypto, machine-cli |
+| 6 | Modal composed of `ConfirmSignModal`, the passphrase field, the codes and `FinalCodeDisplay`; timeline steps follow the proofs of the threat-model table | dsl-lib-machine, view |
+
+Until lot 6, `machine admin approve` is the only way to approve; the page says so (subtitle, row expansion).
