@@ -202,6 +202,8 @@ describe('darwin: `machine install idle-suspend` is not available yet', () => {
     expect(IDLE_DARWIN_UNAVAILABLE).toMatch(/not validated on a real Mac/);
     expect(IDLE_DARWIN_UNAVAILABLE).toContain('macos-idle-suspend-wake.md');
     expect(IDLE_DARWIN_UNAVAILABLE).toMatch(/Nothing was changed/);
+    // Points to the final macOS design (T-71): native sleep timer plus `caffeinate -s` around each job, no root script.
+    expect(IDLE_DARWIN_UNAVAILABLE).toMatch(/native macOS sleep timer.*caffeinate -s.*section 5/);
   });
 
   it('the plan of a darwin host refuses with that message', () => {

@@ -69,3 +69,19 @@ export function scrubEnv(env: Record<string, string | undefined>, platform: Plat
   }
   return out;
 }
+
+/**
+ * macOS only (T-71): every command runs under `caffeinate -s`, so the Mac cannot sleep while the job runs (a network connection wakes
+ * it into a dark wake of about 45 s; only `-s` keeps it up with the display off, `-i` does not). Other platforms: no wrapper.
+ */
+export function defaultKeepAwakeWrapper(platform: Platform): string | undefined {
+  return platform === 'darwin' ? '/usr/bin/caffeinate' : undefined;
+}
+
+/**
+ * `caffeinate -s <utility> [args]` runs the utility and holds the assertion until it exits. The utility is the shell (an absolute path
+ * or `pwsh`, never starting with `-`), so no `--` is needed; its arguments are passed through untouched.
+ */
+export function withKeepAwake(spec: LaunchSpec, wrapper: string): LaunchSpec {
+  return { file: wrapper, args: ['-s', spec.file, ...spec.args], windowsVerbatimArguments: spec.windowsVerbatimArguments };
+}

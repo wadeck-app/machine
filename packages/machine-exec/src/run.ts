@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Shell } from '@wadeck-app/machine-core';
-import { launchSpec, scrubEnv, windowsSystemRoot } from './launch.js';
+import { defaultKeepAwakeWrapper, launchSpec, scrubEnv, windowsSystemRoot, withKeepAwake } from './launch.js';
 import { detectOemCodePage } from './oemCodePage.js';
 import { decodeOutput } from './outputDecode.js';
 
@@ -18,6 +19,8 @@ export interface RunOptions {
   oemCodePage?: () => Promise<number | undefined>;
   /** Called once when the shell process exists (the spawn succeeded). It is never called when the launch fails. */
   onStarted?: () => void;
+  /** Program that holds the Mac awake while the command runs (`caffeinate -s`, T-71). Defaults to `/usr/bin/caffeinate` on macOS and to none elsewhere; tests inject a fake. */
+  keepAwakeWrapper?: string;
 }
 
 export interface RunResult {
@@ -53,7 +56,17 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) throw new Error(`timeoutMs must be a positive integer, got ${options.timeoutMs}`);
   if (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes <= 0) throw new Error(`maxOutputBytes must be a positive integer, got ${options.maxOutputBytes}`);
   const sourceEnv = options.env ?? process.env;
-  const spec = launchSpec(options.shell, options.command, process.platform, sourceEnv);
+  const plain = launchSpec(options.shell, options.command, process.platform, sourceEnv);
+  const wrapper = options.keepAwakeWrapper ?? defaultKeepAwakeWrapper(process.platform);
+  if (wrapper !== undefined) {
+    try {
+      accessSync(wrapper, constants.X_OK);
+    } catch {
+      // Never run unwrapped: the Mac could sleep under the job.
+      throw new Error(`"${wrapper}" is missing or not executable: on macOS every command runs under it so that the Mac keeps awake while the job runs (T-71); restore it (it ships with macOS) before running commands on this machine`);
+    }
+  }
+  const spec = wrapper === undefined ? plain : withKeepAwake(plain, wrapper);
   const started = Date.now();
 
   return new Promise((resolve, reject) => {

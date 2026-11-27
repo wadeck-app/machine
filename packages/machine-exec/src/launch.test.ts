@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { launchSpec, scrubEnv } from './launch.js';
+import { defaultKeepAwakeWrapper, launchSpec, scrubEnv, withKeepAwake } from './launch.js';
 
 const WIN_ENV = { SystemRoot: 'C:\\Windows' };
 
@@ -72,5 +72,27 @@ describe('scrubEnv', () => {
   it('is case-sensitive on Unix', () => {
     const out = scrubEnv({ PATH: 'p', path: 'q', HOME: 'h', AWS_SECRET_ACCESS_KEY: 'secret', LC_ALL: 'C' }, 'linux');
     expect(out).toEqual({ PATH: 'p', HOME: 'h', LC_ALL: 'C' });
+  });
+});
+
+describe('keep-awake wrapper (macOS, T-71)', () => {
+  it('is /usr/bin/caffeinate on darwin and absent elsewhere', () => {
+    expect(defaultKeepAwakeWrapper('darwin')).toBe('/usr/bin/caffeinate');
+    for (const p of ['linux', 'win32', 'freebsd'] as const) expect(defaultKeepAwakeWrapper(p)).toBeUndefined();
+  });
+
+  it('puts `-s` and the unchanged shell launch after the wrapper: the argv of the command is never altered', () => {
+    const inner = launchSpec('bash', 'echo "a b" $(x) \'q\'', 'darwin', {});
+    const wrapped = withKeepAwake(inner, '/usr/bin/caffeinate');
+    expect(wrapped.file).toBe('/usr/bin/caffeinate');
+    expect(wrapped.args).toEqual(['-s', '/bin/bash', '--noprofile', '--norc', '-c', 'echo "a b" $(x) \'q\'']);
+    expect(wrapped.windowsVerbatimArguments).toBe(inner.windowsVerbatimArguments);
+  });
+
+  it('does not modify the spec it wraps', () => {
+    const inner = launchSpec('sh', 'ls', 'darwin', {});
+    const copy = JSON.parse(JSON.stringify(inner));
+    withKeepAwake(inner, '/x');
+    expect(inner).toEqual(copy);
   });
 });

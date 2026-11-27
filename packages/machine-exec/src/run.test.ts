@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -262,5 +262,61 @@ describe('onStarted', () => {
     const shell = onWindows ? 'sh' : 'cmd';
     await expect(runCommand({ shell, command: 'echo hi', ...quick, onStarted: () => (calls += 1) })).rejects.toThrow(/not supported on Windows|only exists on Windows/);
     expect(calls).toBe(0);
+  });
+});
+
+// The macOS wrapper is injected (a fake `caffeinate` script), so these run on every Unix CI machine; Windows has no `sh` fake and is not applicable.
+describe.runIf(onUnix)('keep-awake wrapper (T-71, injected fake caffeinate)', () => {
+  let dir: string;
+  let fake: string;
+  let log: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'machine-exec-kw-'));
+    log = join(dir, 'wrapper.log');
+    fake = join(dir, 'caffeinate');
+    // Like the real one: `-s`, then the utility with its arguments, which it runs; its exit code is the utility's.
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s\n' "$*" > '${log}'\n[ "$1" = "-s" ] || exit 64\nshift\nexec "$@"\n`, { mode: 0o755 });
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('runs the command through the wrapper with -s and the exact approved string', async () => {
+    const r = await runCommand({ shell: 'sh', command: 'echo "a  b" \'c\'', keepAwakeWrapper: fake, ...quick });
+    expect(lines(r.stdout)).toEqual(['a  b c']);
+    expect(readFileSync(log, 'utf8').trim()).toBe('-s /bin/sh -c echo "a  b" \'c\'');
+  });
+
+  it('keeps the exit code, stdout and stderr', async () => {
+    const r = await runCommand({ shell: 'sh', command: 'echo out; echo err 1>&2; exit 5', keepAwakeWrapper: fake, ...quick });
+    expect(r.exitCode).toBe(5);
+    expect(lines(r.stdout)).toEqual(['out']);
+    expect(lines(r.stderr)).toEqual(['err']);
+  });
+
+  it('kills the whole tree on timeout, wrapper included', async () => {
+    const r = await runCommand({ shell: 'sh', command: 'sleep 30', keepAwakeWrapper: fake, timeoutMs: 700, maxOutputBytes: 10_000 });
+    expect(r.timedOut).toBe(true);
+    expect(r.exitCode).toBeNull();
+    expect(r.durationMs).toBeLessThan(10_000);
+  });
+
+  it('applies the output cap', async () => {
+    const r = await runCommand({ shell: 'sh', command: 'yes aaaaaaaaaaaaaaaaaaaaaaaa', keepAwakeWrapper: fake, timeoutMs: 30_000, maxOutputBytes: 1000 });
+    expect(r.truncated).toBe(true);
+    expect(Buffer.byteLength(r.stdout)).toBeLessThanOrEqual(1000);
+  });
+
+  it('fails loudly, naming the cause and the fix, when the wrapper is missing (never runs unwrapped)', async () => {
+    const marker = join(dir, 'ran');
+    await expect(runCommand({ shell: 'sh', command: `touch '${marker}'`, keepAwakeWrapper: join(dir, 'absent'), ...quick })).rejects.toThrow(/absent.*not.*executable.*macOS.*keeps awake.*restore/s);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('does not wrap without a wrapper (default off darwin)', async () => {
+    if (process.platform === 'darwin') return;
+    const r = await runCommand({ shell: 'sh', command: 'echo plain', ...quick });
+    expect(lines(r.stdout)).toEqual(['plain']);
+    expect(existsSync(log)).toBe(false);
   });
 });

@@ -46,7 +46,7 @@ export function idleDarwinProbe(id: IdleDarwinProbeId): never {
 }
 
 /** Why `machine install idle-suspend` is refused on macOS; appended to the unsupported message of the item (never silent: P-2). */
-export const IDLE_DARWIN_UNAVAILABLE = `idle-suspend is not available on macOS yet: its probes (resume detection, ssh tty/notty classification, input idle time, power assertions...) are not validated on a real Mac, and a script that guesses them could suspend a Mac that is in use. Run the read-only measurements of section 2 of ${MEASUREMENT_FILE} on the Mac and report the output. Nothing was changed`;
+export const IDLE_DARWIN_UNAVAILABLE = `idle-suspend is not available on macOS yet: its probes (resume detection, ssh tty/notty classification, input idle time, power assertions...) are not validated on a real Mac, and a script that guesses them could suspend a Mac that is in use. The macOS design is the native macOS sleep timer plus \`caffeinate -s\` around each job run by the daemon (section 5 of ${MEASUREMENT_FILE}): no root script, no launchd job. Nothing was changed`;
 
 export interface IdleDarwinOptions {
   minutes: number;
