@@ -40,8 +40,25 @@ Policy entry gets an optional field `input`: `{ format: 'text' | 'json', maxByte
 
 A held request keeps its payload in memory only (lost with the daemon, like the hold itself). Memory is bounded by the hold limits (5 per peer, 10 per machine) times the entry max.
 
-- D1: what the approver sees for a held call with input: size and hash only, or also a preview of the first 200 characters. A preview shows content to the approver (data, never command).
-- D2: the Allow dialog and `machine allowed` show the declaration (`stdin: json up to 64 KiB`) next to the command.
+- D1 (decided by the owner 2026-11-27): the approver SEES the payload; approving blind would be less safe. The payload of the held request is the example the declaration is built from: the Allow dialog and `machine requests` show it (escaped display, T-42: control characters and bidi marks made visible; first 4 KiB, then size and hash), the proposed character families are the smallest set that covers it, and the owner edits and signs.
+- D2: the Allow dialog and `machine allowed` show the declaration (`stdin: json, letters+digits+space+json, up to 64 KiB`) next to the command.
+
+## Allowed characters (owner request 2026-11-27)
+
+The entry declares which characters the payload may contain, as a WHITELIST (never a list of forbidden characters) written as a union of families, so the owner reads at once what is validated. Same rule as the typed parameters: a character outside the union refuses the call (`input-chars`).
+
+| Family | Characters |
+|---|---|
+| `letters` | Unicode letters and combining marks (accents included) |
+| `digits` | 0-9 |
+| `space` | space and line feed |
+| `punct` | `. , ; : ! ? ' - _ ( ) /` |
+| `json` | `{ } [ ] " : , \` (the JSON structure; implied by none, so a json entry names it) |
+| `symbols` | `@ # % & * + = < > ~ ^ | $` and backquote (each of them is a risk for the command that reads the data, hence opt-in) |
+
+Syntax: `--stdin-chars letters+digits+space+punct+json`. Default when `--stdin` is given without `--stdin-chars`: refused (the owner must choose; no implicit set). Always refused whatever the union: NUL and the other control characters except line feed, unpaired surrogates, bidi controls. Shape only: whether the content is CORRECT stays the job of the receiving command (task-owner, 2026-11-27).
+
+- D6 (open): the family list above (names and members), and whether `letters` covers all Unicode letters or a smaller set.
 
 ## Other requests of the same ask
 
