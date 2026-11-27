@@ -94,6 +94,20 @@ Consequence for the design: macOS already sleeps by itself when idle and counts 
 
 Conclusion so far: a magic packet to this USB Ethernet adapter does not wake this Mac (one test, lid open). Apple's wake for network access relies on a Bonjour Sleep Proxy (an Apple TV, HomePod or an awake Mac on the LAN), and none was found. The only periodic wakes are the 15 min dark wakes of 45 s.
 
+### 2c. Wake over Wi-Fi (2026-11-27 15:15-15:23, lid open, AC, Wi-Fi address fixed by the owner)
+
+| Observation | Measured |
+|---|---|
+| Ethernet adapter | `en8` status inactive at 15:15 (adapter no longer linked); the Wi-Fi address kept answering |
+| Two network accesses to the sleeping Mac | a ping at 15:15:3x and an ssh connection at 15:23:11, each followed in the SAME second by `DarkWake ... due to smc.sysState.Wake(0x70070000) wifibt SMC.OutboxNotEmpty` in `pmset -g log`; the ssh connected and ran its command (no password, no timeout) |
+| Who was at the Mac | nobody: `HIDIdleTime` 1936 s (32 min), `UserIsActive 0` |
+| Duration of a dark wake | 15:15:41 to 15:16:27 (46 s) then `Entering Sleep state due to 'Maintenance Sleep'`; dark wakes by the clock last 45-61 s |
+| `kern.waketime` | moves at a DARK wake (15:23:11 = the DarkWake line): a change of `kern.waketime` is NOT a user resume |
+| Ping while asleep | the Wi-Fi address answers pings while `pmset -g log` shows the system asleep (15:16:27-15:23:11): a ping answer is not a proof of wake |
+| `pmset sleepnow` during a dark wake | printed `Sleeping now...` but the Mac stayed reachable (the sleep came 17 s later, `Maintenance Sleep`) |
+
+Two observations, same cause string both times: wake for network access works over Wi-Fi for this Mac (lid open, AC). Not yet measured: the delay from the first packet to a usable ssh, lid closed, and whether a port other than 22 (the machine peer port) triggers the wake.
+
 ## 3. Facts from sources (power management, launchd)
 
 | Fact | Source |
