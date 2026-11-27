@@ -227,6 +227,7 @@ Open points to measure on the Mac (none done):
 | M4 | Delay from the first packet to a usable ssh/peer connection; whether peer port (not 22) wakes it. |
 | M5 | `caffeinate -s <path> <args>` without `--` with a real `/bin/sh -c "<cmd starting with ->"`: confirm the utility's args are never parsed as options (argv is passed after the utility; unverified on macOS). |
 | M6 | Real run on macOS of `runCommand` (exit code, tree kill on timeout, output cap) through the real `caffeinate`; the tests use a fake wrapper. |
+| M7 | MEASURED (2026-11-27, real Mac, security review A2, A4): `caffeinate -s <utility> <args>` execs the utility (the spawned pid becomes the utility) and a separate caffeinate helper, a child in the same process group, holds the assertion and exits when the utility ends. (1) Exit code and signal seen by the parent are the utility's own (a signal death shows as 143 through sh). (2) A group kill (`process.kill(-pid)`, detached) ends both. (3) Killing only the helper leaves the utility running unwrapped (LOW, same-user local actor only; accepted, the job is not failed). (4) Option-looking args after the utility reach it untouched (`-s -u -d` arrived as `$0 $1 $2`); a command text starting with a dash fails identically with and without the wrapper (sh behavior). |
 
 Superseded sections below stay as the record of the alternative (A/B, root script).
 

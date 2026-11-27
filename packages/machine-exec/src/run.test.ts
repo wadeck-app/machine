@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync,mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -65,6 +66,69 @@ describe.runIf(onWindows)('real cmd', () => {
     const r = await runCommand({ shell: 'cmd', command: 'for /L %i in (1,1,1000000) do @echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', timeoutMs: 30_000, maxOutputBytes: 1000 });
     expect(r.truncated).toBe(true);
     expect(Buffer.byteLength(r.stdout)).toBeLessThanOrEqual(1000);
+  });
+});
+
+// The tree kill of Windows goes through taskkill, injected here so that its failure modes can be forced.
+describe.runIf(onWindows)('Windows tree kill (injected taskkill)', () => {
+  const pids: number[] = [];
+  afterEach(() => {
+    // Whatever a fake taskkill left running.
+    for (const pid of pids.splice(0)) {
+      try {
+        process.kill(pid);
+      } catch {
+        // already gone
+      }
+    }
+  });
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('does not run a program of the current folder first (NoDefaultCurrentDirectoryInExePath reaches cmd)', async () => {
+    const r = await runCommand({ shell: 'cmd', command: 'echo [%NoDefaultCurrentDirectoryInExePath%]', ...quick });
+    expect(lines(r.stdout)).toEqual(['[1]']);
+  });
+
+  it('falls back to killing the shell when taskkill runs but fails (non-zero exit)', async () => {
+    const taskkill: NonNullable<RunOptions['taskkill']> = (_file, args) => {
+      pids.push(Number(args[args.length - 1]));
+      return spawn('cmd.exe', ['/d', '/c', 'exit 1'], { stdio: 'ignore', windowsHide: true });
+    };
+    const r = await runCommand({ shell: 'cmd', command: 'ping -n 8 127.0.0.1', timeoutMs: 500, killGraceMs: 400, maxOutputBytes: 10_000, taskkill });
+    expect(r.timedOut).toBe(true);
+    expect(r.exitCode).toBeNull();
+    expect(pids).toHaveLength(1);
+    expect(alive(pids[0] as number), 'cmd survived: no fallback after a failing taskkill').toBe(false);
+  });
+
+  it('resolves with the timed-out result after the grace delay when something still holds the pipes', async () => {
+    // A taskkill that "succeeds" and kills nothing: cmd and its ping keep the pipes open, the run must not stay in flight.
+    const taskkill: NonNullable<RunOptions['taskkill']> = (_file, args) => {
+      pids.push(Number(args[args.length - 1]));
+      return spawn('cmd.exe', ['/d', '/c', 'exit 0'], { stdio: 'ignore', windowsHide: true });
+    };
+    const started = Date.now();
+    const r = await runCommand({ shell: 'cmd', command: 'ping -n 8 127.0.0.1', timeoutMs: 500, killGraceMs: 400, maxOutputBytes: 10_000, taskkill });
+    expect(r.timedOut).toBe(true);
+    expect(r.exitCode).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('keeps the output read so far when the grace delay ends the run', async () => {
+    const taskkill: NonNullable<RunOptions['taskkill']> = (_file, args) => {
+      pids.push(Number(args[args.length - 1]));
+      return spawn('cmd.exe', ['/d', '/c', 'exit 0'], { stdio: 'ignore', windowsHide: true });
+    };
+    const r = await runCommand({ shell: 'cmd', command: 'echo before& ping -n 8 127.0.0.1', timeoutMs: 1500, killGraceMs: 400, maxOutputBytes: 10_000, taskkill });
+    expect(r.timedOut).toBe(true);
+    expect(r.stdout).toContain('before');
   });
 });
 
@@ -274,8 +338,14 @@ describe.runIf(onUnix)('keep-awake wrapper (T-71, injected fake caffeinate)', ()
     dir = mkdtempSync(join(tmpdir(), 'machine-exec-kw-'));
     log = join(dir, 'wrapper.log');
     fake = join(dir, 'caffeinate');
-    // Like the real one: `-s`, then the utility with its arguments, which it runs; its exit code is the utility's.
-    writeFileSync(fake, `#!/bin/sh\nprintf '%s\n' "$*" > '${log}'\n[ "$1" = "-s" ] || exit 64\nshift\nexec "$@"\n`, { mode: 0o755 });
+    // Like the real one (measured on macOS, M7): `-s`, then the utility with its arguments. The spawned pid BECOMES the utility (exec), and a
+    // helper in the same process group holds the "assertion" until the utility ends.
+    const helperPid = join(dir, 'helper.pid');
+    writeFileSync(
+      fake,
+      `#!/bin/sh\nprintf '%s\\n' "$*" > '${log}'\n[ "$1" = "-s" ] || exit 64\nshift\nme=$$\n(while kill -0 $me 2>/dev/null; do sleep 0.2; done) &\necho $! > '${helperPid}'\nexec "$@"\n`,
+      { mode: 0o755 },
+    );
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -301,6 +371,25 @@ describe.runIf(onUnix)('keep-awake wrapper (T-71, injected fake caffeinate)', ()
     expect(r.durationMs).toBeLessThan(10_000);
   });
 
+  it('kills the helper and a background grandchild of the shell, not only the shell', async () => {
+    const childPidFile = join(dir, 'child.pid');
+    const r = await runCommand({ shell: 'sh', command: `sleep 30 & echo $! > '${childPidFile}'; wait`, keepAwakeWrapper: fake, timeoutMs: 1500, maxOutputBytes: 10_000 });
+    expect(r.timedOut).toBe(true);
+    const gone = async (pid: number): Promise<boolean> => {
+      for (let i = 0; i < 20; i += 1) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    };
+    expect(await gone(Number(readFileSync(join(dir, 'helper.pid'), 'utf8').trim())), 'the wrapper helper survived the kill').toBe(true);
+    expect(await gone(Number(readFileSync(childPidFile, 'utf8').trim())), 'the background grandchild survived the kill').toBe(true);
+  });
+
   it('applies the output cap', async () => {
     const r = await runCommand({ shell: 'sh', command: 'yes aaaaaaaaaaaaaaaaaaaaaaaa', keepAwakeWrapper: fake, timeoutMs: 30_000, maxOutputBytes: 1000 });
     expect(r.truncated).toBe(true);
@@ -311,6 +400,24 @@ describe.runIf(onUnix)('keep-awake wrapper (T-71, injected fake caffeinate)', ()
     const marker = join(dir, 'ran');
     await expect(runCommand({ shell: 'sh', command: `touch '${marker}'`, keepAwakeWrapper: join(dir, 'absent'), ...quick })).rejects.toThrow(/absent.*not.*executable.*macOS.*keeps awake.*restore/s);
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it('resolves pwsh before wrapping and runs the resolved path under the wrapper', async () => {
+    const pwsh = join(dir, 'pwsh');
+    writeFileSync(pwsh, '#!/bin/sh\necho pwsh-ran\n', { mode: 0o755 });
+    const r = await runCommand({ shell: 'ps', command: 'Get-Date', keepAwakeWrapper: fake, resolveProgram: (name) => (name === 'pwsh' ? pwsh : undefined), ...quick });
+    expect(lines(r.stdout)).toEqual(['pwsh-ran']);
+    expect(readFileSync(log, 'utf8').startsWith(`-s ${pwsh} `)).toBe(true);
+  });
+
+  it('fails loudly, naming pwsh and the fix, when pwsh is missing, never as a wrapper error and never through the wrapper', async () => {
+    const error = await runCommand({ shell: 'ps', command: 'Get-Date', keepAwakeWrapper: fake, resolveProgram: () => undefined, ...quick }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toMatch(/pwsh.*not (installed|found).*PATH.*install/s);
+    expect(error?.message).not.toMatch(/caffeinate|wrapper/i);
+    expect(existsSync(log)).toBe(false);
   });
 
   it('does not wrap without a wrapper (default off darwin)', async () => {

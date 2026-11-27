@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Shell } from '@wadeck-app/machine-core';
-import { defaultKeepAwakeWrapper, launchSpec, scrubEnv, windowsSystemRoot, withKeepAwake } from './launch.js';
+import { defaultKeepAwakeWrapper, launchSpec, resolveOnPath, scrubEnv, windowsSystemRoot, withKeepAwake } from './launch.js';
 import { detectOemCodePage } from './oemCodePage.js';
 import { decodeOutput } from './outputDecode.js';
 
@@ -21,6 +21,12 @@ export interface RunOptions {
   onStarted?: () => void;
   /** Program that holds the Mac awake while the command runs (`caffeinate -s`, T-71). Defaults to `/usr/bin/caffeinate` on macOS and to none elsewhere; tests inject a fake. */
   keepAwakeWrapper?: string;
+  /** macOS: finds a program by name before it is wrapped (`pwsh`). Defaults to a search of the PATH; tests inject it. */
+  resolveProgram?: (name: string) => string | undefined;
+  /** Windows: starts taskkill for the tree end. Defaults to `spawn`; tests inject a taskkill that fails or does nothing. */
+  taskkill?: (file: string, args: string[]) => ChildProcess;
+  /** After the end of the tree is requested, how long to wait for the output pipes to close before the run is ended anyway (a grandchild may hold them). Default 5000. */
+  killGraceMs?: number;
 }
 
 export interface RunResult {
@@ -37,12 +43,26 @@ export interface RunResult {
   durationMs: number;
 }
 
-function killTree(pid: number, env: Record<string, string | undefined>, fallback: () => void): void {
+function killTree(pid: number, env: Record<string, string | undefined>, fallback: () => void, taskkill: NonNullable<RunOptions['taskkill']>): void {
   if (process.platform === 'win32') {
     const root = windowsSystemRoot(env);
     if (!root) return fallback();
-    // /T ends the whole tree: a timed-out `cmd` must not leave its children (ping, for loops) running.
-    spawn(`${root}\\System32\\taskkill.exe`, ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true }).on('error', fallback);
+    let fellBack = false;
+    const once = () => {
+      if (!fellBack) {
+        fellBack = true;
+        fallback();
+      }
+    };
+    // /T ends the whole tree: a timed-out `cmd` must not leave its children (ping, for loops) running. A taskkill that cannot start or
+    // that runs and fails (non-zero) falls back to ending the shell itself.
+    const t = taskkill(`${root}\\System32\\taskkill.exe`, ['/T', '/F', '/PID', String(pid)]);
+    t.once('error', once);
+    t.once('exit', (code) => {
+      if (code !== 0) {
+        once();
+      }
+    });
     return;
   }
   try {
@@ -56,7 +76,7 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) throw new Error(`timeoutMs must be a positive integer, got ${options.timeoutMs}`);
   if (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes <= 0) throw new Error(`maxOutputBytes must be a positive integer, got ${options.maxOutputBytes}`);
   const sourceEnv = options.env ?? process.env;
-  const plain = launchSpec(options.shell, options.command, process.platform, sourceEnv);
+  let plain = launchSpec(options.shell, options.command, process.platform, sourceEnv);
   const wrapper = options.keepAwakeWrapper ?? defaultKeepAwakeWrapper(process.platform);
   if (wrapper !== undefined) {
     try {
@@ -65,6 +85,14 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
       // Never run unwrapped: the Mac could sleep under the job.
       throw new Error(`"${wrapper}" is missing or not executable: on macOS every command runs under it so that the Mac keeps awake while the job runs (T-71); restore it (it ships with macOS) before running commands on this machine`);
     }
+  }
+  if (wrapper !== undefined && plain.file === 'pwsh') {
+    // Resolved here so that a missing pwsh is reported as such, not as a failure of the wrapper with an ordinary non-zero exit.
+    const resolved = (options.resolveProgram ?? ((name: string) => resolveOnPath(name, scrubEnv(sourceEnv, process.platform).PATH)))('pwsh');
+    if (resolved === undefined) {
+      throw new Error(`cannot start shell "${options.shell}": "pwsh" is not installed or not on the PATH of the daemon on this machine; install PowerShell 7 (pwsh) or remove the policy entries that use shell "${options.shell}"`);
+    }
+    plain = { ...plain, file: resolved };
   }
   const spec = wrapper === undefined ? plain : withKeepAwake(plain, wrapper);
   const started = Date.now();
@@ -88,11 +116,41 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     let timedOut = false;
     let truncated = false;
     let killed = false;
+    let settled = false;
+    let grace: NodeJS.Timeout | undefined;
+    const settle = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(grace);
+      // Only the output is converted, after the command ran: the approved string is never touched (T-15). The OEM code page is
+      // asked only for output that is not UTF-8, and only on Windows for the shells that write it (cmd, ps).
+      const oem = process.platform === 'win32' && (options.shell === 'cmd' || options.shell === 'ps') ? (options.oemCodePage ?? (() => detectOemCodePage(sourceEnv))) : async () => undefined;
+      Promise.all([decodeOutput(out, truncated, oem), decodeOutput(err, truncated, oem)]).then(([o, e]) => {
+        const decodedFrom = [o.decodedFrom, e.decodedFrom].find((p) => p !== undefined);
+        resolve({
+          exitCode: killed ? null : code,
+          stdout: o.text,
+          stderr: e.text,
+          timedOut,
+          truncated,
+          outputNotUtf8: o.lossy || e.lossy,
+          ...(decodedFrom !== undefined ? { decodedFrom } : {}),
+          durationMs: Date.now() - started,
+        });
+      }, reject);
+    };
     const stop = () => {
       // A shell that already exited must not be killed: its PID may belong to someone else by now.
       if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return false;
       killed = true;
-      killTree(child.pid, sourceEnv, () => child.kill('SIGKILL'));
+      killTree(child.pid, sourceEnv, () => child.kill('SIGKILL'), options.taskkill ?? ((file, args) => spawn(file, args, { stdio: 'ignore', windowsHide: true })));
+      // Hard bound: a grandchild that survived and holds the pipes must not keep this run (and the slot of the caller) in flight.
+      grace ??= setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        settle(null);
+      }, options.killGraceMs ?? 5000);
       return true;
     };
     const keep = (chunk: Buffer, store: Buffer[], used: number): number => {
@@ -126,24 +184,6 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
       const hint = e.code === 'ENOENT' ? `: "${spec.file}" is not installed or not on PATH on this machine; install it or remove the policy entries that use shell "${options.shell}"` : '';
       reject(new Error(`cannot start shell "${options.shell}" (${e.message})${hint}`));
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      // Only the output is converted, after the command ran: the approved string is never touched (T-15). The OEM code page is
-      // asked only for output that is not UTF-8, and only on Windows for the shells that write it (cmd, ps).
-      const oem = process.platform === 'win32' && (options.shell === 'cmd' || options.shell === 'ps') ? (options.oemCodePage ?? (() => detectOemCodePage(sourceEnv))) : async () => undefined;
-      Promise.all([decodeOutput(out, truncated, oem), decodeOutput(err, truncated, oem)]).then(([o, e]) => {
-        const decodedFrom = [o.decodedFrom, e.decodedFrom].find((p) => p !== undefined);
-        resolve({
-          exitCode: killed ? null : code,
-          stdout: o.text,
-          stderr: e.text,
-          timedOut,
-          truncated,
-          outputNotUtf8: o.lossy || e.lossy,
-          ...(decodedFrom !== undefined ? { decodedFrom } : {}),
-          durationMs: Date.now() - started,
-        });
-      }, reject);
-    });
+    child.on('close', (code) => settle(code));
   });
 }

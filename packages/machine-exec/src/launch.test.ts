@@ -9,7 +9,8 @@ describe('launchSpec on Windows', () => {
     expect(spec.file).toBe('C:\\Windows\\System32\\cmd.exe');
     expect(spec.windowsVerbatimArguments).toBe(true);
     // /s makes cmd strip exactly the outer pair of quotes we add, whatever quotes the approved string contains.
-    expect(spec.args).toEqual(['/d', '/s', '/c', '"echo "a b" & dir"']);
+    // /v:off: delayed expansion (!var!) cannot be switched on by the registry of the user, the approved string means what it says.
+    expect(spec.args).toEqual(['/d', '/v:off', '/s', '/c', '"echo "a b" & dir"']);
   });
 
   it('runs PowerShell with the string base64-encoded (UTF-16LE), so no quoting layer exists', () => {
@@ -66,7 +67,13 @@ describe('launchSpec command checks', () => {
 describe('scrubEnv', () => {
   it('keeps only the allow-listed variables, whatever their case on Windows', () => {
     const out = scrubEnv({ Path: 'p', SYSTEMROOT: 's', NODE_AUTH_TOKEN: 'secret', MACHINE_PASSPHRASE: 'secret', ComSpec: 'c' }, 'win32');
-    expect(out).toEqual({ Path: 'p', SYSTEMROOT: 's', ComSpec: 'c' });
+    expect(out).toEqual({ Path: 'p', SYSTEMROOT: 's', ComSpec: 'c', NoDefaultCurrentDirectoryInExePath: '1' });
+  });
+
+  it('forces NoDefaultCurrentDirectoryInExePath=1 on Windows, whatever the daemon had, and never on Unix', () => {
+    expect(scrubEnv({ NODEFAULTCURRENTDIRECTORYINEXEPATH: '0' }, 'win32')).toEqual({ NoDefaultCurrentDirectoryInExePath: '1' });
+    expect(scrubEnv({}, 'win32').NoDefaultCurrentDirectoryInExePath).toBe('1');
+    expect(scrubEnv({ NoDefaultCurrentDirectoryInExePath: '1' }, 'linux')).toEqual({});
   });
 
   it('is case-sensitive on Unix', () => {

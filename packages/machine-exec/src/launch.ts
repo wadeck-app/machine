@@ -1,3 +1,5 @@
+import { accessSync, constants, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { SHELLS, commandTextProblem, type Shell } from '@wadeck-app/machine-core';
 
 export interface LaunchSpec {
@@ -36,7 +38,7 @@ export function launchSpec(shell: Shell, command: string, platform: Platform, en
     const root = windowsSystemRoot(env);
     if (!root) throw new Error('SystemRoot is not set in the daemon environment: cannot locate the Windows shells; start the daemon from a normal Windows session');
     if (shell === 'cmd') {
-      return { file: `${root}\\System32\\cmd.exe`, args: ['/d', '/s', '/c', `"${command}"`], windowsVerbatimArguments: true };
+      return { file: `${root}\\System32\\cmd.exe`, args: ['/d', '/v:off', '/s', '/c', `"${command}"`], windowsVerbatimArguments: true };
     }
     return { file: `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, args: powershellArgs(command), windowsVerbatimArguments: false };
   }
@@ -67,7 +69,29 @@ export function scrubEnv(env: Record<string, string | undefined>, platform: Plat
     const lookup = windows ? name.toUpperCase() : name;
     if (allowed.has(lookup) || (!windows && name.startsWith('LC_'))) out[name] = value;
   }
+  // cmd searches the current folder (the home folder here) before PATH unless told not to: a program planted there must never win.
+  if (windows) out.NoDefaultCurrentDirectoryInExePath = '1';
   return out;
+}
+
+/** Unix: the first executable file named `name` in the directories of `PATH`, as the shell would find it; undefined when there is none. */
+export function resolveOnPath(name: string, pathValue: string | undefined): string | undefined {
+  for (const dir of (pathValue ?? '').split(':')) {
+    // An empty entry means the current folder to a shell: never resolve to it.
+    if (dir === '' || !isAbsolute(dir)) {
+      continue;
+    }
+    const candidate = join(dir, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // not here
+    }
+  }
+  return undefined;
 }
 
 /**
