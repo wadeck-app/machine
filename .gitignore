@@ -23,3 +23,6 @@ dist-launcher/
 
 # Built by npm run css --workspace=@wadeck-app/dsl-lib-machine (app-core-cli package copies it as is)
 packages/app-module-machine/src/dsl-components/style.css
+
+# violations cache and reports created when the check runs from a package folder (the repo config is the root .violations/)
+packages/**/.violations/
