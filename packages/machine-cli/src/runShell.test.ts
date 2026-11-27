@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { runCommand, type RunOptions, type RunResult } from '@wadeck-app/machine-exec';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startMachineDaemon } from './daemonEntry.js';
 import { connectionsFile } from './connectionsStore.js';
@@ -45,14 +46,74 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-async function setUp(policy: PolicyDraftEntry[]) {
+async function setUp(policy: PolicyDraftEntry[], runner?: { run: (options: RunOptions) => Promise<RunResult>; timeoutMs: number }) {
   await provision(root, a, b, policy);
-  const daemon = await startMachineDaemon(b, { port: 0, version: 'e2e', peerPort: 0, peerHost: '127.0.0.1' });
+  const daemon = await startMachineDaemon(b, { port: 0, version: 'e2e', peerPort: 0, peerHost: '127.0.0.1', ...(runner !== undefined ? { exec: runner } : {}) });
   stoppers.push(daemon.stop);
   return `127.0.0.1:${daemon.peerPort}`;
 }
 
 const LS = 'echo hi';
+
+/** The processes that matter to a hung shell (pid, parent, name, command line), as text. Never rejects: a failure of the snapshot is itself the text. */
+function processTree(): Promise<string> {
+  const win = process.platform === 'win32';
+  const file = win ? 'powershell' : 'ps';
+  const args = win
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'node|powershell|pwsh|cmd|conhost|taskkill|reg' } | ForEach-Object { '{0} ppid={1} {2} :: {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }"]
+    : ['-eo', 'pid,ppid,args'];
+  return new Promise((resolve) => {
+    let text = '';
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve(`(process snapshot did not finish in 20 s: ${text})`);
+    }, 20_000);
+    child.stdout.on('data', (c: Buffer) => (text += c.toString('utf8')));
+    child.stderr.on('data', (c: Buffer) => (text += c.toString('utf8')));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve(`(process snapshot could not start: ${e.message})`);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? text.trim() : `(process snapshot exited ${String(code)}) ${text.trim()}`);
+    });
+  });
+}
+
+/**
+ * The daemon runs the real command, but with a shorter limit than the test watchdog and a snapshot of the process tree taken while the child is still
+ * running: a hang then ends with the process tree and with what the child wrote (stdout, stderr, timedOut), not with an anonymous timeout.
+ */
+function diagnosedRunner() {
+  const seen: { snapshots: Array<Promise<string>>; results: RunResult[]; errors: string[] } = { snapshots: [], results: [], errors: [] };
+  const run = (options: RunOptions): Promise<RunResult> => {
+    // 20 s after the start the child should have ended long ago (a cold start measured 5 s at most): what still runs is the suspect.
+    const timer = setTimeout(() => seen.snapshots.push(processTree()), 20_000);
+    return runCommand({ ...options, timeoutMs: 40_000 })
+      .then(
+        (r) => {
+          seen.results.push(r);
+          return r;
+        },
+        (e: unknown) => {
+          seen.errors.push((e as Error).message);
+          throw e;
+        },
+      )
+      .finally(() => clearTimeout(timer));
+  };
+  const report = async (): Promise<string> => {
+    const snapshots = await Promise.all(seen.snapshots);
+    return [
+      `runs ended: ${JSON.stringify(seen.results)}`,
+      `run errors: ${JSON.stringify(seen.errors)}`,
+      snapshots.length === 0 ? 'process tree: no snapshot (no run was alive 20 s after its start)' : `process tree 20 s after the start of the run:\n${snapshots.join('\n')}`,
+    ].join('\n');
+  };
+  return { runner: { run, timeoutMs: 40_000 }, report };
+}
 
 describe('machine run: the shell comes from --shell, else the default of the peer, else the platform', () => {
   it('REAL INCIDENT: the entry exists under another shell: the refusal says which one works, once, and the caller adds what its policy record allows', async () => {
@@ -82,11 +143,15 @@ describe('machine run: the shell comes from --shell, else the default of the pee
     // Timed out at 60 s on the Windows runners of 7b4ae48, 3b45748 and 5e4158d (warm-up 4.9 s in the last one, cause not established, the log shows nothing between the warm-up and the timeout). The stages and a 50 s watchdog below make the next failure say WHERE the time went instead of an anonymous timeout.
     const started = Date.now();
     const seconds = (): string => `${((Date.now() - started) / 1000).toFixed(1)} s`;
-    const address = await setUp([{ shell: ALT, command: LS }]);
+    const diagnosed = diagnosedRunner();
+    const address = await setUp([{ shell: ALT, command: LS }], diagnosed.runner);
     const setUpDone = seconds();
     let watchdog: NodeJS.Timeout | undefined;
     const hung = new Promise<never>((_, reject) => {
-      watchdog = setTimeout(() => reject(new Error(`machine run --shell ${ALT} was still running after 50 s: provision and daemon start were done at ${setUpDone}, now ${seconds()} into the test. Either the daemon or the ${ALT} child hung; the cause is not established (see the test comment).`)), 50_000);
+      watchdog = setTimeout(() => {
+        // The daemon ends the child at 40 s (timedOut), so its result, its output and the process tree of the 20 s snapshot are known here.
+        void diagnosed.report().then((report) => reject(new Error(`machine run --shell ${ALT} was still running after 50 s: provision and daemon start were done at ${setUpDone}, now ${seconds()} into the test. Either the daemon or the ${ALT} child hung; the cause is not established (see the test comment). Diagnostics:\n${report}`)));
+      }, 50_000);
     });
     const r = await Promise.race([cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', ALT, '--', 'echo', 'hi']), hung]).finally(() => clearTimeout(watchdog));
     // powershell writes its own progress XML on stderr: only what machine says matters here.
