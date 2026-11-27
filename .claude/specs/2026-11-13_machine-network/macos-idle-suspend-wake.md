@@ -79,6 +79,21 @@ MacBook Pro M2 Pro (Mac14,10), macOS 26.5.2, arm64. Read-only commands of sectio
 
 Consequence for the design: macOS already sleeps by itself when idle and counts an active tty (`ttyskeepawake`), so a custom root script may not be needed. Simplest candidate: `machine install` sets `pmset` (sleep timer on AC, `womp 1`) and the daemon holds a `caffeinate -i` assertion while a request runs. Whether a notty ssh (Herdr) holds the Mac awake is NOT measured. Decision for the owner (U10), before any code.
 
+### 2b. Wake test 1 (2026-11-27, lid OPEN, AC, `womp 1`, USB Ethernet adapter, user away)
+
+| Step | Measured |
+|---|---|
+| `ssh mac-m2 pmset sleepnow` as the normal user | prints `Sleeping now...`, no password; the ping stops 8 s later; the log says `Entering Sleep state due to 'Software Sleep pid=...'` (so `pmset sleepnow` needs no root, test 18) |
+| 3 magic packets (broadcast, UDP 9, MAC of the adapter) 62 s after the sleep | NO wake: `pmset -g log` shows no `Wake` between the sleep (13:16:13) and the next DarkWake (13:31:40, `rtc/SleepService`) |
+| Ping while asleep | answered 4 times in 15 min (13:18:43, 13:22:23, 13:25:00, 13:29:43) while the log shows no wake: cause UNKNOWN (not a logged wake, so a ping answer is NOT a proof of wake) |
+| Dark wakes on AC | every 15 min (`SleepService`, `rtc`), 45 s each (`Sleep Service Back to Sleep`, `Maintenance Sleep`), then every 2 h `upkeep wake` |
+| Sleep proxy | `dns-sd -B _sleep-proxy._udp local` for 6 s found no Bonjour Sleep Proxy on the LAN |
+| Adapter | Lenovo 2.5G USB-C to RJ45, vendor 0x0bda product 0x8156 (Realtek) |
+| Charge Limit | the Mac charged 31 % (13:16) to 80 % (13:57) while asleep and stayed at `80%; AC attached; not charging`: the 80 % limit works |
+| Battery health | 119 cycles, condition Normal, maximum capacity 100 % |
+
+Conclusion so far: a magic packet to this USB Ethernet adapter does not wake this Mac (one test, lid open). Apple's wake for network access relies on a Bonjour Sleep Proxy (an Apple TV, HomePod or an awake Mac on the LAN), and none was found. The only periodic wakes are the 15 min dark wakes of 45 s.
+
 ## 3. Facts from sources (power management, launchd)
 
 | Fact | Source |
