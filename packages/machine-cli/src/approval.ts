@@ -1,4 +1,4 @@
-import { canonicalize, decodeBase64urlStrict, isUuid, openSealed, sealTo, verifyRegistration, type Json, type RegistrationBody, type SignedRegistration } from '@wadeck-app/machine-core';
+import { approvalSealContext, canonicalize, decodeBase64urlStrict, isUuid, openSealed, pairSecretContext, sealTo, verifyRegistration, type Json, type RegistrationBody, type SealContextParts, type SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinCompatible, parseAdminPinDocument, pinAdminDocument, type AdminPin } from './admin.js';
 import { importPeer, type MachineInfo, type PeerBundle } from './network.js';
 
@@ -35,19 +35,8 @@ export interface CheckedApproval {
   peerBodies: RegistrationBody[];
 }
 
-export interface SealContextParts {
-  adminUuid: string | null;
-  candidateUuid: string;
-  /** The random of the candidacy this approval answers. */
-  random: string;
-  /** `self`, or `peer:<uuid of the peer>`: a sealed value cannot be moved to another entry. */
-  slot: string;
-}
-
-/** The purpose a pair secret is sealed for: one admin machine, one candidate, one candidacy, one entry of the approval. */
-export function pairSecretContext(parts: SealContextParts): string {
-  return `pair-secret:${parts.adminUuid ?? 'none'}:${parts.candidateUuid}:${parts.random}:${parts.slot}`;
-}
+// The seal contexts live in machine-core (shared with the daemon and tested against machine-webcrypto); re-exported here, unchanged.
+export { approvalSealContext, pairSecretContext, type SealContextParts };
 
 /** Admin side: seal the pair secret of a bundle to the identity key of the candidate. */
 export function sealBundle(bundle: PeerBundle, candidateIdentityPublicKey: string, parts: SealContextParts): SealedBundle {
@@ -61,11 +50,6 @@ export interface SealedApproval {
   random: string;
   /** `sealTo(identity key of the candidate, canonical JSON of the Approval, approvalSealContext(...))`. */
   sealed: string;
-}
-
-/** The purpose an approval is sealed for: this candidate machine and this candidacy. A sealed approval opens nowhere else. */
-export function approvalSealContext(candidateUuid: string, random: string): string {
-  return `approval:v2:${candidateUuid}:${random}`;
 }
 
 /** Admin side: seal the whole approval (registrations, admin key, sealed secrets) to the identity key of the candidate. */

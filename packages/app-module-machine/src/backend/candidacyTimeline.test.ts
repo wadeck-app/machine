@@ -9,7 +9,7 @@ function view(overrides: Partial<CandidacyListView> = {}): CandidacyListView {
     id: 'c1', name: 'laptop', hostname: 'H', observedIp: '198.51.100.2', uuid: undefined,
     createdAt: NOW - 84, expiresAt: NOW + 800, ageSeconds: 84, relayStatus: undefined,
     uuidBound: undefined, boundTokenLabel: undefined, boundToCandidateToken: undefined, rebind: false, bindingNote: undefined,
-    code: undefined, problems: [],
+    code: undefined, identityPublicKey: undefined, random: undefined, problems: [],
     ...overrides,
   };
 }

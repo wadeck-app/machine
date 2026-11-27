@@ -77,6 +77,7 @@ export { MAX_READ_ONLY_TEXT, READ_ONLY_COMMANDS, SECRET_NAME_MARKERS, classifyRe
 export { canonicalEntry, hasAngleBracket, looksLikePlaceholder, matchTemplate, MAX_PLACEHOLDERS, MAX_TEXT, parseEntryText, parseTemplate, templateExamples, type EntryText, type Template, type TemplateMatch, type Token } from './template.js';
 export { canonicalType, checkValue, describeType, parseTypeSpec, sampleValues, TemplateError, type Platform, type TypeSpec, type ValueCheck } from './typedParams.js';
 export { candidacyCode, finalCode, formatFinalCode, newCandidacyRandom } from './sas.js';
+export { approvalSealContext, importCandidateSealContext, pairSecretContext, type SealContextParts } from './approvalContext.js';
 export { HINT_MAX_LENGTH, MIN_ITERATIONS, PASSPHRASE_MIN_LENGTH, PASSPHRASE_RECOMMENDED_LENGTH, adminKeyHint, checkHint, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
 export { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry, type NormalizedName, type Resolution } from './reference.js';
 export { MAX_PING_COUNT, parsePingCount, summarizeSamples, type PingCount, type SampleSummary } from './ping.js';

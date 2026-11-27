@@ -32,7 +32,7 @@ The page only UNLOCKS the admin key: it applies no length rule to the passphrase
 | Page | Source of data | Actions |
 |---|---|---|
 | Machines | backend route to the daemon (`list`, presence, addresses, aliases) | alias set and remove |
-| Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | reject (built: row action, PIN, no signature); approve (unlock, sign in the page, post decision through the backend, then distribution documents) NOT built, see "Approve from the page" |
+| Candidacies | backend route to the relay (admin token): list with `uuidBound` warning | reject (built: row action, PIN, no signature); approve (unlock, sign in the page, post decision through the backend, then distribution documents) routes and builders built (lots 1-4), page and distribution NOT built, see "Approve from the page" |
 | Requests (decisions 73, 74) | daemon command `requests` (audit log of this machine, same reader as `machine requests`) | read-only: pending (exact command to allow), history, chain state. The remote section needs a browser-signed `requests-list` document posted to `POST /requests/remote` (route built, sensitive); the signing component is not built |
 | Allowed (decision 104) | daemon command `allowed`: the policy installed here with its call counters, the policies signed here for the others (the readers of `machine allowed`) | read-only: per machine version, mode, when signed, entries by shell with lifetime, text and machine filters, `N entries on M machines`; edit and remove are part 2 (needs a signature design) |
 | Policy | local policy files through the daemon | edit allowlists and limits, sign in the page, install and distribute |
@@ -95,17 +95,19 @@ Facts found in slice 1:
 
 ## Approve from the page (request #146; status 2026-11-27)
 
-Built: Reject only. The Candidacies table has a `Reject` row action (standard DataTable actions column, `$actions.reject` with a confirm, no custom component or style): `POST /candidacies/:id/reject` (sensitive, `rejectCandidacy` in `backend/candidacies.ts`, `PUT .../decision {decision:"reject"}`), shown only where `canDecide` (pending, unexpired, usable id). Threat notes: threat-model.md, "Reject button".
+Visible on the page: Reject only. The Candidacies table has a `Reject` row action (standard DataTable actions column, `$actions.reject` with a confirm, no custom component or style): `POST /candidacies/:id/reject` (sensitive, `rejectCandidacy` in `backend/candidacies.ts`, `PUT .../decision {decision:"reject"}`), shown only where `canDecide` (pending, unexpired, usable id). Threat notes: threat-model.md, "Reject button".
 
-NOT built: approve. Lots, in order; each stands alone and none is wired to a button until the last:
+Approve is NOT usable from the page: lots 1 to 4 (building blocks and routes) are built and tested, lots 5 and 6 are not, and nothing is wired to a button. Lots, in order; each stands alone:
 
-| Lot | Content | Where |
-|---|---|---|
-| 1 | The list answer carries `identityPublicKey` and `random` to the page; the page recomputes the candidacy code and the final code (WebCrypto `candidacyCode` / `finalCode`, already exported) | module backend, dsl-lib |
-| 2 | Pure builder, no I/O: signed registrations (candidate, admin machine), pair secret V2, sealed bundles, sealed approval (v2), byte-for-byte equal to `machine-cli approval.ts` on fixed vectors, opened by `checkApproval` | `machine-webcrypto` |
-| 3 | Daemon command `importCandidate`: opens a pair secret sealed to this machine, verifies the registration against the pinned admin key, `importPeer` | `machine-cli` (commands.ts) |
-| 4 | Backend `POST /candidacies/:id/approve` accepting exactly `{ approval }` (sealed v2, at most 16 KiB, `random` equal to the listed one) after lot 3 succeeded, then `PUT .../decision` | module backend |
-| 5 | Distribution: peer documents built in the page, daemon command verifies and delivers them (reuse of `put`, direct then inbox, same report as `machine admin distribute`) | machine-webcrypto, machine-cli |
-| 6 | Modal composed of `ConfirmSignModal`, the passphrase field, the codes and `FinalCodeDisplay`; timeline steps follow the proofs of the threat-model table | dsl-lib-machine, view |
+| Lot | Status | Content | Where |
+|---|---|---|---|
+| 1 | built | The list answer carries `identityPublicKey` and `random` (only when a code could be computed from them); `proveCandidacy` recomputes the candidacy code (refuses on a mismatch with the listed one) and the final code | module backend `candidacies.ts`, dsl-lib `lib/candidacyProof.ts` |
+| 2 | built | `buildApproval` (pure, no I/O, `now` given): registrations of candidate and admin machine, pair secret V2, sealed bundles, sealed approval v2, import for the admin machine, final code. Registrations and pair secret equal machine-core on a fixed vector; the approval is opened by the real `checkApproval` (`machine-cli/approvalWebcrypto.test.ts`). Seal contexts moved to `machine-core/approvalContext.ts` (CLI re-exports, unchanged) and copied in webcrypto with an equality test | `machine-webcrypto/approvalBuilder.ts`, `machine-core` |
+| 3 | built | Daemon commands `approveContext` (admin machine, pinned key, candidate already trusted or revoked; read-only) and `importCandidate` (exactly `{ registration, sealedPairSecret, adminUuid, candidateUuid, random }`: registration verified against the pinned key, pair secret opened with this machine identity key for `import-candidate:v1:<admin>:<candidate>:<random>`, `importPeer`; idempotent; a uuid trusted with another key is refused `key-changed`, the rebind stays in `machine admin approve`) | `machine-cli/candidateImport.ts`, `commands.ts` |
+| 4 | built | `POST /candidacies/:id/approve` (sensitive, module header): body exactly `{ approval, adminImport }` (`adminImport` null only for the first machine approving itself, checked with `approveContext`); lists the candidacy again (pending, unexpired, no problem), `random` of the approval and the import equal the listed ones, `importCandidate`, THEN `PUT .../decision {approve, approval}`; `GET /approve-context/:uuid` (sensitive, header) | module backend `candidacyApprove.ts`, `candidacies.ts` |
+| 5 | NOT built | Distribution: peer documents built in the page, daemon command verifies and delivers them (reuse of `put`, direct then inbox, same report as `machine admin distribute`), including notice recipients | machine-webcrypto, machine-cli |
+| 6 | NOT built | Modal composed of `ConfirmSignModal`, the passphrase field, the codes and `FinalCodeDisplay`; timeline steps follow the proofs of the threat-model table; the page sends the module header | dsl-lib-machine, view |
 
-Until lot 6, `machine admin approve` is the only way to approve; the page says so (subtitle, row expansion).
+Deviation from the first plan: the body of lot 4 is `{ approval, adminImport }`, not `{ approval }` alone, because the admin machine needs the sealed pair secret that only the page can produce.
+
+Until lot 6, `machine admin approve` is the only way to approve; the page says so (subtitle, row expansion). Without lot 5 an approval from the page would leave the other peers uninformed (the retry is `machine admin distribute <uuid>`).

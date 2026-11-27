@@ -29,6 +29,19 @@ export { REQUESTS_LIST_DOMAIN, REQUESTS_LIST_LIFETIME_SECONDS, REQUESTS_LIST_MAX
 export { DEFAULT_APPLY_WINDOW_SECONDS, POLICY_MAX_ENTRIES_PER_LIST, entryFromText, nextPolicyBody, nextPolicyBodyMany, nextPolicyBodyRemoveMany, nextPolicyBodyRenewMany, type EditContext, type EntryRef, type PolicyChange, type PolicyEdit, type PolicyEditEntries, type PolicyEditMany } from './policyEdit.js';
 export { candidacyCode, finalCode, formatFinalCode, formatVerificationCode } from './sas.js';
 export { ed25519PublicToX25519, sealTo } from './seal.js';
+export {
+  buildApproval,
+  approvalSealContext,
+  importCandidateSealContext,
+  pairSecretContext,
+  type ApprovalCandidate,
+  type ApprovalMachine,
+  type BuildApprovalInput,
+  type BuiltApproval,
+  type CandidateImport,
+  type SealContextParts,
+  type SealedApproval,
+} from './approvalBuilder.js';
 export { PAIR_SECRET_V2_DOMAIN, derivePairSecretFromSignature, type PairMember } from './pairSecret.js';
 export {
   MAX_NOTICE_RECIPIENTS,

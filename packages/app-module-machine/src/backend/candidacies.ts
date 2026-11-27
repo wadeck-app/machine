@@ -61,6 +61,10 @@ export interface CandidacyListView {
   bindingNote: string | undefined;
   /** Recomputed here from the key and random received, never taken from the relay. Absent when it cannot be computed. */
   code: string | undefined;
+  /** Candidate identity key AS RECEIVED, only when the code could be computed from it (a valid key and a 16-byte random): the page recomputes the codes from them (approve from the page). */
+  identityPublicKey: string | undefined;
+  /** The candidacy random AS RECEIVED, under the same condition as `identityPublicKey`. */
+  random: string | undefined;
   /** Why this candidacy must not be approved (it can still be rejected). */
   problems: string[];
 }
@@ -238,6 +242,9 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
     rebind,
     bindingNote,
     code,
+    // The text is carried only when the code computed from it: never an arbitrary string of the relay (control characters, wrong size).
+    identityPublicKey: code === undefined ? undefined : identityPublicKey,
+    random: code === undefined ? undefined : random,
     problems,
   };
 }
@@ -313,8 +320,56 @@ export const isCandidacyId = (id: string): boolean => CANDIDACY_ID.test(id);
  * Resolves on 204; every other answer is a RelayRequestError that names the cause and the fix; the token is never in a message.
  */
 export async function rejectCandidacy(configDir: string, id: string, doFetch: typeof fetch = globalThis.fetch, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  return putDecision(configDir, id, { decision: 'reject' }, REJECT_WORDING, doFetch, env);
+}
+
+/** The sealed approval the page built (decision 78: the relay stores one blob and the `random` it already holds). */
+export interface SealedApprovalBody {
+  v: 2;
+  random: string;
+  sealed: string;
+}
+
+/**
+ * Approve a pending candidacy with the admin token: `PUT .../decision {decision: "approve", approval}`. The approval was signed and sealed in the browser
+ * (hard rule 4: this module never signs); it is only posted. Same answers and errors as `rejectCandidacy`, worded for the approval.
+ */
+export async function approveCandidacy(configDir: string, id: string, approval: SealedApprovalBody, doFetch: typeof fetch = globalThis.fetch, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  return putDecision(configDir, id, { decision: 'approve', approval }, APPROVE_WORDING, doFetch, env);
+}
+
+interface DecisionWording {
+  /** After "the relay answered N to the ...". */
+  noun: string;
+  /** "nothing was rejected". */
+  nothing: string;
+  /** The first problem sentence about an id the relay cannot take, ending with what to press. */
+  badId: string;
+  /** What to do after a network failure. */
+  retryNetwork: string;
+  /** What to do after another failure. */
+  retryOther: string;
+}
+
+const REJECT_WORDING: DecisionWording = {
+  noun: 'rejection',
+  nothing: 'nothing was rejected',
+  badId: 'reload the page and press Reject on the row again',
+  retryNetwork: 'then press Reject again',
+  retryOther: 'retry, and run `machine admin approve <id> --reject` if it persists',
+};
+
+const APPROVE_WORDING: DecisionWording = {
+  noun: 'approval',
+  nothing: 'nothing was approved',
+  badId: 'reload the page and approve the candidacy of the row again',
+  retryNetwork: 'then approve again',
+  retryOther: 'reload the page and approve again, or run `machine admin approve <id>` in a terminal if it persists',
+};
+
+async function putDecision(configDir: string, id: string, decision: Record<string, unknown>, wording: DecisionWording, doFetch: typeof fetch, env: NodeJS.ProcessEnv): Promise<void> {
   if (!CANDIDACY_ID.test(id)) {
-    throw new RelayRequestError(400, 'the candidacy id must be 1 to 128 letters, digits, "-" or "_" (it is the id the relay listed): reload the page and press Reject on the row again');
+    throw new RelayRequestError(400, `the candidacy id must be 1 to 128 letters, digits, "-" or "_" (it is the id the relay listed): ${wording.badId}`);
   }
   const insecure = insecureTlsProblem(env);
   if (insecure !== undefined) {
@@ -326,12 +381,12 @@ export async function rejectCandidacy(configDir: string, id: string, doFetch: ty
     res = await doFetch(`${relayUrl}/api/machines/candidacies/${id}/decision`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ decision: 'reject' }),
+      body: JSON.stringify(decision),
       redirect: 'error',
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
-    throw new RelayRequestError(0, `the relay is unreachable at ${relayUrl} (${printable((e as Error).message)}): nothing was rejected; check the network and that the relay runs, then press Reject again`);
+    throw new RelayRequestError(0, `the relay is unreachable at ${relayUrl} (${printable((e as Error).message)}): ${wording.nothing}; check the network and that the relay runs, ${wording.retryNetwork}`);
   }
   if (res.status === 204) return;
   const text = await readLimited(res);
@@ -343,7 +398,7 @@ export async function rejectCandidacy(configDir: string, id: string, doFetch: ty
   }
   const o = asObject(body);
   if (res.status === 401) {
-    throw new RelayRequestError(401, `the relay refused the admin token (invalid or revoked): nothing was rejected. ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
+    throw new RelayRequestError(401, `the relay refused the admin token (invalid or revoked): ${wording.nothing}. ${LOGIN_ADVICE.charAt(0).toUpperCase()}${LOGIN_ADVICE.slice(1)}`);
   }
   const gateText = res.status === 403 && typeof o['error'] === 'string' && !['not_owner', 'not_registered', 'forbidden'].includes(o['error']);
   if (o['error'] === 'full_access_required' || o['error'] === 'scope_denied' || gateText) {
@@ -353,8 +408,29 @@ export async function rejectCandidacy(configDir: string, id: string, doFetch: ty
     throw new RelayRequestError(409, 'the candidacy is no longer pending (it was already approved or rejected, or it expired): nothing was changed here. Reload the page to see its current state');
   }
   if (res.status === 404) {
-    throw new RelayRequestError(404, 'the relay does not know this candidacy (it expired, 15 minutes after it was posted, or the relay restarted): nothing was rejected. The candidate can run `machine join --resume` to post a new one');
+    throw new RelayRequestError(404, `the relay does not know this candidacy (it expired, 15 minutes after it was posted, or the relay restarted): ${wording.nothing}. The candidate can run \`machine join --resume\` to post a new one`);
   }
   const why = typeof o['message'] === 'string' ? o['message'] : typeof o['error'] === 'string' ? o['error'] : 'no detail';
-  throw new RelayRequestError(res.status, `the relay answered ${res.status} to the rejection (${printable(why)}): nothing was rejected; retry, and run \`machine admin approve <id> --reject\` if it persists`);
+  throw new RelayRequestError(res.status, `the relay answered ${res.status} to the ${wording.noun} (${printable(why)}): ${wording.nothing}; ${wording.retryOther}`);
+}
+
+/**
+ * The candidacy the page wants to approve, listed AGAIN by the relay right now: it must still be there, pending, unexpired and without problems (the relay is
+ * untrusted: the key and random used for the approval are the ones listed now, recomputed codes included). 404 when it is not listed, 409 otherwise.
+ */
+export async function findApprovable(configDir: string, id: string, nowSeconds: number, doFetch: typeof fetch = globalThis.fetch, env: NodeJS.ProcessEnv = process.env): Promise<CandidacyListView> {
+  if (!CANDIDACY_ID.test(id)) {
+    throw new RelayRequestError(400, `the candidacy id must be 1 to 128 letters, digits, "-" or "_" (it is the id the relay listed): ${APPROVE_WORDING.badId}`);
+  }
+  const view = (await listCandidacies(configDir, nowSeconds, doFetch, env)).find((v) => v.id === id);
+  if (view === undefined) {
+    throw new RelayRequestError(404, 'the relay does not list this candidacy any more (it expired 15 minutes after it was posted, was decided, or the relay restarted): nothing was approved. The candidate can run `machine join --resume` to post a new one');
+  }
+  if (view.relayStatus !== undefined && view.relayStatus !== 'pending') {
+    throw new RelayRequestError(409, `the relay says this candidacy is no longer pending (its status is "${view.relayStatus}"): nothing was approved. Reload the page to see its current state`);
+  }
+  if (view.problems.length > 0) {
+    throw new RelayRequestError(409, `this candidacy cannot be approved: ${view.problems.join('; ')}. Nothing was approved; reject it, or ask the candidate to run \`machine join --resume\``);
+  }
+  return view;
 }

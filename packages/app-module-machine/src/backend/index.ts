@@ -1,6 +1,7 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
 import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
+import { registerApproveRoutes } from './candidacyApprove.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
@@ -555,6 +556,9 @@ export default function register(ctx: ModuleContextLike): void {
       return reply.code(failure.status).send(failure);
     }
   }, SENSITIVE);
+
+  // Approve from the page (admin-ui.md): the page signs and seals in the browser; these routes carry the result (candidacyApprove.ts).
+  registerApproveRoutes(ctx, { configDir, failureOf });
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

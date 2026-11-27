@@ -224,11 +224,22 @@ No `Open` threat ships with it (hard rule 10).
 
 **Reject button (Candidacies page, built).** A rejection only restricts (hard rule 4): no signature, no passphrase. `POST /candidacies/:id/reject` is `sensitive` (app-core PIN) because it spends the relay admin token (AR-10); the `x-machine-module` header is NOT required (a DSL row action cannot send one), so the PIN is the only gate. It reads no body: the id is the path (`[A-Za-z0-9_-]{1,128}`, checked before any call), the decision is fixed to `reject` in the module, so the route cannot approve. A local process behind the PIN session can reject candidacies, as it can with the file `relay-admin.json` (AR-10). Errors name cause and fix (409 no longer pending, 404 unknown or expired, 401/403 token, unreachable); the token is never in an answer.
 
-**Approve from the page (NOT built; constraints for whoever builds it).**
+**Approve from the page (page and distribution NOT built; lots 1-4 built, see admin-ui.md).**
+
+| Built (lots 1-4) | Facts |
+|---|---|
+| Routes | `POST /candidacies/:id/approve` and `GET /approve-context/:uuid`: `sensitive` (app-core PIN) AND the module header, so any local process behind the PIN session that sends the header can call them (AR-10 class, same as Reject). They carry no passphrase and no key: body exactly `{ approval, adminImport }`, anything else is a 400 |
+| What a hostile caller gains | Nothing it cannot already do with `relay-admin.json`, except the import: `importCandidate` is applied only to a registration signed by the PINNED admin key (rule 4, verified by the daemon), so a caller without a registration signed by the admin key imports nothing. A replayed genuine import is idempotent |
+| Pair secret path | Never in clear outside the page: sealed to the candidate (inside the approval) and to the identity key of the admin machine for `import-candidate:v1:<admin uuid>:<candidate uuid>:<random>`; the daemon opens it only for this admin machine, candidate and candidacy. The backend forwards the sealed text and never opens it |
+| Order | The candidate is imported on the admin machine BEFORE the relay is told (as the CLI): a failed decision leaves a harmless extra peer (named in the error); the opposite order could leave an enrolled machine this one does not know |
+| Rebind | A uuid already trusted with another identity key is refused by the daemon (`key-changed`): the explicit rebind, which needs the relay `uuidBound`, stays in `machine admin approve` |
+| Not yet | Nothing signs in a real page yet (lot 6), peers are not informed (lot 5); the first-machine approval (`adminImport` null) is accepted only when the daemon says the candidate is the admin machine itself |
+
+Constraints that still bind lots 5 and 6:
 
 | Point | Required |
 |---|---|
-| Relay untrusted (T-05, rule 5) | The page recomputes the candidacy code from the key and random AS RECEIVED (the list answer must carry them, it does not today) and refuses on a mismatch with any relay code; the code stays hidden unless verbose, as in the CLI (decision 55) |
+| Relay untrusted (T-05, rule 5) | The page recomputes the candidacy code from the key and random AS RECEIVED (the list answer carries them since lot 1; `proveCandidacy`) and refuses on a mismatch with any relay code; the code stays hidden unless verbose, as in the CLI (decision 55) |
 | Signing (rule 4) | Registrations of the candidate and of the admin machine, the pair secret (`derivePairSecretFromSignature`, D27) and the sealed approval are produced in the browser with the non-extractable key; backend and daemon only verify and relay. Passphrase typed in the modal for each approval, read once, never sent, never kept (decision of #146: no unlock window) |
 | Admin machine trusts the candidate | The CLI does `importPeer` (registration + pair secret) before telling the relay. The pair secret must not cross the backend in clear: seal it to the identity key of the admin machine (`sealTo`, context naming candidate and random) and let a daemon command open and import it. New command, new context string, new test vectors |
 | Security code (rule 5, T-05) | `finalCode(candidate key, admin key, random)` computed in the page from the keys it holds, shown for the human to compare with the candidate screen; never taken from relay text |

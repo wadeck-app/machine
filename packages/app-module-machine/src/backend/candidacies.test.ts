@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { candidacyCode, generateSigningKeyPair, newCandidacyRandom } from '@wadeck-app/machine-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pathToFileURL } from 'node:url';
-import { ADMIN_TOKEN_WHY, LOGIN_ADVICE, PAIRING_CLICK_PATH, RelayNotConfiguredError, RelayRequestError, listCandidacies, rejectCandidacy } from './candidacies.js';
+import { ADMIN_TOKEN_WHY, LOGIN_ADVICE, PAIRING_CLICK_PATH, RelayNotConfiguredError, RelayRequestError, approveCandidacy, findApprovable, listCandidacies, rejectCandidacy } from './candidacies.js';
 import { makeTempDir, removeTempDir } from './tempDir.testUtil.js';
 
 const TOKEN = 'admin-token-secret-value';
@@ -83,6 +83,31 @@ describe('listCandidacies', () => {
       code: candidacyCode(c.identityPublicKey as string, c.random as string),
       problems: [],
     });
+  });
+
+  it('carries the key and random AS RECEIVED, so the page can recompute the codes itself (approve from the page, lot 1)', async () => {
+    const c = candidate();
+    const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [c] } }));
+    writeAdminConfig(relay.url);
+    const [view] = await listCandidacies(configDir, NOW);
+    expect(view?.identityPublicKey).toBe(c.identityPublicKey);
+    expect(view?.random).toBe(c.random);
+  });
+
+  it('carries neither key nor random when they cannot be used (invalid key, random of a wrong size, control characters): the page never gets text it cannot compute from', async () => {
+    const good = candidate();
+    const relay = await fakeRelay(() => ({
+      status: 200,
+      body: { candidacies: [{ ...good, id: 'a', identityPublicKey: 'not-a-key' }, { ...good, id: 'b', random: 'AAAA' }, { ...good, id: 'c', random: `${good.random as string}\u001b[31m` }] },
+    }));
+    writeAdminConfig(relay.url);
+    const views = await listCandidacies(configDir, NOW);
+    expect(views).toHaveLength(3);
+    for (const v of views) {
+      expect(v.identityPublicKey).toBeUndefined();
+      expect(v.random).toBeUndefined();
+      expect(v.problems.length).toBeGreaterThan(0);
+    }
   });
 
   it('returns the status the relay states for a candidacy, and none when it states none (never a made-up "pending")', async () => {
@@ -490,5 +515,96 @@ describe('rejectCandidacy', () => {
 
   it('without an admin token file: RelayNotConfiguredError with the login advice', async () => {
     await expect(rejectCandidacy(configDir, 'cand-1')).rejects.toBeInstanceOf(RelayNotConfiguredError);
+  });
+});
+
+// Approve from the page, lot 4: the relay side of the approval. The approval is sealed in the browser; this module only posts it.
+const APPROVAL = { v: 2 as const, random: 'AAAAAAAAAAAAAAAAAAAAAA', sealed: 'c2VhbGVk' };
+
+describe('approveCandidacy', () => {
+  it('sends PUT .../decision {decision: "approve", approval} with the admin token and resolves on 204', async () => {
+    const relay = await fakeRelay(() => ({ status: 204, body: {} }));
+    writeAdminConfig(relay.url);
+    await expect(approveCandidacy(configDir, 'cand-1', APPROVAL)).resolves.toBeUndefined();
+    expect(relay.seen[0]).toMatchObject({ method: 'PUT', url: '/api/machines/candidacies/cand-1/decision', authorization: `Bearer ${TOKEN}` });
+  });
+
+  it('puts exactly the approval in the body (nothing else travels with it)', async () => {
+    let received = '';
+    const server = createServer((req, res) => {
+      req.on('data', (c: Buffer) => { received += c.toString(); });
+      req.on('end', () => { res.writeHead(204); res.end(); });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    writeAdminConfig(`http://127.0.0.1:${address.port}`);
+    await approveCandidacy(configDir, 'cand-1', APPROVAL);
+    expect(JSON.parse(received)).toEqual({ decision: 'approve', approval: APPROVAL });
+  });
+
+  it('refuses an id that is not a plain token BEFORE any request', async () => {
+    const relay = await fakeRelay(() => ({ status: 204, body: {} }));
+    writeAdminConfig(relay.url);
+    for (const id of ['', '../x', 'a/b', 'a?b']) await expect(approveCandidacy(configDir, id, APPROVAL)).rejects.toThrow(/candidacy id/);
+    expect(relay.seen).toEqual([]);
+  });
+
+  it('409, 404, 401, plain machine token and other answers name the cause, say the candidate was NOT approved, and never carry the token', async () => {
+    const cases: Array<[number, unknown, RegExp]> = [
+      [409, { error: 'not_pending' }, /no longer pending.*nothing was changed|not approved/is],
+      [404, { error: 'not_found' }, /does not know this candidacy.*nothing was approved/is],
+      [401, { error: 'invalid_token' }, /refused the admin token.*nothing was approved.*machine admin login/is],
+      [403, { error: 'scope_denied' }, /plain machine token.*cannot decide/is],
+      [500, { error: 'boom' }, /answered 500 to the approval.*nothing was approved/is],
+    ];
+    for (const [status, body, expected] of cases) {
+      const relay = await fakeRelay(() => ({ status, body }));
+      writeAdminConfig(relay.url);
+      const e = await approveCandidacy(configDir, 'cand-1', APPROVAL).then(() => undefined, (err: unknown) => err);
+      expect(e, String(status)).toBeInstanceOf(RelayRequestError);
+      expect((e as RelayRequestError).status).toBe(status);
+      expect((e as RelayRequestError).message).toMatch(expected);
+      expect((e as RelayRequestError).message).not.toContain(TOKEN);
+    }
+  });
+
+  it('an unreachable relay: status 0, nothing approved, the fix', async () => {
+    writeAdminConfig('http://127.0.0.1:1');
+    const e = await approveCandidacy(configDir, 'cand-1', APPROVAL).then(() => undefined, (err: unknown) => err);
+    expect((e as RelayRequestError).status).toBe(0);
+    expect((e as RelayRequestError).message).toMatch(/unreachable.*nothing was approved/is);
+  });
+});
+
+describe('findApprovable: the candidacy must still be listed, pending, usable and unexpired', () => {
+  it('returns the view of the listed candidacy', async () => {
+    const c = candidate({ id: 'a' });
+    const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [c, candidate({ id: 'b' })] } }));
+    writeAdminConfig(relay.url);
+    const view = await findApprovable(configDir, 'a', NOW);
+    expect(view).toMatchObject({ id: 'a', uuid: UUID, random: c.random, identityPublicKey: c.identityPublicKey });
+  });
+
+  it('404 when it is not listed (expired, decided, or the relay restarted), with the fix', async () => {
+    const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [candidate({ id: 'b' })] } }));
+    writeAdminConfig(relay.url);
+    const e = await findApprovable(configDir, 'a', NOW).then(() => undefined, (err: unknown) => err);
+    expect(e).toBeInstanceOf(RelayRequestError);
+    expect((e as RelayRequestError).status).toBe(404);
+    expect((e as RelayRequestError).message).toMatch(/machine join --resume/);
+  });
+
+  it('409 when the relay states another status than pending, when it is expired, or when it has problems (the problems are named)', async () => {
+    const noUuid = candidate({ id: 'c' });
+    delete noUuid['uuid'];
+    const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [candidate({ id: 'a', status: 'approved' }), candidate({ id: 'b', expiresAt: NOW - 1 }), noUuid] } }));
+    writeAdminConfig(relay.url);
+    for (const [id, expected] of [['a', /status is "approved"/], ['b', /expired/], ['c', /no uuid/]] as const) {
+      const e = await findApprovable(configDir, id, NOW).then(() => undefined, (err: unknown) => err);
+      expect((e as RelayRequestError).status, id).toBe(409);
+      expect((e as RelayRequestError).message, id).toMatch(expected);
+    }
   });
 });

@@ -10,6 +10,7 @@ import { directDeliveryFor } from './directDelivery.js';
 import { holdProgressCommand, type HoldProgressAnswer } from './holdProgress.js';
 import { answerOf, reachabilityOnce, type ReachabilityAnswer } from './reachabilityWiring.js';
 import type { ReachabilityProbe } from './reachabilityProbe.js';
+import { approveContext, importCandidate, type ImportCandidateAnswer } from './candidateImport.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -235,6 +236,19 @@ export function makeCommands(configDir: string, version: string | (() => string)
     submitPolicy(payload?: unknown): Promise<SubmitAnswer> {
       // Direct delivery first (decision 86): the target takes the signed document over the peer channel; the relay inbox only when it cannot.
       return submitPolicy(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * Approve from the page (admin-ui.md). The page builds and signs the approval IN THE BROWSER; the daemon of the machine that holds the admin key serves
+     * what the page needs before the passphrase (`approveContext`) and, once the page signed, verifies and imports the candidate (`importCandidate`). No
+     * passphrase or unlocked key ever reaches it, and it signs nothing.
+     */
+    approveContext(payload?: unknown): ReturnType<typeof approveContext> {
+      return approveContext(configDir, payload, now());
+    },
+
+    importCandidate(payload?: unknown): Promise<ImportCandidateAnswer> {
+      return importCandidate(configDir, payload, now());
     },
 
     /**
