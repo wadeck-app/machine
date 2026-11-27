@@ -54,6 +54,31 @@ Test 12 protocol (wake from lid closed). Needs a second machine on the same wire
 8. If a wake happens: note whether it is a dark wake (display off) and how many seconds the Mac stays reachable: from the other machine `ping` every second and `machine ping <peer>` immediately after the packet; `machine` can only run if the Mac stays awake long enough to connect (reports above: 5 to 10 s, 7 s).
 9. Keep-awake alternative, lid closed no display, AC: `caffeinate -s` in a Terminal for 10 min, close the lid, from the other machine `ping` for the 10 min; then `pmset -g log | grep -E 'Sleep|Clamshell'`. Stop it with Ctrl-C after reopening.
 
+## 2a. Measured on the real Mac (2026-11-27, read-only over ssh)
+
+MacBook Pro M2 Pro (Mac14,10), macOS 26.5.2, arm64. Read-only commands of section 2 (rows 1-4, 6-10, 13-16 and `pmset -g therm`); rows 11, 12, 17, 18 not done yet.
+
+| Fact | Measured |
+|---|---|
+| Tool paths | `pmset caffeinate ioreg netstat lsof logger stat date sysctl networksetup` all present (`/usr/bin`, `/usr/sbin`, `/bin`); `launchctl` is `/bin/launchctl` |
+| `pmset -g` keys | `sleep`, `displaysleep`, `womp`, `powernap`, `standby`, `ttyskeepawake`, `tcpkeepalive`, `hibernatemode`, `networkoversleep`, `disksleep`; no `disablesleep`, no `lidwake`, no `acwake` printed |
+| Wake for network | `womp 1` on AC, `womp 0` on battery (the "currently in use" block showed 0 because the Mac was on battery) |
+| Sleep timers | `sleep 1` on AC and battery (the system sleeps 1 min after the last activity when nothing holds it), `displaysleep 30` on AC / 10 on battery, `ttyskeepawake 1` |
+| Native idle sleep already works | log: `Entering Sleep state due to 'Idle Sleep'` with ssh sessions open whose ttys were idle; while the display is on `powerd` holds `PreventUserIdleSystemSleep` "Prevent sleep while display is on" |
+| Dark wakes | the Mac wakes 2-3 s every 15-30 min (`DarkWake ... SleepService`, backupd/CoreAnalytics) and every 2 h (mDNSResponder upkeep): a script triggered by time may run in a dark wake |
+| Resume signal | `sysctl kern.waketime` and `kern.sleeptime` exist and match the `pmset -g log` `Wake` and `Sleep` lines to the second (waketime 13:00:25 = log "Wake from Deep Idle"); NOT yet checked: whether a dark wake also moves `kern.waketime` |
+| Input idle | `ioreg -c IOHIDSystem \| grep HIDIdleTime` readable as a normal user over ssh; value in nanoseconds (19460818958 = 19.5 s, consistent with a UserIsActive timeout) |
+| Assertions | names printed as `PreventUserIdleSystemSleep`, `PreventSystemSleep`, `UserIsActive`, `NetworkClientActive`; an assertion line carries pid, name and timeout |
+| BSD date | `date -j -f '%Y-%m-%dT%H:%M:%SZ'` reads the text as LOCAL time and ignores the `Z` (1795424400 = 09:00Z for 10:00Z): the script must use `date -j -u -f` (1795428000, correct) |
+| BSD netstat | `ESTABLISHED` lines have `ip.port` (address then dot then port), e.g. `a.b.c.d.22 e.f.g.h.61199` |
+| Load average | `sysctl -n vm.loadavg` gives `{ 9.41 4.57 4.87 }` (braces); idle load was not measured (the owner was working: a 0.30 limit like Linux is NOT valid here without an idle measurement) |
+| Network | USB 2.5G Ethernet adapter active at 1000baseT, Wi-Fi also active, the default route is on Wi-Fi: Ethernet is NOT the primary link now (wake over Ethernet needs it primary) |
+| Directories | `/Library/LaunchDaemons` root:wheel 755; `/usr/local` root:wheel 755; `/usr/local/bin` does NOT exist; `/var/run` root:daemon 775 |
+| Thermal | `pmset -g therm`: no thermal, performance or CPU power warning recorded |
+| Power state at the time | on battery (28 %), user active on the console |
+
+Consequence for the design: macOS already sleeps by itself when idle and counts an active tty (`ttyskeepawake`), so a custom root script may not be needed. Simplest candidate: `machine install` sets `pmset` (sleep timer on AC, `womp 1`) and the daemon holds a `caffeinate -i` assertion while a request runs. Whether a notty ssh (Herdr) holds the Mac awake is NOT measured. Decision for the owner (U10), before any code.
+
 ## 3. Facts from sources (power management, launchd)
 
 | Fact | Source |
