@@ -106,6 +106,8 @@ Conclusion so far: a magic packet to this USB Ethernet adapter does not wake thi
 | Ping while asleep | the Wi-Fi address answers pings while `pmset -g log` shows the system asleep (15:16:27-15:23:11): a ping answer is not a proof of wake |
 | `pmset sleepnow` during a dark wake | printed `Sleeping now...` but the Mac stayed reachable (the sleep came 17 s later, `Maintenance Sleep`) |
 
+Full wake from a dark wake (15:25:08, lid open, AC): over ssh, `caffeinate -u -t 12` (man page: "declare that user is active; if the display is off, turns the display on") produced `DarkWake to FullWake from Deep Idle [CDNVA] : due to HID Activity` and `Display is turned on`; `powerd` then held `PreventUserIdleSystemSleep` "Prevent sleep while display is on". So a connection (dark wake) plus `caffeinate -u` is a way to a full wake without any magic packet. Not measured: lid closed, how long the Mac stays up afterwards.
+
 Two observations, same cause string both times: wake for network access works over Wi-Fi for this Mac (lid open, AC). Not yet measured: the delay from the first packet to a usable ssh, lid closed, and whether a port other than 22 (the machine peer port) triggers the wake.
 
 ## 3. Facts from sources (power management, launchd)
