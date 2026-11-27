@@ -84,7 +84,15 @@ describe('candidacyTimeline', () => {
     expect(out.note).toContain('frozen');
   });
 
-  it('never marks the security code or the distribution as done: the page cannot observe them', () => {
+  it('the passphrase step says it is typed in the approval dialog of the page and signed in the browser, never sent (the terminal command does the same)', () => {
+    const info = candidacyTimeline([], NOW).steps.find((s) => s.id === 'signed')?.info ?? '';
+    expect(info).toMatch(/dialog of this page/);
+    expect(info).toMatch(/never sent/);
+    expect(info).toContain('machine admin approve');
+    expect(info).not.toMatch(/never in this page|Today/);
+  });
+
+  it('never marks the security code or the distribution as done from the relay data: only the page that approves can prove them (it overlays them itself)', () => {
     for (const relayStatus of [undefined, 'pending', 'approved', 'rejected', 'frozen']) {
       const s = statuses(candidacyTimeline([view({ relayStatus })], NOW).steps);
       expect(s['final-code']).toBe('todo');

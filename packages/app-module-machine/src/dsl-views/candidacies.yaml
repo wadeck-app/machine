@@ -3,9 +3,9 @@ $sources:
     url: GET /api/modules/machine/candidacies
     poll: 30s
 
-# Reject is a row action of the standard DataTable (a restricting action: no signature, no passphrase; the route is sensitive, the app-core PIN is asked by
-# the shell). Approving is NOT built in this page yet: it needs the admin signature made in the browser, the daemon import of the new peer and the
-# distribution of the signed documents (admin-ui.md, "Approve from the page"); `machine admin approve` does it. No custom component, no styling here.
+# One component for the timeline and the table (machine:CandidaciesTable): the approval dialog lays what the page proves over the steps of the module, so both
+# share its state. Approve signs IN THE BROWSER with the admin passphrase asked at every approval (admin-ui.md, "Approve from the page"); Reject is the standard
+# action below, called by name from the component (a restricting action: no signature, no passphrase; the route is sensitive, the app-core PIN is asked by the shell).
 $actions:
   reject:
     url: POST /api/modules/machine/candidacies/{id}/reject
@@ -13,16 +13,14 @@ $actions:
     reloadSources: [candidacies]
     errorPrefix: Could not reject the candidacy
 
-# The timeline on the left lists the approval procedure; the route computes its steps (texts and
-# statuses, candidacyTimeline.ts) from the relay data of the oldest pending candidacy and marks a step done only when that data
-# proves it. Decision 55: the candidacy code is not displayed (the human compares
-# the security code after signing). The route still answers `code`, recomputed by the module from the key and random it received,
-# never the one the relay sends; it is compared internally and is a problem when the relay disagrees.
+# The route computes the steps (texts and statuses, candidacyTimeline.ts) from the relay data of the oldest pending candidacy and marks a step done only when that
+# data proves it. Decision 55: the candidacy code is not displayed (the human compares the security code after signing). The route still answers `code`, recomputed by
+# the module from the key and random it received, never the one the relay sends; the approval dialog recomputes it again in the page and refuses on a mismatch.
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Candidacies
-    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Reject refuses a candidate here; approving, the passphrase, security code and distribution steps happen in `machine admin approve` and are not observable here.
+    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Approve signs in your browser with the admin passphrase (asked at every approval, never kept or sent), then tells the other machines; Reject refuses the candidate. The terminal alternative is `machine admin approve`.
   # The candidacy the timeline follows (the oldest pending one) and what the relay says about it.
   - $type: Card
     $if: $sources.candidacies.timelineNote
@@ -30,29 +28,7 @@ sections:
     items:
       - $type: Markdown
         text: $sources.candidacies.timelineNote
-  - $type: HorizontalStack
-    gap: gap-6
-    align: items-start
-    itemSizes: [fixed, flex]
-    items:
-      - $type: machine:VerticalTimeline
-        $if: $sources.candidacies.timeline
-        steps: $sources.candidacies.timeline
-      - $type: DataTable
-        rows: $sources.candidacies.candidacies
-        emptyMessage: No pending candidacy
-        expansion:
-          $type: Markdown
-          text: $ctx.row.bindingText
-        columns:
-          - { key: "name", label: "Name", nowrap: true }
-          - { key: "hostname", label: "Hostname", nowrap: true }
-          - { key: "observedIp", label: "Seen from", nowrap: true }
-          - { key: "ageText", label: "Age", nowrap: true }
-          - { key: "statusText", label: "Status", nowrap: true }
-          - type: actions
-            items:
-              - label: Reject
-                action: reject
-                variant: danger-outline
-                condition: canDecide
+  - $type: machine:CandidaciesTable
+    rows: $sources.candidacies.candidacies
+    timeline: $sources.candidacies.timeline
+    emptyMessage: No pending candidacy

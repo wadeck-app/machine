@@ -86,16 +86,22 @@ export interface Sender {
   direct?: DirectDelivery;
 }
 
+/**
+ * What delivering an ALREADY BUILT document needs: the relay client, the optional peer channel and the clock. The admin private key is not part of it, so the
+ * daemon (which never holds an unlocked key) can deliver documents the page signed, through the very same `put`.
+ */
+export type DeliveryContext = Pick<Sender, 'client' | 'direct' | 'now' | 'configDir' | 'adminUuid'>;
+
 // The config directory a client was made for (see `adminRelayAccess`): lets `distributePolicy` find the registration of its target
 // without the caller repeating the directory.
 const clientConfigDir = new WeakMap<RelayClient, string>();
 
-interface Recipient {
+export interface Recipient {
   uuid: string;
   name: string;
 }
 
-const emptyReport = (): DistributionReport => ({ delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: 0 });
+export const emptyReport = (): DistributionReport => ({ delivered: 0, alreadyThere: 0, failures: [], aborted: false, machines: 0 });
 
 /** The identity of the admin machine, or null when it has none (`machine init` was never run here). */
 export function adminMachineIdentity(configDir: string): { uuid: string; name: string } | null {
@@ -116,7 +122,7 @@ export function adminMachineUuid(configDir: string): string | null {
 const skewTold = new WeakMap<DistributionReport, Set<string>>();
 
 /** Build and send one document. Returns false when the rest must not be attempted (the relay cannot be used at all). */
-async function put(sender: Sender, report: DistributionReport, to: Recipient, kind: DocumentKind, build: () => SignedDocument): Promise<boolean> {
+export async function put(sender: DeliveryContext, report: DistributionReport, to: Recipient, kind: DocumentKind, build: () => SignedDocument): Promise<boolean> {
   let document: SignedDocument;
   try {
     document = build();
@@ -359,8 +365,7 @@ export async function putNoticeRecipients(sender: Sender, report: DistributionRe
     if (to.uuid === sender.adminUuid) {
       continue;
     }
-    const before = report.noticeLists ?? 0;
-    const next = await put(sender, report, to, 'notice-recipients', () => {
+    const next = await putNoticeDocument(sender, report, to, signed, () => {
       const now = sender.now();
       return buildDocument(
         {
@@ -375,19 +380,29 @@ export async function putNoticeRecipients(sender: Sender, report: DistributionRe
         sender.adminPrivateKeyPkcs8,
       );
     });
-    // What this machine sent, for `machine admin notify-to --list` and the Machines page; display only, a failure to write it is a warning.
-    const recordDir = sender.configDir ?? clientConfigDir.get(sender.client);
-    if (recordDir !== undefined) {
-      try {
-        recordNoticeSent(recordDir, to.uuid, { serial: signed.body.serial, at: sender.now(), stored: (report.noticeLists ?? 0) > before });
-      } catch (e) {
-        (report.warnings ??= []).push((e as Error).message);
-      }
-    }
     if (!next) {
       return;
     }
   }
+}
+
+/**
+ * Send one document of a list of notice recipients (built here, or by the page and verified by the daemon) and record what this machine sent. Returns false when
+ * the rest must not be attempted. Shared by the CLI and by the approval from the page, so both report and record the same way.
+ */
+export async function putNoticeDocument(sender: DeliveryContext, report: DistributionReport, to: Recipient, signed: SignedNoticeRecipients, build: () => SignedDocument): Promise<boolean> {
+  const before = report.noticeLists ?? 0;
+  const next = await put(sender, report, to, 'notice-recipients', build);
+  // What this machine sent, for `machine admin notify-to --list` and the Machines page; display only, a failure to write it is a warning.
+  const recordDir = sender.configDir ?? clientConfigDir.get(sender.client);
+  if (recordDir !== undefined) {
+    try {
+      recordNoticeSent(recordDir, to.uuid, { serial: signed.body.serial, at: sender.now(), stored: (report.noticeLists ?? 0) > before });
+    } catch (e) {
+      (report.warnings ??= []).push((e as Error).message);
+    }
+  }
+  return next;
 }
 
 /** The name this admin machine knows `uuid` by (from its registration), else the uuid itself: what a message to the person calls the machine. */

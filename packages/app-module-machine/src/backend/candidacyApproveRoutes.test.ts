@@ -312,3 +312,67 @@ describe('GET /approve-context/:uuid: what the page needs before it asks the pas
     expect(out.body.error).toMatch(/holds it/);
   });
 });
+
+// Lot 5: the page signed the documents that tell the other peers about the new machine; the route hands them to the daemon of the admin machine, which verifies and delivers.
+describe('POST /approve-distribute (lot 5): the documents for the other peers', () => {
+  const DIST = 'POST /approve-distribute';
+  const doc = (to: string): Record<string, unknown> => ({ body: { v: 2, kind: 'peer', to, id: 'AAAAAAAAAAAAAAAAAAAAAA', issuedAt: 1, expiresAt: 2, payload: { sealed: 'x' } }, signature: 'sig' });
+  const body = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({ candidateUuid: CANDIDATE_UUID, documents: [doc(ADMIN_UUID)], noticeRecipients: null, ...extra });
+  const DELIVERED = { ok: true, subject: { uuid: CANDIDATE_UUID, name: 'laptop' }, failed: false, report: { delivered: 2, alreadyThere: 0, failures: [], aborted: false, machines: 1 }, text: { out: '[ok] 2 document(s)\n', err: '' }, retry: `machine admin distribute ${CANDIDATE_UUID}` };
+
+  it('is a sensitive route (the app-core PIN): it makes the relay and the other machines learn a machine', () => {
+    expect(routes().get(DIST)?.options).toEqual({ effect: 'sensitive' });
+  });
+
+  it('without the module header: 403, no daemon call', async () => {
+    await start({ candidacy: listed(), daemon: { approveDistribute: DELIVERED } });
+    const out = await call(DIST, { body: body() });
+    expect(out.status).toBe(403);
+    expect(events).toEqual([]);
+  });
+
+  it('the body is exactly { candidateUuid, documents, noticeRecipients }: a missing field, an extra field (a passphrase cannot travel here) or a bad uuid is a 400 before any call', async () => {
+    await start({ candidacy: listed(), daemon: { approveDistribute: DELIVERED } });
+    for (const bad of [undefined, { candidateUuid: CANDIDATE_UUID }, body({ passphrase: 'x' }), body({ candidateUuid: 'nope' }), body({ documents: 'x' }), body({ documents: [5] }), body({ noticeRecipients: 'x' })]) {
+      const out = await call(DIST, { headers: HEADER, body: bad });
+      expect(out.status, JSON.stringify(bad)).toBe(400);
+      expect(out.body.kind).toBe('bad_request');
+    }
+    expect(events).toEqual([]);
+  });
+
+  it('refuses a body larger than the relay can ever store, before any call', async () => {
+    await start({ candidacy: listed(), daemon: { approveDistribute: DELIVERED } });
+    const out = await call(DIST, { headers: HEADER, body: body({ documents: Array.from({ length: 80 }, () => ({ ...doc(ADMIN_UUID), pad: 'A'.repeat(16 * 1024) })) }) });
+    expect(out.status).toBe(400);
+    expect(out.body.error).toMatch(/too large/);
+    expect(events).toEqual([]);
+  });
+
+  it('forwards exactly the three fields to the daemon command approveDistribute and answers what it answered', async () => {
+    const seen = await start({ candidacy: listed(), daemon: { approveDistribute: DELIVERED } });
+    const sent = body({ documents: [doc(ADMIN_UUID), doc(CANDIDATE_UUID)] });
+    const out = await call(DIST, { headers: HEADER, body: sent });
+    expect(out.status).toBe(200);
+    expect(out.body).toEqual(DELIVERED);
+    expect(events).toEqual(['daemon-approveDistribute']);
+    expect(seen.daemonBodies[0]?.body).toEqual(sent);
+    expect(JSON.stringify(out.body)).not.toContain(TOKEN);
+  });
+
+  it('a refusal of the daemon keeps its reason and its message (cause and fix), with a status per reason', async () => {
+    const cases: Array<[string, number]> = [['bad-payload', 400], ['bad-document', 422], ['bad-notice-recipients', 422], ['not-imported', 409], ['no-admin-key', 409], ['no-admin-token', 409], ['stale-notice-recipients', 409]];
+    for (const [reason, status] of cases) {
+      await start({ candidacy: listed(), daemon: { approveDistribute: { ok: false, reason, message: `cause of ${reason}: fix it` } } });
+      const out = await call(DIST, { headers: HEADER, body: body() });
+      expect(out.status, reason).toBe(status);
+      expect(out.body.error).toBe(`cause of ${reason}: fix it`);
+    }
+  });
+
+  it('a daemon that is not running is a loud 503 naming the fix', async () => {
+    const out = await call(DIST, { headers: HEADER, body: body() });
+    expect(out.status).toBe(503);
+    expect(out.body.error).toMatch(/daemon/);
+  });
+});

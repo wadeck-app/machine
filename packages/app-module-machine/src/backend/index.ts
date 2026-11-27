@@ -297,7 +297,7 @@ async function reachabilityColumns(dir: string): Promise<{ decorate: <R extends 
   };
 }
 
-function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyListView & { ageText: string; bindingText: string; statusText: string; canDecide: boolean } {
+function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyListView & { ageText: string; bindingText: string; statusText: string; canDecide: boolean; canApprove: boolean } {
   let binding: string;
   if (view.rebind) {
     const which = view.boundTokenLabel !== undefined ? `the token labelled "${view.boundTokenLabel}"` : 'another token (the relay did not say which)';
@@ -321,10 +321,12 @@ function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyLis
     '',
     binding,
     '',
-    'Reject refuses the candidate here (no passphrase needed). To approve it, run `machine admin approve` in a terminal: approving from this page is not built yet.',
+    'Approve signs here, in your browser, with the admin passphrase asked at every approval (it is never kept or sent), then tells the other machines. Reject refuses the candidate here (no passphrase needed). The terminal alternative is `machine admin approve`.',
   ].join('\n');
   // Reject is offered only where the relay can still take a decision: pending (or no status stated) and not expired. A candidacy with problems can still be rejected.
   const canDecide = isCandidacyId(view.id) && (view.relayStatus === undefined || view.relayStatus === 'pending') && (view.expiresAt === undefined || view.expiresAt > nowSeconds);
+  // Approve needs everything the page recomputes the codes from (uuid, key, random, the code of the list) and no problem; Reject needs only the decision to be open.
+  const canApprove = canDecide && view.problems.length === 0 && view.uuid !== undefined && view.identityPublicKey !== undefined && view.random !== undefined && view.code !== undefined;
   const statusText = view.problems.length > 0
     ? `Cannot be approved: ${view.problems.join('; ')}`
     : view.relayStatus === 'approved'
@@ -334,7 +336,7 @@ function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyLis
         : view.rebind
       ? 'Warning: uuid already bound to a token'
       : 'Pending';
-  return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText, canDecide };
+  return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText, canDecide, canApprove };
 }
 
 /**

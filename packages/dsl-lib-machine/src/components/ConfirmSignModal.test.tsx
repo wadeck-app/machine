@@ -95,3 +95,35 @@ describe('the held admin key in the signing dialog (decision 92)', () => {
     }
   });
 });
+
+describe('askEveryTime: no unlock window (approve from the page)', () => {
+  const key = () => {
+    let locked = false;
+    return { privateKey: {} as CryptoKey, publicKeyRaw: new Uint8Array(32), publicKey: 'p', keyId: 'k'.repeat(32), lock: () => { locked = true; }, isLocked: () => locked };
+  };
+
+  it('asks the passphrase even while a key is held in this page, and offers no "Keep unlocked for" and no unlocked bar', async () => {
+    const onConfirm = vi.fn();
+    adminKeyHolder.hold(key());
+    render(<ConfirmSignModal {...base} askEveryTime onConfirm={onConfirm} />);
+    expect(screen.getByLabelText('Admin passphrase')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Keep unlocked for')).toBeNull();
+    expect(screen.queryByText(/Admin key unlocked/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    // Nothing typed: nothing is confirmed, never a null passphrase.
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the admin passphrase');
+  });
+
+  it('take() returns the typed passphrase ONCE and empties the field', async () => {
+    const onConfirm = vi.fn();
+    render(<ConfirmSignModal {...base} askEveryTime onConfirm={onConfirm} />);
+    const field = screen.getByLabelText('Admin passphrase') as HTMLInputElement;
+    await userEvent.type(field, 'secret words');
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    const take = onConfirm.mock.calls[0]?.[0] as () => string | null;
+    expect(field.value).toBe('secret words');
+    expect(take()).toBe('secret words');
+    expect(field.value).toBe('');
+  });
+});

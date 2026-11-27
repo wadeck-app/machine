@@ -385,7 +385,7 @@ export async function postSigned(api: AllowApi, context: AllowContext, body: All
 }
 
 /** The key unlocked from the file must be the admin key this machine pinned. */
-export function assertPinnedKey(key: { keyId: string; publicKey: string }, context: AllowContext): void {
+export function assertPinnedKey(key: { keyId: string; publicKey: string }, context: Pick<AllowContext, 'adminKeyId' | 'adminPublicKey'>): void {
   if (key.keyId !== context.adminKeyId || key.publicKey !== context.adminPublicKey) {
     throw new Error('the key unlocked from the key file is not the admin key pinned on this machine: nothing was signed. Copy the admin key file again from the admin machine');
   }

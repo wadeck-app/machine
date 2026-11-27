@@ -1,6 +1,6 @@
 import { createRegistry } from '@wadeck-app/dsl-renderer';
 import type { ComponentRegistryEntry } from '@wadeck-app/dsl-renderer';
-import { ActivityLogEntry, AllowedListEntry, AllowRequestsTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, RequestsOverviewEntry, VerticalTimelineEntry } from './generated/entries.js';
+import { ActivityLogEntry, AllowedListEntry, AllowRequestsTableEntry, CandidaciesTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, RequestsOverviewEntry, VerticalTimelineEntry } from './generated/entries.js';
 
 export { ActivityLog } from './components/ActivityLog.js'; // run-log
 export type { ActivityLogProps, ActivityPageData, ActivityRowData } from './components/ActivityLog.js'; // run-log
@@ -8,6 +8,8 @@ export { AllowedList } from './components/AllowedList.js';
 export type { AllowedListProps, AllowedPageData } from './components/AllowedList.js';
 export { AllowRequestsTable } from './components/AllowRequestsTable.js';
 export type { AllowRequestsTableProps, PendingRequestRow } from './components/AllowRequestsTable.js';
+export { CandidaciesTable } from './components/CandidaciesTable.js';
+export type { CandidaciesTableProps, CandidacyTableRow } from './components/CandidaciesTable.js';
 export { ConfirmSignModal } from './components/ConfirmSignModal.js';
 export type { ConfirmSignModalProps } from './components/ConfirmSignModal.js';
 
@@ -27,5 +29,5 @@ export type { TimelineStatus, TimelineStep, VerticalTimelineProps } from './comp
  * (`machine:VerticalTimeline`).
  */
 export function createMachineLibEntries(): ComponentRegistryEntry[] {
-  return Object.values(createRegistry([ActivityLogEntry, AllowedListEntry, AllowRequestsTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, RequestsOverviewEntry, VerticalTimelineEntry]));
+  return Object.values(createRegistry([ActivityLogEntry, AllowedListEntry, AllowRequestsTableEntry, CandidaciesTableEntry, FinalCodeDisplayEntry, HeldRequestsEntry, PassphraseSignerEntry, RequestsOverviewEntry, VerticalTimelineEntry]));
 }

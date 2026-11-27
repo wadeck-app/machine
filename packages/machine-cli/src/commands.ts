@@ -11,6 +11,7 @@ import { holdProgressCommand, type HoldProgressAnswer } from './holdProgress.js'
 import { answerOf, reachabilityOnce, type ReachabilityAnswer } from './reachabilityWiring.js';
 import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { approveContext, importCandidate, type ImportCandidateAnswer } from './candidateImport.js';
+import { approveDistribute, type ApproveDistributeAnswer } from './approveDistribute.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -249,6 +250,15 @@ export function makeCommands(configDir: string, version: string | (() => string)
 
     importCandidate(payload?: unknown): Promise<ImportCandidateAnswer> {
       return importCandidate(configDir, payload, now());
+    },
+
+    /**
+     * Approve from the page, lot 5: after the approval, delivers the peer documents and the list of notice recipients the page signed, so the other peers learn the
+     * new machine. Verified against the pinned admin key and the ids derived here, then sent by the code of `machine admin distribute` (direct first, relay inbox
+     * as fallback). Signs nothing; a failure never undoes the approval and names the retry command.
+     */
+    approveDistribute(payload?: unknown): Promise<ApproveDistributeAnswer> {
+      return approveDistribute(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
     },
 
     /**

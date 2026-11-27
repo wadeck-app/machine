@@ -81,7 +81,7 @@ async function withRelay(candidacies: unknown[]): Promise<string> {
 
 describe('route registration', () => {
   it('registers the seven read-only GET routes (the Activity page, run-log; the Allowed page, decision 104), the Deny post and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76)', () => {
-    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote']);
+    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /approve-distribute', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote']);
   });
 });
 
@@ -255,12 +255,22 @@ describe('GET /candidacies', () => {
     expect(rows.map((r: { id: string; canDecide: boolean }) => [r.id, r.canDecide])).toEqual([['c1', true], ['c2', false], ['c3', false], ['c4', false]]);
   });
 
-  it('the row expansion says what the page can do (Reject) and what stays in the CLI (approve), never "read-only"', async () => {
+  it('canApprove (the Approve button) needs, on top of canDecide, a uuid, a key and a random the code was computed from, the code, and no problem', async () => {
+    const { identityPublicKey, random } = pending();
+    await withRelay([pending(), { ...pending(), id: 'c2', uuid: undefined }, { ...pending(), id: 'c3', identityPublicKey: 'not-a-key' }, { ...pending(), id: 'c4', status: 'approved' }, { ...pending(), id: 'c5', random: undefined }]);
+    const rows = (await call(routes(), 'GET /candidacies')).body.candidacies;
+    expect(identityPublicKey).toBeTruthy();
+    expect(random).toBeTruthy();
+    expect(rows.map((r: { id: string; canApprove: boolean }) => [r.id, r.canApprove])).toEqual([['c1', true], ['c2', false], ['c3', false], ['c4', false], ['c5', false]]);
+  });
+
+  it('the row expansion says what the page does (Approve in the browser, Reject) and keeps the terminal alternative, never "read-only" nor "not built"', async () => {
     await withRelay([pending()]);
     const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.bindingText).toContain('Approve');
     expect(row.bindingText).toContain('Reject');
     expect(row.bindingText).toContain('machine admin approve');
-    expect(row.bindingText).not.toMatch(/read-only/i);
+    expect(row.bindingText).not.toMatch(/read-only|not built/i);
   });
 
   it('answers the timeline of the oldest pending candidacy, with one source for the step texts', async () => {

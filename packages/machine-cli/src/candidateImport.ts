@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
-import { decodeBase64urlStrict, DOCUMENT_SKEW_SECONDS, importCandidateSealContext, isUuid, NOT_YET_VALID_LEEWAY_SECONDS, openSealed, verifyRegistration, type SignedRegistration } from '@wadeck-app/machine-core';
+import { decodeBase64urlStrict, DOCUMENT_SKEW_SECONDS, importCandidateSealContext, isUuid, NOT_YET_VALID_LEEWAY_SECONDS, openSealed, verifyRegistration, type SignedNoticeRecipients, type SignedRegistration } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin } from './admin.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
-import { importPeer, installedRevocations, loadNetwork } from './network.js';
+import { importPeer, installedRevocations, loadNetwork, trustedRegistrations } from './network.js';
+import { readNoticeRecipients } from './noticeRecipientsStore.js';
 
 // Approve from the page, lot 3 (admin-ui.md): the daemon side of the approval of a candidacy. The BROWSER holds the passphrase and signs (machine-webcrypto
 // `buildApproval`); this machine, the one that holds the admin key, only verifies and imports. It never receives a passphrase or an unlocked key and signs nothing.
@@ -37,6 +38,13 @@ export interface ApproveContextOk {
   adminPublicKey: string;
   adminKeyId: string;
   candidate: { trusted: boolean; name?: string; identityPublicKey?: string; revokedSerial?: number };
+  /**
+   * Lot 5: the registrations this machine holds for its OTHER trusted peers (not the candidate, not this machine): the page signs a peer document for each and
+   * verifies every one against the admin key it unlocks before it uses it, so a hostile backend cannot swap an identity key.
+   */
+  others: SignedRegistration[];
+  /** The list of machines that receive request notices stored here (it rides every distribution and is never replaced by one), or null when none: the page then signs `[this machine]`. */
+  noticeRecipients: SignedNoticeRecipients | null;
 }
 
 /** Everything the page needs BEFORE it asks the passphrase. Read-only. Payload: exactly `{ candidateUuid }`. */
@@ -53,8 +61,16 @@ export function approveContext(configDir: string, payload: unknown, _now: number
   const pin = readAdminPin(configDir);
   const known = loadNetwork(configDir, _now).directory.find(uuid);
   const revoked = installedRevocations(configDir).filter((entry) => entry.uuid === uuid).at(-1);
+  let noticeRecipients: SignedNoticeRecipients | null;
+  try {
+    noticeRecipients = readNoticeRecipients(configDir, pin.adminPublicKey) ?? null;
+  } catch (e) {
+    return fail('notice-recipients-invalid', `${(e as Error).message}. Nothing was signed`);
+  }
   return {
     ok: true,
+    others: trustedRegistrations(configDir, _now).filter((r) => r.body.uuid !== uuid),
+    noticeRecipients,
     adminMachine: { uuid: self.uuid, name: self.name, identityPublicKey: self.identity.publicKey },
     adminPublicKey: pin.adminPublicKey,
     adminKeyId: pin.adminKeyId,

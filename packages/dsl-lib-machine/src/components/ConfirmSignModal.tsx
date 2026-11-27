@@ -37,6 +37,11 @@ export interface ConfirmSignModalProps {
   hint?: string | null;
   /** False: nothing to sign (already allowed, load failure): the dialog only informs, with a Close button. */
   needsPassphrase?: boolean;
+  /**
+   * True: the passphrase is asked at EVERY confirmation, whatever the holder keeps: no "Keep unlocked for", no unlocked bar, no one-click signing, and `take()` never
+   * returns null. For the actions whose key must never outlive the one signature (approving a machine, decision of #146: no unlock window).
+   */
+  askEveryTime?: boolean;
   /** Called with `take` when the person confirms; `take()` returns the typed passphrase and empties the field, or null when the admin key is unlocked in this page (no passphrase then). */
   onConfirm: (take: () => string | null) => void;
   onCancel: () => void;
@@ -44,12 +49,13 @@ export interface ConfirmSignModalProps {
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
-export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, hint = null, needsPassphrase = true, children, onConfirm, onCancel }: ConfirmSignModalProps) {
+export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
-  const { unlocked } = useAdminKey();
+  const held = useAdminKey().unlocked;
+  const unlocked = held && !askEveryTime;
 
   // Cancel is the default focus: Enter without thinking must never sign.
   useEffect(() => {
@@ -86,7 +92,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
       return;
     }
     // Unlocked: nothing to type. The key is read again at signing time; an expiry in between is said by the signing code, with the fix.
-    if (adminKeyHolder.current() !== null) {
+    if (!askEveryTime && adminKeyHolder.current() !== null) {
       setLocalError(null);
       onConfirm(() => null);
       return;
@@ -135,7 +141,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
                   {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
                   <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
                 </div>
-              <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
+              {!askEveryTime && <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>}
               </div>
             </>
           )}

@@ -25,6 +25,11 @@ export interface ApproveDeps {
 
 const MAX_APPROVAL_BYTES = 16 * 1024;
 const IMPORT_TIMEOUT_MS = 15_000;
+// Delivery tries each machine directly first (a few seconds each when it is asleep) then the relay inbox.
+const DISTRIBUTE_TIMEOUT_MS = 90_000;
+// What the relay can ever store for one approval: a document is at most 16 KiB; far above what a network of a few machines needs, far below an abusive body.
+const MAX_DISTRIBUTE_BYTES = 1024 * 1024;
+const DISTRIBUTE_RULE = 'expected exactly {"candidateUuid": "<uuid>", "documents": [<signed inbox document>...], "noticeRecipients": <signed list, or null>}, nothing else: reload the page and approve again';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const IMPORT_FIELDS = ['registration', 'sealedPairSecret', 'adminUuid', 'candidateUuid', 'random'] as const;
 
@@ -38,6 +43,13 @@ const APPROVE_STATUS: Record<string, number> = {
   'bad-registration': 422,
   'cannot-open': 422,
   refused: 409,
+  // Lot 5 (approveDistribute).
+  'bad-document': 422,
+  'bad-notice-recipients': 422,
+  'stale-notice-recipients': 409,
+  'notice-recipients-invalid': 409,
+  'not-imported': 409,
+  'no-admin-token': 409,
 };
 
 const BODY_RULE = 'expected exactly {"approval": {"v": 2, "random": "...", "sealed": "..."}, "adminImport": <import for the admin machine, or null for the first machine approving itself>}, nothing else: reload the page and approve again';
@@ -65,6 +77,16 @@ function parseBody(body: unknown): Parsed | string {
 
 const kindOfStatus = (status: number): string => (status === 400 ? 'bad_request' : status === 404 ? 'not_found' : status === 409 ? 'not_pending' : 'relay_error');
 
+function parseDistribute(body: unknown): { candidateUuid: string; documents: unknown[]; noticeRecipients: unknown } | string {
+  if (!isObject(body) || Object.keys(body).length !== 3 || !('candidateUuid' in body) || !('documents' in body) || !('noticeRecipients' in body)) return DISTRIBUTE_RULE;
+  const { candidateUuid, documents, noticeRecipients } = body;
+  if (typeof candidateUuid !== 'string' || !UUID.test(candidateUuid)) return `"candidateUuid" is not the uuid of the approved machine: ${DISTRIBUTE_RULE}`;
+  if (!Array.isArray(documents) || !documents.every(isObject)) return `"documents" must be a list of signed documents: ${DISTRIBUTE_RULE}`;
+  if (noticeRecipients !== null && !isObject(noticeRecipients)) return `"noticeRecipients" must be a signed list or null: ${DISTRIBUTE_RULE}`;
+  if (Buffer.byteLength(JSON.stringify(body)) > MAX_DISTRIBUTE_BYTES) return 'the documents are too large (more than 1 MiB for one approval): nothing was delivered. Retry from the terminal with the command shown after an approval (`machine admin distribute <machine>`)';
+  return { candidateUuid, documents, noticeRecipients };
+}
+
 export function registerApproveRoutes(ctx: RouteContext, deps: ApproveDeps): void {
   const SENSITIVE = { effect: 'sensitive' } as const;
 
@@ -85,6 +107,23 @@ export function registerApproveRoutes(ctx: RouteContext, deps: ApproveDeps): voi
     if (typeof uuid !== 'string' || !UUID.test(uuid)) return reply.code(400).send(errorBody(400, 'bad_request', 'expected the uuid of the candidacy in the path: /approve-context/<uuid>'));
     try {
       const out = await daemon('approveContext', { candidateUuid: uuid });
+      return out.ok ? reply.code(200).send(out.answer) : reply.code(out.failure.status).send(out.failure);
+    } catch (err) {
+      const failure = deps.failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  }, SENSITIVE);
+
+  // Lot 5: the page signed the peer documents and the list of notice recipients with the key it unlocked for the approval. They are sealed to their addressees and
+  // signed: this route cannot read, change or sign them, it hands them to the daemon of the admin machine, which verifies them against the pinned key and the ids it
+  // derives itself, then delivers them with the code of `machine admin distribute`.
+  ctx.registerRoute('POST', '/approve-distribute', async (req, reply) => {
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
+    const parsed = parseDistribute(isObject(req) ? req['body'] : undefined);
+    if (typeof parsed === 'string') return reply.code(400).send(errorBody(400, 'bad_request', parsed));
+    try {
+      const out = await daemon('approveDistribute', parsed, DISTRIBUTE_TIMEOUT_MS);
       return out.ok ? reply.code(200).send(out.answer) : reply.code(out.failure.status).send(out.failure);
     } catch (err) {
       const failure = deps.failureOf(err);

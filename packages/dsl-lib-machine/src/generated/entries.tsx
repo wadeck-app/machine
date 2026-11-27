@@ -112,6 +112,7 @@ import { SortableColumn } from '@wadeck-app/dsl-ui/dist/components/table/Sortabl
 import { ActivityLog } from '../components/ActivityLog.js'
 import { AllowRequestsTable } from '../components/AllowRequestsTable.js'
 import { AllowedList } from '../components/AllowedList.js'
+import { CandidaciesTable } from '../components/CandidaciesTable.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
 import { HeldRequests } from '../components/HeldRequests.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
@@ -1983,6 +1984,19 @@ export const AllowedListEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const CandidaciesTableEntry: ComponentRegistryEntry = {
+	name: 'CandidaciesTable', category: 'composite', tags: ["candidacies","approve","reject","admin","enrollment"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'CandidaciesTable.rows', 'array', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['rows']
+		const timeline = coerceProp(resolveExpressionValue(node['timeline'], ctx), 'CandidaciesTable.timeline', 'array', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['timeline']
+		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'CandidaciesTable.emptyMessage', 'string', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['emptyMessage']
+		const onAction = coerceProp(resolveExpressionValue(node['onAction'], ctx) ?? ctx['onAction'], 'CandidaciesTable.onAction', 'function', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['onAction']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'CandidaciesTable.onRefresh', 'function', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['onRefresh']
+		return <CandidaciesTable rows={rows} timeline={timeline} emptyMessage={emptyMessage} onAction={onAction} onRefresh={onRefresh} />
+	},
+}
+
 export const FinalCodeDisplayEntry: ComponentRegistryEntry = {
 	name: 'FinalCodeDisplay', category: 'atomic', tags: ["verification","code","enrollment"],
 	nodeSchema: null as never,
@@ -2155,6 +2169,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	ActivityLogEntry,
 	AllowRequestsTableEntry,
 	AllowedListEntry,
+	CandidaciesTableEntry,
 	FinalCodeDisplayEntry,
 	HeldRequestsEntry,
 	PassphraseSignerEntry,
@@ -2308,6 +2323,7 @@ SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["curren
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","loading","onRefresh","refreshing","search"] : [];
+CandidaciesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["emptyMessage","onAction","onRefresh","rows","timeline"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
