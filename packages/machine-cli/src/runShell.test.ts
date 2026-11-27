@@ -154,6 +154,10 @@ describe('machine run: the shell comes from --shell, else the default of the pee
       }, 50_000);
     });
     const r = await Promise.race([cli(a, ['run', 'laptop', '--no-wait', '--address', address, '--shell', ALT, '--', 'echo', 'hi']), hung]).finally(() => clearTimeout(watchdog));
+    // The daemon ends a hung child at 40 s (before the 50 s watchdog), so the failure arrives here as exit 255: say what the run saw, not only the code.
+    if (r.code !== 0) {
+      throw new Error(`machine run --shell ${ALT} exited ${r.code} after ${seconds()} (provision and daemon start done at ${setUpDone}).\nstdout: ${JSON.stringify(r.out)}\nstderr: ${JSON.stringify(r.err)}\n${await diagnosed.report()}`);
+    }
     // powershell writes its own progress XML on stderr: only what machine says matters here.
     expect(r.err).not.toContain('refused');
     expect(r.code).toBe(0);
