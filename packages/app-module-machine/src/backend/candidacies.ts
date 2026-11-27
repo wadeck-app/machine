@@ -46,6 +46,8 @@ export interface CandidacyListView {
   /** Epoch seconds; undefined when the relay sent no usable date (a problem says so). */
   createdAt: number | undefined;
   expiresAt: number | undefined;
+  /** The status the relay states for the entry (the list route only has pending ones today). Absent: the relay stated none, never assumed. */
+  relayStatus: string | undefined;
   ageSeconds: number | undefined;
   /** The relay says the uuid is already bound to a token (approving replaces the binding). Absent: the relay did not say. */
   uuidBound: boolean | undefined;
@@ -228,6 +230,7 @@ function review(raw: unknown, nowSeconds: number): CandidacyListView {
     uuid,
     createdAt,
     expiresAt,
+    relayStatus: typeof o['status'] === 'string' && o['status'].length > 0 ? printable(o['status']) : undefined,
     ageSeconds: createdAt === undefined ? undefined : Math.max(0, nowSeconds - createdAt),
     uuidBound,
     boundTokenLabel,

@@ -14,4 +14,15 @@ describe('candidacies view', () => {
     const wrapping = columns.filter(l => !/\bnowrap: true\b/.test(l));
     expect(wrapping, `columns without nowrap (they break words mid-word): ${wrapping.join(' | ')}`).toEqual([]);
   });
+
+  it('the timeline steps come from the source (no hard-coded status), and the followed candidacy is shown', () => {
+    expect(yaml).toContain('steps: $sources.candidacies.timeline');
+    expect(yaml).not.toMatch(/^\s*status: (todo|done|current)\s*$/m);
+    expect(yaml).not.toContain('static');
+    expect(yaml).toContain('$sources.candidacies.timelineNote');
+  });
+
+  it('says the CLI steps are not observable on this page', () => {
+    expect(yaml).toMatch(/subtitle:.*machine admin approve.*not observable/);
+  });
 });

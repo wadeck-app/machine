@@ -39,7 +39,7 @@ The page only UNLOCKS the admin key: it applies no length rule to the passphrase
 | Audit | daemon audit log | view and verify the hash chain |
 | Unlock | none (page memory only) | passphrase, unlock duration, lock now |
 
-The Candidacies page shows a vertical timeline on the left (candidacy received, details checked, passphrase and signature, final code compared, documents distributed) with an "i" tooltip per step naming the threat it answers. The tab shows a badge with the number of pending candidacies (module indicator).
+The Candidacies page shows a vertical timeline on the left (candidacy received, details checked, passphrase and signature, final code compared, documents distributed) with an "i" tooltip per step naming the threat it answers. The route computes the steps (`candidacyTimeline.ts`) for the oldest pending candidacy and a step is done only when the relay data proves it: none -> all to do; pending -> received done, checked current; approved (relay status) -> received, checked, signed done; rejected, expired or unknown status -> received only. Security code and distribution are never done here (they happen in `machine admin approve`; the subtitle says so); a note names the followed candidacy. The tab shows a badge with the number of pending candidacies (module indicator).
 
 ## Work breakdown
 
@@ -83,7 +83,7 @@ Rule: ok:false only for what the update could cause or what makes the module unu
 | 1 `machine-webcrypto` | Done (separate work) |
 | 2 Backend routes | Slice 1 done, read-only: `GET /status`, `/machines`, `/candidacies`, `/health` (`packages/app-module-machine`, 53 tests incl. a real app-core server test, local app-core-cli devDependency). Post decision, distribution and the signature check are not started |
 | 3 dsl-lib components | `packages/dsl-lib-machine` (jsdom tests, generated entries, CSS): `VerticalTimeline` (generic, incubating), `PassphraseSigner` (unlock and sign a registration in the page, key in a ref), `FinalCodeDisplay`. Not done: the key file route, wiring the signed result to a backend post, the two components are on no page yet |
-| 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (timeline of the five steps with static statuses, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
+| 4 Views and scaffold | Scaffold, `machines.yaml`, `candidacies.yaml` (timeline of the five steps driven by the relay data, no buttons) and a tab count on Candidacies done. Policy, Audit, Unlock pages not started |
 | 5 Publish | Not started |
 
 Facts found in slice 1:

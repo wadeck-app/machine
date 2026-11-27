@@ -1,5 +1,6 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
 import { ageText, listCandidacies,RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
+import { candidacyTimeline } from './candidacyTimeline.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
@@ -295,17 +296,39 @@ async function reachabilityColumns(dir: string): Promise<{ decorate: <R extends 
   };
 }
 
-function candidacyRow(view: CandidacyListView): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
-  let bindingText = '';
+function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyListView & { ageText: string; bindingText: string; statusText: string } {
+  let binding: string;
   if (view.rebind) {
     const which = view.boundTokenLabel !== undefined ? `the token labelled "${view.boundTokenLabel}"` : 'another token (the relay did not say which)';
-    bindingText = `The uuid is already bound to ${which}; approving replaces that binding.${view.bindingNote !== undefined ? ` Note: ${view.bindingNote}.` : ''}`;
+    binding = `The uuid is already bound to ${which}; approving replaces that binding.${view.bindingNote !== undefined ? ` Note: ${view.bindingNote}.` : ''}`;
   } else if (view.uuidBound === true) {
-    bindingText = 'The uuid is already bound to the same token as this candidacy: a re-approval, nothing is rebound.';
+    binding = 'The uuid is already bound to the same token as this candidacy: a re-approval, nothing is rebound.';
+  } else if (view.uuidBound === false) {
+    binding = 'The uuid is not bound yet: approving creates the binding.';
+  } else {
+    binding = 'The relay did not say whether the uuid is already bound.';
   }
+  const expires = view.expiresAt === undefined ? 'unknown' : view.expiresAt <= nowSeconds ? 'expired' : `in ${ageText(view.expiresAt - nowSeconds)}`;
+  // Markdown of the row expansion, never empty. The candidacy code is not shown (decision 55).
+  const bindingText = [
+    `- name: ${view.name}`,
+    `- hostname: ${view.hostname === '' ? 'unknown' : view.hostname}`,
+    `- uuid: ${view.uuid ?? 'unknown'}`,
+    `- seen from: ${view.observedIp === '' ? 'unknown' : view.observedIp}`,
+    `- age: ${ageText(view.ageSeconds)}`,
+    `- ${expires === 'unknown' ? 'expires: unknown' : expires === 'expired' ? 'expired' : `expires ${expires}`}`,
+    '',
+    binding,
+    '',
+    'To approve or reject it, run `machine admin approve` in a terminal: this page is read-only.',
+  ].join('\n');
   const statusText = view.problems.length > 0
     ? `Cannot be approved: ${view.problems.join('; ')}`
-    : view.rebind
+    : view.relayStatus === 'approved'
+      ? 'Approved by the admin (relay status: approved)'
+      : view.relayStatus !== undefined && view.relayStatus !== 'pending'
+        ? `Relay status: ${view.relayStatus}`
+        : view.rebind
       ? 'Warning: uuid already bound to a token'
       : 'Pending';
   return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText };
@@ -516,10 +539,12 @@ export default function register(ctx: ModuleContextLike): void {
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {
-      const views = await listCandidacies(configDir(), Math.floor(Date.now() / 1000));
-      const candidacies = views.map(candidacyRow);
+      const now = Math.floor(Date.now() / 1000);
+      const views = await listCandidacies(configDir(), now);
+      const candidacies = views.map((v) => candidacyRow(v, now));
       // `count` is the field the tab indicator of the manifest reads.
-      return reply.code(200).send({ candidacies, count: candidacies.length });
+      const { steps: timeline, note: timelineNote } = candidacyTimeline(views, now);
+      return reply.code(200).send({ candidacies, count: candidacies.length, timeline, timelineNote });
     } catch (err) {
       const failure = failureOf(err);
       return reply.code(failure.status).send(failure);

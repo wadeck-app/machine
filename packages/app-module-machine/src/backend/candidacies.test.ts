@@ -85,6 +85,13 @@ describe('listCandidacies', () => {
     });
   });
 
+  it('returns the status the relay states for a candidacy, and none when it states none (never a made-up "pending")', async () => {
+    const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [candidate({ id: 'a', status: 'approved' }), candidate({ id: 'b' })] } }));
+    writeAdminConfig(relay.url);
+    const views = await listCandidacies(configDir, NOW);
+    expect(views.map((v) => v.relayStatus)).toEqual(['approved', undefined]);
+  });
+
   it('never returns the code the relay sends: a swapped code is replaced by the recomputed one and reported', async () => {
     const c = candidate({ code: 'AAAA-BBBB-CCCC-DDDD' });
     const relay = await fakeRelay(() => ({ status: 200, body: { candidacies: [c] } }));

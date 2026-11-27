@@ -248,6 +248,60 @@ describe('GET /candidacies', () => {
     expect(out.body.candidacies[0].code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   });
 
+  it('answers the timeline of the oldest pending candidacy, with one source for the step texts', async () => {
+    await withRelay([{ ...pending(), id: 'new', name: 'newer', createdAt: Math.floor(Date.now() / 1000) - 10 }, { ...pending(), id: 'old', name: 'older', createdAt: Math.floor(Date.now() / 1000) - 300 }]);
+    const out = await call(routes(), 'GET /candidacies');
+    const byId = Object.fromEntries(out.body.timeline.map((s: { id: string; status: string }) => [s.id, s.status]));
+    expect(byId).toEqual({ received: 'done', checked: 'current', signed: 'todo', 'final-code': 'todo', distributed: 'todo' });
+    expect(out.body.timelineNote).toContain('older');
+  });
+
+  it('answers a timeline with every step to do, and no note, when there is no candidacy', async () => {
+    await withRelay([]);
+    const out = await call(routes(), 'GET /candidacies');
+    expect(out.body.timeline.map((s: { status: string }) => s.status)).toEqual(['todo', 'todo', 'todo', 'todo', 'todo']);
+    expect(out.body.timelineNote).toBe('');
+  });
+
+  it('shows the status the relay states instead of "Pending" for an approved candidacy', async () => {
+    await withRelay([{ ...pending(), status: 'approved' }]);
+    const out = await call(routes(), 'GET /candidacies');
+    expect(out.body.candidacies[0].statusText).toBe('Approved by the admin (relay status: approved)');
+    expect(out.body.timeline.find((s: { id: string }) => s.id === 'signed').status).toBe('done');
+  });
+
+  it('gives a plain pending candidacy useful details in the row expansion (never empty)', async () => {
+    await withRelay([{ ...pending(), hostname: 'MACBOOK-PRO', observedIp: '198.51.100.2', uuidBound: false }]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.bindingText).not.toBe('');
+    for (const part of ['laptop', 'MACBOOK-PRO', UUID, '198.51.100.2', 'not bound yet', 'machine admin approve']) expect(row.bindingText).toContain(part);
+    expect(row.bindingText).toMatch(/expires in \d+ min/);
+    // Decision 55: the candidacy code is not displayed
+    expect(row.bindingText).not.toContain(row.code);
+  });
+
+  it('does not claim the uuid is unbound when the relay did not say', async () => {
+    await withRelay([pending()]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.bindingText).toContain('The relay did not say whether the uuid is already bound');
+    expect(row.bindingText).not.toContain('not bound yet');
+  });
+
+  it('keeps the rebind warning in the details of a rebind, next to the plain details', async () => {
+    await withRelay([{ ...pending(), uuidBound: true, boundToCandidateToken: false, boundTokenLabel: 'old laptop' }]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.bindingText).toContain('old laptop');
+    expect(row.bindingText).toContain('machine admin approve');
+    expect(row.bindingText).not.toContain('not bound yet');
+  });
+
+  it('says what the relay did not send instead of leaving a blank (no uuid, no expiry)', async () => {
+    await withRelay([{ ...pending(), uuid: undefined, expiresAt: undefined }]);
+    const row = (await call(routes(), 'GET /candidacies')).body.candidacies[0];
+    expect(row.bindingText).toContain('uuid: unknown');
+    expect(row.bindingText).toContain('expires: unknown');
+  });
+
   it('adds flat display fields for the page (age text, binding warning text, problems text)', async () => {
     await withRelay([{ ...pending(), uuidBound: true, boundToCandidateToken: false, boundTokenLabel: 'old laptop' }]);
     const out = await call(routes(), 'GET /candidacies');

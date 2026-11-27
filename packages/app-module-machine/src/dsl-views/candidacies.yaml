@@ -4,42 +4,31 @@ $sources:
     poll: 30s
 
 # Read-only slice: no approve or reject buttons yet, they come with the signing slice (the passphrase and the signature happen in
-# the page, never in the backend). The timeline on the left lists the approval procedure; its statuses are static ("todo") until
-# the signing slice drives them from the selected candidacy. Decision 55: the candidacy code is not displayed (the human compares
+# the page, never in the backend). The timeline on the left lists the approval procedure; the route computes its steps (texts and
+# statuses, candidacyTimeline.ts) from the relay data of the oldest pending candidacy and marks a step done only when that data
+# proves it. Decision 55: the candidacy code is not displayed (the human compares
 # the security code after signing). The route still answers `code`, recomputed by the module from the key and random it received,
 # never the one the relay sends; it is compared internally and is a problem when the relay disagrees.
 $type: PageContent
 sections:
   - $type: PageHeader
     title: Candidacies
-    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Read-only.
+    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Read-only; the passphrase, security code and distribution steps happen in `machine admin approve` and are not observable here.
+  # The candidacy the timeline follows (the oldest pending one) and what the relay says about it.
+  - $type: Card
+    $if: $sources.candidacies.timelineNote
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.candidacies.timelineNote
   - $type: HorizontalStack
     gap: gap-6
     align: items-start
     itemSizes: [fixed, flex]
     items:
       - $type: machine:VerticalTimeline
-        steps:
-          - id: received
-            title: Candidacy received
-            status: todo
-            info: "Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here."
-          - id: checked
-            title: Details checked
-            status: todo
-            info: "Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect."
-          - id: signed
-            title: Passphrase and signature
-            status: todo
-            info: "Threat: a local process signing for you. The passphrase is typed in this page only and the signature is made in your browser, never by the daemon or the module backend."
-          - id: final-code
-            title: Security code compared
-            status: todo
-            info: "Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay."
-          - id: distributed
-            title: Documents distributed
-            status: todo
-            info: "Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one."
+        $if: $sources.candidacies.timeline
+        steps: $sources.candidacies.timeline
       - $type: DataTable
         rows: $sources.candidacies.candidacies
         emptyMessage: No pending candidacy
