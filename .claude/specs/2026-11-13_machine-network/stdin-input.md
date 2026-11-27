@@ -52,11 +52,18 @@ The entry declares which characters the payload may contain, as a WHITELIST (nev
 | `letters` | Unicode letters and combining marks (accents included) |
 | `digits` | 0-9 |
 | `space` | space and line feed |
-| `punct` | `. , ; : ! ? ' - _ ( ) /` |
-| `json` | `{ } [ ] " : , \` (the JSON structure; implied by none, so a json entry names it) |
-| `symbols` | `@ # % & * + = < > ~ ^ | $` and backquote (each of them is a risk for the command that reads the data, hence opt-in) |
+| `punct` | `. , : ! ? - _ ( )` only: nothing that quotes, escapes, separates commands or opens a path |
+| Explicit characters (owner rule 2026-11-27: slashes and quotes are the usual trouble, each is named) | `slash` `/`, `backslash` `\`, `dquote` `"`, `squote` `'`, `backquote` `` ` ``, `semicolon` `;`, `ampersand` `&`, `pipe` `\|`, `dollar` `$`, `lt` `<`, `gt` `>`, `at` `@`, `hash` `#`, `percent` `%`, `star` `*`, `plus` `+`, `equal` `=`, `tilde` `~`, `caret` `^`, `brace-open` `{`, `brace-close` `}`, `bracket-open` `[`, `bracket-close` `]` |
+| Meta families (exempt from naming each character) | `json`: implies the structure characters the format needs (`{ } [ ] " : , \ /`) AND the payload must parse as strict JSON; `xml` (not in the first release, D7): same idea with a hardened parser |
 
-Syntax: `--stdin-chars letters+digits+space+punct+json`. Default when `--stdin` is given without `--stdin-chars`: refused (the owner must choose; no implicit set). Always refused whatever the union: NUL and the other control characters except line feed, unpaired surrogates, bidi controls. Shape only: whether the content is CORRECT stays the job of the receiving command (task-owner, 2026-11-27).
+Syntax: `--stdin-chars letters+digits+space+punct+slash+dquote` or `--stdin-chars json+letters+digits+space`. Default when `--stdin` is given without `--stdin-chars`: refused (the owner must choose; no implicit set). The Allow dialog proposes the smallest union that covers the example payload and writes each explicit character by its name.
+
+## No interpretation behind a meta family
+
+A meta family adds a parse check, and the parse must never interpret or execute anything:
+
+- `json`: strict `JSON.parse` of the UTF-8 text (no code evaluation by construction), nesting depth at most 32, duplicate keys refused (ambiguity between parsers), the payload is passed on byte for byte (never re-serialized). The key names `__proto__`, `constructor` and `prototype` are a hazard for a receiving JavaScript command: D8.
+- `xml` (D7, not built in the first release): XXE and its relatives are refused by construction, with a hardened parser that has no DTD support: a `<!DOCTYPE`, an `<!ENTITY`, an external reference (SYSTEM / PUBLIC), an XInclude or a processing instruction refuses the payload; only elements, attributes, text and the five predefined entities are accepted (a whitelist of the XML subset, not a list of bad constructs). Needs its own parser or dependency review and its adversarial tests (billion laughs, external entity, parameter entity, XInclude, DOCTYPE with internal subset). Always refused whatever the union: NUL and the other control characters except line feed, unpaired surrogates, bidi controls. Shape only: whether the content is CORRECT stays the job of the receiving command (task-owner, 2026-11-27).
 
 - D6 (open): the family list above (names and members), and whether `letters` covers all Unicode letters or a smaller set.
 
