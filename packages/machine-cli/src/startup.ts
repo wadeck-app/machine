@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
-import { delimiter, dirname, join, resolve, win32 } from 'node:path';
+import { delimiter, dirname, join, posix, resolve, win32 } from 'node:path';
 import { ConfigDir } from '@wadeck-app/shared-cli/ConfigDir';
 import { planBundleLink, syncBundleLink, type BundleLinkFs, type BundleLinkPlan, type BundleLinkReport } from './bundleLink.js';
 import { daemonPortFile, readDaemonState, type DaemonState } from './daemonPortFile.js';
@@ -75,6 +75,10 @@ export interface StartupContext {
   restartOnExit?: boolean;
   /** Absolute path of the running bundle. Default: the script node runs. */
   bundlePath?: string;
+  /** Tests: the node that runs `enable`. Default process.execPath. */
+  execPath?: string;
+  /** Tests: whether `node` is found with the PATH `/usr/bin:/bin` alone. Default: looked up on this machine. */
+  minimalPathHasNode?: boolean;
   /** Platform, resolver and fs of the launcher lookup (tests). */
   binary?: BinaryDeps;
   /** Tests: the fs of the Windows node_modules junction (bundleLink.ts). */
@@ -108,6 +112,16 @@ export function wrapperHash(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 12);
 }
 
+/** PATH of the job when orch gives it none (or an empty one): the standard system directories. */
+export const JOB_PATH_FALLBACK = '/usr/local/bin:/usr/bin:/bin';
+/** What the job PATH is checked against at enable time: node must be found there, or the PATH part is what makes the job work. */
+const MINIMAL_UNIX_PATH_DIRS = ['/usr/bin', '/bin'];
+
+/** Directory of the node that runs `enable` (Unix form: `dirname(execPath)` with `/`). */
+function nodeDirOf(source: DaemonSource): string {
+  return posix.dirname(source.execPath);
+}
+
 /** The shell string orch will run: the staged launcher form or the `"<node>" "<bundle>" daemon` development form. */
 export function daemonCommand(source: DaemonSource, configDir?: string): string {
   const q = (v: string) => quoteArg(v, source.platform);
@@ -121,7 +135,7 @@ export function daemonCommand(source: DaemonSource, configDir?: string): string 
     const { exe, bundleOverride, wrapper } = source.launcher;
     if (source.platform !== 'win32') {
       // orch passes the string to sh and does not support a quote inside a path of this form (orch-owner, packaging.md section 8).
-      for (const path of [exe, bundleOverride, configDir]) {
+      for (const path of [exe, bundleOverride, configDir, nodeDirOf(source)]) {
         if (path !== undefined && path.includes("'")) {
           throw new StartupError(`the path ${path} contains a single quote, which orch cannot carry in the launcher command: move machine (or its configuration folder) to a path without it`);
         }
@@ -135,7 +149,9 @@ export function daemonCommand(source: DaemonSource, configDir?: string): string 
         `the launcher cannot find the bundle ${bundleOverride} from its staged folder: it only looks under <folder of node>\\node_modules\\${LAUNCHER_BUNDLE_SPEC}, and the Windows job cannot carry LAUNCHER_BUNDLE_OVERRIDE through orch.cmd. Make the global modules of machine live next to node.exe (npm prefix = the folder of node.exe), run \`npm i -g @wadeck-app/machine-cli\` again, then \`machine startup enable\``,
       );
     }
-    command = `${bundleOverride === undefined ? '' : `LAUNCHER_BUNDLE_OVERRIDE=${q(bundleOverride)} `}${q(exe)} daemon`;
+    // Unix only: the job runs under `sh -c` (orch supervisor), which expands the PATH part; the launcher starts node by name.
+    const pathPart = source.platform === 'win32' ? '' : `PATH=${q(nodeDirOf(source))}:"\${PATH:-${JOB_PATH_FALLBACK}}" `;
+    command = `${bundleOverride === undefined ? '' : `LAUNCHER_BUNDLE_OVERRIDE=${q(bundleOverride)} `}${pathPart}${q(exe)} daemon`;
   } else {
     command = `${q(source.execPath)} ${q(source.scriptPath)} daemon`;
   }
@@ -161,7 +177,8 @@ export function launcherBundleOverride(opts: { bundle: string; spec: string; nod
 
 /** Which form a stored command is, from its first program: the staged launcher, node, or something else (not guessed). */
 export function registeredForm(command: string): DaemonForm | 'unknown' {
-  const rest = command.replace(/^LAUNCHER_BUNDLE_OVERRIDE='(?:[^']|'\\'')*'\s+/, '');
+  // The environment prefixes machine writes: LAUNCHER_BUNDLE_OVERRIDE='<bundle>' and PATH='<node dir>':"${PATH:-...}", in this order, each optional.
+  const rest = command.replace(/^(?:LAUNCHER_BUNDLE_OVERRIDE='(?:[^']|'\\'')*'\s+)?(?:PATH='(?:[^']|'\\'')*':"\$\{PATH:-[^}"]*\}"\s+)?/, '');
   if (/^"[^"]*[\\/]wscript\.exe"\s+\/\/B\s+\/\/Nologo\s+"[^"]*[\\/]machine-daemon\.vbs"(?:\s+[0-9a-f]{12})?$/i.test(rest)) return 'launcher-wrapper';
   const program = /^"([^"]*)"/.exec(rest)?.[1] ?? /^'((?:[^']|'\\'')*)'/.exec(rest)?.[1];
   if (program === undefined) return 'unknown';
@@ -190,7 +207,7 @@ function planDaemon(ctx: StartupContext, stage: boolean): DaemonPlan {
   const platform = ctx.platform ?? process.platform;
   const env = ctx.env ?? process.env;
   const bundle = ctx.bundlePath ?? (process.argv[1] ? resolve(process.argv[1]) : undefined);
-  const base: DaemonSource = { platform, execPath: process.execPath, ...(bundle === undefined ? {} : { scriptPath: bundle }) };
+  const base: DaemonSource = { platform, execPath: ctx.execPath ?? process.execPath, ...(bundle === undefined ? {} : { scriptPath: bundle }) };
   const staged = stagedLauncher(resolve(ctx.configDir), { platform, ...ctx.binary }, stage);
   if (staged.kind === 'absent') {
     return {
@@ -398,6 +415,20 @@ export interface EnableResult {
   pruned?: PruneResult;
   /** Windows: the junction that lets the staged launcher find the bundle by itself (absent when none is needed). A failure is reported here, not thrown: the wrapper still carries the job. */
   bundleLink?: BundleLinkReport;
+  /** Unix launcher form: the node directory put in front of the PATH of the job, and whether `node` is found with `/usr/bin:/bin` alone (false: the job would fail without it). */
+  nodePath?: { dir: string; onMinimalPath: boolean };
+}
+
+/** Whether `node` is an executable file in one of the minimal Unix directories of this machine. */
+function nodeOnMinimalPath(): boolean {
+  return MINIMAL_UNIX_PATH_DIRS.some((dir) => {
+    try {
+      accessSync(posix.join(dir, 'node'), constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export async function enableStartup(ctx: StartupContext): Promise<EnableResult> {
@@ -416,7 +447,8 @@ export async function enableStartup(ctx: StartupContext): Promise<EnableResult> 
   const action = parseOutcome(result.stdout, ['added', 'updated', 'unchanged'] as const, 'added, updated or unchanged');
   const pruned = plan.keepStamp === undefined ? undefined : pruneStaged(resolve(ctx.configDir), plan.keepStamp, ctx.binary?.fs);
   const daemon = await ensureDaemonRunning(ctx, id, before);
-  return { action, daemon, id, command, portFile, form: plan.form, ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }), ...(bundleLink === undefined ? {} : { bundleLink }) };
+  const nodePath = plan.source.launcher !== undefined && plan.source.platform !== 'win32' ? { dir: nodeDirOf(plan.source), onMinimalPath: ctx.minimalPathHasNode ?? nodeOnMinimalPath() } : undefined;
+  return { action, daemon, id, command, portFile, form: plan.form, ...(nodePath === undefined ? {} : { nodePath }), ...(plan.formNote === undefined ? {} : { formNote: plan.formNote }), ...(pruned === undefined ? {} : { pruned }), ...(bundleLink === undefined ? {} : { bundleLink }) };
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

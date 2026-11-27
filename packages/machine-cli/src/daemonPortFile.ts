@@ -16,7 +16,7 @@ export function daemonPortFile(configDir: string): string {
 }
 
 /** What `daemon.port.json` says about the local daemon: running (live pid), or not, with the problem found when the file exists but cannot be trusted. */
-export type DaemonState = ({ running: true } & DaemonPortInfo) | { running: false; problem?: string };
+export type DaemonState = ({ running: true } & DaemonPortInfo) | { running: false; problem?: string; /** The file is valid but names a pid that is gone. */ stale?: true };
 
 /**
  * Read only: the same test orch's portFile liveness makes (the file holds a numeric `pid`, the daemon runs while that pid is alive),
@@ -41,7 +41,7 @@ export function readDaemonState(configDir: string, isAlive: (pid: number) => boo
     return { running: false, problem: `${file} does not hold the numeric pid, port and peerPort a daemon writes: delete it, then start the daemon again` };
   }
   const { pid, port, peerPort } = info as DaemonPortInfo;
-  if (!isAlive(pid)) return { running: false, problem: `${file} names pid ${pid}, which is not running: the file is stale (the daemon ended without removing it; the next start replaces it)` };
+  if (!isAlive(pid)) return { running: false, stale: true, problem: `${file} names pid ${pid}, which is not running: the file is stale (the daemon ended without removing it; the next start replaces it)` };
   return { running: true, pid, port, peerPort };
 }
 

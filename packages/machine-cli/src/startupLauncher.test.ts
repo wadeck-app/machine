@@ -25,6 +25,8 @@ afterEach(() => {
   rmSync(stub.dir, { recursive: true, force: true });
 });
 
+const NODE = '/home/u/.nvm/versions/node/v24.22.2/bin/node';
+const NODE_PATH_PART = `PATH='/home/u/.nvm/versions/node/v24.22.2/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}"`;
 const UNIX_BUNDLE: DaemonSource = { platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/opt/m/machine.cjs' };
 const ensureArgs = (command: string) => ['ensure', 'startup', 'machine', '--command', command, '--restart-on-exit', '--timeout', '0', '--restart-if-changed', '--liveness-strategy', 'portFile', '--liveness-port-file', join(configDir, 'daemon.port.json'), '--json'];
 
@@ -59,6 +61,8 @@ describe('registeredForm (which form a stored command is)', () => {
   it('recognises the staged launcher on both platforms, with or without the override and the config dir', () => {
     expect(registeredForm('"C:\\cfg\\bin\\1\\machine.exe" daemon')).toBe('launcher');
     expect(registeredForm("LAUNCHER_BUNDLE_OVERRIDE='/b/machine.cjs' '/cfg/bin/1/machine' daemon --config-dir '/c'")).toBe('launcher');
+    expect(registeredForm(`LAUNCHER_BUNDLE_OVERRIDE='/b/machine.cjs' PATH='/n/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}" '/cfg/bin/1/machine' daemon`)).toBe('launcher');
+    expect(registeredForm(`PATH='/n/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}" '/cfg/bin/1/machine' daemon`)).toBe('launcher');
   });
 
   it('recognises the node + bundle development form', () => {
@@ -99,12 +103,44 @@ describe('the staged launcher form, with a fake installed platform package', () 
     platform: 'linux',
     env: { PATH: '' },
     bundlePath: BUNDLE,
+    execPath: NODE,
+    // node is not on the minimal PATH: `enable` warns (tested below), nothing else here depends on it.
+    minimalPathHasNode: false,
     binary: { platform: 'linux', arch: 'x64', resolve },
     ...extra,
   });
   const staged = (stamp: string) => join(configDir, 'bin', stamp, 'machine');
-  const launcherCommand = (stamp: string) => `LAUNCHER_BUNDLE_OVERRIDE='${BUNDLE}' '${staged(stamp)}' daemon --config-dir '${configDir}'`;
-  const devCommand = () => `'${process.execPath}' '${BUNDLE}' daemon --config-dir '${configDir}'`;
+  const launcherCommand = (stamp: string, nodePath = NODE_PATH_PART) => `LAUNCHER_BUNDLE_OVERRIDE='${BUNDLE}' ${nodePath} '${staged(stamp)}' daemon --config-dir '${configDir}'`;
+  const devCommand = () => `'${NODE}' '${BUNDLE}' daemon --config-dir '${configDir}'`;
+
+  it('enable on Unix puts the directory of the node that runs it in front of the PATH of the job, and says so (a warning when node is not on /usr/bin:/bin)', async () => {
+    stub.script({ ensure: { stdout: 'added machine\n' } });
+    const r = await enableStartup(ctxWith(installed('1.0.0')));
+    expect(r.command).toBe(launcherCommand('1.0.0'));
+    expect(r.nodePath).toEqual({ dir: '/home/u/.nvm/versions/node/v24.22.2/bin', onMinimalPath: false });
+  });
+
+  it('enable reports node as found on the minimal PATH when it is', async () => {
+    stub.script({ ensure: { stdout: 'added machine\n' } });
+    const r = await enableStartup(ctxWith(installed('1.0.0'), { minimalPathHasNode: true }));
+    expect(r.nodePath).toEqual({ dir: '/home/u/.nvm/versions/node/v24.22.2/bin', onMinimalPath: true });
+  });
+
+  it('the development form and Windows carry no nodePath', async () => {
+    stub.script({ ensure: { stdout: 'added machine\n' } });
+    expect((await enableStartup(ctxWith(notFound))).nodePath).toBeUndefined();
+  });
+
+  it('status: a job registered before this change (no PATH part) is outdated; a job whose node directory moved is outdated', async () => {
+    const old = `LAUNCHER_BUNDLE_OVERRIDE='${BUNDLE}' '${staged('1.0.0')}' daemon --config-dir '${configDir}'`;
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: old }) } });
+    expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: false, registeredForm: 'launcher' });
+    const moved = launcherCommand('1.0.0', `PATH='/home/u/.nvm/versions/node/v22.1.0/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}"`);
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: moved }) } });
+    expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: false });
+    stub.script({ list: { stdout: '[]' }, show: { stdout: JSON.stringify({ command: launcherCommand('1.0.0') }) } });
+    expect(await startupStatus(ctxWith(installed('1.0.0')))).toMatchObject({ upToDate: true });
+  });
 
   it('enable stages the launcher into <configDir>/bin/<stamp>/ and registers it, never the node_modules path', async () => {
     stub.script({ ensure: { stdout: 'added machine\n' } });
@@ -224,5 +260,18 @@ describe('the staged launcher form, with a fake installed platform package', () 
     expect(old.out).toMatch(/registered form: development/);
     expect(old.out).toMatch(/expected form: staged launcher/);
     expect(old.out).toMatch(/outdated: run machine startup enable/);
+  });
+
+  it('CLI enable: a warning plus one [info] line when node is not on /usr/bin:/bin, the [info] line alone when it is', async () => {
+    stub.script({ ensure: { stdout: 'added machine\n' } });
+    const off = await cli(configDir, ['startup', 'enable'], undefined, { startup: ctxWith(installed('1.0.0')) });
+    expect(off.out).toContain('[warn] node was not found on the minimal PATH /usr/bin:/bin');
+    const info = off.out.split('\n').filter((l) => l.startsWith('[info] job PATH'));
+    expect(info).toHaveLength(1);
+    expect(info[0]).toContain('/home/u/.nvm/versions/node/v24.22.2/bin');
+    stub.script({ ensure: { stdout: 'unchanged machine\n' } });
+    const on = await cli(configDir, ['startup', 'enable'], undefined, { startup: ctxWith(installed('1.0.0'), { minimalPathHasNode: true }) });
+    expect(on.out).not.toContain('[warn] node was not found');
+    expect(on.out).toContain('[info] job PATH');
   });
 });

@@ -25,14 +25,26 @@ const FORM_TEXT: Record<DaemonForm | 'unknown', string> = {
 /** `daemon: running (peer port N, pid P)`, or `daemon: NOT running: <what to do>` plus the problem found with the port file, if any. */
 export function daemonStateText(state: DaemonState, startHint: string): string {
   if (state.running) return `daemon: running (peer port ${state.peerPort}, pid ${state.pid})\n`;
-  return `daemon: NOT running: ${startHint}\n${state.problem === undefined ? '' : `[warn] ${state.problem}\n`}`;
+  const hint = state.stale ? `${STALE_HINT}\n` : '';
+  return `daemon: NOT running: ${startHint}\n${state.problem === undefined ? '' : `[warn] ${state.problem}\n`}${hint}`;
 }
+
+/** Stale port file: the daemon ran and is gone (a reboot, a crash). Two checks, no cause stated: none is known from the file alone. */
+const STALE_HINT =
+  '[hint] the daemon is down and left a stale port file. Two checks: `machine startup enable` re-registers the job with the directory of node on its PATH; and run the job command shown by `machine startup` by hand to see the error of the launcher';
 
 /** What `enable` says about the daemon: started now, already up, not started on request, or not started (cause and fix). */
 function daemonOutcomeText(d: DaemonOutcome, id: string, start: boolean): string {
   if (d.running) return d.started ? `[ok] daemon started (peer port ${d.peerPort})\n` : `[ok] daemon already running (peer port ${d.peerPort}, pid ${d.pid})\n`;
   if (!start) return `[info] daemon not started (--no-start): it starts at the next login of orch, or now with \`orch restart-job ${id}\`${d.reason === undefined ? '' : `\n[warn] ${d.reason}`}\n`;
   return `[warn] ${d.reason ?? 'the daemon is not running'}\n`;
+}
+
+/** Unix launcher form: what was put in the PATH of the job, and a warning when the job would not find node without it. */
+function nodePathText(r: EnableResult): string {
+  if (r.nodePath === undefined) return '';
+  const warn = r.nodePath.onMinimalPath ? '' : '[warn] node was not found on the minimal PATH /usr/bin:/bin: a job started with a reduced PATH (not the one of your interactive shell, e.g. set by nvm) fails with "node was not found in PATH"\n';
+  return `${warn}[info] job PATH: ${r.nodePath.dir} is put in front of the PATH of the job (the directory of the node that ran this command; rerun \`machine startup enable\` after moving or upgrading node)\n`;
 }
 
 function enableText(r: EnableResult, start: boolean): string {
@@ -42,7 +54,7 @@ function enableText(r: EnableResult, start: boolean): string {
   const skipped = r.pruned && r.pruned.skipped.length > 0 ? `older staged launchers still in use, kept until the next run: ${r.pruned.skipped.join(', ')}\n` : '';
   const note = r.formNote === undefined ? '' : `${r.formNote}\n`;
   const link = r.bundleLink === undefined ? '' : `${bundleLinkLine(r.bundleLink)}\n`;
-  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${removed}${skipped}${link}port file: ${r.portFile}\n${daemon}`;
+  return `[ok] startup job "${r.id}" ${r.action}\ncommand: ${r.command}\nform: ${form}\n${note}${nodePathText(r)}${removed}${skipped}${link}port file: ${r.portFile}\n${daemon}`;
 }
 
 /**

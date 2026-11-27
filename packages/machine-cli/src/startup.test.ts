@@ -50,6 +50,7 @@ describe('daemonCommand', () => {
   });
 
   const WIN_LAUNCHER: DaemonSource = { platform: 'win32', execPath: 'C:\\node.exe', scriptPath: 'C:\\nm\\machine.cjs', launcher: { exe: 'C:\\my cfg\\bin\\1.0.0\\machine.exe' } };
+  const UNIX_PATH_PART = `PATH='/usr/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}"`;
   const UNIX_LAUNCHER: DaemonSource = { platform: 'linux', execPath: '/usr/bin/node', scriptPath: '/opt/lib/machine.cjs', launcher: { exe: '/home/u/.config/machine/bin/1.0.0/machine', bundleOverride: '/opt/lib/machine.cjs' } };
 
   it('staged launcher on Windows: "<staged exe>" daemon, no override when the launcher finds the bundle by itself', () => {
@@ -57,14 +58,25 @@ describe('daemonCommand', () => {
     expect(daemonCommand(WIN_LAUNCHER, 'D:\\cfg dir')).toBe('"C:\\my cfg\\bin\\1.0.0\\machine.exe" daemon --config-dir "D:\\cfg dir"');
   });
 
-  it('staged launcher on Unix: LAUNCHER_BUNDLE_OVERRIDE=<bundle> in front of the quoted exe', () => {
-    expect(daemonCommand(UNIX_LAUNCHER)).toBe("LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' '/home/u/.config/machine/bin/1.0.0/machine' daemon");
-    expect(daemonCommand(UNIX_LAUNCHER, '/data/my cfg')).toBe("LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' '/home/u/.config/machine/bin/1.0.0/machine' daemon --config-dir '/data/my cfg'");
+  it('staged launcher on Unix: LAUNCHER_BUNDLE_OVERRIDE=<bundle> and the directory of node in front of the PATH of the job, then the quoted exe', () => {
+    expect(daemonCommand(UNIX_LAUNCHER)).toBe(`LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' ${UNIX_PATH_PART} '/home/u/.config/machine/bin/1.0.0/machine' daemon`);
+    expect(daemonCommand(UNIX_LAUNCHER, '/data/my cfg')).toBe(`LAUNCHER_BUNDLE_OVERRIDE='/opt/lib/machine.cjs' ${UNIX_PATH_PART} '/home/u/.config/machine/bin/1.0.0/machine' daemon --config-dir '/data/my cfg'`);
   });
 
-  it('staged launcher on Unix without override: just the quoted exe', () => {
+  it('staged launcher on Unix without override: the PATH part and the quoted exe', () => {
     const source: DaemonSource = { ...UNIX_LAUNCHER, launcher: { exe: '/a b/machine' } };
-    expect(daemonCommand(source)).toBe("'/a b/machine' daemon");
+    expect(daemonCommand(source)).toBe(`${UNIX_PATH_PART} '/a b/machine' daemon`);
+  });
+
+  it('the PATH part names the directory of the node that runs enable (an nvm folder with a space and a quote is quoted), and keeps the PATH of the job, or the system directories when it is empty', () => {
+    const nvm: DaemonSource = { ...UNIX_LAUNCHER, execPath: "/home/u/.nvm/versions/node/v24.22.2/bin/node", launcher: { exe: '/x/machine' } };
+    expect(daemonCommand(nvm)).toBe(`PATH='/home/u/.nvm/versions/node/v24.22.2/bin':"\${PATH:-/usr/local/bin:/usr/bin:/bin}" '/x/machine' daemon`);
+    const odd: DaemonSource = { ...nvm, execPath: "/home/u/it's here/bin/node" };
+    expect(() => daemonCommand(odd)).toThrow(/single quote/);
+  });
+
+  it('the Windows launcher forms carry no PATH part (the wscript wrapper and cmd.exe inherit the PATH of the session, see startup.md)', () => {
+    expect(daemonCommand(WIN_LAUNCHER)).not.toContain('PATH');
   });
 
   it('a single quote in a path of the launcher form is refused on Unix, naming the path and the fix', () => {

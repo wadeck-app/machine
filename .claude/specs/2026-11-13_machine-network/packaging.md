@@ -145,7 +145,7 @@ Rule from CLAUDE.md applies: new `@wadeck-app/*` dependencies (`shared-updater`,
 ```
 
 - Staging code (new `platformBinary.ts` in machine-cli, port of orch `platform-binary.ts:119-322`): table, `findLauncher()` via `require.resolve('<pkg>/machine[.exe]')`, `stageBinary` (partial + rename, throw on failure), `pruneStaged`, `unsupportedPlatformMessage`. No fallback to the `node_modules` path.
-- `machine startup enable` (fix of G1): command = `"<staged exe>" daemon [--config-dir <dir>]`, plus on Unix a `LAUNCHER_BUNDLE_OVERRIDE='<bundle>'` prefix when the bundle is not under `<dirname(node)>/node_modules` (rule of `launcher-bundle.ts`, G2). Started from sources it still refuses (existing text). The Node-only form `"<node>" "<bundle>" daemon` stays as the explicit non-launcher form (see question to orch-owner and user, section 7).
+- `machine startup enable` (fix of G1): command = `"<staged exe>" daemon [--config-dir <dir>]`, plus on Unix `PATH='<dirname(node)>':"${PATH:-...}"` (decision 77, startup.md) and a `LAUNCHER_BUNDLE_OVERRIDE='<bundle>'` prefix when the bundle is not under `<dirname(node)>/node_modules` (rule of `launcher-bundle.ts`, G2). Started from sources it still refuses (existing text). The Node-only form `"<node>" "<bundle>" daemon` stays as the explicit non-launcher form (see question to orch-owner and user, section 7).
 - Daemon start: prune staged folders of other stamps (failures ignored) and stage the module (see 3.7).
 - `machine cli self-check` (run by node, never the launcher): version is CalVer, platform package present and same family as the wrapper, staged launcher creatable, config dir writable, daemon version when running, node >= 22. No identity access, no passphrase.
 

@@ -265,6 +265,35 @@ describe('machine status shows whether the daemon runs (read only, no network, n
     const r = await run(['status']);
     expect(r.out).toMatch(/daemon: NOT running.*\n.*daemon\.port\.json.*not valid/s);
   });
+
+  it('a stale port file (dead pid): one line names the two checks, without stating a cause', async () => {
+    await init();
+    writeFileSync(portFile(), portFileContent({ ...LIVE, pid: 9999 }));
+    const r = await run(['status']);
+    const hints = r.out.split('\n').filter((l) => l.startsWith('[hint]'));
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain('`machine startup enable`');
+    expect(hints[0]).toMatch(/directory of node/);
+    expect(hints[0]).toMatch(/by hand/);
+    expect(hints[0]).toContain('`machine startup`');
+    expect(JSON.parse((await run(['status', '--json'])).out).daemon).toMatchObject({ running: false, stale: true });
+  });
+
+  it('no hint when there is no port file, or the daemon runs', async () => {
+    await init();
+    expect((await run(['status'])).out).not.toContain('[hint]');
+    writeFileSync(portFile(), portFileContent());
+    expect((await run(['status'])).out).not.toContain('[hint]');
+  });
+});
+
+describe('machine startup shows the same hint for a stale port file', () => {
+  it('present job, stale file', async () => {
+    writeFileSync(portFile(), portFileContent({ ...LIVE, pid: 9999 }));
+    stub.script({ show: { stdout: JSON.stringify({ command: 'old' }) }, list: { stdout: '[]' } });
+    const r = await cli(configDir, ['startup'], undefined, { startup: { orch: stub.orch, daemon: UNIX_BUNDLE, platform: 'linux', isAlive: alive } });
+    expect(r.out.split('\n').filter((l) => l.startsWith('[hint]'))).toHaveLength(1);
+  });
 });
 
 describe('callers of enable', () => {
