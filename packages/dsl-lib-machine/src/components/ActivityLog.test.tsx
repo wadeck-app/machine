@@ -334,26 +334,38 @@ describe('errors', () => {
     const user = userEvent.setup();
     answer = () => new Error('the machine daemon is not running (no daemon.port.json): start it with `machine daemon` and reload the page');
     render(<ActivityLog />);
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('the machine daemon is not running');
+    // The daemon is not running: not a bug of the page. The sentence says it, Retry loads again, the command is to copy (never the headline).
+    expect(await screen.findByText('Could not reach the machine daemon, so the activity cannot be loaded.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeInTheDocument();
     answer = () => page();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('echo 1')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Could not reach the machine daemon/)).toBeNull();
   });
 
   it('shows a page past the end as an error with the fix, and Retry asks the same page again', async () => {
     window.history.replaceState({}, '', '/modules/machine/activity?page=9');
     answer = () => new Error('page 9 is beyond the last page (2): 30 entries match at 25 per page. Ask for a page from 1 to 2');
     render(<ActivityLog />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('beyond the last page (2)');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the activity: page 9 is beyond the last page. 30 entries match at 25 per page. Ask for a page from 1 to 2.');
     expect(screen.getByRole('button', { name: 'First page' })).toBeEnabled();
   });
 
   it('tells the person to update app-core when the shell offers no fetcher (never a silent plain fetch)', async () => {
     Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
     render(<ActivityLog />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/update app-core/);
+    // The sentence that holds the command sits under the box (CommandNotice), so it is read in the page, not in the alert.
+    await screen.findByRole('alert');
+    expect(document.body).toHaveTextContent(/Update app-core \(app-core-cli update\) and reload the page/);
+  });
+
+  it('an internal error of the route (HTTP 500) says so and offers Copy details with the route and the status', async () => {
+    const failure = Object.assign(new Error('Cannot read properties of undefined'), { status: 500 });
+    answer = () => failure;
+    render(<ActivityLog />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Internal error: the activity could not be loaded because of a bug in this page or in the module (HTTP 500).');
+    expect(screen.getByRole('button', { name: 'Copy details' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
   it('shows the notes and the broken audit chain of the answer', async () => {

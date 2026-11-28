@@ -87,6 +87,18 @@ const DENY_STATUS: Record<string, number> = {
   'bad-payload': 400,
 };
 
+/** The HTTP status of a refusal of the daemon command `adminLoginStart` (the reason is the `kind`; anything not listed is 502). The body carries the daemon's own sentence. */
+const ADMIN_LOGIN_STATUS: Record<string, number> = {
+  'already-configured': 409,
+  'token-file-invalid': 409,
+  'no-relay': 409,
+  'relay-error': 502,
+  'relay-unsupported': 502,
+};
+
+/** Starting the login asks the relay once (its own timeout is 15 s). */
+const ADMIN_LOGIN_TIMEOUT_MS = 20_000;
+
 /** Connecting to the target (3 s per address, plus the address lookup) and its answer (10 s). */
 const REMOTE_DENY_TIMEOUT_MS = 30_000;
 
@@ -568,6 +580,21 @@ export default function register(ctx: ModuleContextLike): void {
       return reply.code(failure.status).send(failure);
     }
   }, SENSITIVE);
+
+  // `machine admin login` from the page (admin-ui.md, "A failed source: three cases"): the page offers a button instead of the command when this machine holds no admin relay
+  // token. The daemon runs the console login (the admin confirms in the relay console) and keeps its state; these routes carry nothing of the request to it (no relay, no
+  // token, no code from the page) and never answer a token. Start and cancel make the machine act: sensitive (the app-core PIN) plus the module header. The status is a
+  // plain read (the code to compare is not a secret and the page polls it).
+  ctx.registerRoute('POST', '/admin-login', (req, reply) => viaDaemon(req, reply, 'adminLoginStart', undefined, ADMIN_LOGIN_TIMEOUT_MS, (r) => r, ADMIN_LOGIN_STATUS), SENSITIVE);
+  ctx.registerRoute('POST', '/admin-login/cancel', (req, reply) => viaDaemon(req, reply, 'adminLoginCancel', undefined, undefined, (r) => r, ADMIN_LOGIN_STATUS), SENSITIVE);
+  ctx.registerRoute('GET', '/admin-login', async (_req, reply) => {
+    try {
+      return reply.code(200).send(await callDaemon(configDir(), 'adminLoginStatus'));
+    } catch (err) {
+      const failure = failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  });
 
   // Approve from the page (admin-ui.md): the page signs and seals in the browser; these routes carry the result (candidacyApprove.ts).
   registerApproveRoutes(ctx, { configDir, failureOf });

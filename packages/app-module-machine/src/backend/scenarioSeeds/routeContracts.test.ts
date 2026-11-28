@@ -2,6 +2,8 @@ import type { SignedRegistration } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import type { ApproveContext } from '../../../../dsl-lib-machine/src/lib/approveFlow.js';
 import type { DeliveryMachine as PageDeliveryMachine } from '../../../../dsl-lib-machine/src/lib/approvalResult.js';
+import type { AdminLoginState } from '../../../../dsl-lib-machine/src/lib/adminLoginFlow.js';
+import type { AdminLoginAnswer } from '../../../../machine-cli/src/adminLoginFromPage.js';
 import type { ApproveDistributeAnswer } from '../../../../machine-cli/src/approveDistribute.js';
 import type { DeliveryMachine } from '../../../../machine-cli/src/deliveryMachines.js';
 import type { RecordedApproval } from '../approvalCodes.js';
@@ -47,6 +49,8 @@ export type Checks = [
   Is<Into<PageDeliveryMachine, DeliveryMachineWire>>,
   Is<Into<DeliveryMachineWire, PageDeliveryMachine>>,
   Is<Into<Extract<ApproveDistributeAnswer, { ok: true }>, DistributeAnswer>>,
+  // The relay login started from the page: what the page reads is exactly what the daemon answers when it does not refuse (a refusal is an HTTP error).
+  Is<Same<AdminLoginState, Extract<AdminLoginAnswer, { ok: true }>>>,
 ];
 
 describe('route contracts', () => {

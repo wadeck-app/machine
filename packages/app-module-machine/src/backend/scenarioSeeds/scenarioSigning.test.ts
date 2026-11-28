@@ -63,7 +63,7 @@ describe('the throwaway admin key of the scenarios', () => {
   });
 
   it('every scenario where something can be signed publishes the passphrase in its hint, and none still says placeholder', () => {
-    const signable = SCENARIOS.filter((s) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'pending-with-problems', 'candidate-expired', 'approval-codes-recallable', 'only-this-machine'].includes(s.id));
+    const signable = SCENARIOS.filter((s) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'internal-error-500', 'pending-with-problems', 'candidate-expired', 'approval-codes-recallable', 'only-this-machine'].includes(s.id));
     expect(signable.length).toBe(12);
     for (const s of signable) expect(s.hint, s.id).toContain(`passphrase ${PASSPHRASE}`);
     for (const s of SCENARIOS) expect(s.hint, s.id).not.toMatch(/placeholder/i);

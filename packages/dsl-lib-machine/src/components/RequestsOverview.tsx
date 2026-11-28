@@ -10,7 +10,9 @@ import { ExpiredNotices } from './ExpiredNotices.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { MachineName } from './MachineName.js';
 import { HeldRequests, type HeldRequestRow } from './HeldRequests.js';
+import type { SourceError } from '../lib/loadFailure.js';
 import { SaferModeSwitch } from './SaferModeSwitch.js';
+import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { useAllowStyle } from './useAllowStyle.js';
 import { useSaferMode } from './useSaferMode.js';
 
@@ -37,6 +39,11 @@ export interface RequestsOverviewProps {
   expired?: NoticeData[];
   emptyMessage?: string;
   /**
+   * The failed sources of the page (`$ctx.$sourceErrors`): a failed read of `requests` or `machines` is the notice of the page (what it is, Retry) instead of lists that read as empty.
+   * @ctxDefault $sourceErrors
+   */
+  sourceErrors?: Record<string, SourceError>;
+  /**
    * Re-runs the page's sources, so the lists are the daemon's own after an allow or a deny. Defaults to the page's $refresh.
    * @ctxDefault $refresh
    */
@@ -60,7 +67,7 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
  * @registryCategory composite
  * @registryTags requests allow hold policy admin machines
  */
-export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', expired = NO_NOTICES, emptyMessage = 'No request is waiting for approval', onRefresh }: RequestsOverviewProps) {
+export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD, pending = NO_PENDING, allow, remote, notices = NO_NOTICES, noticesError = '', expired = NO_NOTICES, emptyMessage = 'No request is waiting for approval', sourceErrors, onRefresh }: RequestsOverviewProps) {
   const allowStyle = useAllowStyle();
   const saferMode = useSaferMode();
   const [filter, setFilter] = useState(ALL);
@@ -147,8 +154,21 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
   );
   const counts = `${rows.length} held request${rows.length === 1 ? '' : 's'}`;
 
+  // The failed sources of the page, each told by what it is. Where the requests were never read, nothing below is shown: empty lists would read as "nothing is waiting".
+  const refresh = onRefresh === undefined ? undefined : () => onRefresh();
+  // One literal read per source of the page: `viewSourceErrors.test.ts` looks for them.
+  const failed: Array<[string, SourceError | undefined]> = [
+    ['requests', sourceErrors?.['requests']],
+    ['machines', sourceErrors?.['machines']],
+  ];
+  const alerts = failed.flatMap(([key, error]) => (error === undefined ? [] : [<SourceFailureNotice key={key} source={key} error={error} onRefresh={refresh} />]));
+  if (sourceErrors?.['requests'] !== undefined && self === undefined) {
+    return <div className="flex flex-col gap-4">{alerts}</div>;
+  }
+
   return (
     <div className="flex flex-col gap-4">
+      {alerts}
       {/* The admin key kept in this page (decision 92): ONE chip for the page (the countdown and Lock), not repeated in the cards. Nothing while the key is locked. */}
       <UnlockedKeyBar variant="chip" />
       <div className="flex flex-wrap items-end gap-3">

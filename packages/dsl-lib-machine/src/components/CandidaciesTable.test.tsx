@@ -249,21 +249,35 @@ describe('the status column and the empty and failed states (UX review)', () => 
     expect(screen.queryByText('To do')).toBeNull();
   });
 
-  it('a failed load is ONE alert above the table (cause and exact command), the whole message folded, and the empty text is NOT shown', async () => {
-    const message = 'this machine holds no admin relay token (no relay-admin.json): approving needs it. Run `machine admin login` and confirm the request';
-    render(<CandidaciesTable rows={[]} timeline={TIMELINE} sourceErrors={{ candidacies: { message, status: 503 } }} onAction={vi.fn()} />);
+  it('a failed load of the relay is ONE alert above the table (cause, Retry that reloads the page sources), the whole message folded, the empty text is NOT shown', async () => {
+    const message = 'the relay is unreachable at https://r.example (fetch failed): check the network and that the relay runs';
+    const onRefresh = vi.fn(async () => undefined);
+    render(<CandidaciesTable rows={[]} timeline={TIMELINE} sourceErrors={{ candidacies: { message, status: 502 } }} onAction={vi.fn()} onRefresh={onRefresh} />);
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('Could not load the candidacies: this machine holds no admin relay token.');
-    // The command is monospace text next to the alert, never between literal backticks.
-    expect(screen.getByText('machine admin login')).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/Run `machine admin login`/);
+    expect(alert).toHaveTextContent('Could not load the candidacies: the relay is unreachable at https://r.example. Check the network and that the relay runs.');
     expect(screen.queryByTestId('empty-candidacies')).toBeNull();
     expect(screen.queryByText('No pending candidacy')).toBeNull();
     expect(screen.queryByText('Candidacy received')).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByText('Details'));
-    expect(screen.getByText(/HTTP 503/)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp('approving needs it'))).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 502/)).toBeInTheDocument();
+  });
+
+  it('no admin relay token is NOT an error: a to-configure state with the login button, no alert, no empty text, no command in the sentence', async () => {
+    const message = 'this machine holds no admin relay token (no relay-admin.json): approving needs it. Run `machine admin login` and confirm the request';
+    // The page asks the daemon what the login is doing: nothing yet.
+    const shell = Reflect.get(globalThis, '__APP_CORE_SHELL__') as { fetcher: (url: string) => Promise<unknown> };
+    const inner = shell.fetcher;
+    shell.fetcher = async (url: string) => (url === 'GET /api/modules/machine/admin-login' ? { ok: true, state: 'idle' } : inner(url));
+    render(<CandidaciesTable rows={[]} timeline={TIMELINE} sourceErrors={{ candidacies: { message, status: 503 } }} onAction={vi.fn()} onRefresh={async () => undefined} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(await screen.findByText('To see the candidacies, this machine needs an admin relay token. It has none yet.')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log in to the relay' })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/machine admin login/);
+    expect(screen.queryByTestId('empty-candidacies')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
   });
 
   it('a failed poll that keeps the rows shown before: the alert is above them, the rows stay', () => {

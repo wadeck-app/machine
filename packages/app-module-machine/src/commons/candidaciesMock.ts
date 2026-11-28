@@ -11,10 +11,11 @@ import {
   type CandidaciesState,
   type Step,
 } from './candidaciesState.js';
+import { IDLE, loginCancel, loginStart, loginStatus, type LoginMock, type LoginStep } from './adminLoginMock.js';
 import { MODULE_PREFIX, type MockRoutes } from './mockRoutes.js';
 import type { ApprovalCodeRequest, ApproveRequest, DistributeRequest } from './routeContracts.js';
 
-// The seven routes of the Candidacies page on mock data (the dev-only scenarios of the module). The pure state machine (candidaciesState.ts) does the work; this file
+// The ten routes of the Candidacies page on mock data (the dev-only scenarios of the module). The pure state machine (candidaciesState.ts) does the work; this file
 // only keeps its state in a closure, so that Approve / Reject change what the next GET returns, and follows the clock of the browser, so that ages grow and a candidacy
 // expires as it would for real. BROWSER-SAFE: no import of another package, no Node API.
 
@@ -35,6 +36,8 @@ const nameOf = (body: unknown): string | undefined => {
 export function candidaciesRoutes(seed: CandidaciesState, clock: () => number): MockRoutes {
   let state = rebase(seed, Math.floor(clock()));
   let last = Math.floor(clock());
+  // The relay login started from the page (adminLoginMock.ts): kept here, not in the seed, because it is what the user does, not where the scenario starts.
+  let login: LoginMock = IDLE;
 
   const run = <T>(step: (current: CandidaciesState) => Step<T>, delayMs: number): { status: number; body: unknown; delayMs: number } => {
     const now = Math.floor(clock());
@@ -47,6 +50,15 @@ export function candidaciesRoutes(seed: CandidaciesState, clock: () => number): 
     return { status: out.answer.status, body: out.answer.body, delayMs };
   };
 
+  const loginRun = (step: (now: number, needsToken: boolean) => LoginStep, delayMs: number): { status: number; body: unknown; delayMs: number } => {
+    const now = Math.floor(clock());
+    // Only the scenario with no admin relay token can log in: anywhere else the daemon would refuse (a token is never replaced from the page).
+    const out = step(now, state.relayError?.kind === 'relay_not_configured');
+    login = out.login;
+    if (out.tokenSaved) state = { ...state, relayError: null };
+    return { status: out.answer.status, body: out.answer.body, delayMs };
+  };
+
   const key = (route: string): string => `${route.slice(0, route.indexOf(' '))} ${MODULE_PREFIX}${route.slice(route.indexOf(' ') + 1)}`;
   return {
     [key('GET /candidacies')]: () => run((s) => listCandidacies(s), READ_MS),
@@ -56,5 +68,8 @@ export function candidaciesRoutes(seed: CandidaciesState, clock: () => number): 
     [key('POST /candidacies/:id/reject')]: (req) => run((s) => rejectCandidacy(s, req.params['id'] ?? '', nameOf(req.body)), WRITE_MS),
     [key('POST /approve-distribute')]: (req) => run((s) => distribute(s, req.body as DistributeRequest), WRITE_MS),
     [key('POST /approval-codes')]: (req) => run((s) => keepApprovalCode(s, req.body as ApprovalCodeRequest), READ_MS),
+    [key('GET /admin-login')]: () => loginRun((now) => loginStatus(login, now), READ_MS),
+    [key('POST /admin-login')]: () => loginRun((now, needsToken) => loginStart(login, now, needsToken), WRITE_MS),
+    [key('POST /admin-login/cancel')]: () => loginRun(() => loginCancel(login), READ_MS),
   };
 }

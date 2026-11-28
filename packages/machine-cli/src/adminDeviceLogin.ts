@@ -49,6 +49,21 @@ export interface AdminConsoleLoginOptions {
   setup?: boolean;
   client?: RelayClient;
   now?: () => Date;
+  /**
+   * Called once the relay started the request, before the wait: the page of the module shows the code to compare from it (the CLI prints the same text through `say`).
+   * Never carries the device code or the token.
+   */
+  onStarted?: (info: AdminLoginStarted) => void;
+}
+
+/** What a caller needs to tell the admin which request to confirm in the relay console. */
+export interface AdminLoginStarted {
+  relayUrl: string;
+  label: string;
+  userCode: string;
+  verificationUrl: string;
+  /** The lifetime of the code (the wait is bounded by the same number). */
+  expiresInSeconds: number;
 }
 
 export interface AdminConsoleLoginResult {
@@ -93,6 +108,7 @@ export async function adminLoginByConsole(configDir: string, o: AdminConsoleLogi
   }
 
   const minutes = Math.max(1, Math.round(Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) / 60));
+  o.onStarted?.({ relayUrl, label, userCode: printable(started.userCode), verificationUrl: printable(started.verificationUrl), expiresInSeconds: Math.min(started.expiresIn, MAX_DEVICE_LOGIN_SECONDS) });
   const heading =
     access === 'full'
       ? `Admin login on ${relayUrl} (FULL ACCESS: can also manage tokens).`

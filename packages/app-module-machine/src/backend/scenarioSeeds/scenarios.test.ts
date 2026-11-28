@@ -20,6 +20,7 @@ const CANDIDACY_SEEDS = [
   'pending-with-problems',
   'relay-error-503',
   'relay-unreachable-502',
+  'internal-error-500',
   'approve-result-delivered',
   'approve-result-partial',
   'approve-result-failed',
@@ -35,6 +36,9 @@ const CANDIDACY_ROUTES = [
   'POST /api/modules/machine/candidacies/cand-mac-m2-01/reject',
   'POST /api/modules/machine/approve-distribute',
   'POST /api/modules/machine/approval-codes',
+  'GET /api/modules/machine/admin-login',
+  'POST /api/modules/machine/admin-login',
+  'POST /api/modules/machine/admin-login/cancel',
 ];
 const MACHINES_ROUTES = [
   'GET /api/modules/machine/machines',

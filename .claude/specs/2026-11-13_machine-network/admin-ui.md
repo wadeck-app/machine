@@ -167,7 +167,7 @@ Gaps of the standard `Dialog` closed by dsl-ui 413: inner scroll inside the view
 ## UX review fixes (2026-11-28, dsl-ui 413)
 
 - Long statuses never break mid-word: the Candidacies Status and Machines Reachable cells show a headline (`lib/statusHeadline.ts`: cut at the first ": " or " ("), `nowrap`; the whole sentence is the first line of the row expansion.
-- A failed source load (`$ctx.$sourceErrors.<source>`, `@ctxDefault $sourceErrors`) is one danger `Notice` above the table: the cause, the exact command of the message (or its short fix), the whole message folded in "Details" (`lib/loadFailure.ts`). The empty text, the table and the timeline are not shown when nothing was loaded. The page YAML passes `sourceErrors: $ctx.$sourceErrors` to the table: a page that reads `$ctx.$sourceErrors` gets no generic shell toast for that source (app-core, commit e2b6528, live after the next app-core update). `viewSourceErrors.test.ts` fails when a source of these two pages is not read that way. The other pages (Requests, Allowed, Activity) still get the toast.
+- A failed source load is told by what it is: see "A failed source: three cases" below (supersedes the single danger `Notice` with a command).
 - Timeline of an approved candidacy: "Documents distributed" and "Security code compared" are `unrecorded` ("Not recorded by this page"), not "To do"; the note says "posted 9 min ago" (the age of the candidacy), distinct from "approved 4 min ago" of the kept codes.
 - Candidacies: the subtitle is one sentence; the empty state names the next step (run `machine join` on the new machine) and draws no timeline (it appears with the candidacy it follows).
 - Tables at 1024 px: Candidacies Status wraps (name, age and buttons never wrap, timeline column 208 px); Machines keeps Name, Role, Aliases, Reachable and the action, "Receives notices" and "Notice list held" are in the row details. Real-browser check needed (jsdom has no layout).
@@ -177,3 +177,36 @@ Gaps of the standard `Dialog` closed by dsl-ui 413: inner scroll inside the view
 - Security code: grid of five columns (never wraps 20 + 5). Empty Candidacies state: padded block, one line, command in monospace.
 - Machines alone on the network: card "No other machine yet. Run `machine join` on the new machine, ..." (`nextStep`); the subtitle is one sentence and no text names the daemon.
 - Machines: the "presence not shown yet" note is a muted small `Text` under the title, not a Card; its sentence has no markup.
+
+## A failed source: three cases (2026-11-28)
+
+A failing source is not always our bug and the page offers an action before it asks for a terminal. `machine:SourceFailureNotice` (`lib/loadFailure.ts` decides) is used by every page: Candidacies and Machines (tables), Requests (`RequestsOverview`, sources `requests` and `machines`), Allowed (`AllowedList`), Activity (`ActivityLog`, which reads its route itself). Each page YAML passes `sourceErrors: $ctx.$sourceErrors`: a page that reads it gets no generic shell toast (app-core e2b6528). `viewSourceErrors.test.ts` fails when a view is not listed, a source is not read, or its route differs from `SOURCE_ROUTES`.
+
+`$sourceErrors` carries only `{ message, status }`, not the `kind` of the backend body, so the page reads the words of the backend; `backend/failureKinds.test.ts` produces every failure with the real routes and fails when a message is reworded.
+
+| Case | Recognised by | Page shows | Actions |
+|---|---|---|---|
+| 1 Internal error | HTTP 500, 404, 405, 422, or a daemon command failure (502 "the daemon ...") | "Internal error: <what> could not be loaded because of a bug ... (HTTP n)", danger | Retry, Copy details (cause, source, route, status, time); no command |
+| 2 Not configured | `holds no admin relay token` | "To see <what>, this machine needs an admin relay token. It has none yet.", info, not an alert | Log in to the relay (below), Retry; the command is folded in Details with Copy command |
+| 2b Setup by hand | damaged or refused admin token file, relay URL refused, machine without identity | "Setup needed: <cause>.", info | Copy command (`machine admin login --force`, `machine setup <relay>`), Retry |
+| 3 External | message starts "the relay ..." | "Could not load <what>: <cause>. <short fix>", danger, never a command | Retry |
+| Daemon down / older | daemon not running, token refused, "older than this module" | warning sentence | Retry, Copy command (`machine daemon`, `machine stop` + `machine daemon`, `machine cli update`) |
+| Anything else (no status, HTTP 400) | none | "Could not load <what>: <cause>." | Retry, Copy details |
+
+Retry calls `$refresh()` (`@ctxDefault`), then says "Checked again at hh:mm:ss, still failing." A refresh that throws is shown. Without `onRefresh` there is no button and the page says to reload.
+
+### Log in to the relay from the page (case 2)
+
+Feasible and built. The daemon runs the same console login as `machine admin login` (`adminLoginByConsole`, new `onStarted` callback) in the background: daemon commands `adminLoginStart`, `adminLoginStatus`, `adminLoginCancel` (`machine-cli/adminLoginFromPage.ts`, one service per daemon, state in memory). Routes: `POST /admin-login` and `POST /admin-login/cancel` (sensitive, module header, no body forwarded), `GET /admin-login` (plain read, polled every 3 s). The page shows the code to compare, the relay page and the console hint; the admin still confirms in the relay console (T-37); on `approved` the page calls `$refresh()` once. A page reloaded mid-wait adopts the waiting login.
+
+- Never replaces a token: `already-configured` (409) and `token-file-invalid` (409) say to run `machine admin login --force` in a terminal. `no-relay` (409): run `machine setup <relay>`. Relay failure: 502 `relay-error`.
+- Answers carry the code and the page, never the token or the device code. Nothing is stored before the relay delivers; Cancel stores nothing.
+- Threat model: T-74.
+
+### Scenarios
+
+`relay-error-503` is the not-configured state with a working login (the mock admin confirms after 8 s, then the list loads: `commons/adminLoginMock.ts`); `relay-unreachable-502` shows case 3; `internal-error-500` (new) shows case 1. Requests, Allowed and Activity have no scenarios.
+
+### Not verifiable without a real browser and relay
+
+Layout of the notice and the login card at 1024 px; the PIN dialog on Start; the real relay console confirmation; that the shell raises no toast on a failed Retry (`$refresh` reports "a failure is always reported" unless `shouldNotifyLoadFailure` is false, which holds only with app-core >= e2b6528). The code is shown in `Text mono` (no larger standard size).

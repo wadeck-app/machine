@@ -23,5 +23,8 @@ sections:
       - $type: RefreshButton
         source: allowed
   - $type: machine:AllowedList
+    # The failed source of the page, read HERE explicitly: a page that reads `$ctx.$sourceErrors` gets no generic shell toast for it; the component tells what the
+    # failure is (internal error, daemon down, not initialized) and offers Retry (`$refresh`, its default).
+    sourceErrors: $ctx.$sourceErrors
     data: $sources.allowed
     search: $urlParam.search

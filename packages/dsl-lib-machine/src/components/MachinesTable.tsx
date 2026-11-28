@@ -3,7 +3,7 @@ import { ButtonAction, DataTable, Markdown, type TableColumn } from '@wadeck-app
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
-import { LoadFailureNotice } from './LoadFailureNotice.js';
+import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { RevokeMachineDialog } from './RevokeMachineDialog.js';
 
 /** One row of the Machines list, as the module backend answers it. */
@@ -91,7 +91,7 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
   const failure = sourceErrors?.['machines'];
   return (
     <>
-      {failure !== undefined && <LoadFailureNotice what="Could not load the machines" error={failure} />}
+      {failure !== undefined && <SourceFailureNotice source="machines" error={failure} onRefresh={onRefresh} />}
       {/* A failed load with nothing to show is the alert above, never the empty message. */}
       {(failure === undefined || rows.length > 0) && (
         <DataTable<MachineTableRow>

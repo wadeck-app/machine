@@ -259,8 +259,10 @@ describe('the Reachable column and the failed load (UX review)', () => {
   });
 
   it('a failed load is ONE alert above the table, and the empty text is NOT shown', () => {
-    render(<MachinesTable rows={[]} emptyMessage="No machine" sourceErrors={{ machines: { message: 'the relay is unreachable at https://r.example (fetch failed): check the network', status: 502 } }} />);
+    const onRefresh = vi.fn(async () => undefined);
+    render(<MachinesTable rows={[]} emptyMessage="No machine" sourceErrors={{ machines: { message: 'the relay is unreachable at https://r.example (fetch failed): check the network', status: 502 } }} onRefresh={onRefresh} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Could not load the machines: the relay is unreachable at https://r.example. Check the network.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.queryByText('No machine')).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
   });

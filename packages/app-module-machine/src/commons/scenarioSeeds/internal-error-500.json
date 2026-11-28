@@ -1,0 +1,50 @@
+{
+  "now": 1795860000,
+  "relayError": {
+    "status": 500,
+    "kind": "internal",
+    "error": "Cannot read properties of undefined (reading 'toLowerCase')",
+    "message": "Cannot read properties of undefined (reading 'toLowerCase')"
+  },
+  "adminKeyFile": "{\"v\":2,\"publicKey\":\"vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU\",\"hint\":\"scenario key, trusted by nothing: its passphrase is in the scenario hint\",\"kdf\":{\"name\":\"pbkdf2-sha256\",\"iterations\":600000,\"salt\":\"Lp2olVXgLwcZIDqCMmUuNw\"},\"cipher\":{\"name\":\"aes-256-gcm\",\"iv\":\"GoGY3WA5PsbWx83o\"},\"ciphertext\":\"Qc6SBfH7H--t7Lyq9DawBNF5vvoE0t46Dk89MZ-phsul0iQR4pdJrH4Tfkn6zJPBui6lF_FGaPLaodfRbpf0mw\"}",
+  "admin": {
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "name": "midgard2",
+    "identityPublicKey": "7TI0snbUztpX1ZutFPuvWnc8DzGMmZ3jpg1TxaWzTAU",
+    "publicKey": "vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU",
+    "keyId": "730a5edc28c2f8daf2d9dce3a01d5f20"
+  },
+  "trusted": [],
+  "revoked": {},
+  "candidacies": [],
+  "approvals": [],
+  "approvalsProblem": "",
+  "timelineSteps": [
+    {
+      "id": "received",
+      "title": "Candidacy received",
+      "info": "Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here."
+    },
+    {
+      "id": "checked",
+      "title": "Details checked",
+      "info": "Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect."
+    },
+    {
+      "id": "signed",
+      "title": "Passphrase and signature",
+      "info": "Threat: a local process signing for you. The passphrase is typed in the approval dialog of this page (or in the terminal that runs `machine admin approve`), used for ONE signature made in the browser and never sent: the daemon and the module backend only receive what is already signed."
+    },
+    {
+      "id": "distributed",
+      "title": "Documents distributed",
+      "info": "Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one. A machine that is offline gets them from the relay inbox when it is back."
+    },
+    {
+      "id": "final-code",
+      "title": "Security code compared",
+      "info": "Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay."
+    }
+  ],
+  "distributions": {}
+}

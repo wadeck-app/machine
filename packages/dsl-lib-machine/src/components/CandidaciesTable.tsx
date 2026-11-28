@@ -7,7 +7,7 @@ import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
 import { CodeText, CommandNotice } from './CommandNotice.js';
-import { LoadFailureNotice } from './LoadFailureNotice.js';
+import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { RejectCandidacyDialog } from './RejectCandidacyDialog.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
@@ -139,7 +139,7 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-2">
         {problem !== null && <CommandNotice variant="danger" label={problem} />}
-        {failure !== undefined && <LoadFailureNotice what="Could not load the candidacies" error={failure} />}
+        {failure !== undefined && <SourceFailureNotice source="candidacies" error={failure} onRefresh={onRefresh} />}
         {/* A failed load with nothing to show is the alert above, never the empty message (it would say "nothing pending"). */}
         {/* Nothing pending: a padded block that says it and names the next step (an empty table header says nothing, and its message is plain text: no command in monospace). */}
         {failure === undefined && rows.length === 0 && (

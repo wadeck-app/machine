@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, type BadgeVariant, ButtonAction, CompactSelect, DataTable, Notice, RefreshButton, SearchBar, type TableColumn, Text } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
+import type { SourceError } from '../lib/loadFailure.js';
 import { MachineName } from './MachineName.js';
+import { SourceFailureNotice } from './SourceFailureNotice.js';
 
 export type ActivityRowData = {
   key: string;
@@ -164,6 +166,13 @@ const COLUMNS: Array<TableColumn<ActivityRowData>> = [
   { key: 'waitedText', label: 'Waited', nowrap: true, render: (r) => r.waitedText },
 ];
 
+/** A failed read as the page's `$sourceErrors` carries it: the message and, when the fetcher gives one, the HTTP status. */
+function sourceErrorOf(e: unknown): SourceError {
+  const status = typeof e === 'object' && e !== null ? (e as { status?: unknown }).status : undefined;
+  const message = e instanceof Error ? e.message : String(e);
+  return typeof status === 'number' ? { message, status } : { message };
+}
+
 /**
  * The Activity page: every command this machine sent with `machine run` and every command it received, newest first. Filters (direction,
  * machine, outcome, period, a word of the command) and pages cut on the server (a log holds thousands of commands), a column for the result, the
@@ -181,7 +190,8 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
   const [page, setPage] = useState(initial.page);
   const [size, setSize] = useState(initial.pageSize);
   const [data, setData] = useState<ActivityPageData | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
+  // The failure as `$sourceErrors` would carry it (message and HTTP status): the same notice as every page tells what it is (SourceFailureNotice).
+  const [error, setError] = useState<SourceError | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   const latest = useRef(0);
@@ -210,7 +220,7 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
       })
       .catch((e: unknown) => {
         if (mine === latest.current) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(sourceErrorOf(e));
         }
       })
       .finally(() => {
@@ -253,12 +263,7 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
         <RefreshButton loading={loading} onClick={() => setReload((n) => n + 1)} />
       </div>
 
-      {error !== undefined ? (
-        <div className="flex flex-col items-start gap-2">
-          <Notice variant="danger" label={error} />
-          <ButtonAction label="Retry" variant="secondary" size="xs" onClick={() => setReload((n) => n + 1)} />
-        </div>
-      ) : null}
+      {error !== undefined ? <SourceFailureNotice source="activity" error={error} onRefresh={() => setReload((n) => n + 1)} /> : null}
       {data?.chainText ? <Notice variant="warning" label={data.chainText} /> : null}
       {(data?.notes ?? []).map((note) => (
         <Notice key={note} variant="default" label={note} />

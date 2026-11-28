@@ -7,6 +7,7 @@ import { vi } from 'vitest';
 import register from '../index.js';
 import { makeTempDir, removeTempDir } from '../tempDir.testUtil.js';
 import { candidacyTimeline } from '../candidacyTimeline.js';
+import { errorBody } from '../errorBody.js';
 // Test-only reach into machine-cli (the module never imports it): the delivery text and per-machine states of the seeds come from the REAL functions of the CLI.
 import { deliveryMachines } from '../../../../machine-cli/src/deliveryMachines.js';
 import { emptyReport, formatDistribution, type DistributionReport, type Recipient } from '../../../../machine-cli/src/distribute.js';
@@ -304,6 +305,10 @@ export async function buildSeeds(): Promise<Record<string, CandidaciesState>> {
   const unreachableBody = (await unreachable.call('GET /candidacies', {})).body as ErrorBody;
   await unreachable.close();
   seeds['relay-unreachable-502'] = { ...emptyState(), relayError: unreachableBody };
+
+  // An unexpected exception of the backend (HTTP 500, kind `internal`): the body is the one of the REAL errorBody, the message is what a JavaScript exception says. The real
+  // route cannot be made to throw on purpose from here, so seeds.test.ts proves the shape (errorBody) and failureKinds.test.ts proves the real routes answer 500 `internal`.
+  seeds['internal-error-500'] = { ...emptyState(), relayError: errorBody(500, 'internal', "Cannot read properties of undefined (reading 'toLowerCase')") };
 
   for (const [name, plan] of [['approve-result-delivered', 'delivered'], ['approve-result-partial', 'partial'], ['approve-result-failed', 'failed']] as const) {
     const pending = mac(4 * 60);

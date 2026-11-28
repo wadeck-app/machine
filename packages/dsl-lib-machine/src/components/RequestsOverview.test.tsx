@@ -149,6 +149,30 @@ describe('the admin key kept in the page (decision 92)', () => {
   }, 120_000);
 });
 
+describe('a failed source of the page', () => {
+  it('the requests could not be read: the notice of the page (what it is, Retry), never "no request is waiting"', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    render(<RequestsOverview {...props({ self: undefined, held: undefined, pending: undefined, sourceErrors: { requests: { message: 'boom', status: 500 } }, onRefresh })} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Internal error: the requests could not be loaded because of a bug in this page or in the module (HTTP 500).');
+    expect(screen.queryByText('No request is waiting for approval')).toBeNull();
+    expect(screen.queryByText(/No held request/)).toBeNull();
+    expect(screen.queryByLabelText('Machine')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('the machines could not be read but the requests were: the notice is above the requests, which stay', () => {
+    render(<RequestsOverview {...props({ sourceErrors: { machines: { message: 'the machine daemon is not running (no daemon.port.json): start it with the daemon command', status: 503 } }, onRefresh: async () => undefined })} />);
+    expect(screen.getByText('Could not reach the machine daemon, so the machines cannot be loaded.')).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Held request ls' })).toBeInTheDocument();
+  });
+
+  it('the failure of ANOTHER source is not this page', () => {
+    render(<RequestsOverview {...props({ sourceErrors: { candidacies: { message: 'boom', status: 500 } } })} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('this machine only (before anything is loaded)', () => {
   it('shows its own held and refused requests, and the machine filter lists every trusted machine', () => {
     render(<RequestsOverview {...props()} />);

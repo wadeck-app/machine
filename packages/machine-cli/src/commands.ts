@@ -19,6 +19,7 @@ import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './p
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
 import { allowedAnswer, type AllowedAnswer } from './allowedAnswer.js';
+import { createAdminLoginService, type AdminLoginAnswer } from './adminLoginFromPage.js';
 import { activityFromPayload, type ActivityAnswer } from './activityView.js'; // run-log
 
 // The daemon commands. Each is a plain function of the config directory, so the CLI runs the very same code in-process
@@ -101,7 +102,27 @@ const epochSeconds = () => Math.floor(Date.now() / 1000);
 /** `version` is read only by `status`: a failure to determine it must not break the other commands. */
 export function makeCommands(configDir: string, version: string | (() => string), now: () => number = epochSeconds, holds?: HoldTable, reachability?: ReachabilityProbe) {
   const everyone = (self: MachineIdentity): MachineEntry[] => [{ uuid: self.uuid, name: self.name }, ...loadNetwork(configDir, now()).directory.machines()];
+  // ONE login service per daemon: the console login started from the page keeps its state here (the page reads it while the admin confirms in the relay console).
+  const adminLogin = createAdminLoginService(configDir);
   return {
+    /**
+     * `machine admin login` from the page (admin-ui.md): starts the console login in the background and answers the code to compare, or why it cannot start. Never replaces a
+     * token, never answers the token or the device code (the answer is what the page may show).
+     */
+    adminLoginStart(): Promise<AdminLoginAnswer> {
+      return adminLogin.start();
+    },
+
+    /** The state of the login started from the page: idle, waiting (the code), approved or failed (the cause). */
+    adminLoginStatus(): AdminLoginAnswer {
+      return adminLogin.status();
+    },
+
+    /** Stops the wait of the login started from the page: nothing is stored. */
+    adminLoginCancel(): AdminLoginAnswer {
+      return adminLogin.cancel();
+    },
+
     status(): StatusAnswer | NotInitialized {
       const self = selfOf(configDir);
       if ('initialized' in self) return self;

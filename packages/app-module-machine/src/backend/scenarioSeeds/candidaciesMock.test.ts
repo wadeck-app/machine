@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parseAdminLogin } from '../../../../dsl-lib-machine/src/lib/adminLoginFlow.js';
 import type { CandidaciesState, RelayCandidacy } from '../../commons/candidaciesState.js';
 import { candidaciesRoutes } from '../../commons/candidaciesMock.js';
 import { MODULE_PREFIX, type MockResponse, type MockRoutes } from '../../commons/mockRoutes.js';
@@ -28,7 +29,7 @@ const approveBody = (c: RelayCandidacy): ApproveRequest => ({
 const first = (name: string): RelayCandidacy => seed(name).candidacies[0] as RelayCandidacy;
 
 describe('the routes of the Candidacies page', () => {
-  it('answers exactly the seven routes the page calls, under the module prefix', () => {
+  it('answers exactly the ten routes the page calls, under the module prefix', () => {
     expect(Object.keys(make('one-pending')).sort()).toEqual(
       [
         'GET /candidacies',
@@ -38,6 +39,9 @@ describe('the routes of the Candidacies page', () => {
         'POST /candidacies/:id/reject',
         'POST /approve-distribute',
         'POST /approval-codes',
+        'GET /admin-login',
+        'POST /admin-login',
+        'POST /admin-login/cancel',
       ]
         .map(full)
         .sort(),
@@ -146,5 +150,60 @@ describe('the routes of the Candidacies page', () => {
     call(a, 'POST /candidacies/:id/reject', { id: first('one-pending').id });
     expect(list(a).count).toBe(0);
     expect(list(b).count).toBe(1);
+  });
+});
+
+describe('the relay login started from the page (scenario relay-error-503: no admin relay token)', () => {
+  const login = (routes: MockRoutes, key: 'GET /admin-login' | 'POST /admin-login' | 'POST /admin-login/cancel'): MockResponse => call(routes, key);
+  const stateOf = (answer: MockResponse): string => parseAdminLogin(answer.body).state;
+
+  it('nothing started: idle. Start: the code to compare, parsed by the page as the daemon would answer it', () => {
+    const routes = make('relay-error-503');
+    expect(stateOf(login(routes, 'GET /admin-login'))).toBe('idle');
+    const started = login(routes, 'POST /admin-login');
+    expect(started.status).toBe(200);
+    expect(parseAdminLogin(started.body)).toMatchObject({ state: 'waiting', userCode: 'ADMN-7K42', label: 'midgard2 admin' });
+    expect(started.delayMs).toBeGreaterThan(0);
+  });
+
+  it('while the admin has not confirmed the list still fails; once the clock passes the confirmation, the status is approved and the list loads', () => {
+    const clock = { now: CLOCK_START };
+    const routes = make('relay-error-503', clock);
+    login(routes, 'POST /admin-login');
+    clock.now += 3;
+    expect(stateOf(login(routes, 'GET /admin-login'))).toBe('waiting');
+    expect(call(routes, 'GET /candidacies').status).toBe(503);
+    clock.now += 10;
+    expect(stateOf(login(routes, 'GET /admin-login'))).toBe('approved');
+    const after = call(routes, 'GET /candidacies');
+    expect(after.status).toBe(200);
+    expect((after.body as CandidaciesAnswer).count).toBe(0);
+  });
+
+  it('start twice while waiting is the same request; Cancel goes back to idle and the list still fails', () => {
+    const routes = make('relay-error-503');
+    const a = parseAdminLogin(login(routes, 'POST /admin-login').body);
+    const b = parseAdminLogin(login(routes, 'POST /admin-login').body);
+    expect(b).toEqual(a);
+    expect(stateOf(login(routes, 'POST /admin-login/cancel'))).toBe('idle');
+    expect(stateOf(login(routes, 'GET /admin-login'))).toBe('idle');
+    expect(call(routes, 'GET /candidacies').status).toBe(503);
+  });
+
+  it('a scenario that already holds a token refuses the start like the daemon (409 already-configured, nothing replaced)', () => {
+    for (const name of ['one-pending', 'relay-unreachable-502', 'internal-error-500']) {
+      const out = login(make(name), 'POST /admin-login');
+      expect([out.status, (out.body as ErrorBody).kind], name).toEqual([409, 'already-configured']);
+      expect((out.body as ErrorBody).message).toBe((out.body as ErrorBody).error);
+    }
+  });
+});
+
+describe('the internal error scenario', () => {
+  it('every relay route fails with the error body of an unexpected exception of the backend (500, internal)', () => {
+    const routes = make('internal-error-500');
+    const answer = call(routes, 'GET /candidacies');
+    expect([answer.status, (answer.body as ErrorBody).kind]).toEqual([500, 'internal']);
+    expect((answer.body as ErrorBody).message).toBe((answer.body as ErrorBody).error);
   });
 });

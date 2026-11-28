@@ -80,8 +80,8 @@ async function withRelay(candidacies: unknown[]): Promise<string> {
 }
 
 describe('route registration', () => {
-  it('registers the seven read-only GET routes (the Activity page, run-log; the Allowed page, decision 104), the Deny post and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76)', () => {
-    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /revoke-context/:uuid', 'GET /status', 'POST /allow', 'POST /approval-codes', 'POST /approve-distribute', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote', 'POST /revoke']);
+  it('registers the read-only GET routes (the Activity page, run-log; the Allowed page, decision 104; the state of the relay login), the Deny post and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76; start and cancel of the relay login)', () => {
+    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /admin-login', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /revoke-context/:uuid', 'GET /status', 'POST /admin-login', 'POST /admin-login/cancel', 'POST /allow', 'POST /approval-codes', 'POST /approve-distribute', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote', 'POST /revoke']);
   });
 });
 

@@ -12,6 +12,7 @@ import empty from './scenarioSeeds/empty.json';
 import onePending from './scenarioSeeds/one-pending.json';
 import pendingRevokedEarlier from './scenarioSeeds/pending-revoked-earlier.json';
 import pendingWithProblems from './scenarioSeeds/pending-with-problems.json';
+import internalError500 from './scenarioSeeds/internal-error-500.json';
 import relayError503 from './scenarioSeeds/relay-error-503.json';
 import relayUnreachable502 from './scenarioSeeds/relay-unreachable-502.json';
 import severalPending from './scenarioSeeds/several-pending.json';
@@ -69,8 +70,14 @@ const candidacies: CandidaciesScenario[] = [
     hint: 'No uuid in the candidacy: the status text names the problem, Approve is not offered, Reject still works.',
     seed: pendingWithProblems as CandidaciesState,
   },
-  { id: 'relay-error-503', label: 'Relay not configured (503)', hint: 'No admin token: the page shows the 503 error with the fix (`machine admin login`).', seed: relayError503 as CandidaciesState },
-  { id: 'relay-unreachable-502', label: 'Relay unreachable (502)', hint: 'The relay does not answer: the page shows the 502 error ("the relay is unreachable").', seed: relayUnreachable502 as CandidaciesState },
+  {
+    id: 'relay-error-503',
+    label: 'No admin relay token (to configure)',
+    hint: 'Not an error: a to-configure state with the button "Log in to the relay". Press it: the code appears, the mock admin confirms in the relay console after 8 seconds, then the list loads. No PIN in a scenario.',
+    seed: relayError503 as CandidaciesState,
+  },
+  { id: 'relay-unreachable-502', label: 'Relay unreachable (502)', hint: 'The relay does not answer: the cause and a Retry button (it asks the sources again and the failure stays: the scenario never recovers).', seed: relayUnreachable502 as CandidaciesState },
+  { id: 'internal-error-500', label: 'Internal error (500)', hint: 'A bug of the module: the page says it is an internal error and offers Retry and Copy details (cause, route, status), no command.', seed: internalError500 as CandidaciesState },
   {
     id: 'approve-result-delivered',
     label: 'Approval: documents delivered',

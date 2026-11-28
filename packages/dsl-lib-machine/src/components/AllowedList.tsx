@@ -3,6 +3,8 @@ import { useMemo, useRef, useState } from 'react';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { EditOutcome } from '../lib/allowedEdit.js';
 import { AllowedMachineBlock, matches } from './AllowedMachineBlock.js';
+import type { SourceError } from '../lib/loadFailure.js';
+import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useSaferMode } from './useSaferMode.js';
 
@@ -73,6 +75,11 @@ export interface AllowedPageData {
 export interface AllowedListProps {
   /** The answer of `GET /api/modules/machine/allowed` (`$sources.allowed`, polled by the page). Absent: not read yet, or the read failed (the page's notifier says why). */
   data?: AllowedPageData;
+  /**
+   * The failed sources of the page (`$ctx.$sourceErrors`): a failed read of `allowed` is the notice of the page (what it is, Retry) instead of an empty list.
+   * @ctxDefault $sourceErrors
+   */
+  sourceErrors?: Record<string, SourceError>;
   /** The search word (`$urlParam.search`, typed in the SearchBar of the page). */
   search?: string;
   /**
@@ -92,7 +99,8 @@ export interface AllowedListProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
-const NOT_READ = 'The list of allowed commands could not be read: the reason is in the notification of the page (the machine daemon or the module is not running, or this machine is not initialized). Fix it, then press Refresh.';
+// Only reached when the page gave neither the list nor a failure: the page is wrong, and says so (never an empty list).
+const NOT_READ = 'The list of allowed commands is not available and the page reported no failure: this is a bug of the page. Reload the page; if it persists, report it.';
 
 /** The tab label: name and entries (the entries that match the search while one is typed), and a word when the policy could not be read. */
 const labelOf = (m: AllowedMachineData, count: number): string => `${m.name} (${count})${m.problem === '' ? '' : ' - unreadable policy'}`;
@@ -107,7 +115,7 @@ const labelOf = (m: AllowedMachineData, count: number): string => `${m.name} (${
  * @registryCategory composite
  * @registryTags allowed whitelist allow list policy commands approved machines
  */
-export function AllowedList({ data, search = '', loading = false, refreshing = false, onRefresh }: AllowedListProps) {
+export function AllowedList({ data, sourceErrors, search = '', loading = false, refreshing = false, onRefresh }: AllowedListProps) {
   const [chosen, setChosen] = useState<string | undefined>(undefined);
   // Most recent use first; kept here so that the choice survives a change of tab and a re-read.
   const [sortCol, setSortCol] = useState('lastUsedSort');
@@ -118,6 +126,7 @@ export function AllowedList({ data, search = '', loading = false, refreshing = f
   api.current ??= shellAllowApi();
   const safer = useSaferMode();
 
+  const failure = sourceErrors?.['allowed'];
   const needle = search.trim().toLowerCase();
   const machines = useMemo(() => data?.machines ?? [], [data]);
   const shown = useMemo(() => machines.map((m) => ({ machine: m, rows: m.entries.filter((e) => matches(needle, e)) })), [machines, needle]);
@@ -128,6 +137,7 @@ export function AllowedList({ data, search = '', loading = false, refreshing = f
   return (
     <section className="flex flex-col gap-3" aria-label="Allowed commands">
       <UnlockedKeyBar variant="chip" />
+      {failure !== undefined && <SourceFailureNotice source="allowed" error={failure} onRefresh={onRefresh === undefined ? undefined : () => onRefresh()} />}
       {data !== undefined && needle !== '' ? <Notice variant="default" label={`${shownEntries} of ${data.entryCount} entries shown`} /> : null}
 
       {outcome !== null ? (
@@ -173,9 +183,9 @@ export function AllowedList({ data, search = '', loading = false, refreshing = f
         </>
       ) : loading ? (
         <Notice variant="default" label="Loading..." />
-      ) : (
+      ) : failure === undefined ? (
         <Notice variant="danger" label={NOT_READ} />
-      )}
+      ) : null}
     </section>
   );
 }

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AllowedList, type AllowedPageData } from './AllowedList.js';
 
 // The Allowed page: what every machine allows, read-only. One tab per machine, one DataTable per tab. The app-core shell is a stub on
@@ -274,9 +274,31 @@ describe('search (the word comes from the search field of the page)', () => {
 });
 
 describe('failures', () => {
-  it('without data once loaded: says the list could not be read, where the reason is and what to do, never an empty list', () => {
+  it('a failed read of the source is the notice of the page (what it is, Retry), never an empty list', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    render(<AllowedList sourceErrors={{ allowed: { message: 'the machine daemon is not running (no daemon.port.json): start it with the daemon command and reload the page', status: 503 } }} onRefresh={onRefresh} />);
+    expect(screen.getByText('Could not reach the machine daemon, so the allow lists cannot be loaded.')).toBeInTheDocument();
+    expect(screen.queryByRole('tab')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('an internal error of the route says so and offers Copy details', () => {
+    render(<AllowedList sourceErrors={{ allowed: { message: 'boom', status: 500 } }} onRefresh={async () => undefined} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Internal error: the allow lists could not be loaded because of a bug in this page or in the module (HTTP 500).');
+    expect(screen.getByRole('button', { name: 'Copy details' })).toBeInTheDocument();
+  });
+
+  it('a failed re-read keeps the lists shown before, with the notice above them', async () => {
+    render(<AllowedList data={answer()} sourceErrors={{ allowed: { message: 'boom', status: 500 } }} onRefresh={async () => undefined} />);
+    await ready();
+    expect(screen.getByRole('alert')).toHaveTextContent('Internal error');
+    expect(screen.getAllByRole('tab').length).toBeGreaterThan(0);
+  });
+
+  it('no data, no failure and not loading is a bug of the page: said as one, never an empty list', () => {
     render(<AllowedList />);
-    expect(screen.getByRole('alert')).toHaveTextContent(/could not be read.*notification of the page.*press Refresh/s);
+    expect(screen.getByRole('alert')).toHaveTextContent(/not available and the page reported no failure.*bug of the page/s);
     expect(screen.queryByRole('tab')).toBeNull();
   });
 

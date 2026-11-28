@@ -15,6 +15,8 @@ import {
   type RelayCandidacy,
 } from '../../commons/candidaciesState.js';
 import type { ApproveContextAnswer, ApproveRequest, CandidaciesAnswer, DistributeAnswer } from '../../commons/routeContracts.js';
+import { errorBody } from '../errorBody.js';
+import { loadFailureView } from '../../../../dsl-lib-machine/src/lib/loadFailure.js';
 import { expectNoRealData } from './privacyScan.testUtil.js';
 import { ALLOWED_PUBLIC_KEYS, ALLOWED_RANDOMS, ALLOWED_SCENARIO_KEY_STRINGS, buildSeeds, KEYS, FAKE_DAEMON_IMPORT, NOW, rawOf, startReal, type Real, type RealOptions } from './seedBuilders.testUtil.js';
 
@@ -32,6 +34,7 @@ const NAMES = [
   'pending-with-problems',
   'relay-error-503',
   'relay-unreachable-502',
+  'internal-error-500',
   'approve-result-delivered',
   'approve-result-partial',
   'approve-result-failed',
@@ -85,7 +88,8 @@ describe('the seed files', () => {
 });
 
 describe('the list answered by the state machine is what the REAL GET /candidacies answers', () => {
-  it.each(NAMES)('%s', async (name) => {
+  // internal-error-500 has no real twin: no input makes the real route throw on purpose (see its own test below).
+  it.each(NAMES.filter((n) => n !== 'internal-error-500'))('%s', async (name) => {
     const state = readSeed(name);
     real = await startReal({ now: NOW, relay: relayOf(state, name), approvals: state.approvals });
     const really = await real.call('GET /candidacies', {});
@@ -126,6 +130,20 @@ describe('what each seed shows (the intent of the scenario, on the real answer)'
     expect([b.status, (b.body as { kind: string }).kind]).toEqual([502, 'relay_error']);
     expect((b.body as { error: string }).error).toContain('relay is unreachable');
   });
+  it('internal-error-500: the list is the error body of the real errorBody (HTTP 500, kind internal), and the page tells it as an internal error', () => {
+    const answer = listCandidacies(readSeed('internal-error-500')).answer;
+    expect(json(answer.body)).toEqual(json(errorBody(500, 'internal', "Cannot read properties of undefined (reading 'toLowerCase')")));
+    expect(answer.status).toBe(500);
+    const body = answer.body as { message: string };
+    expect(loadFailureView('the candidacies', { message: body.message, status: answer.status }, 'candidacies').kind).toBe('internal');
+  });
+  it('relay-error-503 is told by the page as not configured (the login button), relay-unreachable-502 as an external failure (Retry)', () => {
+    for (const [name, kind, canLogin] of [['relay-error-503', 'not-configured', true], ['relay-unreachable-502', 'relay', false]] as const) {
+      const answer = listCandidacies(readSeed(name)).answer;
+      const view = loadFailureView('the candidacies', { message: (answer.body as { message: string }).message, status: answer.status }, 'candidacies');
+      expect([view.kind, view.canLogin], name).toEqual([kind, canLogin]);
+    }
+  });
   it('approval-codes-recallable: the approved machine shows its code on the last step, a second reminder is listed', () => {
     const out = rowsOf(readSeed('approval-codes-recallable'));
     expect(out.approvals.map((a) => a.name)).toEqual(['mac-m2', 'thinkcentre']);
@@ -142,7 +160,7 @@ describe('what each seed shows (the intent of the scenario, on the real answer)'
 });
 
 describe('the approval context, checked by the REAL code of the page', () => {
-  const approvable = NAMES.filter((n) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'approval-codes-recallable', 'pending-with-problems', 'candidate-expired'].includes(n));
+  const approvable = NAMES.filter((n) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'internal-error-500', 'approval-codes-recallable', 'pending-with-problems', 'candidate-expired'].includes(n));
 
   it.each(approvable)('%s: loadApproveContext accepts it, its registrations carry a valid admin signature, checkApprovable passes on the row', async (name) => {
     const state = readSeed(name);

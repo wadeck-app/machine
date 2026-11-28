@@ -2040,11 +2040,12 @@ export const AllowedListEntry: ComponentRegistryEntry = {
 	nodeSchema: null as never,
 	render: ({ node, ctx }: RegistryRenderProps) => {
 		const data = coerceProp(resolveExpressionValue(node['data'], ctx), 'AllowedList.data', 'object', false) as import('../components/AllowedList.js').AllowedListProps['data']
+		const sourceErrors = coerceProp(resolveExpressionValue(node['sourceErrors'], ctx) ?? ctx['$sourceErrors'], 'AllowedList.sourceErrors', 'object', false) as import('../components/AllowedList.js').AllowedListProps['sourceErrors']
 		const search = coerceProp(resolveExpressionValue(node['search'], ctx), 'AllowedList.search', 'string', false) as import('../components/AllowedList.js').AllowedListProps['search']
 		const loading = coerceProp(resolveExpressionValue(node['loading'], ctx) ?? ctx['$initialLoading'], 'AllowedList.loading', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['loading']
 		const refreshing = coerceProp(resolveExpressionValue(node['refreshing'], ctx) ?? ctx['$refreshing'], 'AllowedList.refreshing', 'primitive', false) as import('../components/AllowedList.js').AllowedListProps['refreshing']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'AllowedList.onRefresh', 'function', false) as import('../components/AllowedList.js').AllowedListProps['onRefresh']
-		return <AllowedList data={data} search={search} loading={loading} refreshing={refreshing} onRefresh={onRefresh} />
+		return <AllowedList data={data} sourceErrors={sourceErrors} search={search} loading={loading} refreshing={refreshing} onRefresh={onRefresh} />
 	},
 }
 
@@ -2129,8 +2130,9 @@ export const RequestsOverviewEntry: ComponentRegistryEntry = {
 		const noticesError = coerceProp(resolveExpressionValue(node['noticesError'], ctx), 'RequestsOverview.noticesError', 'string', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['noticesError']
 		const expired = coerceProp(resolveExpressionValue(node['expired'], ctx), 'RequestsOverview.expired', 'array', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['expired']
 		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'RequestsOverview.emptyMessage', 'string', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['emptyMessage']
+		const sourceErrors = coerceProp(resolveExpressionValue(node['sourceErrors'], ctx) ?? ctx['$sourceErrors'], 'RequestsOverview.sourceErrors', 'object', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['sourceErrors']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'RequestsOverview.onRefresh', 'function', false) as import('../components/RequestsOverview.js').RequestsOverviewProps['onRefresh']
-		return <RequestsOverview self={self} machines={machines} held={held} pending={pending} allow={allow} remote={remote} notices={notices} noticesError={noticesError} expired={expired} emptyMessage={emptyMessage} onRefresh={onRefresh} />
+		return <RequestsOverview self={self} machines={machines} held={held} pending={pending} allow={allow} remote={remote} notices={notices} noticesError={noticesError} expired={expired} emptyMessage={emptyMessage} sourceErrors={sourceErrors} onRefresh={onRefresh} />
 	},
 }
 
@@ -2407,11 +2409,11 @@ SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControl
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
-AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","loading","onRefresh","refreshing","search"] : [];
+AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","loading","onRefresh","refreshing","search","sourceErrors"] : [];
 CandidaciesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["approvals","approvalsProblem","emptyMessage","onAction","onRefresh","rows","sourceErrors","timeline"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
 MachinesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["emptyMessage","onRefresh","rows","sourceErrors"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
-RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","expired","held","machines","notices","noticesError","onRefresh","pending","remote","self"] : [];
+RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","expired","held","machines","notices","noticesError","onRefresh","pending","remote","self","sourceErrors"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

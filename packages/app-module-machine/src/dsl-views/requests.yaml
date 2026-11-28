@@ -29,12 +29,17 @@ sections:
     items:
       - $type: Markdown
         text: $sources.requests.chainText
+  # Nothing of the requests is shown while they were not read (a failed source is the notice of machine:RequestsOverview, never an empty list).
   - $type: Card
+    $if: $sources.requests.remoteNote
     padding: sm
     items:
       - $type: Markdown
         text: $sources.requests.remoteNote
   - $type: machine:RequestsOverview
+    # The failed sources of the page, read HERE explicitly: a page that reads `$ctx.$sourceErrors` gets no generic shell toast for a failed source; the component tells
+    # what the failure is (internal error, not configured, relay or daemon down) and offers Retry (`$refresh`, its default).
+    sourceErrors: $ctx.$sourceErrors
     self: $sources.requests.machine
     machines: $sources.machines.machines
     held: $sources.requests.waiting
@@ -46,8 +51,10 @@ sections:
     expired: $sources.requests.expired
     emptyMessage: $sources.requests.emptyMessage
   - $type: Markdown
+    $if: $sources.requests
     text: "### History of this machine"
   - $type: DataTable
+    $if: $sources.requests
     rows: $sources.requests.history
     emptyMessage: No entry in the audit log
     columns:
