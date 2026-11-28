@@ -35,6 +35,7 @@ const CANDIDACY_ROUTES = [
   'POST /api/modules/machine/candidacies/cand-mac-m2-01/approve',
   'POST /api/modules/machine/candidacies/cand-mac-m2-01/reject',
   'POST /api/modules/machine/approve-distribute',
+  'POST /api/modules/machine/delivery-retry',
   'POST /api/modules/machine/approval-codes',
   'GET /api/modules/machine/admin-login',
   'POST /api/modules/machine/admin-login',
@@ -45,6 +46,7 @@ const MACHINES_ROUTES = [
   'GET /api/modules/machine/admin-key',
   'GET /api/modules/machine/revoke-context/00000000-0000-4000-8000-000000000003',
   'POST /api/modules/machine/revoke',
+  'POST /api/modules/machine/delivery-retry',
 ];
 
 const list: readonly ScenarioDefinition[] = scenarios;

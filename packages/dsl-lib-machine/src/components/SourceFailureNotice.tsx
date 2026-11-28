@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction, Card, Collapsible, HorizontalStack, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Card, Collapsible, HorizontalStack, Link, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
 import { cancelAdminLogin, readAdminLogin, startAdminLogin, type AdminLoginState } from '../lib/adminLoginFlow.js';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { loadFailureView, SOURCE_SUBJECTS, type FailureView, type SourceError } from '../lib/loadFailure.js';
@@ -214,6 +214,16 @@ function AdminLoginPanel({ what, onRefresh, api, pollMs }: { what: string; onRef
   );
 }
 
+/** Only an http(s) address becomes a link: the address comes from the daemon, a `javascript:` one would run in the page. Anything else stays text. */
+function isWebAddress(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 function WaitingCard({ state }: { state: Extract<AdminLoginState, { state: 'waiting' }> }) {
   const minutes = Math.max(1, Math.ceil((state.expiresAt - Date.now() / 1000) / 60));
   return (
@@ -222,7 +232,10 @@ function WaitingCard({ state }: { state: Extract<AdminLoginState, { state: 'wait
         <Text size="sm" text="Code to compare in the relay console:" />
         <Text mono text={state.userCode} />
         <Text size="sm" text={state.consoleHint} />
-        <Text size="sm" text={`Relay page: ${state.verificationUrl}`} />
+        <HorizontalStack gap="gap-1" align="items-center" wrap>
+          <Text size="sm" text="Relay page:" />
+          {isWebAddress(state.verificationUrl) ? <Link href={state.verificationUrl} label={state.verificationUrl} external /> : <Text size="sm" text={state.verificationUrl} />}
+        </HorizontalStack>
         <Text tone="muted" size="sm" text={`Waiting for your confirmation in the relay console. Code lives about ${minutes} min.`} />
       </VerticalStack>
     </Card>

@@ -11,7 +11,7 @@ export function CodeText({ text }: { text: string }) {
     <>
       {text.split('`').map((part, i) =>
         i % 2 === 1 ? (
-          <span key={i} className="break-all">
+          <span key={i} className="break-words">
             <Text mono text={part} />
           </span>
         ) : (

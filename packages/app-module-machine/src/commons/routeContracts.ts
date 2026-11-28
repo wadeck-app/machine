@@ -158,6 +158,17 @@ export interface DistributeAnswer {
   retry: string;
 }
 
+/**
+ * `POST /delivery-retry`: sends again the documents an approval or a revocation could not store, without a passphrase. `uuid` is the machine the approval or the
+ * revocation was about (`DistributeAnswer.subject.uuid`). The answer is a `DistributeAnswer` (same shape, ALL the machines told: one delivered earlier stays delivered).
+ * Refusals (`ErrorBody.kind` is the daemon reason; the message names cause and fix): 400 `bad-payload`, 409 `nothing-retained` (the daemon keeps the documents in memory
+ * only: lost after a restart and after a success; the CLI `machine admin distribute <uuid>` asks the passphrase), 409 `no-admin-key`, 409 `no-admin-token`,
+ * 409 `not-initialized`, 422 `bad-document` (a kept document expired: use the CLI).
+ */
+export interface RetryDeliveryRequest {
+  uuid: string;
+}
+
 /** `POST /approval-codes`: the page hands over the code it just showed. */
 export interface ApprovalCodeRequest {
   uuid: string;
@@ -184,6 +195,7 @@ export interface RouteContracts {
   'POST /candidacies/:id/reject': { request: { id: string; name?: string }; answer: RejectAnswer };
   'POST /approve-distribute': { request: { body: DistributeRequest }; answer: DistributeAnswer };
   'POST /approval-codes': { request: { body: ApprovalCodeRequest }; answer: OkAnswer };
+  'POST /delivery-retry': { request: { body: RetryDeliveryRequest }; answer: DistributeAnswer };
 }
 
 export type RouteKey = keyof RouteContracts;

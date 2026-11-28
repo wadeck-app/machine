@@ -34,3 +34,12 @@ describe('CodeText', () => {
     expect(document.body.textContent).toBe('Run machine join on the new machine, then machine list.');
   });
 });
+
+describe('CodeText and the words (UX review 4, c)', () => {
+  it('a command is never cut in the middle of a word: it wraps at its spaces, and only a word longer than the line is broken (break-words, not break-all)', () => {
+    render(<p><CodeText text="Ask it to run `machine join --resume` again." /></p>);
+    const span = screen.getByText('machine join --resume').closest('span.break-words');
+    expect(span).not.toBeNull();
+    expect(document.querySelector('.break-all')).toBeNull();
+  });
+});

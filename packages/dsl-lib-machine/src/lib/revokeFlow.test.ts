@@ -169,8 +169,26 @@ describe('signAndRevoke: one passphrase, one unlock, the key locked before the n
     const result = await signAndRevoke(stubApi({ post: answer }), context(), PASSPHRASE, NOW);
     expect(result.distribution.status).toBe('partial');
     expect(result.distribution.text).toContain('relay down');
-    expect(result.distribution.headline).toContain(RETRY);
+    expect(result.distribution.retryCommand).toBe(RETRY);
+    expect(result.distribution.headline).not.toContain('machine admin distribute');
     expect(result.distribution.tone).toBe('danger');
+  });
+
+  it('a partial delivery can be retried without the passphrase: the daemon route gets the uuid only, the new report replaces the old one', async () => {
+    const sent: Array<{ path: string; body: unknown }> = [];
+    const first = answerOf({ failed: true, text: { out: '', err: '[error] server (x): revocation document not stored: relay down\n' }, machines: [FAILED_SERVER] });
+    const base = stubApi({ post: first });
+    const api = { ...base, post: async (path: string, body: unknown) => (path === '/delivery-retry' ? (sent.push({ path, body }), answerOf({ machines: [DELIVERED_SERVER] })) : base.post(path, body)) };
+    const result = await signAndRevoke(api, context(), PASSPHRASE, NOW);
+    expect(result.retryDelivery).toBeTypeOf('function');
+    const again = await (result.retryDelivery as () => Promise<{ status: string; headline: string }>)();
+    expect(sent).toEqual([{ path: '/delivery-retry', body: { uuid: REVOKED.uuid } }]);
+    expect(again).toMatchObject({ status: 'delivered', headline: 'Documents delivered to 1 machine.' });
+  });
+
+  it('delivered: nothing to retry', async () => {
+    const result = await signAndRevoke(stubApi({ post: answerOf({ machines: [DELIVERED_SERVER] }) }), context(), PASSPHRASE, NOW);
+    expect(result.retryDelivery).toBeUndefined();
   });
 
   it('no other peer: one line, no machine', async () => {

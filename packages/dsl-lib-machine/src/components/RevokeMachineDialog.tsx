@@ -94,12 +94,19 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
 
   if (phase.kind === 'done') {
     const { distribution } = phase.result;
-    // The command the headline already gives: the machine rows do not say it again.
-    const retry = /`([^`]+)`/.exec(distribution.headline)?.[1];
+    const retryDelivery = phase.result.retryDelivery;
+    const onRetry = retryDelivery === undefined || distribution.status !== 'partial'
+      ? undefined
+      : async () => {
+          const next = await retryDelivery();
+          if (mounted.current) {
+            setPhase({ kind: 'done', result: { ...phase.result, distribution: next } });
+          }
+        };
     return (
       <ConfirmSignModal title={`${row.name} revoked`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
         <CommandNotice label={distribution.headline} variant={distribution.tone} />
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(retry === undefined ? {} : { said: retry })} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
       </ConfirmSignModal>
     );
   }

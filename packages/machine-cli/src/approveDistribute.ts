@@ -15,7 +15,8 @@ import { adminKeyFile, readAdminPin } from './admin.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import type { DirectDelivery } from './directDelivery.js';
 import { deliveryMachines, type DeliveryMachine } from './deliveryMachines.js';
-import { adminRelayAccess, emptyReport, formatDistribution, put, putNoticeDocument, type DeliveryContext, type DistributionReport } from './distribute.js';
+import { deliverItem, keepForRetry, type RetainedItem } from './deliveryRetry.js';
+import { adminRelayAccess, emptyReport, formatDistribution, type DeliveryContext, type DistributionFailure, type DistributionReport } from './distribute.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { trustedRegistrations } from './network.js';
@@ -173,6 +174,8 @@ export async function approveDistribute(
   report.machines = others.length;
   // Same order as `distributeMachine`: for each other peer the document about the new machine, then the one about it, then the lists.
   const missing: Array<{ to: { uuid: string; name: string }; kind: 'peer' | 'notice-recipients' }> = [];
+  // What is not stored after this run (failed, or not attempted after an abort): kept in memory for `retryDelivery`.
+  const remaining: RetainedItem[] = [];
   let go = true;
   for (const [key, want] of expected) {
     const document = received.get(key);
@@ -180,15 +183,19 @@ export async function approveDistribute(
       missing.push(want);
       continue;
     }
-    if (!go) continue;
-    go =
-      want.kind === 'notice-recipients'
-        ? await putNoticeDocument(sender, report, want.to, list, () => document)
-        : await put(sender, report, want.to, 'peer', () => document);
+    const item: RetainedItem = want.kind === 'notice-recipients' ? { to: want.to, kind: 'notice-recipients', document, noticeList: list } : { to: want.to, kind: 'peer', document };
+    if (!go) {
+      remaining.push(item);
+      continue;
+    }
+    const sent = await deliverItem(sender, report, item);
+    go = sent.go;
+    if (!sent.stored) remaining.push(item);
   }
   // A document the page could not build (an expired registration, say) is not silence: the machine is named, with the way to send it from the terminal.
+  const notSent: DistributionFailure[] = [];
   for (const m of missing) {
-    report.failures.push({
+    notSent.push({
       toUuid: m.to.uuid,
       toName: m.to.name,
       kind: m.kind,
@@ -196,9 +203,13 @@ export async function approveDistribute(
       message: `the page did not send the ${m.kind === 'peer' ? 'peer' : 'notice recipients'} document for this machine (it could not be built, or it was dropped): it was not delivered`,
     });
   }
+  report.failures.push(...notSent);
   const text = formatDistribution(report, 'the approval', retry);
   // The machines told, once each, in the order of the documents.
   const told = new Map<string, { uuid: string; name: string }>();
   for (const want of expected.values()) told.set(want.to.uuid, want.to);
-  return { ok: true, subject: { uuid: subject.body.uuid, name: subject.body.name }, failed: text.failed, report, text: { out: text.out, err: text.err }, machines: deliveryMachines(report, [...told.values()], retry), retry };
+  const machines = deliveryMachines(report, [...told.values()], retry);
+  const subjectOf = { uuid: subject.body.uuid, name: subject.body.name };
+  keepForRetry(configDir, { kind: 'approval', subject: subjectOf, told: [...told.values()], retry, items: remaining, persistent: notSent, removal: undefined, machines });
+  return { ok: true, subject: subjectOf, failed: text.failed, report, text: { out: text.out, err: text.err }, machines, retry };
 }

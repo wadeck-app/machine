@@ -119,7 +119,14 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
                 {!askEveryTime && <KeepUnlockedSelect busy={busy} />}
               </>
             )}
-            {shown !== null && <Notice variant="danger" label={shownMessage(shown)} />}
+            {/* The alert about the passphrase has its place reserved (two lines): when it appears the buttons below do not jump, which would move them under the pointer. */}
+            {needsPassphrase ? (
+              <div data-testid="alert-slot" className="min-h-16">
+                {shown !== null && <Notice variant="danger" label={shownMessage(shown)} />}
+              </div>
+            ) : (
+              shown !== null && <Notice variant="danger" label={shownMessage(shown)} />
+            )}
             <DialogFooter>
               {/* Cancel is the default focus (autoFocus): Enter without thinking must never sign. */}
               <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} autoFocus />

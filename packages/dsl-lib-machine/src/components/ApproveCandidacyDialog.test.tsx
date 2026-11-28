@@ -360,14 +360,21 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(api.sent.some((s) => s.path === '/approval-codes')).toBe(false);
   }, 60_000);
 
-  it('a failed delivery: ONE alert with what happened and the exact retry command; the cause is open in the Details; the code is still shown (the approval stands)', async () => {
+  it('a failed delivery: ONE alert with what happened (no command in it), Retry delivery, the cause open in the Details; the code is still shown (the approval stands)', async () => {
     const api = stubApi({ post: { '/approve-distribute': new Error('the daemon is not running') } });
     setup(api);
     await approve();
     await resultShown();
     expect(screen.getByRole('alert')).toHaveTextContent(/NOT told/);
-    // The command is monospace text, ONCE outside the raw report (headline); no literal backtick anywhere in the dialog.
-    expect(outsideDetails(RETRY)).toHaveLength(1);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('machine admin distribute');
+    expect(screen.getByRole('button', { name: 'Retry delivery' })).toBeInTheDocument();
+    // The command is folded as the last resort: on screen nowhere (headline, machine rows, open Details) until the person opens it, then ONCE; no literal backtick.
+    expect(screen.queryAllByText(RETRY)).toHaveLength(0);
+    expect(withoutReport()).not.toContain(RETRY);
+    expect(document.body.textContent).not.toContain(RETRY);
+    await userEvent.click(screen.getByRole('button', { name: 'Run it in a terminal instead' }));
+    expect(screen.getAllByText(RETRY)).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeInTheDocument();
     expect(withoutReport()).not.toContain('`');
     // The documents are not delivered: the comparison is not offered, one line says why, the code is still readable.
     expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
@@ -379,10 +386,11 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(screen.queryByRole('list', { name: 'Machines told' })).toBeNull();
   }, 60_000);
 
-  it('a delivery that partly failed: the retry command is said ONCE (the headline, as code), the machine rows do not repeat it, and the comparison is held back', async () => {
+  it('a delivery that partly failed: no command in the headline or the rows, the comparison is held back; Retry delivery sends it again WITHOUT the passphrase, the dialog shows the new report and the comparison is offered', async () => {
     const failed = { uuid: PEER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`${RETRY}\`` };
-    const answer = REPORT({ failed: true, machines: [failed, INBOX_LAPTOP], text: { out: '', err: '[error] server (x): peer document not stored: relay down\n' } });
-    setup(stubApi({ post: { '/approve-distribute': answer } }));
+    const partial = REPORT({ failed: true, machines: [failed, INBOX_LAPTOP], text: { out: '', err: `[error] server (x): peer document not stored: relay down\n[warn] the approval stands. Run \`${RETRY}\` to send what is missing\n` } });
+    const api = stubApi({ post: { '/approve-distribute': partial, '/delivery-retry': REPORT() } });
+    const { onProgress } = setup(api);
     await approve();
     await resultShown();
     const items = within(screen.getByRole('list', { name: 'Machines told' })).getAllByRole('listitem');
@@ -390,10 +398,29 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(items[0]).toHaveTextContent('documents not stored');
     expect(items[0]).not.toHaveTextContent(RETRY);
     expect(items[1]).toHaveTextContent('installs by itself when it is back');
-    expect(outsideDetails(RETRY)).toHaveLength(1);
-    expect(withoutReport()).not.toContain('`');
+    expect(document.body.textContent).not.toContain(RETRY);
     expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
     expect(screen.getByText(/relay down/)).toBeInTheDocument();
+    const before = api.sent.length;
+    await userEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    expect(await screen.findByText('Documents delivered to 1 machine, 1 waits in the relay inbox.')).toBeInTheDocument();
+    // Only the uuid went to the daemon, no key file was read and no passphrase asked again.
+    expect(api.sent.slice(before)).toEqual([{ method: 'POST', path: '/delivery-retry', body: { uuid: CANDIDATE.uuid } }]);
+    expect(screen.queryByRole('button', { name: 'Retry delivery' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Codes match' })).toBeInTheDocument();
+    expect((onProgress as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toMatchObject({ delivery: 'delivered' });
+  }, 60_000);
+
+  it('a retry the daemon refuses (it restarted: nothing is held) is an alert with its words; the button stays and the command is still folded', async () => {
+    const failed = { uuid: PEER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: 'nothing to do' };
+    const api = stubApi({ post: { '/approve-distribute': REPORT({ failed: true, machines: [failed] }), '/delivery-retry': new Error('the daemon holds nothing to retry for this machine (it restarted)') } });
+    setup(api);
+    await approve();
+    await resultShown();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    expect(await screen.findByText(/the daemon holds nothing to retry for this machine/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry delivery' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run it in a terminal instead' })).toBeInTheDocument();
   }, 60_000);
 
   it('the code could not be kept for later: said next to the code, with why, and the code stays on screen', async () => {

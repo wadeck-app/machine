@@ -3,6 +3,7 @@ import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfi
 import { listApprovalCodes, type RecordedApproval } from './approvalCodes.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
 import { registerApproveRoutes } from './candidacyApprove.js';
+import { registerDeliveryRetryRoutes } from './deliveryRetry.js';
 import { registerRevokeRoutes } from './machineRevoke.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
@@ -601,6 +602,9 @@ export default function register(ctx: ModuleContextLike): void {
 
   // Revoke from the page (admin-ui.md): same pattern, the page signs in the browser; these routes carry the result (machineRevoke.ts).
   registerRevokeRoutes(ctx, { configDir, failureOf });
+
+  // Retry delivery (admin-ui.md): the daemon sends again the documents it kept in memory after an approval or a revocation, no passphrase (deliveryRetry.ts).
+  registerDeliveryRetryRoutes(ctx, { configDir, failureOf });
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

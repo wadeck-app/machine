@@ -152,8 +152,19 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
     const { distribution } = phase.result;
     // Some machine did not get its documents: comparing the codes now would be premature (the timeline keeps that step to do).
     const documentsMissing = distribution.status === 'partial' || distribution.status === 'failed';
-    // The command the headline already gives: the machine rows do not say it again.
-    const retry = /`([^`]+)`/.exec(distribution.headline)?.[1];
+    // Sends the documents again (no passphrase, nothing signed): the dialog shows the new report and the timeline follows it.
+    const retryDelivery = phase.result.retryDelivery;
+    const onRetry = retryDelivery === undefined || distribution.status === 'delivered' || distribution.status === 'none'
+      ? undefined
+      : async () => {
+          const next = await retryDelivery();
+          if (progress.current !== undefined) {
+            report({ ...progress.current, delivery: next.status, waiting: next.waiting });
+          }
+          if (mounted.current) {
+            setPhase({ ...phase, result: { ...phase.result, distribution: next } });
+          }
+        };
     const answer = (value: 'match' | 'differ') => {
       setCodes(value);
       if (progress.current !== undefined) {
@@ -172,7 +183,7 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
         {codes === 'match' && <CommandNotice variant="success" label={`Comparison recorded on this page. The decisive confirmation is still to be made on ${row.name}: \`machine join\` there asks you to confirm its code.`} />}
         {codes === 'differ' && <CommandNotice variant="danger" label={`Codes differ: do NOT use "${row.name}". Run \`machine admin revoke ${row.name}\` now, then reject the candidate and look for who sits between the machines.`} />}
         {keepProblem !== null && <Notice variant="warning" label={keepProblem} />}
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={documentsMissing} {...(retry === undefined ? {} : { said: retry })} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={documentsMissing} {...(documentsMissing ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
       </ConfirmSignModal>
     );
   }

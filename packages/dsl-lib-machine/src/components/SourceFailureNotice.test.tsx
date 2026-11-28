@@ -178,6 +178,25 @@ describe('case 2, not configured: no admin relay token', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it('the relay console address is a link that opens in a new tab without giving the page to the console (UX review 4)', async () => {
+    const user = setup();
+    render(<SourceFailureNotice source="candidacies" error={{ message: NO_TOKEN, status: 503 }} onRefresh={async () => undefined} api={fakeApi()} pollMs={20} />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to the relay' }));
+    const link = await screen.findByRole('link', { name: 'https://relay.example.net/console' });
+    expect(link).toHaveAttribute('href', 'https://relay.example.net/console');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toMatch(/noopener/);
+  });
+
+  it('an address that is not http(s) is never a link (a javascript: address from the daemon would run in the page): it is shown as text', async () => {
+    const user = setup();
+    const api = fakeApi({ start: { ...WAITING, verificationUrl: 'javascript:alert(1)' } });
+    render(<SourceFailureNotice source="candidacies" error={{ message: NO_TOKEN, status: 503 }} onRefresh={async () => undefined} api={api} pollMs={20} />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to the relay' }));
+    expect(await screen.findByText(/javascript:alert[(]1[)]/)).toBeInTheDocument();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
   it('a denied or expired request is said with its cause, and the button starts a new one', async () => {
     const user = setup();
     const api = fakeApi({ states: [{ ok: true, state: 'idle' }, WAITING, { ok: true, state: 'failed', message: 'the request was denied in the relay console: nothing was stored' }] });

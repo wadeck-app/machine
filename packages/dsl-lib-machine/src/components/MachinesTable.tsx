@@ -3,8 +3,10 @@ import { ButtonAction, DataTable, Markdown, type TableColumn } from '@wadeck-app
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
+import { CellText, WrapText } from './CellText.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { RevokeMachineDialog } from './RevokeMachineDialog.js';
+import { useFocusReturn } from './useFocusReturn.js';
 
 /** One row of the Machines list, as the module backend answers it. */
 export type MachineTableRow = {
@@ -35,21 +37,26 @@ export interface MachinesTableProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
-// Four columns, then one narrow column for the action: a word is never cut (the cells that must not wrap say so), and the Revoke button stays in view at 1024 px.
+// Four columns, then one narrow column for the action: whatever the text, Revoke stays in view (no sideways scroll, UX review 4). The name and the aliases are one line cut
+// at a fixed width (the whole text is the tooltip and in the row details); Reachable is the column that gives way: its short headline wraps at its spaces, never in a word.
 // The UUID (36 characters), "Receives notices" and "Notice list held" are in the row details: as columns they made the table scroll sideways.
 const EXPANSION = { $type: 'MachineDetails' };
 const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
-  { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
+  { key: 'name', label: 'Name', nowrap: true, render: (r) => <CellText text={r.name} width="max-w-40" /> },
   { key: 'role', label: 'Role', nowrap: true, render: (r) => r.role },
-  { key: 'aliasesText', label: 'Aliases', nowrap: true, render: (r) => r.aliasesText ?? '' },
-  // A headline that never wraps; the daemon's whole sentence is in the row details.
-  { key: 'reachable', label: 'Reachable', nowrap: true, render: (r) => splitHeadline(r.reachable ?? '').headline },
+  { key: 'aliasesText', label: 'Aliases', nowrap: true, render: (r) => <CellText text={r.aliasesText ?? ''} width="max-w-40" /> },
+  // A headline that wraps at its spaces; the daemon's whole sentence is in the row details.
+  { key: 'reachable', label: 'Reachable', render: (r) => <WrapText text={splitHeadline(r.reachable ?? '').headline} /> },
 ];
 
-// The row details: the uuid, the whole reachability sentence when the cell shows only its headline, and the notice columns that are not in the table (an empty value is not listed).
+// The row details: the whole name and aliases (the cells are cut), the uuid, the whole reachability sentence when the cell shows only its headline, and the notice columns
+// that are not in the table (an empty value is not listed).
 function detailsText(row: MachineTableRow): string {
   const { detail } = splitHeadline(row.reachable ?? '');
-  const lines = [`- uuid: ${row.uuid}`];
+  const lines = [`- name: ${row.name}`, `- uuid: ${row.uuid}`];
+  if ((row.aliasesText ?? '') !== '') {
+    lines.push(`- aliases: ${row.aliasesText ?? ''}`);
+  }
   if (detail !== '') {
     lines.push(`- reachable: ${row.reachable ?? ''}`);
   }
@@ -72,6 +79,9 @@ function detailsText(row: MachineTableRow): string {
 export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceErrors, onRefresh }: MachinesTableProps) {
   const [selected, setSelected] = useState<MachineTableRow | null>(null);
   const api = useRef<AllowApi | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // The dialog gives the focus back to the Revoke button that opened it (to the list when the row is gone), never to the page body.
+  const focus = useFocusReturn(root, rows);
   api.current ??= shellAllowApi();
 
   const columns: Array<TableColumn<MachineTableRow>> = [
@@ -90,7 +100,7 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
 
   const failure = sourceErrors?.['machines'];
   return (
-    <>
+    <div ref={root} tabIndex={-1} data-testid="machines-root" className="focus:outline-none">
       {failure !== undefined && <SourceFailureNotice source="machines" error={failure} onRefresh={onRefresh} />}
       {/* A failed load with nothing to show is the alert above, never the empty message. */}
       {(failure === undefined || rows.length > 0) && (
@@ -106,12 +116,15 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
         <RevokeMachineDialog
           row={selected}
           api={api.current}
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            focus.leave(`Revoke ${selected.name}`);
+            setSelected(null);
+          }}
           onRevoked={() => {
             void onRefresh?.('machines');
           }}
         />
       )}
-    </>
+    </div>
   );
 }

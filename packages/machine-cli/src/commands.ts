@@ -14,6 +14,7 @@ import { answerOf, reachabilityOnce, type ReachabilityAnswer } from './reachabil
 import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { approveContext, importCandidate, type ImportCandidateAnswer } from './candidateImport.js';
 import { approveDistribute, type ApproveDistributeAnswer } from './approveDistribute.js';
+import { retryDelivery, type RetryDeliveryAnswer } from './deliveryRetry.js';
 import { revokeApply, revokeContext, type RevokeApplyAnswer } from './revokeFromPage.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
@@ -303,6 +304,14 @@ export function makeCommands(configDir: string, version: string | (() => string)
 
     revokeApply(payload?: unknown): Promise<RevokeApplyAnswer> {
       return revokeApply(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * Retry delivery (admin-ui.md): sends again the documents an approval or a revocation from the page could not store. They are the ones the page signed and this daemon
+     * verified, kept in memory only (never on disk), verified again here. No passphrase, nothing signed; lost when the daemon restarts (then `machine admin distribute`).
+     */
+    retryDelivery(payload?: unknown): Promise<RetryDeliveryAnswer> {
+      return retryDelivery(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
     },
 
     /**

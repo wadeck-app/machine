@@ -124,6 +124,10 @@ Behaviour to know:
 - Before the passphrase the dialog is one line ("Enrolls <name>: ..."), warnings, a folded "Details" (name, hostname, uuid, seen from, validity, who is told, the candidacy-code check) and the passphrase field; the key hint is the field description. The table keeps Name, Age, Status and the actions (hostname and address are in the row expansion) so no word is cut.
 - "Codes match" only records the comparison on this page; the decisive confirmation (pinning the admin key) is made on the candidate (`machine join` shows its own code and asks to confirm). The sentence sits next to the code, in the dialog and when read again.
 - The relay purges the candidacy random once approved, so the code cannot be recomputed later. The page posts it right after the approval (`POST /approval-codes`, write route, public value) to `<configDir>/approval-codes.json` (module state, no daemon or relay change): kept 7 days, newest 20, one per machine. It is listed under the table ("Show security code: <name> (approved <age> ago)") and written on the step "Security code compared" of the followed approved candidacy. A refusal to keep it is shown in the dialog (the code stays on screen); a damaged file is reported on the page with the fix, never hides the list.
+- Retry delivery (no passphrase): `POST /delivery-retry`, body exactly `{ uuid }` (the subject of `approveDistribute` / `revokeApply`), answers the same shape as the delivery it finishes (`DistributeAnswer`, ALL machines told; one delivered earlier stays delivered).
+- The daemon keeps in MEMORY only (`deliveryRetry.ts`, never on disk) the documents not stored by the last run, one entry per subject, newest replaces older; a run that stored everything drops it. A restart loses them: `nothing-retained` (409) names `machine admin distribute <uuid>`, which asks the passphrase.
+- Safe: only documents the daemon already verified against the pinned admin key (verified again, expiry included, before every retry); nothing is signed, so hard rule 4 is unaffected. An expired kept document is `bad-document` (422) with the CLI command.
+- Never retried: documents the page did not send. They stay failures in every report, with the CLI command. A revocation also retries the removal of the revoked machine from the relay.
 
 ## Revoke from the page (status: built)
 
@@ -178,6 +182,16 @@ Gaps of the standard `Dialog` closed by dsl-ui 413: inner scroll inside the view
 - Machines alone on the network: card "No other machine yet. Run `machine join` on the new machine, ..." (`nextStep`); the subtitle is one sentence and no text names the daemon.
 - Machines: the "presence not shown yet" note is a muted small `Text` under the title, not a Card; its sentence has no markup.
 
+## UX review 4 fixes (2026-11-28)
+
+- Actions never leave the view: Machines name and aliases, Candidacies name are one line cut at a fixed width (`CellText`: `truncate max-w-*`, the whole text is the tooltip and the first lines of the row expansion); Reachable and Status are the columns that give way (`WrapText`: wrap at spaces, `break-normal`, never in a word). Checked at 1024 px in a real browser with 60-85 character names: no horizontal scroll, buttons inside the viewport. The timeline column is `w-44` below 1280 px.
+- Focus: a dialog opened from a row gives the focus back to its button (found again by accessible name), or to the list when the row is gone after a reload (`useFocusReturn`; the Dialog of dsl-ui cannot do it for dialogs mounted on open).
+- Commands in prose wrap at spaces (`break-words`, not `break-all`).
+- Status of a candidacy with a problem says why (`Cannot be approved: expired`, `lib/problemHeadline.ts`). An expired candidacy has NO Reject: the relay drops it and answers 404 to a decision on it (poc-node `store.js` `getCandidacy` purges, `decideCandidacy` refuses), so there is nothing to dismiss; the row expansion says so.
+- The retry command is said once, folded under "Run it in a terminal instead" with Copy; headlines and the raw report no longer carry it. "Retry delivery" is the first action of a partial or failed result (see "Result and progress UX"); for an approval whose first delivery never reached the daemon (`failed`) the page re-posts the same signed documents, it still holds them.
+- The relay console address of the login panel is a link (`target=_blank`, `rel=noopener noreferrer`), only for http(s): any other scheme stays text.
+- The alert of the signing dialog has a reserved slot (`min-h-16`), so the buttons do not jump when it appears.
+
 ## A failed source: three cases (2026-11-28)
 
 A failing source is not always our bug and the page offers an action before it asks for a terminal. `machine:SourceFailureNotice` (`lib/loadFailure.ts` decides) is used by every page: Candidacies and Machines (tables), Requests (`RequestsOverview`, sources `requests` and `machines`), Allowed (`AllowedList`), Activity (`ActivityLog`, which reads its route itself). Each page YAML passes `sourceErrors: $ctx.$sourceErrors`: a page that reads it gets no generic shell toast (app-core e2b6528). `viewSourceErrors.test.ts` fails when a view is not listed, a source is not read, or its route differs from `SOURCE_ROUTES`.
@@ -205,7 +219,7 @@ Feasible and built. The daemon runs the same console login as `machine admin log
 
 ### Scenarios
 
-`relay-error-503` is the not-configured state with a working login (the mock admin confirms after 8 s, then the list loads: `commons/adminLoginMock.ts`); `relay-unreachable-502` shows case 3; `internal-error-500` (new) shows case 1. Requests, Allowed and Activity have no scenarios.
+`relay-error-503` is the not-configured state with a working login (the mock admin confirms after 8 s, then the list loads: `commons/adminLoginMock.ts`); `relay-unreachable-502` shows case 3; `internal-error-500` (new) shows case 1. GAP (not built): Requests, Allowed and Activity have no scenarios, so their layouts (tables, long texts, states) cannot be shown without a real daemon; the failure notice is covered by unit tests only.
 
 ### Not verifiable without a real browser and relay
 

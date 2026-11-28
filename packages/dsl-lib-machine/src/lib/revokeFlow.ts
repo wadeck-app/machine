@@ -1,7 +1,8 @@
 import { buildRevocation, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
 import type { RevocationEntry, SignedNoticeRecipients, SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinnedKey, readKeyFile, trackSigning, type AllowApi } from './allowFlow.js';
-import { dedupeReport, describeDelivery, type DeliveryMachine, type DeliverySummary } from './approvalResult.js';
+import { dedupeReport, describeDelivery, isDeliveryMachine, type DeliveryMachine, type DeliverySummary } from './approvalResult.js';
+import { postDeliveryRetry, type DeliveryAnswer } from './deliveryRetry.js';
 
 // Revoke from the page without React (admin-ui.md, "Revoke from the page"; threat-model.md). What `machine admin revoke <machine>` does, with the admin passphrase and the
 // unlocked key living ONLY in this page and for ONE revocation:
@@ -66,11 +67,18 @@ export interface RevokeDistribution extends DeliverySummary {
   text: string;
   /** One entry per peer told, plus the revoked machine when it could not be removed from the relay (empty when `none`). */
   machines: DeliveryMachine[];
+  /** `machine admin distribute <uuid>`: the terminal way to finish the job (it asks the admin passphrase). Said once, folded, never in the headline. */
+  retryCommand: string;
 }
 
 export interface RevokeResult {
   name: string;
   distribution: RevokeDistribution;
+  /**
+   * Sends again what was not delivered, WITHOUT the passphrase (nothing is signed again; the revocation stands): resolves with the new report. Present only when the delivery
+   * is `partial`. Rejects with the sentence of whoever refused (the daemon holds nothing to retry any more, no admin relay token ...).
+   */
+  retryDelivery?: () => Promise<RevokeDistribution>;
 }
 
 export interface RevokeHooks {
@@ -120,40 +128,34 @@ async function signAndRevokeNow(api: AllowApi, context: RevokeContext, passphras
       `the module backend sent an unexpected answer for the revocation (the list of machines is missing: an older module or daemon): the page and the module are not the same version. "${revoked.name}" may already be revoked on this machine: reload the Machines page to see whether it is still listed, update the machine module (\`app-core-cli update\`), then run \`${retry}\` in a terminal to tell the other machines`,
     );
   }
-  const machines = answer['machines'];
   const buildNotes = built.failures.map((f) => `[error] ${f.toName} (${f.toUuid}): ${f.kind} document not built: ${f.message}`);
-  const lines = [
-    answer['text']['out'].trimEnd(),
-    ...buildNotes,
-    answer['text']['err'].trimEnd(),
-    ...(buildNotes.length > 0 && !answer['failed'] ? [`[warn] the revocation stands: nothing was undone. Run \`${retry}\` to send what is missing; it is safe to run again`] : []),
-  ].filter((l) => l !== '');
+  const distribution = distributionOf({ failed: answer['failed'], text: { out: answer['text']['out'], err: answer['text']['err'] }, machines: answer['machines'], retry: typeof answer['retry'] === 'string' ? answer['retry'] : retry }, revoked, retry, buildNotes);
+  if (distribution.status !== 'partial') {
+    return { name: revoked.name, distribution };
+  }
+  // The daemon holds what is left (in memory) and sends it again; the passphrase is not asked again.
+  return { name: revoked.name, distribution, retryDelivery: async () => distributionOf(await postDeliveryRetry(api, revoked.uuid), revoked, retry, []) };
+}
+
+/** The report of the daemon as the dialog shows it; `buildNotes` are the documents the page could not build (they stay failures: only a signature can make them). */
+function distributionOf(answer: DeliveryAnswer, revoked: { uuid: string; name: string }, retry: string, buildNotes: string[]): RevokeDistribution {
+  const { machines } = answer;
+  const stands = buildNotes.length > 0 && !answer.failed ? ['[warn] the revocation stands: nothing was undone. A document could not be built in this page: only the terminal command can send it; it is safe to run again'] : [];
+  const lines = [answer.text.out.trimEnd(), ...buildNotes, answer.text.err.trimEnd(), ...stands].filter((l) => l !== '');
   const text = dedupeReport(lines.join('\n'));
-  const failed = answer['failed'] || buildNotes.length > 0;
+  const failed = answer.failed || buildNotes.length > 0;
 
   // The revoked machine is not told anything: it is in the list only when it could not be removed from the relay.
   const told = machines.filter((m) => m.uuid !== revoked.uuid);
   const notRemoved = machines.some((m) => m.uuid === revoked.uuid && m.state === 'failed');
   if (told.length === 0 && !failed && !notRemoved) {
-    return { name: revoked.name, distribution: { status: 'none', text, machines, headline: 'No other machine to tell.', tone: 'success', waiting: 0 } };
+    return { status: 'none', text, machines, headline: 'No other machine to tell.', tone: 'success', waiting: 0, retryCommand: retry };
   }
   if (told.length === 0) {
-    return { name: revoked.name, distribution: { status: 'partial', text, machines, headline: `"${revoked.name}" was not removed from the relay. Run \`${retry}\`.`, tone: 'warning', waiting: 0 } };
+    return { status: 'partial', text, machines, headline: `"${revoked.name}" was not removed from the relay.`, tone: 'warning', waiting: 0, retryCommand: retry };
   }
   const status = failed ? 'partial' : 'delivered';
-  const summary = describeDelivery(status, told, retry);
+  const summary = describeDelivery(status, told);
   const headline = notRemoved ? `${summary.headline} "${revoked.name}" was not removed from the relay.` : summary.headline;
-  return { name: revoked.name, distribution: { status, text, machines, headline, tone: notRemoved && summary.tone === 'success' ? 'warning' : summary.tone, waiting: summary.waiting } };
-}
-
-function isDeliveryMachine(value: unknown): value is DeliveryMachine {
-  return (
-    isObject(value) &&
-    typeof value['uuid'] === 'string' &&
-    typeof value['name'] === 'string' &&
-    (value['state'] === 'delivered' || value['state'] === 'inbox' || value['state'] === 'failed') &&
-    typeof value['code'] === 'string' &&
-    typeof value['reason'] === 'string' &&
-    typeof value['next'] === 'string'
-  );
+  return { status, text, machines, headline, tone: notRemoved && summary.tone === 'success' ? 'warning' : summary.tone, waiting: summary.waiting, retryCommand: retry };
 }

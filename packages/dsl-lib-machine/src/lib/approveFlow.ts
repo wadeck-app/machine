@@ -2,6 +2,7 @@ import { buildApproval, buildDistribution, unlockAdminKey } from '@wadeck-app/ma
 import type { SignedNoticeRecipients, SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinnedKey, readKeyFile, trackSigning, type AllowApi } from './allowFlow.js';
 import { dedupeReport, describeDelivery, type DeliveryMachine, type DeliverySummary } from './approvalResult.js';
+import { postDeliveryRetry, readDeliveryAnswer, type DeliveryAnswer } from './deliveryRetry.js';
 import { proveCandidacy } from './candidacyProof.js';
 
 // Approve from the page without React (admin-ui.md, "Approve from the page"; threat-model.md). What `machine admin approve <id>` does, with the admin
@@ -129,6 +130,8 @@ export interface ApproveDistribution extends DeliverySummary {
   text: string;
   /** One entry per machine told: state, cause code, one short reason, one next action (empty when `none` or `failed`). */
   machines: DeliveryMachine[];
+  /** `machine admin distribute <uuid>`: the terminal way to finish the job (it asks the admin passphrase). Said once, folded, never in the headline. */
+  retryCommand: string;
 }
 
 export interface ApproveResult {
@@ -136,6 +139,11 @@ export interface ApproveResult {
   finalCode: string;
   message: string;
   distribution: ApproveDistribution;
+  /**
+   * Sends again what was not delivered, WITHOUT the passphrase (nothing is signed again): resolves with the new report. Present only when the delivery is `partial` or
+   * `failed`. Rejects with the sentence of whoever refused (the daemon holds nothing to retry any more, no admin relay token ...).
+   */
+  retryDelivery?: () => Promise<ApproveDistribution>;
 }
 
 export interface ApproveHooks {
@@ -207,49 +215,50 @@ async function signAndApproveNow(api: AllowApi, context: ApproveContext, row: Ap
   hooks.onApproved?.(built.finalCode);
 
   if (documents === undefined) {
-    return { finalCode: built.finalCode, message, distribution: { status: 'none', text: 'No other machine to inform: this is the first machine of the network.', machines: [], ...describeDelivery('none', [], retryCommand(uuid)) } };
+    return { finalCode: built.finalCode, message, distribution: { status: 'none', text: 'No other machine to inform: this is the first machine of the network.', machines: [], retryCommand: retryCommand(uuid), ...describeDelivery('none', []) } };
   }
   const buildNotes = documents.failures.map((f) => `[error] ${f.toName} (${f.toUuid}): ${f.kind} document not built: ${f.message}`);
+  const body = { candidateUuid: uuid, documents: documents.documents, noticeRecipients: documents.noticeRecipients };
   const retry = retryCommand(uuid);
-  try {
-    const answer = await api.post('/approve-distribute', { candidateUuid: uuid, documents: documents.documents, noticeRecipients: documents.noticeRecipients });
-    if (!isObject(answer) || !isObject(answer['text']) || typeof answer['text']['out'] !== 'string' || typeof answer['text']['err'] !== 'string' || typeof answer['failed'] !== 'boolean' || typeof answer['retry'] !== 'string') {
-      throw unexpected('the delivery of the documents');
-    }
-    const machines = answer['machines'];
-    if (!Array.isArray(machines) || !machines.every(isDeliveryMachine)) {
-      throw unexpected('the delivery of the documents (the list of machines is missing: an older module or daemon)');
-    }
-    const out = answer['text']['out'];
-    const err = answer['text']['err'];
-    const failed = answer['failed'] || buildNotes.length > 0;
-    const lines = [out.trimEnd(), ...buildNotes, err.trimEnd(), ...(buildNotes.length > 0 && !answer['failed'] ? [`[warn] the approval stands: nothing was undone. Run \`${retry}\` to send what is missing; it is safe to run again`] : [])].filter((l) => l !== '');
-    const status = failed ? 'partial' : 'delivered';
-    return { finalCode: built.finalCode, message, distribution: { status, text: dedupeReport(lines.join('\n')), machines, ...describeDelivery(status, machines, answer['retry']) } };
-  } catch (e) {
-    return {
-      finalCode: built.finalCode,
-      message,
-      distribution: {
+  // The documents are signed and sealed (no secret): the page keeps them for the dialog's lifetime, so a delivery the daemon could not even be asked can be sent again.
+  const deliver = async (): Promise<ApproveDistribution> => {
+    try {
+      const answer = readDeliveryAnswer(await api.post('/approve-distribute', body));
+      if (answer === undefined) {
+        throw unexpected('the delivery of the documents (the list of machines is missing: an older module or daemon)');
+      }
+      return distributionOf(answer, buildNotes, retry);
+    } catch (e) {
+      return {
         status: 'failed',
-        text: `[error] the other machines were NOT told about "${row.name}": ${(e as Error).message}\n[warn] the approval stands: nothing was undone. Run \`${retry}\` on this machine to tell them; it is safe to run again`,
+        text: `[error] the other machines were NOT told about "${row.name}": ${(e as Error).message}\n[warn] the approval stands: nothing was undone. Retry the delivery, or run the terminal command: it is safe to run again`,
         machines: [],
-        ...describeDelivery('failed', [], retry),
-      },
-    };
+        retryCommand: retry,
+        ...describeDelivery('failed', []),
+      };
+    }
+  };
+  const distribution = await deliver();
+  if (distribution.status === 'delivered') {
+    return { finalCode: built.finalCode, message, distribution };
   }
+  // `failed`: the daemon never held the documents, the page sends them again. `partial`: the daemon holds what is left (in memory) and sends it again.
+  // The state moves with each attempt: a first `failed` that becomes `partial` (the daemon now holds what is left) is retried through the daemon from then on.
+  let current = distribution;
+  const retryDelivery = async (): Promise<ApproveDistribution> => {
+    current = current.status === 'failed' ? await deliver() : distributionOf(await postDeliveryRetry(api, uuid), [], retry);
+    return current;
+  };
+  return { finalCode: built.finalCode, message, distribution, retryDelivery };
 }
 
-function isDeliveryMachine(value: unknown): value is DeliveryMachine {
-  return (
-    isObject(value) &&
-    typeof value['uuid'] === 'string' &&
-    typeof value['name'] === 'string' &&
-    (value['state'] === 'delivered' || value['state'] === 'inbox' || value['state'] === 'failed') &&
-    typeof value['code'] === 'string' &&
-    typeof value['reason'] === 'string' &&
-    typeof value['next'] === 'string'
-  );
+/** The report of the daemon as the dialog shows it; `buildNotes` are the documents the page could not build (they stay failures: only a signature can make them). */
+function distributionOf(answer: DeliveryAnswer, buildNotes: string[], retry: string): ApproveDistribution {
+  const failed = answer.failed || buildNotes.length > 0;
+  const stands = buildNotes.length > 0 && !answer.failed ? ['[warn] the approval stands: nothing was undone. A document could not be built in this page: only the terminal command can send it; it is safe to run again'] : [];
+  const lines = [answer.text.out.trimEnd(), ...buildNotes, answer.text.err.trimEnd(), ...stands].filter((l) => l !== '');
+  const status = failed ? 'partial' : 'delivered';
+  return { status, text: dedupeReport(lines.join('\n')), machines: answer.machines, retryCommand: retry, ...describeDelivery(status, answer.machines) };
 }
 
 /**

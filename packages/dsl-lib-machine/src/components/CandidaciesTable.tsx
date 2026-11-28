@@ -4,12 +4,14 @@ import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { overlayApproval, type ApprovalProgress } from '../lib/approvalTimeline.js';
 import type { ApproveRow } from '../lib/approveFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
-import { splitHeadline } from '../lib/statusHeadline.js';
+import { statusHeadlineOf } from '../lib/problemHeadline.js';
+import { CellText, WrapText } from './CellText.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
 import { CodeText, CommandNotice } from './CommandNotice.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { RejectCandidacyDialog } from './RejectCandidacyDialog.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
+import { useFocusReturn } from './useFocusReturn.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
 /** One row of the Candidacies list, as the module backend answers it. */
@@ -57,21 +59,32 @@ export interface CandidaciesTableProps {
 // What the page says when nothing is pending: the next step, not only the absence.
 export const NO_CANDIDACY = 'No pending candidacy. Run `machine join` on the new machine to enroll it.';
 
-// Four columns that fit at 1024 px: the name, the age and the buttons never wrap (a word is never cut), the status is the column that gives way: a short headline
-// that WRAPS at its spaces, so the buttons stay in view next to the timeline. The hostname and the address are in the row expansion, and the rest of a long status
-// (the problems of the candidacy) is the first line of the row expansion.
+// Four columns that fit at 1024 px, whatever the text (UX review 4): the name is one line cut at a fixed width (the whole name is its tooltip and the first line of the row
+// expansion), the age and the buttons never wrap, the status is the column that gives way: a short headline that WRAPS at its spaces and never inside a word, so the buttons
+// stay in view next to the timeline. The hostname and the address are in the row expansion, and the rest of a long status (the problems of the candidacy) too.
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
-  { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
+  { key: 'name', label: 'Name', nowrap: true, render: (r) => <CellText text={r.name} width="max-w-32" /> },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
-  { key: 'statusText', label: 'Status', render: (r) => splitHeadline(r.statusText).headline },
+  { key: 'statusText', label: 'Status', render: (r) => <WrapText text={statusHeadlineOf(r)} /> },
 ];
 
 // The same rule as the details of the row expansion: never empty, markdown of the module.
 const EXPANSION = { $type: 'CandidacyDetails' };
 
-// The row expansion: the status sentence when the cell shows only its headline, then the details of the module.
+// Why an expired candidacy has no Reject: the relay drops a candidacy when it expires and answers 404 to a decision on it (poc-node lib/machines/store.js, getCandidacy), so
+// there is nothing to reject; the candidate posts a new one.
+const NOTHING_TO_REJECT = '- Nothing to reject: the relay drops an expired candidacy and refuses a decision on it. The candidate runs `machine join --resume` to post a new one.';
+
+// The row expansion: the whole name (the cell cuts it), the status sentence when the cell shows only its headline, then the details of the module.
 function expansionText(row: CandidacyTableRow): string {
-  return splitHeadline(row.statusText).detail === '' ? row.bindingText : `- status: ${row.statusText}\n${row.bindingText}`;
+  const lines = [`- name: ${row.name}`];
+  if (statusHeadlineOf(row) !== row.statusText) {
+    lines.push(`- status: ${row.statusText}`);
+  }
+  if (!row.canDecide && row.problems.some((p) => /is expired/.test(p))) {
+    lines.push(NOTHING_TO_REJECT);
+  }
+  return `${lines.join('\n')}\n${row.bindingText}`;
 }
 
 /**
@@ -88,6 +101,9 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
   // The candidacy whose rejection waits for the person's confirmation (a dialog that names it).
   const [rejecting, setRejecting] = useState<CandidacyTableRow | null>(null);
   const latest = useRef<ApprovalProgress | undefined>(undefined);
+  const root = useRef<HTMLDivElement>(null);
+  // A dialog gives the focus back to the button that opened it (to the list when the row is gone), never to the page body.
+  const focus = useFocusReturn(root, rows);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
 
@@ -96,6 +112,9 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
     setProgress(next);
   };
   const close = () => {
+    if (selected !== null) {
+      focus.leave(`Approve ${selected.name}`);
+    }
     setSelected(null);
     // The relay holds the approval: the list catches up (the candidacy leaves the pending ones). A failure is reported by the page's notifier.
     if (latest.current?.approved === true) {
@@ -131,9 +150,9 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
   // No candidacy: five steps to do that follow nobody say nothing. The timeline appears with the candidacy it follows.
   const steps = timeline === undefined || rows.length === 0 ? undefined : overlayApproval(timeline, progress);
   return (
-    <div className="flex items-start gap-4">
+    <div ref={root} tabIndex={-1} data-testid="candidacies-root" className="flex items-start gap-4 focus:outline-none">
       {steps !== undefined && steps.length > 0 && (
-        <div className="w-52 shrink-0">
+        <div className="w-44 shrink-0 xl:w-52">
           <VerticalTimeline steps={steps} />
         </div>
       )}
@@ -171,9 +190,13 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
       {rejecting !== null && (
         <RejectCandidacyDialog
           name={rejecting.name}
-          onCancel={() => setRejecting(null)}
+          onCancel={() => {
+            focus.leave(`Reject ${rejecting.name}`);
+            setRejecting(null);
+          }}
           onConfirm={() => {
             const row = rejecting;
+            focus.leave(`Reject ${row.name}`);
             setRejecting(null);
             reject(row);
           }}

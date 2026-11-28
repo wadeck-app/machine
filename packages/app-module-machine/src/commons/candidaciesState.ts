@@ -15,6 +15,7 @@ import type {
   SignedRegistrationWire,
   TimelineStepRow,
 } from './routeContracts.js';
+import { nothingRetained, retriedAnswer, retryUuid } from './deliveryRetryMock.js';
 
 // The pure state machine of the Candidacies page: what the relay and the daemon of the admin machine hold, and what every route of the page answers from it. No
 // React, no Node API, no import of another package (the mock of the page runs it in the browser). Every function takes the state and returns a NEW state with the
@@ -73,6 +74,8 @@ export interface CandidaciesState {
   timelineSteps: Array<{ id: string; title: string; info: string }>;
   /** The answer of `POST /approve-distribute`, by uuid of the approved machine: what the scenario plans for the delivery. */
   distributions: Record<string, DistributeAnswer>;
+  /** MOCK memory of the daemon: the machines (uuid) whose planned delivery failed, so their documents are still to send again. Absent in a seed; set by `POST /approve-distribute`. */
+  retained?: Record<string, true>;
 }
 
 export interface Step<T> {
@@ -381,7 +384,20 @@ export function distribute(state: CandidaciesState, body: DistributeRequest): St
   const planned = state.distributions[candidateUuid];
   // MOCK: a scenario that plans no delivery fails loudly instead of inventing one.
   if (planned === undefined) return refuse(502, 'mock_no_delivery', `the mock scenario plans no delivery for machine ${candidateUuid}: add its answer to "distributions" of the seed`);
-  return { state, answer: ok(planned) };
+  // The daemon keeps the documents of a delivery that failed (in memory) for the retry; a delivery that did not fail leaves nothing.
+  const { [candidateUuid]: _forgotten, ...others } = state.retained ?? {};
+  const retained = planned.failed ? { ...others, [candidateUuid]: true as const } : others;
+  return { state: { ...state, retained }, answer: ok(planned) };
+}
+
+/** `POST /delivery-retry`: the first retry after a failed delivery delivers everything; with nothing retained the daemon refuses (409, same words). */
+export function retryDelivery(state: CandidaciesState, body: unknown): Step<DistributeAnswer> {
+  const parsed = retryUuid(body);
+  if (!('uuid' in parsed)) return { state, answer: parsed };
+  const planned = state.distributions[parsed.uuid];
+  if (planned === undefined || state.retained?.[parsed.uuid] !== true) return { state, answer: nothingRetained(parsed.uuid) };
+  const { [parsed.uuid]: _delivered, ...rest } = state.retained;
+  return { state: { ...state, retained: rest }, answer: ok(retriedAnswer(planned)) };
 }
 
 /** Moves the clock: ages grow, a candidacy can expire, a kept code can be forgotten. */

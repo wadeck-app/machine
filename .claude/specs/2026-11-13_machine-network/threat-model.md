@@ -241,6 +241,8 @@ No `Open` threat ships with it (hard rule 10).
 | Security code (lot 6) | Shown only after the relay accepted the approval, computed in the page (checked equal to the pre-signing value); the dialog tells what to run when it differs (`machine admin revoke <name>`). "Codes match" is the admin's assertion, the only thing that marks the timeline step done |
 | Not covered | The admin machine renewing itself while it has peers is refused by the page (needs `distributeAdminRenewal`); the first-machine approval (`adminImport` null) is accepted only when the daemon says the candidate is the admin machine itself. Documents are sent right after the approval and BEFORE the human compares the codes (same order as the CLI): if the codes differ, revoke distributes the revocation |
 
+**Retry delivery (built).** `POST /delivery-retry` is `sensitive` + module header, body exactly `{ uuid }`: it carries no document, no passphrase and signs nothing. The daemon sends again only documents it verified against the PINNED key before (approval, revocation), keeps them in memory only (never on disk, lost on restart) and verifies them again, expiry included, before each retry: no right is widened (rule 4), and a caller gains only a re-send of what the admin already decided (idempotent: ids come from the documents).
+
 Constraints that still bind lots 5 and 6:
 
 | Point | Required |

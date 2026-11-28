@@ -22,7 +22,8 @@ import { adminKeyFile, readAdminPin } from './admin.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { deliveryMachines, type DeliveryMachine } from './deliveryMachines.js';
 import type { DirectDelivery } from './directDelivery.js';
-import { adminRelayAccess, emptyReport, formatDistribution, put, putNoticeDocument, removeRevokedFromRelay, type DeliveryContext, type DistributionReport } from './distribute.js';
+import { deliverItem, keepForRetry, type RetainedItem } from './deliveryRetry.js';
+import { adminRelayAccess, emptyReport, formatDistribution, removeRevokedFromRelay, type DeliveryContext, type DistributionFailure, type DistributionReport } from './distribute.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { installedRevocations, installRevocation, loadNetwork, registeredSerial, revocationState, trustedRegistrations } from './network.js';
@@ -271,14 +272,38 @@ export async function revokeApply(
   const report = emptyReport();
   report.machines = recipients.length;
   const told = recipients.map((r) => ({ uuid: r.body.uuid, name: r.body.name }));
-  const finish = (): RevokeApplyAnswer => {
+  const subjectOf = { uuid, name: peer.name };
+  // What the page did not send: no retry can fix it, it stays a failure with the CLI command in every report.
+  const notSent: DistributionFailure[] = [];
+  // The documents to deliver, in the order of delivery (revocations, then lists).
+  const items: RetainedItem[] = [];
+  for (const [key, want] of expected) {
+    const document = received.get(key);
+    if (document === undefined) {
+      notSent.push({
+        toUuid: want.to.uuid,
+        toName: want.to.name,
+        kind: want.kind,
+        id: undefined,
+        message: `the page did not send the ${want.kind === 'revocation' ? 'revocation' : 'notice recipients'} document for this machine (it could not be built, or it was dropped): it was not delivered`,
+      });
+    } else {
+      items.push(want.kind === 'notice-recipients' ? { to: want.to, kind: 'notice-recipients', document, noticeList } : { to: want.to, kind: 'revocation', document });
+    }
+  }
+  // What is not stored after this run (failed, or not attempted after an abort): kept in memory for `retryDelivery`.
+  const remaining: RetainedItem[] = [];
+  // A failure of this machine that a retry cannot fix (the list of notice recipients could not be kept here).
+  const kept: DistributionFailure[] = [];
+  const finish = (removalPending: boolean): RevokeApplyAnswer => {
     const text = formatDistribution(report, 'the revocation', retry);
     const machines = deliveryMachines(report, told, retry);
     // The revoked machine is not told anything: it appears only when it could not be removed from the relay.
     if (report.failures.some((f) => f.toUuid === uuid)) {
       machines.push({ uuid, name: peer.name, state: 'failed', code: 'not-stored', reason: 'not removed from the relay', next: `run \`${retry}\`` });
     }
-    return { ok: true, revoked: { uuid, name: peer.name }, failed: text.failed, report, text: { out: text.out, err: text.err }, machines, retry };
+    keepForRetry(configDir, { kind: 'revocation', subject: subjectOf, told, retry, items: remaining, persistent: [...notSent, ...kept], removal: removalPending ? subjectOf : undefined, machines });
+    return { ok: true, revoked: subjectOf, failed: text.failed, report, text: { out: text.out, err: text.err }, machines, retry };
   };
 
   const access = adminRelayAccess(configDir, options.client);
@@ -291,42 +316,41 @@ export async function revokeApply(
       id: undefined,
       message: `the revocation was NOT distributed: ${missingAdminTokenMessage(configDir, readRelayConfig(configDir)?.relayUrl)}`,
     });
-    return finish();
+    // Nothing was attempted: every document is kept, and so is the removal of the revoked machine.
+    remaining.push(...items);
+    return finish(true);
   }
 
   if (installNotices) {
     try {
       installNoticeRecipients(configDir, noticeList, pin.adminPublicKey);
     } catch (e) {
-      report.failures.push({ toUuid: self.uuid, toName: 'this machine', kind: 'notice-recipients', id: undefined, message: `the list of notice recipients could not be kept on this machine (${(e as Error).message})` });
+      const failure: DistributionFailure = { toUuid: self.uuid, toName: 'this machine', kind: 'notice-recipients', id: undefined, message: `the list of notice recipients could not be kept on this machine (${(e as Error).message})` };
+      report.failures.push(failure);
+      kept.push(failure);
     }
   }
 
   const sender: DeliveryContext = { client: access.client, adminUuid: self.uuid, now: () => now, configDir, ...(options.direct === undefined ? {} : { direct: options.direct }) };
-  // Same order as `distributeRevocation`: the revocation for each peer; the lists and the removal from the relay only when the relay is usable.
+  // Same order as `distributeRevocation`: the revocation for each peer, then the lists; the removal from the relay only when the relay is usable.
   let go = true;
-  for (const [key, want] of expected) {
-    if (want.kind !== 'revocation') continue;
-    const document = received.get(key);
-    if (document === undefined) {
-      report.failures.push({ toUuid: want.to.uuid, toName: want.to.name, kind: 'revocation', id: undefined, message: 'the page did not send the revocation document for this machine (it could not be built, or it was dropped): it was not delivered' });
+  for (const item of items) {
+    if (!go) {
+      remaining.push(item);
       continue;
     }
-    if (!go) continue;
-    go = await put(sender, report, want.to, 'revocation', () => document);
+    const sent = await deliverItem(sender, report, item);
+    go = sent.go;
+    if (!sent.stored) remaining.push(item);
   }
+  // The documents the page did not send are told: the revocations always, the lists only while the relay is usable (as before).
+  for (const f of notSent) {
+    if (f.kind === 'revocation' || go) report.failures.push(f);
+  }
+  let removalPending = true;
   if (go) {
-    for (const [key, want] of expected) {
-      if (want.kind !== 'notice-recipients') continue;
-      const document = received.get(key);
-      if (document === undefined) {
-        report.failures.push({ toUuid: want.to.uuid, toName: want.to.name, kind: 'notice-recipients', id: undefined, message: 'the page did not send the notice recipients document for this machine (it could not be built, or it was dropped): it was not delivered' });
-        continue;
-      }
-      if (!go) continue;
-      go = await putNoticeDocument(sender, report, want.to, noticeList, () => document);
-    }
     await removeRevokedFromRelay(access.client, report, uuid, peer.name);
+    removalPending = report.failures.some((f) => f.toUuid === uuid && f.kind === 'machine');
   }
-  return finish();
+  return finish(removalPending);
 }

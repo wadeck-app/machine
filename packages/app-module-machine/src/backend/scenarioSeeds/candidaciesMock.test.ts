@@ -29,7 +29,7 @@ const approveBody = (c: RelayCandidacy): ApproveRequest => ({
 const first = (name: string): RelayCandidacy => seed(name).candidacies[0] as RelayCandidacy;
 
 describe('the routes of the Candidacies page', () => {
-  it('answers exactly the ten routes the page calls, under the module prefix', () => {
+  it('answers exactly the eleven routes the page calls, under the module prefix', () => {
     expect(Object.keys(make('one-pending')).sort()).toEqual(
       [
         'GET /candidacies',
@@ -38,6 +38,7 @@ describe('the routes of the Candidacies page', () => {
         'POST /candidacies/:id/approve',
         'POST /candidacies/:id/reject',
         'POST /approve-distribute',
+        'POST /delivery-retry',
         'POST /approval-codes',
         'GET /admin-login',
         'POST /admin-login',
@@ -126,6 +127,38 @@ describe('the routes of the Candidacies page', () => {
     const out = call(routes, 'POST /approve-distribute', {}, body);
     expect(out.status).toBe(200);
     expect((out.body as DistributeAnswer).machines.map((m) => m.state)).toEqual(['inbox', 'delivered']);
+  });
+
+  it('POST /delivery-retry: after a failed delivery the first retry delivers everything (all machines told, none failed), then nothing is retained (409)', () => {
+    const routes = make('approve-result-failed');
+    const c = first('approve-result-failed');
+    const body = { candidateUuid: c.uuid, documents: [], noticeRecipients: null };
+    call(routes, 'POST /candidacies/:id/approve', { id: c.id }, approveBody(c));
+    const failed = call(routes, 'POST /approve-distribute', {}, body).body as DistributeAnswer;
+    expect([failed.failed, failed.machines.map((m) => m.state)]).toEqual([true, ['failed', 'failed']]);
+    const out = call(routes, 'POST /delivery-retry', {}, { uuid: c.uuid });
+    expect(out.status).toBe(200);
+    const answer = out.body as DistributeAnswer;
+    expect([answer.ok, answer.failed, answer.text.err]).toEqual([true, false, '']);
+    expect(answer.subject.uuid).toBe(c.uuid);
+    expect(answer.machines.map((m) => [m.name, m.state])).toEqual(failed.machines.map((m) => [m.name, 'inbox']));
+    expect(out.delayMs).toBeGreaterThan(0);
+    const again = call(routes, 'POST /delivery-retry', {}, { uuid: c.uuid });
+    expect([again.status, (again.body as ErrorBody).kind]).toEqual([409, 'nothing-retained']);
+    expect((again.body as ErrorBody).error).toContain(`machine admin distribute ${c.uuid}`);
+  });
+
+  it('POST /delivery-retry: nothing is retained before a failed delivery (a delivery that did not fail leaves nothing to retry), and the body is exactly { uuid }', () => {
+    const routes = make('approve-result-partial');
+    const c = first('approve-result-partial');
+    expect(call(routes, 'POST /delivery-retry', {}, { uuid: c.uuid }).status).toBe(409);
+    call(routes, 'POST /candidacies/:id/approve', { id: c.id }, approveBody(c));
+    call(routes, 'POST /approve-distribute', {}, { candidateUuid: c.uuid, documents: [], noticeRecipients: null });
+    expect(call(routes, 'POST /delivery-retry', {}, { uuid: c.uuid }).status).toBe(409);
+    for (const bad of [undefined, {}, { uuid: 'nope' }, { uuid: c.uuid, extra: 1 }]) {
+      const out = call(routes, 'POST /delivery-retry', {}, bad);
+      expect([out.status, (out.body as ErrorBody).kind]).toEqual([400, 'bad_request']);
+    }
   });
 
   it('a relay error seed fails every relay route with the error body of the real backend (503 / 502, the fix in the message)', () => {

@@ -6,6 +6,7 @@ import type { AdminLoginState } from '../../../../dsl-lib-machine/src/lib/adminL
 import type { AdminLoginAnswer } from '../../../../machine-cli/src/adminLoginFromPage.js';
 import type { ApproveDistributeAnswer } from '../../../../machine-cli/src/approveDistribute.js';
 import type { DeliveryMachine } from '../../../../machine-cli/src/deliveryMachines.js';
+import type { RetryDeliveryAnswer } from '../../../../machine-cli/src/deliveryRetry.js';
 import type { RecordedApproval } from '../approvalCodes.js';
 import type { CandidacyListView, SealedApprovalBody } from '../candidacies.js';
 import type { TimelineStepRow as RealTimelineStepRow } from '../candidacyTimeline.js';
@@ -19,6 +20,7 @@ import type {
   CandidacyView,
   DeliveryMachineWire,
   DistributeAnswer,
+  RetryDeliveryRequest,
   ErrorBody,
   SignedRegistrationWire,
   TimelineStepRow,
@@ -49,6 +51,10 @@ export type Checks = [
   Is<Into<PageDeliveryMachine, DeliveryMachineWire>>,
   Is<Into<DeliveryMachineWire, PageDeliveryMachine>>,
   Is<Into<Extract<ApproveDistributeAnswer, { ok: true }>, DistributeAnswer>>,
+  // The retry answers the same shape as the delivery it finishes: the page reads one type for both.
+  Is<Same<Extract<RetryDeliveryAnswer, { ok: true }>, Extract<ApproveDistributeAnswer, { ok: true }>>>,
+  Is<Into<Extract<RetryDeliveryAnswer, { ok: true }>, DistributeAnswer>>,
+  Is<Same<RetryDeliveryRequest, { uuid: string }>>,
   // The relay login started from the page: what the page reads is exactly what the daemon answers when it does not refuse (a refusal is an HTTP error).
   Is<Same<AdminLoginState, Extract<AdminLoginAnswer, { ok: true }>>>,
 ];

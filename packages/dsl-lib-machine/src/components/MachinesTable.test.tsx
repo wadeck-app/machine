@@ -1,5 +1,5 @@
 import { encryptAdminKey, generateSigningKeyPair, keyId, signRegistration as coreSignRegistration, type RegistrationBody } from '@wadeck-app/machine-core';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MachinesTable, type MachineTableRow } from './MachinesTable.js';
@@ -28,7 +28,7 @@ const registration = (m: { uuid: string; name: string; identity: { publicKey: st
 };
 
 const RETRY = `machine admin distribute ${LAPTOP.uuid}`;
-const answers: { context: unknown; revoke: unknown } = { context: undefined, revoke: undefined };
+const answers: { context: unknown; revoke: unknown; retry: unknown } = { context: undefined, revoke: undefined, retry: undefined };
 const contextOk = () => ({
   ok: true,
   adminMachine: SELF,
@@ -58,6 +58,7 @@ beforeEach(() => {
   calls = [];
   answers.context = contextOk();
   answers.revoke = revokeOk();
+  answers.retry = undefined;
   const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
     calls.push({ url, body, headers });
     if (url === `GET /api/modules/machine/revoke-context/${LAPTOP.uuid}`) {
@@ -68,6 +69,11 @@ beforeEach(() => {
     if (url === 'POST /api/modules/machine/revoke') {
       if (answers.revoke instanceof Error) throw answers.revoke;
       return answers.revoke;
+    }
+    if (url === 'POST /api/modules/machine/delivery-retry') {
+      if (answers.retry instanceof Error) throw answers.retry;
+      if (answers.retry === undefined) throw new Error('unexpected call POST /delivery-retry');
+      return answers.retry;
     }
     throw new Error(`unexpected call ${url}`);
   };
@@ -172,22 +178,41 @@ describe('Revoke', () => {
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
   }, 60_000);
 
-  it('a partial delivery: the failed machine says what to run (the exact command in code) and the raw report is open', async () => {
-    answers.revoke = revokeOk({
-      failed: true,
-      text: { out: '', err: `[error] server (x): revocation document not stored: relay down\n[warn] the revocation stands: nothing was undone. Run \`${RETRY}\`\n` },
-      machines: [{ uuid: SERVER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`${RETRY}\`` }],
-    });
+  const partial = () => revokeOk({
+    failed: true,
+    text: { out: '', err: `[error] server (x): revocation document not stored: relay down\n[warn] the revocation stands: nothing was undone. Run \`${RETRY}\`\n` },
+    machines: [{ uuid: SERVER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`${RETRY}\`` }],
+  });
+  const revokeAndSign = async () => {
     render(<MachinesTable rows={ROWS} onRefresh={vi.fn(async () => undefined)} />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
-    const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
+    return screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
+  };
+
+  it('a partial delivery: the headline says how many were not told (no command), the cause is open, Retry delivery is offered, the command is folded and said once', async () => {
+    answers.revoke = partial();
+    const dialog = await revokeAndSign();
     expect(within(dialog).getByText('Documents NOT delivered to 1 machine.')).toBeInTheDocument();
     expect(within(dialog).getByText('Failed')).toBeInTheDocument();
-    // The command is said ONCE (the headline), as code; the machine row does not repeat it.
-    expect(within(dialog).getAllByText(RETRY, { selector: '.font-mono' })).toHaveLength(1);
     expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Retry delivery' })).toBeInTheDocument();
+    // Said ONCE, and only when the person opens the folded section: not in the headline, the machine row or the open report.
+    expect(dialog.textContent).not.toContain(RETRY);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Run it in a terminal instead' }));
+    expect(within(dialog).getAllByText(RETRY)).toHaveLength(1);
+  }, 60_000);
+
+  it('Retry delivery sends the uuid ONLY to the daemon route (no passphrase, no key read again) and shows the new report', async () => {
+    answers.revoke = partial();
+    answers.retry = revokeOk({ machines: [{ uuid: SERVER.uuid, name: 'server', state: 'delivered', code: 'direct', reason: 'took the documents directly', next: 'nothing to do' }] });
+    const dialog = await revokeAndSign();
+    const before = calls.length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Retry delivery' }));
+    expect(await within(dialog).findByText('Documents delivered to 1 machine.')).toBeInTheDocument();
+    expect(calls.slice(before)).toEqual([{ url: 'POST /api/modules/machine/delivery-retry', body: { uuid: LAPTOP.uuid }, headers: { 'x-machine-module': '1' } }]);
+    expect(within(dialog).queryByRole('button', { name: 'Retry delivery' })).toBeNull();
   }, 60_000);
 
   it('a wrong passphrase is an alert in the dialog, nothing is posted, the dialog stays for another try and the list is not refreshed', async () => {
@@ -246,13 +271,47 @@ describe('Revoke', () => {
   }, 60_000);
 });
 
+describe('long names and aliases never hide Revoke (UX review 4, a)', () => {
+  const LONG_NAME = 'thinkcentre-workstation-office-2nd-floor-building-B-with-a-very-long-hostname-example';
+  const LONG_ALIASES = 'tc, think, office-workstation, second-floor-machine, tc-long-alias-example, another-long-alias';
+  const ROW: MachineTableRow = { ...ROWS[2]!, name: LONG_NAME, aliasesText: LONG_ALIASES, reachable: 'directly reachable' };
+
+  it('the name and the aliases are one line cut at a fixed width with the whole text as tooltip; the whole text is in the row details; Revoke stays in the row', async () => {
+    render(<MachinesTable rows={[ROWS[0]!, ROW]} />);
+    const row = tableRow(LONG_NAME);
+    for (const text of [LONG_NAME, LONG_ALIASES]) {
+      const cell = within(row).getByText(text);
+      expect(cell.className).toMatch(/ truncate |^truncate | truncate$/);
+      expect(cell.className).toMatch(/max-w-/);
+      expect(cell).toHaveAttribute('title', text);
+    }
+    expect(within(row).getByRole('button', { name: `Revoke ${LONG_NAME}` }).closest('td')?.className).toMatch(/whitespace-nowrap/);
+    await userEvent.click(within(row).getByRole('button', { name: /expand row/i }));
+    expect(screen.getByText(new RegExp(`name: ${LONG_NAME}`))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`aliases: ${LONG_ALIASES}`))).toBeInTheDocument();
+  });
+
+  it('the Reachable headline wraps at its spaces only (it gives way before the action does) and never in the middle of a word', () => {
+    render(<MachinesTable rows={[ROWS[0]!, ROW]} />);
+    const text = within(tableRow(LONG_NAME)).getByText('directly reachable');
+    expect(text.className).toMatch(/^break-normal$/);
+    expect(text.closest('td')?.className).not.toMatch(/whitespace-nowrap/);
+  });
+
+  it('a machine with no alias has no empty "aliases:" line in the row details', async () => {
+    render(<MachinesTable rows={[ROWS[2]!]} />);
+    await userEvent.click(screen.getByRole('button', { name: /expand row/i }));
+    expect(document.body.textContent).not.toMatch(/aliases:/);
+  });
+});
+
 describe('the Reachable column and the failed load (UX review)', () => {
   const ROW: MachineTableRow = { ...ROWS[2]!, reachable: 'not reachable now: documents go through the relay inbox' };
 
-  it('the Reachable cell is a short headline that never wraps; the whole sentence is in the row details', async () => {
+  it('the Reachable cell is a short headline that wraps at its spaces only; the whole sentence is in the row details', async () => {
     render(<MachinesTable rows={[ROWS[0]!, ROW]} />);
     const cell = within(tableRow('server')).getByText('not reachable now').closest('td') as HTMLElement;
-    expect(cell.className).toMatch(/whitespace-nowrap/);
+    expect(cell.className).not.toMatch(/whitespace-nowrap/);
     expect(cell).not.toHaveTextContent('relay inbox');
     await userEvent.click(within(tableRow('server')).getByRole('button', { name: /expand row/i }));
     expect(screen.getByText(/documents go through the relay inbox/)).toBeInTheDocument();
@@ -265,5 +324,27 @@ describe('the Reachable column and the failed load (UX review)', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.queryByText('No machine')).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+describe('the focus after a dialog closes (UX review 4, b)', () => {
+  it('Escape on the Revoke dialog gives the focus back to the Revoke button of the row, not to the page body', async () => {
+    const user = userEvent.setup();
+    render(<MachinesTable rows={ROWS} />);
+    await user.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Revoke laptop' })).toHaveFocus());
+  });
+
+  it('a revocation that removes the row leaves the focus on the list, never on the page body', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MachinesTable rows={ROWS} />);
+    await user.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    rerender(<MachinesTable rows={[ROWS[0]!, ROWS[2]!]} />);
+    await waitFor(() => expect(screen.getByTestId('machines-root')).toContainElement(document.activeElement as HTMLElement));
   });
 });

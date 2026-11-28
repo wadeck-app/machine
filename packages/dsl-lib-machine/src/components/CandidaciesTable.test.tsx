@@ -215,6 +215,46 @@ describe('Approve', () => {
   }, 60_000);
 });
 
+describe('long texts never hide the actions (UX review 4, a)', () => {
+  const LONG_NAME = 'thinkcentre-workstation-office-2nd-floor-very-long-hostname-b';
+
+  it('a 60-character name is one line cut at a fixed width, the whole name is its tooltip and the first line of the row expansion; Approve and Reject stay in the row, never wrapped', async () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A, { name: LONG_NAME, bindingText: `- name: ${LONG_NAME}` })]} onAction={vi.fn()} />);
+    const row = tableRow(LONG_NAME);
+    const text = within(row).getByText(LONG_NAME);
+    expect(text.className).toMatch(/ truncate |^truncate | truncate$/);
+    expect(text.className).toMatch(/max-w-/);
+    expect(text).toHaveAttribute('title', LONG_NAME);
+    expect(within(row).getByRole('button', { name: `Approve ${LONG_NAME}` })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: `Reject ${LONG_NAME}` }).closest('td')?.className).toMatch(/whitespace-nowrap/);
+    await userEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    expect(screen.getAllByText(new RegExp(LONG_NAME)).length).toBeGreaterThan(1);
+  });
+
+  it('the status wraps at its spaces only: no word is cut in the middle (the cell breaks nowhere inside a word)', () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: 'Warning: uuid already bound to a token', canApprove: false })]} onAction={vi.fn()} />);
+    const text = within(tableRow('laptop')).getByText('Warning: uuid already bound to a token');
+    expect(text.className).toMatch(/^break-normal$/);
+    expect(text.className).not.toMatch(/break-all/);
+  });
+
+  it('the reason a candidacy cannot be approved is in the status, in a few words', async () => {
+    const EXPIRED = 'this candidacy is expired: the candidate must post a new one (`machine join --resume`)';
+    render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: `Cannot be approved: ${EXPIRED}`, problems: [EXPIRED], canApprove: false, canDecide: false })]} onAction={vi.fn()} />);
+    expect(within(tableRow('laptop')).getByText('Cannot be approved: expired')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    expect(screen.getByText(/the candidate must post a new one/)).toBeInTheDocument();
+  });
+
+  it('an expired candidacy has no Reject, and the row expansion says why (the relay drops it and refuses a decision on it: 404)', async () => {
+    const EXPIRED = 'this candidacy is expired: the candidate must post a new one (`machine join --resume`)';
+    render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: `Cannot be approved: ${EXPIRED}`, problems: [EXPIRED], canApprove: false, canDecide: false })]} onAction={vi.fn()} />);
+    expect(within(tableRow('laptop')).queryByRole('button', { name: /^Reject/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    expect(screen.getByText(/Nothing to reject/)).toBeInTheDocument();
+  });
+});
+
 describe('the status column and the empty and failed states (UX review)', () => {
   const LONG = 'Cannot be approved: the candidacy carries no uuid (posted by an older `machine join`, or the relay dropped it): reject it, and ask the candidate to run `machine join --resume`';
 
@@ -289,5 +329,35 @@ describe('the status column and the empty and failed states (UX review)', () => 
   it('the failure of ANOTHER source is not this table\'s alert', () => {
     render(<CandidaciesTable rows={[]} sourceErrors={{ machines: { message: 'boom' } }} onAction={vi.fn()} />);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('the focus after a dialog closes (UX review 4, b)', () => {
+  it('Escape on the Reject dialog gives the focus back to the Reject button of the row, not to the page body', async () => {
+    const user = userEvent.setup();
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} onAction={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Reject laptop' }));
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reject laptop' })).toHaveFocus());
+  });
+
+  it('Escape on the Approve dialog gives the focus back to the Approve button of the row', async () => {
+    const user = userEvent.setup();
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} timeline={TIMELINE} onAction={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Approve laptop' }));
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve laptop' })).toHaveFocus());
+  });
+
+  it('a Reject that removes the row (the list reloads) leaves the focus on the list, never on the page body', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<CandidaciesTable rows={[rowOf('c1', A), rowOf('c2', B)]} onAction={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Reject laptop' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Reject' }));
+    rerender(<CandidaciesTable rows={[rowOf('c2', B)]} onAction={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('candidacies-root')).toContainElement(document.activeElement as HTMLElement));
   });
 });

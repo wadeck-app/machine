@@ -35,8 +35,36 @@ describe('the seeds of the Machines page', () => {
 });
 
 describe('the routes of the Machines page', () => {
-  it('answers exactly the four routes the page calls, under the module prefix', () => {
-    expect(Object.keys(make('two-trusted-peers')).sort()).toEqual(['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke'].map(full).sort());
+  it('answers exactly the five routes the page calls, under the module prefix', () => {
+    expect(Object.keys(make('two-trusted-peers')).sort()).toEqual(['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke', 'POST /delivery-retry'].map(full).sort());
+  });
+
+  it('POST /delivery-retry: after a failed revocation the first retry delivers to the peer that stays and drops the revoked machine from the list, then nothing is retained (409)', () => {
+    const routes = make('revoke-failed');
+    expect(call(routes, 'POST /delivery-retry', {}, { uuid: MAC }).status).toBe(409);
+    call(routes, 'POST /revoke', {}, apply(MAC));
+    const out = call(routes, 'POST /delivery-retry', {}, { uuid: MAC });
+    expect(out.status).toBe(200);
+    const answer = out.body as { ok: boolean; failed: boolean; subject: { uuid: string }; machines: Array<{ name: string; state: string }>; text: { err: string } };
+    expect([answer.ok, answer.failed, answer.subject.uuid, answer.text.err]).toEqual([true, false, MAC, '']);
+    expect(answer.machines.map((m) => [m.name, m.state])).toEqual([['thinkcentre', 'inbox']]);
+    const again = call(routes, 'POST /delivery-retry', {}, { uuid: MAC });
+    expect([again.status, (again.body as ErrorBody).kind]).toEqual([409, 'nothing-retained']);
+  });
+
+  it('POST /delivery-retry: a revocation that failed nothing leaves nothing to retry, and the body is exactly { uuid }', () => {
+    const routes = make('revoke-partial');
+    call(routes, 'POST /revoke', {}, apply(MAC));
+    expect(call(routes, 'POST /delivery-retry', {}, { uuid: MAC }).status).toBe(409);
+    expect(call(routes, 'POST /delivery-retry', {}, { uuid: MAC, extra: 1 }).status).toBe(400);
+  });
+
+  it('POST /delivery-retry: a revoked machine that could not be removed from the relay is dropped from the answer once removed (relay-unreachable)', () => {
+    const routes = make('relay-unreachable');
+    call(routes, 'POST /revoke', {}, apply(MAC));
+    const answer = call(routes, 'POST /delivery-retry', {}, { uuid: MAC }).body as { failed: boolean; machines: Array<{ uuid: string; state: string }> };
+    expect(answer.failed).toBe(false);
+    expect(answer.machines.some((m) => m.uuid === MAC)).toBe(false);
   });
 
   it('only-this-machine: one row, this machine, no Revoke to offer', () => {
@@ -125,13 +153,13 @@ describe('the routes of the Machines page', () => {
     expect([out.failed, out.machines.map((m) => [m.name, m.state])]).toEqual([false, [['thinkcentre', 'delivered']]]);
     expect(out.text.err).toBe('');
     expect(out.text.out).toContain('thinkcentre');
-    expect(describeDelivery('delivered', out.machines, out.retry).tone).toBe('success');
+    expect(describeDelivery('delivered', out.machines).tone).toBe('success');
   });
 
   it('revoke-partial: the peer that stays is offline, its document waits in the relay inbox, nothing failed', () => {
     const out = call(make('revoke-partial'), 'POST /revoke', {}, apply(MAC)).body as RevokeApplyAnswer;
     expect([out.failed, out.machines.map((m) => [m.name, m.state, m.code])]).toEqual([false, [['thinkcentre', 'inbox', 'unreachable']]]);
-    expect(describeDelivery('delivered', out.machines, out.retry).headline).toContain('wait');
+    expect(describeDelivery('delivered', out.machines).headline).toContain('wait');
   });
 
   it('revoke-failed: the relay refuses the documents, the revocation stands, the retry command is in the report', () => {

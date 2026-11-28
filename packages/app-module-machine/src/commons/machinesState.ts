@@ -1,4 +1,5 @@
-import type { RouteAnswer, SignedDocumentWire, SignedRegistrationWire } from './routeContracts.js';
+import { nothingRetained, retriedAnswer, retryUuid } from './deliveryRetryMock.js';
+import type { DistributeAnswer, RouteAnswer, SignedDocumentWire, SignedRegistrationWire } from './routeContracts.js';
 
 // The pure state machine of the Machines page (list, Revoke): what the local daemon of the admin machine holds, and what the four routes of the page answer from it. No
 // React, no Node API, no import of another package (the mock of the page runs it in the browser). Every function takes the state and returns a NEW state with the
@@ -32,6 +33,8 @@ export interface MachinesState {
   /** Version (issuedAt) of the revocation list held here. */
   heldVersion: number;
   plan: RevokePlan;
+  /** MOCK memory of the daemon: the answer of a revocation whose delivery failed (by uuid of the revoked machine), so its documents are still to send again. Absent in a seed; set by `POST /revoke`. */
+  retained?: Record<string, RevokeApplyAnswer>;
 }
 
 export interface MachineRow {
@@ -238,5 +241,18 @@ export function revokeApply(state: MachinesState, body: RevokeRequest): Machines
     revoked: [...state.revoked, { uuid: body.uuid, serial: peer.registration.body.serial }],
     heldVersion: state.heldVersion + 1,
   };
-  return { state: next, answer: ok({ ok: true, revoked: { uuid: body.uuid, name: peer.registration.body.name }, retry: retryOf(body.uuid), ...planned(state.plan, peer, stay) }) };
+  const answer: RevokeApplyAnswer = { ok: true, revoked: { uuid: body.uuid, name: peer.registration.body.name }, retry: retryOf(body.uuid), ...planned(state.plan, peer, stay) };
+  // The daemon keeps the documents of a delivery that failed (in memory) for the retry; a delivery that did not fail leaves nothing.
+  const { [body.uuid]: _forgotten, ...others } = state.retained ?? {};
+  return { state: { ...next, retained: answer.failed ? { ...others, [body.uuid]: answer } : others }, answer: ok(answer) };
+}
+
+/** `POST /delivery-retry`: the first retry after a failed revocation delivers everything and removes the revoked machine from the relay; with nothing retained the daemon refuses (409, same words). */
+export function retryDelivery(state: MachinesState, body: unknown): MachinesStep<DistributeAnswer> {
+  const parsed = retryUuid(body);
+  if (!('uuid' in parsed)) return { state, answer: parsed };
+  const first = state.retained?.[parsed.uuid];
+  if (first === undefined) return { state, answer: nothingRetained(parsed.uuid) };
+  const { [parsed.uuid]: _delivered, ...rest } = state.retained ?? {};
+  return { state: { ...state, retained: rest }, answer: ok(retriedAnswer({ subject: first.revoked, machines: first.machines, retry: first.retry }, parsed.uuid)) };
 }

@@ -226,9 +226,10 @@ describe('signAndApprove: one passphrase, one unlock, the key locked before the 
     expect(result.finalCode).toMatch(/\d/);
     expect(result.distribution.status).toBe('failed');
     expect(result.distribution.text).toMatch(/the daemon is not running/);
-    expect(result.distribution.text).toContain(`machine admin distribute ${CANDIDATE.uuid}`);
+    expect(result.distribution.text).not.toContain('machine admin distribute');
+    expect(result.distribution.retryCommand).toBe(`machine admin distribute ${CANDIDATE.uuid}`);
     expect(result.distribution.text).toMatch(/approval stands/);
-    expect(result.distribution).toMatchObject({ tone: 'danger', machines: [], waiting: 0, headline: `The other machines were NOT told. Run \`machine admin distribute ${CANDIDATE.uuid}\` on this machine; it is safe to run again.` });
+    expect(result.distribution).toMatchObject({ tone: 'danger', machines: [], waiting: 0, headline: 'The other machines were NOT told.', retryCommand: `machine admin distribute ${CANDIDATE.uuid}` });
   });
 
   it('a delivery that partly failed keeps the report of the daemon and says so', async () => {
@@ -237,7 +238,7 @@ describe('signAndApprove: one passphrase, one unlock, the key locked before the 
     expect(result.distribution.status).toBe('partial');
     expect(result.distribution.text).toContain('relay down');
     expect(result.distribution.machines).toEqual([FAILED_SERVER, INBOX_LAPTOP]);
-    expect(result.distribution).toMatchObject({ tone: 'warning', waiting: 1, headline: `Documents wait in the relay inbox of 1 machine, 1 NOT told. Run \`machine admin distribute ${CANDIDATE.uuid}\`.` });
+    expect(result.distribution).toMatchObject({ tone: 'warning', waiting: 1, headline: 'Documents wait in the relay inbox of 1 machine, 1 NOT told.', retryCommand: `machine admin distribute ${CANDIDATE.uuid}` });
   });
 
   it('the structure of the daemon answer is what the page shows: a headline, a tone, the machines, how many wait in the inbox; the raw text is kept for the Details, without repeated lines', async () => {
@@ -252,8 +253,62 @@ describe('signAndApprove: one passphrase, one unlock, the key locked before the 
     const result = await signAndApprove(stubApi({ post: { '/approve-distribute': answer } }), context(), row(), PASSPHRASE, NOW, {});
     expect(result.distribution.status).toBe('failed');
     expect(result.distribution.text).toMatch(/unexpected answer.*update the machine module/s);
-    expect(result.distribution.headline).toContain(`machine admin distribute ${CANDIDATE.uuid}`);
+    expect(result.distribution.retryCommand).toBe(`machine admin distribute ${CANDIDATE.uuid}`);
+    expect(result.distribution.headline).not.toContain('machine admin distribute');
   });
+
+  describe('retryDelivery: the same documents again, no passphrase (UX review 4, e)', () => {
+  const PARTIAL = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: true, report: {}, text: { out: '', err: '[error] server (x): peer document not stored: relay down\n' }, machines: [FAILED_SERVER, INBOX_LAPTOP], retry: `machine admin distribute ${CANDIDATE.uuid}` };
+  const RETRIED = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '[ok] 1 document(s) stored by the relay for 1 machine(s)\n', err: '' }, machines: [DELIVERED_SERVER, INBOX_LAPTOP], retry: `machine admin distribute ${CANDIDATE.uuid}` };
+
+  it('a partial delivery: the retry asks the daemon route with the uuid ONLY (the documents are held there), no key file is read, and the new report replaces the old one', async () => {
+    const api = stubApi({ post: { '/approve-distribute': PARTIAL, '/delivery-retry': RETRIED } });
+    const result = await signAndApprove(api, context(), row(), PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('partial');
+    const before = api.sent.length;
+    const again = await (result.retryDelivery as () => Promise<unknown>)();
+    expect(api.sent.slice(before)).toEqual([{ method: 'POST', path: '/delivery-retry', body: { uuid: CANDIDATE.uuid } }]);
+    expect(again).toMatchObject({ status: 'delivered', tone: 'success', machines: [DELIVERED_SERVER, INBOX_LAPTOP], retryCommand: `machine admin distribute ${CANDIDATE.uuid}` });
+  });
+
+  it('a retry that still fails stays partial with the new report, and can be asked again', async () => {
+    const api = stubApi({ post: { '/approve-distribute': PARTIAL, '/delivery-retry': PARTIAL } });
+    const result = await signAndApprove(api, context(), row(), PASSPHRASE, NOW, {});
+    const again = (await (result.retryDelivery as () => Promise<{ status: string }>)());
+    expect(again.status).toBe('partial');
+  });
+
+  it('the daemon could not be asked the first time: the retry posts the SAME documents again (the page still holds them), nothing is signed again', async () => {
+    const post: Record<string, unknown> = { '/approve-distribute': new Error('the daemon is not running') };
+    const api = stubApi({ post });
+    const result = await signAndApprove(api, context(), row(), PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('failed');
+    const first = api.sent.find((s) => s.path === '/approve-distribute');
+    const before = api.sent.length;
+    // The daemon is back.
+    post['/approve-distribute'] = RETRIED;
+    const again = await (result.retryDelivery as () => Promise<{ status: string }>)();
+    expect(api.sent.slice(before)).toEqual([{ method: 'POST', path: '/approve-distribute', body: first?.body }]);
+    expect(again.status).toBe('delivered');
+  });
+
+  it('delivered or nobody to tell: there is nothing to retry', async () => {
+    const delivered = await signAndApprove(stubApi(), context(), row(), PASSPHRASE, NOW, {});
+    expect(delivered.retryDelivery).toBeUndefined();
+  });
+
+  it('a refusal of the daemon (nothing retained: it restarted) is the error, as it is worded, so the dialog can show it with the command', async () => {
+    const api = stubApi({ post: { '/approve-distribute': PARTIAL, '/delivery-retry': new Error('the daemon holds nothing to retry for this machine (it restarted): run machine admin distribute') } });
+    const result = await signAndApprove(api, context(), row(), PASSPHRASE, NOW, {});
+    await expect((result.retryDelivery as () => Promise<unknown>)()).rejects.toThrow(/holds nothing to retry/);
+  });
+
+  it('an answer of another shape is refused loudly, never read as a success', async () => {
+    const api = stubApi({ post: { '/approve-distribute': PARTIAL, '/delivery-retry': { ok: true } } });
+    const result = await signAndApprove(api, context(), row(), PASSPHRASE, NOW, {});
+    await expect((result.retryDelivery as () => Promise<unknown>)()).rejects.toThrow(/unexpected answer/);
+  });
+});
 
   it('a machine entry of another shape is refused the same way', async () => {
     const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '', err: '' }, machines: [{ name: 'server', state: 'weird' }], retry: 'x' };

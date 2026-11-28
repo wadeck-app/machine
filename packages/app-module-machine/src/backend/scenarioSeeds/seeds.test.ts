@@ -196,7 +196,7 @@ describe('the delivery answers, checked by the REAL code of the page', () => {
   const plans: Array<[string, 'delivered' | 'partial' | 'failed', string, string]> = [
     ['approve-result-delivered', 'delivered', 'success', 'Documents delivered to 2 machines.'],
     ['approve-result-partial', 'partial', 'success', 'Documents delivered to 1 machine, 1 waits in the relay inbox.'],
-    ['approve-result-failed', 'failed', 'danger', 'Documents NOT delivered to 2 machines. Run `machine admin distribute 00000000-0000-4000-8000-000000000003`.'],
+    ['approve-result-failed', 'failed', 'danger', 'Documents NOT delivered to 2 machines.'],
   ];
 
   it.each(plans)('%s: the route hands it through, and the page summary is the one of the scenario', async (name, plan, tone, headline) => {
@@ -206,7 +206,7 @@ describe('the delivery answers, checked by the REAL code of the page', () => {
     real = await startReal({ now: NOW, relay: relayOf(state, name), daemon: { approveDistribute: answer } });
     const body = { candidateUuid: uuid, documents: [], noticeRecipients: null };
     expect(json((await real.call('POST /approve-distribute', { body })).body)).toEqual(json(answer));
-    const summary = describeDelivery(answer.failed ? 'partial' : 'delivered', answer.machines, answer.retry);
+    const summary = describeDelivery(answer.failed ? 'partial' : 'delivered', answer.machines);
     expect([summary.tone, summary.headline]).toEqual([tone, headline]);
     expect(answer.machines.map((m) => m.state)).toEqual(plan === 'delivered' ? ['delivered', 'delivered'] : plan === 'partial' ? ['inbox', 'delivered'] : ['failed', 'failed']);
     expect(answer.failed).toBe(plan === 'failed');

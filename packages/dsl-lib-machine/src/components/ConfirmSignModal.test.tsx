@@ -242,3 +242,20 @@ describe('a wrong passphrase and the focus (UX review)', () => {
     expect(document.body).not.toHaveFocus();
   });
 });
+
+describe('the place of the alert (UX review 4, g)', () => {
+  it('the space of the alert is reserved before any error: the same element holds the alert when it appears, so the buttons do not move', () => {
+    const { rerender } = render(<ConfirmSignModal {...base} />);
+    const slot = screen.getByTestId('alert-slot');
+    expect(slot.className).toMatch(/min-h-/);
+    expect(screen.queryByRole('alert')).toBeNull();
+    rerender(<ConfirmSignModal {...base} error="wrong passphrase or damaged key file (detail)" />);
+    expect(screen.getByTestId('alert-slot')).toBe(slot);
+    expect(slot).toContainElement(screen.getByRole('alert'));
+  });
+
+  it('an informational dialog (no passphrase) reserves nothing: its message is not an alert about a field', () => {
+    render(<ConfirmSignModal {...base} needsPassphrase={false} />);
+    expect(screen.queryByTestId('alert-slot')).toBeNull();
+  });
+});
