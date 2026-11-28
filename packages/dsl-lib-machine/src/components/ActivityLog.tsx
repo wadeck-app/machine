@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ButtonAction, CompactSelect, RefreshButton, SearchBar } from '@wadeck-app/dsl-ui';
+import { Badge, type BadgeVariant, ButtonAction, CompactSelect, DataTable, Notice, RefreshButton, SearchBar, type TableColumn } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
-import { COMMAND_TEXT, EXIT_FAIL, EXIT_NONE, EXIT_OK, NOTICE_NEUTRAL, NOTICE_WARNING, OUTCOME_DANGER, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TABLE_BODY_ROW, TABLE_HEAD_ROW, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
+import { TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
-export interface ActivityRowData {
+export type ActivityRowData = {
   key: string;
   /** ISO 8601, UTC: shown as the tooltip of the age. */
   ts: string;
@@ -31,7 +31,7 @@ export interface ActivityRowData {
   waitedText: string;
   detailText: string;
   verified: boolean;
-}
+};
 
 /** The answer of `GET /api/modules/machine/activity`. */
 export interface ActivityPageData {
@@ -72,8 +72,6 @@ const DIRECTIONS: Array<{ label: string; value: string }> = [
   { label: 'Received', value: 'received' },
 ];
 
-const TONES: Record<ActivityRowData['tone'], string> = { success: OUTCOME_SUCCESS, warning: OUTCOME_WARNING, danger: OUTCOME_DANGER, neutral: OUTCOME_NEUTRAL };
-const EXIT_TONES: Record<ActivityRowData['exitTone'], string> = { ok: EXIT_OK, fail: EXIT_FAIL, none: EXIT_NONE };
 
 /** The page is re-read this often while its first page is shown: a command sent from a terminal shows up without a click. */
 const REFRESH_MS = 15_000;
@@ -142,18 +140,29 @@ function urlOf(filters: Filters, page: number, pageSize: number): string {
 /** 1234567 -> "1,234,567". */
 const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
-/** The header cells stay in view while the table scrolls (the column of the numbers is on the right, its width fixed so the pages do not jump). */
-const HEAD = 'sticky top-0 z-10 border-b border-border bg-surface py-1 font-medium';
-const COLUMNS: Array<{ label: string; className: string }> = [
-  { label: 'When', className: `${HEAD} whitespace-nowrap pr-3` },
-  { label: 'Direction', className: `${HEAD} whitespace-nowrap pr-3` },
-  { label: 'From \u2192 To', className: `${HEAD} whitespace-nowrap pr-3` },
-  { label: 'Shell', className: `${HEAD} whitespace-nowrap pr-3` },
-  { label: 'Command', className: `${HEAD} pr-3` },
-  { label: 'Result', className: `${HEAD} whitespace-nowrap pr-3` },
-  { label: 'Exit', className: `${HEAD} w-24 whitespace-nowrap pr-3 text-right` },
-  { label: 'Ran for', className: `${HEAD} w-24 whitespace-nowrap pr-3 text-right` },
-  { label: 'Waited', className: `${HEAD} w-28 whitespace-nowrap text-right` },
+const RESULT_VARIANT: Record<ActivityRowData['tone'], BadgeVariant> = { success: 'success', warning: 'warning', danger: 'danger', neutral: 'default' };
+const EXIT_VARIANT: Record<ActivityRowData['exitTone'], BadgeVariant> = { ok: 'success', fail: 'danger', none: 'default' };
+
+const COLUMNS: Array<TableColumn<ActivityRowData>> = [
+  { key: 'whenText', label: 'When', muted: true, nowrap: true, render: (r) => <span title={r.ts}>{r.whenText}</span> },
+  { key: 'directionText', label: 'Direction', nowrap: true, render: (r) => r.directionText },
+  { key: 'fromText', label: 'From → To', nowrap: true, render: (r) => <><MachineName name={r.fromText} /> &rarr; <MachineName name={r.toText} /></> },
+  { key: 'shell', label: 'Shell', muted: true, nowrap: true, render: (r) => (r.shell === '' ? '-' : r.shell) },
+  { key: 'command', label: 'Command', mono: true, render: (r) => (r.command === '' ? '-' : r.command) },
+  {
+    key: 'resultText',
+    label: 'Result',
+    nowrap: true,
+    render: (r) => (
+      <>
+        <Badge label={r.resultText} variant={RESULT_VARIANT[r.tone]} tone="subtle" {...(r.detailText === '' ? {} : { title: r.detailText })} />
+        {r.detailText !== '' ? <div>{r.detailText}</div> : null}
+      </>
+    ),
+  },
+  { key: 'exitText', label: 'Exit', nowrap: true, render: (r) => <span data-exit=""><Badge label={r.exitText} variant={EXIT_VARIANT[r.exitTone]} tone="subtle" title={r.exitTitle} /></span> },
+  { key: 'ranText', label: 'Ran for', nowrap: true, render: (r) => <span title={r.ranTitle}>{r.ranText}</span> },
+  { key: 'waitedText', label: 'Waited', nowrap: true, render: (r) => r.waitedText },
 ];
 
 /**
@@ -246,59 +255,24 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
       </div>
 
       {error !== undefined ? (
-        <div role="alert" className="flex flex-col items-start gap-2 rounded border border-danger bg-danger-bg p-3 text-sm text-danger-text">
-          <span className={TEXT_ERROR}>{error}</span>
+        <div className="flex flex-col items-start gap-2">
+          <Notice variant="danger" label={error} />
           <ButtonAction label="Retry" variant="secondary" size="xs" onClick={() => setReload((n) => n + 1)} />
         </div>
       ) : null}
-      {data?.chainText ? <p className={NOTICE_WARNING}>{data.chainText}</p> : null}
+      {data?.chainText ? <Notice variant="warning" label={data.chainText} /> : null}
       {(data?.notes ?? []).map((note) => (
-        <p key={note} className={NOTICE_NEUTRAL}>{note}</p>
+        <Notice key={note} variant="default" label={note} />
       ))}
 
       {known ? (
-        <p className={TEXT_MUTED_SM} aria-live="polite">
-          {data.total === 0 ? '0 entries' : `${from}-${to} of ${data.totalExact ? '' : 'at least '}${grouped(data.total)}`}
-          {data.total > 0 ? <span>{`  (${grouped(data.counts.sent)} sent, ${grouped(data.counts.received)} received)`}</span> : null}
-        </p>
+        <Notice variant="default" label={data.total === 0 ? '0 entries' : `${from}-${to} of ${data.totalExact ? '' : 'at least '}${grouped(data.total)}  (${grouped(data.counts.sent)} sent, ${grouped(data.counts.received)} received)`} />
       ) : loading && error === undefined ? (
-        <p className={TEXT_MUTED_SM} aria-live="polite">Loading...</p>
+        <Notice variant="default" label="Loading..." />
       ) : null}
 
-      {known && rows.length === 0 ? <p className={TEXT_MUTED_SM}>{data.emptyMessage}</p> : null}
-      {rows.length > 0 ? (
-        <div className="max-h-[70vh] overflow-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className={TABLE_HEAD_ROW}>
-                {COLUMNS.map((c) => (
-                  <th key={c.label} className={c.className}>{c.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.key} className={TABLE_BODY_ROW}>
-                  <td className="whitespace-nowrap py-1 pr-3 text-muted"><span title={r.ts}>{r.whenText}</span></td>
-                  <td className="whitespace-nowrap py-1 pr-3">{r.directionText}</td>
-                  <td className="whitespace-nowrap py-1 pr-3">
-                    <MachineName name={r.fromText} /> <span className="text-muted">&rarr;</span> <MachineName name={r.toText} />
-                  </td>
-                  <td className="whitespace-nowrap py-1 pr-3 text-muted">{r.shell === '' ? '-' : r.shell}</td>
-                  <td className="py-1 pr-3"><span className={COMMAND_TEXT} style={MONO_STYLE}>{r.command === '' ? '-' : r.command}</span></td>
-                  <td className="py-1 pr-3">
-                    <span className={TONES[r.tone]} title={r.detailText === '' ? undefined : r.detailText}>{r.resultText}</span>
-                    {r.detailText !== '' ? <div className="text-xs text-muted">{r.detailText}</div> : null}
-                  </td>
-                  <td className="whitespace-nowrap py-1 pr-3 text-right"><span data-exit="" className={EXIT_TONES[r.exitTone]} title={r.exitTitle}>{r.exitText}</span></td>
-                  <td className={`whitespace-nowrap py-1 pr-3 text-right tabular-nums ${r.ranText === '-' ? 'text-muted' : ''}`}><span title={r.ranTitle}>{r.ranText}</span></td>
-                  <td className={`whitespace-nowrap py-1 text-right tabular-nums ${r.waitedText === '-' ? 'text-muted' : ''}`}>{r.waitedText}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+      {known && rows.length === 0 ? <Notice variant="default" label={data.emptyMessage} /> : null}
+      {rows.length > 0 ? <DataTable<ActivityRowData> rows={rows} columns={COLUMNS} rowKey="key" /> : null}
 
       <nav aria-label="Pages of the activity" className="flex flex-wrap items-center gap-2">
         <ButtonAction label="First" ariaLabel="First page" variant="secondary" size="xs" disabled={page <= 1} onClick={() => goTo(1)} />

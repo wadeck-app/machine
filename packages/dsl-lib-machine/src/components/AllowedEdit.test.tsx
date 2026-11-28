@@ -230,7 +230,7 @@ describe('delete one row', () => {
     expect(reads()).toBe(1);
     await user.click(screen.getByRole('button', { name: 'Delete echo c' }));
     await user.click(await screen.findByRole('button', { name: 'Delete and sign' }));
-    const line = await screen.findByRole('status', { name: /Last change/ });
+    const line = within(await screen.findByRole('group', { name: 'Last change' })).getByRole('status');
     expect(line).toHaveTextContent('Signed version 5 for desktop');
     expect(line).toHaveTextContent('Installed on desktop (this machine)');
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -275,7 +275,7 @@ describe('delete one row', () => {
     const body = posts()[0]?.body as { policy: SignedPolicy; document?: unknown };
     expect(body.policy.body).toMatchObject({ target: LAPTOP, version: 3, baseVersion: 2 });
     expect(body.document).toBeDefined();
-    expect(await screen.findByRole('status', { name: /Last change/ })).toHaveTextContent('laptop is not reachable directly');
+    expect(within(await screen.findByRole('group', { name: 'Last change' })).getByRole('status')).toHaveTextContent('laptop is not reachable directly');
   });
 });
 
@@ -376,8 +376,12 @@ describe('batch editing with the shared table', () => {
     await user.click(within(bar).getByRole('button', { name: 'Delete selected' }));
     const d = await screen.findByRole('dialog');
     expect(within(d).getByRole('heading')).toHaveTextContent('Delete 3 allowed commands on desktop?');
-    const list = within(d).getByRole('list', { name: 'Commands' });
-    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['sh echo a', 'sh echo c', 'sh peer one (own list of thinkcentre)']);
+    // One read-only field per command (the standard FieldReadOnly), in the order of the selection.
+    expect(['Command 1', 'Command 2', 'Command 3'].map((label) => within(d).getByText(label).closest('div')?.parentElement?.textContent)).toEqual([
+      expect.stringContaining('sh echo a'),
+      expect.stringContaining('sh echo c'),
+      expect.stringContaining('sh peer one (own list of thinkcentre)'),
+    ]);
     await user.click(await within(d).findByRole('button', { name: 'Delete and sign' }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(defaultsOf(posted().policy)).toEqual(['echo b', 'echo d']);
@@ -434,15 +438,16 @@ describe('batch editing with the shared table', () => {
     expect(th.style.width).toBe('');
   });
 
-  it('a long list scrolls in the dialog (bounded height) instead of pushing the buttons away', async () => {
+  it('every selected command has its own read-only field in the dialog, so a long selection is a column of fields (the design-system Dialog has no scroll of its own)', async () => {
     const user = userEvent.setup();
     render(<Host />);
     await opened();
     await select(user, 'default|sh|echo a', 'default|sh|echo b');
     await user.click(within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name: 'Delete selected' }));
-    const list = await screen.findByRole('list', { name: 'Commands' });
-    expect(list.className).toMatch(/max-h-/);
-    expect(list.className).toMatch(/overflow-y-auto/);
+    const d = await screen.findByRole('dialog');
+    expect(within(d).getByText('Command 1')).toBeInTheDocument();
+    expect(within(d).getByText('Command 2')).toBeInTheDocument();
+    expect(within(d).queryByText('Command 3')).toBeNull();
   });
 
   it('the selection survives the re-read of the page (the 15 s poll or Refresh) and a row that vanished is dropped from the action', async () => {
@@ -502,7 +507,7 @@ describe('failures say the cause and the fix', () => {
     await user.click(screen.getByRole('tab', { name: /^laptop/ }));
     await user.click(await screen.findByRole('button', { name: 'Delete df -h' }));
     await user.click(await screen.findByRole('button', { name: 'Delete and sign' }));
-    const line = await screen.findByRole('alert', { name: /Last change/ });
+    const line = within(await screen.findByRole('group', { name: 'Last change' })).getByRole('alert');
     expect(line).toHaveTextContent('Signed version 3 for laptop');
     expect(line).toHaveTextContent('machine admin distribute --policy C:/cfg/policies/33.json');
     expect(screen.queryByRole('dialog')).toBeNull();

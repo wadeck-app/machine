@@ -1,15 +1,14 @@
 import React, { useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, DataTable, HorizontalStack, Notice, type TableColumn } from '@wadeck-app/dsl-ui';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { dismissFailureMessage, dismissNotice } from '../lib/dismissNotice.js';
-import { NOTICE_NEUTRAL, NOTICE_SUCCESS, NOTICE_WARNING, TABLE_HEAD_ROW, TABLE_ROW_MIDDLE, TEXT_ERROR, TEXT_MUTED_SM, MONO_STYLE } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
-import { MachineText } from './MachineText.js';
 import { AllowDialog } from './AllowDialog.js';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
-export interface PendingRequestRow {
+export type PendingRequestRow = {
   peerText: string;
   peer: string;
   shell: string;
@@ -32,7 +31,7 @@ export interface PendingRequestRow {
   renewal?: WaitingRenewal;
   /** What the caller asked the owner for (a held request only): pre-fills the lifetime of the Allow, never applied by itself. */
   ask?: CallerAsk;
-}
+};
 
 export interface AllowRequestsTableProps {
   /** The pending requests of the Requests page (`$sources.requests.pending`). */
@@ -46,6 +45,8 @@ export interface AllowRequestsTableProps {
    */
   onRefresh?: (source?: string) => Promise<void>;
 }
+
+type PendingRow = PendingRequestRow & { rowId: string };
 
 const rowKey = (r: PendingRequestRow): string => `${r.peer}\u0000${r.shell}\u0000${r.command}`;
 
@@ -106,65 +107,53 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
     void onRefresh?.('requests');
   };
 
+  const columns: Array<TableColumn<PendingRow>> = [
+    { key: 'peerText', label: 'From', nowrap: true, render: (r) => <MachineName name={r.peerText} /> },
+    { key: 'shell', label: 'Shell', nowrap: true, render: (r) => r.shell },
+    {
+      key: 'command',
+      label: 'Command',
+      mono: true,
+      render: (r) => (
+        <>
+          {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
+          {r.command}
+          {r.commandTruncated === true && <Notice variant="default" label="Truncated: only the first part of the command was reported." />}
+          {r.note !== undefined && (
+            <div data-testid="notice-note">
+              <Notice variant="default" label={r.note} />
+            </div>
+          )}
+        </>
+      ),
+    },
+    { key: 'countText', label: 'Times', nowrap: true, render: (r) => r.countText },
+    { key: 'firstSeenText', label: 'First', nowrap: true, render: (r) => r.firstSeenText },
+    { key: 'lastSeenText', label: 'Last', nowrap: true, render: (r) => r.lastSeenText },
+    {
+      key: 'action',
+      label: canAllow ? 'Action' : 'To allow it',
+      render: (r) => (
+        <HorizontalStack gap="gap-2" align="items-center" wrap>
+          {rowCanAllow(r) ? (
+            <ButtonAction label="Allow" ariaLabel={`Allow ${r.command}`} size="xs" onClick={() => setSelected(r)} />
+          ) : (
+            <span style={MONO_STYLE}>{r.nextCommand}</span>
+          )}
+          {r.notice !== undefined && <ButtonAction label="Dismiss" variant="secondary" size="sm" disabled={dismissing} onClick={() => dismiss(r, r.notice as NonNullable<PendingRequestRow['notice']>)} />}
+        </HorizontalStack>
+      ),
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-3">
-      {dismissError !== null && <div role="alert" className={TEXT_ERROR}>{dismissError}</div>}
-      {result !== null && (
-        <div role="status" className={result.tone === 'success' ? NOTICE_SUCCESS : NOTICE_WARNING}><MachineText text={result.text} names={[result.machine]} /></div>
-      )}
+      {dismissError !== null && <Notice variant="danger" label={dismissError} />}
+      {result !== null && <Notice variant={result.tone} label={result.text} />}
       {allow !== undefined && !canAllow && allow.note !== '' && (
-        <div className={NOTICE_NEUTRAL}>{allow.note}</div>
+        <Notice variant="default" label={allow.note} />
       )}
-      {visible.length === 0 ? (
-        <div className={`py-2 ${TEXT_MUTED_SM}`}>{emptyMessage}</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className={TABLE_HEAD_ROW}>
-                <th className="px-2 py-1 font-medium">From</th>
-                <th className="px-2 py-1 font-medium">Shell</th>
-                <th className="px-2 py-1 font-medium">Command</th>
-                <th className="px-2 py-1 font-medium">Times</th>
-                <th className="px-2 py-1 font-medium">First</th>
-                <th className="px-2 py-1 font-medium">Last</th>
-                <th className="px-2 py-1 font-medium">{canAllow ? 'Action' : 'To allow it'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map(r => (
-                <tr key={rowKey(r)} className={TABLE_ROW_MIDDLE} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-                  <td className="whitespace-nowrap px-2 py-2"><MachineName name={r.peerText} /></td>
-                  <td className="whitespace-nowrap px-2 py-2">{r.shell}</td>
-                  <td className="break-all px-2 py-2">
-                    {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
-                    <span style={MONO_STYLE}>{r.command}</span>
-                    {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED_SM}`}>Truncated: only the first part of the command was reported.</div>}
-                    {r.note !== undefined && (
-                      <div data-testid="notice-note" className="text-xs text-muted">
-                        {r.note}
-                      </div>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-2">{r.countText}</td>
-                  <td className="whitespace-nowrap px-2 py-2">{r.firstSeenText}</td>
-                  <td className="whitespace-nowrap px-2 py-2">{r.lastSeenText}</td>
-                  <td className="px-2 py-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                    {rowCanAllow(r) ? (
-                      <ButtonAction label="Allow" ariaLabel={`Allow ${r.command}`} size="xs" onClick={() => setSelected(r)} />
-                    ) : (
-                      <span className="break-all text-xs" style={MONO_STYLE}>{r.nextCommand}</span>
-                    )}
-                    {r.notice !== undefined && <ButtonAction label="Dismiss" variant="secondary" size="sm" disabled={dismissing} onClick={() => dismiss(r, r.notice as NonNullable<PendingRequestRow['notice']>)} />}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {visible.length === 0 ? <Notice variant="default" label={emptyMessage} /> : <DataTable<PendingRow> rows={visible.map((r) => ({ ...r, rowId: rowKey(r) }))} columns={columns} rowKey="rowId" />}
       {selected !== null && allow !== undefined && (
         <AllowDialog key={rowKey(selected)} row={selected} machine={allow.machine} api={api.current} onClose={() => setSelected(null)} onAlreadyAllowed={() => alreadyAllowed(selected)} onDone={answer => done(selected, answer)} />
       )}

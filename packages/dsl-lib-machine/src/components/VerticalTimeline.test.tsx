@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
@@ -51,6 +51,8 @@ describe('VerticalTimeline', () => {
     expect(button).toHaveAccessibleDescription('Answers: substitution of the key.');
     expect(screen.getAllByRole('button')).toHaveLength(2);
     expect(screen.getAllByRole('tooltip')).toHaveLength(2);
+    // The visible card is drawn on demand (hover or focus), not kept in the page.
+    expect(screen.queryByTestId('tooltip-card')).toBeNull();
   });
 
   it('shows a distinct state per step with the semantic tokens of the app, never a palette class or a hex value', () => {
@@ -75,34 +77,26 @@ describe('VerticalTimeline', () => {
     }
   });
 
-  it('opens the explanation on hover and on keyboard focus, closes it on leave, blur and Escape', async () => {
+  it('opens the explanation (the tooltip of the design-system icon button) on hover and on keyboard focus, closes it on leave, blur and Escape', async () => {
     render(<VerticalTimeline steps={STEPS} />);
     const button = screen.getByRole('button', { name: 'About: Candidacy received' });
-    const tip = document.getElementById(button.getAttribute('aria-describedby') as string) as HTMLElement;
-    expect(tip).toHaveAttribute('role', 'tooltip');
-    expect(tip).toHaveTextContent('Answers: a stranger posting a candidacy.');
-    expect(tip).toHaveAttribute('data-open', 'false');
+    expect(screen.queryByTestId('tooltip-card')).toBeNull();
     await userEvent.hover(button);
-    expect(tip).toHaveAttribute('data-open', 'true');
+    expect(await screen.findByTestId('tooltip-card')).toHaveTextContent('Answers: a stranger posting a candidacy.');
     await userEvent.unhover(button);
-    expect(tip).toHaveAttribute('data-open', 'false');
+    await waitFor(() => expect(screen.queryByTestId('tooltip-card')).toBeNull());
     await userEvent.tab();
     expect(button).toHaveFocus();
-    expect(tip).toHaveAttribute('data-open', 'true');
+    expect(await screen.findByTestId('tooltip-card')).toHaveTextContent('Answers: a stranger posting a candidacy.');
     await userEvent.keyboard('{Escape}');
-    expect(tip).toHaveAttribute('data-open', 'false');
-    await userEvent.tab();
-    expect(tip).toHaveAttribute('data-open', 'false');
+    await waitFor(() => expect(screen.queryByTestId('tooltip-card')).toBeNull());
   });
 
-  it('puts the explanation at the side of the button (never above it, over the title) with a bounded width and a visible focus ring', () => {
-    render(<VerticalTimeline steps={STEPS} />);
-    const button = screen.getByRole('button', { name: 'About: Candidacy received' });
-    const tip = screen.getAllByRole('tooltip')[0] as HTMLElement;
-    expect(tip).toHaveClass('left-full', 'z-50');
-    expect(tip.className).not.toMatch(/bottom-full|top-full/);
-    expect(tip.firstElementChild).toHaveClass('max-w-xs', 'bg-surface', 'text-content', 'border-border');
-    expect(button).toHaveClass('focus-visible:ring-2', 'focus-visible:ring-primary');
+  it('draws the explanation outside the timeline (portaled by the design system), so no ancestor with an overflow clips it', async () => {
+    const { container } = render(<VerticalTimeline steps={STEPS} />);
+    await userEvent.tab();
+    const card = await screen.findByTestId('tooltip-card');
+    expect(container.contains(card)).toBe(false);
   });
 
   it('refuses an empty list loudly instead of rendering nothing', () => {

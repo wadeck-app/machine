@@ -456,7 +456,6 @@ describe('a request held on ANOTHER machine (listed by the admin machine)', () =
     expect(elevate).toHaveBeenCalledTimes(1);
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Denied hostname on laptop (laptop was told): nothing was signed');
-    expect(status.querySelector('span')?.style.fontFamily).toContain('JetBrains Mono');
   });
 
   it('when the target refuses because this machine is not a notice recipient, the form shows its cause and the fix, and the row stays', async () => {
@@ -586,7 +585,8 @@ describe('the progress after Allow (decision 86)', () => {
     await allowLs();
     await closeDone();
     expect(await within(itemOf('ls')).findByText(/the list of notice recipients was NOT sent/, undefined, { timeout: 20_000 })).toBeInTheDocument();
-    expect(screen.queryByRole('status')).toBeNull();
+    // A Notice of the design system on the card itself (a status inside the item), never a banner of the page above the list.
+    expect(screen.getAllByRole('status').every((el) => itemOf('ls').contains(el))).toBe(true);
   }, 120_000);
 
   it('the card keeps the progress when the dialog is closed, polls the daemon, and shows the release only when the end is reported', async () => {
@@ -667,7 +667,7 @@ describe('a held request that waits for the RENEWAL of an exhausted or expired e
     render(<HeldRequests rows={[RENEW_ROW]} allow={ALLOW} />);
     const item = itemOf('orch stop');
     expect(within(item).getByTestId('renewal-badge')).toHaveTextContent('Renewal');
-    expect(within(item).getByTestId('renewal-badge').className).toMatch(/warning/);
+    expect(within(item).getByTestId('renewal-badge').firstElementChild?.className).toMatch(/warning/);
     expect(within(item).getByTestId('held-status')).toHaveTextContent('Renewal: entry used 3 of 3 call(s)');
     expect(within(item).queryByTestId('renewal-note')).toBeNull();
     await userEvent.click(within(item).getByRole('button', { name: 'Details' }));
@@ -732,7 +732,7 @@ describe('what the caller asked for (decision 96)', () => {
     const warning = within(itemOf('orch deploy')).getByTestId('caller-ask-warning');
     expect(warning).toHaveTextContent(text);
     expect(warning).toHaveTextContent('Caller asks');
-    expect(warning.className).toMatch(/warning/);
+    expect(warning.firstElementChild?.className).toMatch(/warning/);
     expect((warning.textContent ?? '').length).toBeLessThan(60);
   });
 
@@ -747,7 +747,7 @@ describe('what the caller asked for (decision 96)', () => {
     await user.click(allowBtn('orch deploy'));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByLabelText('Number of calls (1 to 10000)')).toHaveValue('3'));
-    expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Requested by the caller/)).toBeInTheDocument();
     expect(dialog).toHaveTextContent('allowed 3 times');
     expect(dialog).toHaveTextContent('3 calls; reason given: rerun');
     // On failure the message lists EVERY call this test received (url and the first 120 characters of the body), which names what posted before the owner confirmed.
@@ -763,7 +763,7 @@ describe('what the caller asked for (decision 96)', () => {
     render(<HeldRequests rows={[ASKED({ for: 'permanent' })]} allow={ALLOW} />);
     await user.click(allowBtn('orch deploy'));
     const dialog = await screen.findByRole('dialog');
-    await waitFor(() => expect(within(dialog).getByText('Requested by the caller')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText(/Requested by the caller/)).toBeInTheDocument());
     expect(dialog).toHaveTextContent('permanent, until you remove it');
     expect(within(dialog).getByTestId('caller-ask-warning')).toHaveTextContent('asked by the caller, not decided by you');
   });
@@ -774,7 +774,7 @@ describe('what the caller asked for (decision 96)', () => {
     await user.click(allowBtn("make ls"));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByText('Lifetime')).toBeInTheDocument());
-    expect(within(dialog).queryByText('Requested by the caller')).toBeNull();
+    expect(within(dialog).queryByText(/Requested by the caller/)).toBeNull();
     expect(dialog).toHaveTextContent('allowed once');
   });
 });

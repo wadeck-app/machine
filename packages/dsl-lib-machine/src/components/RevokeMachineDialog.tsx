@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice } from '@wadeck-app/dsl-ui';
+import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import { loadRevokeContext, signAndRevoke, type RevokeContext, type RevokeResult, type RevokeRow } from '../lib/revokeFlow.js';
-import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
 
@@ -51,7 +50,7 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
     };
   }, [api, row]);
 
-  const title = <>Revoke <span>{row.name}</span>?</>;
+  const title = `Revoke ${row.name}?`;
 
   const confirm = (take: () => string | null) => {
     if (phase.kind !== 'ready') {
@@ -95,7 +94,7 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
   if (phase.kind === 'done') {
     const { distribution } = phase.result;
     return (
-      <ConfirmSignModal title={<>{row.name} revoked</>} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
+      <ConfirmSignModal title={`${row.name} revoked`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
         <Notice label={distribution.headline} variant={distribution.tone} />
         <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} />
       </ConfirmSignModal>
@@ -118,11 +117,9 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
       onConfirm={confirm}
       onCancel={onClose}
     >
-      <p className="text-sm">
-        Revokes {row.name}: this machine stops trusting it now, and {inform.length === 0 ? 'there is no other machine to tell' : `${inform.join(', ')} will be told to stop too`}. It can come back only through a new approval.
-      </p>
+      <Notice variant="default" label={`Revokes ${row.name}: this machine stops trusting it now, and ${inform.length === 0 ? 'there is no other machine to tell' : `${inform.join(', ')} will be told to stop too`}. It can come back only through a new approval.`} />
       <Collapsible title="Details">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <VerticalStack gap="gap-2">
           {[
             ['Name', row.name],
             ['Uuid', row.uuid],
@@ -131,12 +128,9 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
             ['Others told', inform.length === 0 ? 'nobody' : inform.join(', ')],
             ['Relay', 'its record and inbox are removed'],
           ].map(([label, value]) => (
-            <React.Fragment key={label}>
-              <dt className={TEXT_MUTED}>{label}</dt>
-              <dd className="m-0 break-all" style={MONO_STYLE}>{value}</dd>
-            </React.Fragment>
+            <FieldReadOnly key={label} label={label as string} value={value as string} mono />
           ))}
-        </dl>
+        </VerticalStack>
       </Collapsible>
     </ConfirmSignModal>
   );

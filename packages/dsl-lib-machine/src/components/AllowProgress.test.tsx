@@ -27,21 +27,22 @@ describe('AllowProgress (the thin stepper)', () => {
 
   it('shows ONE word per step and nothing else: no cause, no sentence, no vertical list', () => {
     render(<AllowProgress record={waiting()} now={T0 + 6000} />);
-    expect(screen.getByRole('progressbar')).toHaveTextContent(/^SignedStoredInstalledReleased$/);
+    expect(screen.getByTestId('allow-progress')).toHaveTextContent(/^SignedStoredInstalledReleased$/);
     expect(screen.queryByRole('list')).toBeNull();
     expect(screen.queryByText(/Cause/)).toBeNull();
   });
 
-  it('says the state of every step in words for a screen reader (the value text of the bar)', () => {
+  it('says the state of every step in words (the title of its badge): the Progress of the design system has no value text', () => {
     render(<AllowProgress record={waiting()} now={T0} />);
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', 'Signed: done, Stored: done, Installed: in progress, Released: pending');
+    const titles = ['Signed', 'Stored', 'Installed', 'Released'].map((word) => screen.getByText(word).closest('[title]')?.getAttribute('title'));
+    expect(titles).toEqual(['Signed: done', 'Stored: done', 'Installed: in progress', 'Released: pending']);
   });
 
   it('a request nobody waits for has three segments', () => {
     let r = reduceProgress(initialProgress({ machineName: 'thinkcentre', held: false, now: T0 }), { type: 'signed' }, T0);
     r = reduceProgress(r, { type: 'result', result: inbox }, T0);
     render(<AllowProgress record={r} now={T0} />);
-    expect(screen.getByRole('progressbar')).toHaveTextContent(/^SignedStoredInstalled$/);
+    expect(screen.getByTestId('allow-progress')).toHaveTextContent(/^SignedStoredInstalled$/);
   });
 
   it('only a released request reaches 100; a timeout never does', () => {

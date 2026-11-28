@@ -1,14 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Checkbox } from '@wadeck-app/dsl-ui';
+import { Checkbox, Notice } from '@wadeck-app/dsl-ui';
 import { loadContext, readAdminKeyHint, type AllowApi, type AllowContext } from '../lib/allowFlow.js';
 import { editNotDelivered, editOutcome, prepareEdit, RECORDED_BUT_NOT_DELIVERED, signAndSubmitEdit, type EditAction, type EditOutcome, type EditPrepared, type EditRef } from '../lib/allowedEdit.js';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice } from '../lib/lifetimeChoice.js';
 import { cardFlags } from '../lib/quickAllow.js';
-import { OUTCOME_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowedEntryData, AllowedMachineData } from './AllowedList.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { LifetimePicker } from './LifetimePicker.js';
-import { MachineName } from './MachineName.js';
 import { useAdminKey } from './useAdminKey.js';
 
 // The confirmation of a delete or a change of lifetime on the Allowed page (decision 112): the machine, the shell(s), the EXACT command(s) and what happens,
@@ -30,7 +28,6 @@ export interface AllowedEditDialogProps {
 
 type Phase = { kind: 'loading' } | { kind: 'ready'; context: AllowContext; hint: string | undefined } | { kind: 'failed'; message: string };
 
-const LIST = 'max-h-40 overflow-y-auto';
 const START_CHOICE: LifetimeChoice = { kind: 'once', customKind: 'duration', customText: '' };
 
 const refOf = (r: AllowedEntryData): EditRef => ({ shell: r.shell, text: r.text, index: r.index, peerUuid: r.peerUuid });
@@ -99,7 +96,7 @@ export function AllowedEditDialog({ machine, rows, action, api, saferMode, onClo
   }, [action, context, resolution, machine.version, refs]);
 
   const name = machine.name;
-  const title = action === 'delete' ? <>Delete {plural(rows.length)} on <MachineName name={name} />?</> : <>Change the lifetime of {plural(rows.length)} on <MachineName name={name} />?</>;
+  const title = action === 'delete' ? `Delete ${plural(rows.length)} on ${name}?` : `Change the lifetime of ${plural(rows.length)} on ${name}?`;
 
   if (phase.kind === 'loading') {
     return <ConfirmSignModal title={title} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
@@ -123,25 +120,17 @@ export function AllowedEditDialog({ machine, rows, action, api, saferMode, onClo
     return e === undefined ? undefined : { before: e.lifetimeBefore, after: e.lifetimeAfter ?? '', widens: e.widens === true };
   };
 
-  const commands: React.ReactNode =
-    rows.length === 1 ? (
-      (rows[0] as AllowedEntryData).text + where(rows[0] as AllowedEntryData)
-    ) : (
-      <ul aria-label="Commands" className={LIST}>
-        {rows.map((r) => {
+  // One read-only field per command: a single command is "Command", several are "Command 1", "Command 2" ...
+  const commands: Array<{ label: string; value: string }> =
+    rows.length === 1
+      ? [{ label: 'Command', value: (rows[0] as AllowedEntryData).text + where(rows[0] as AllowedEntryData) }]
+      : rows.map((r, i) => {
           const life = action === 'lifetime' ? lifetimeOf(r) : undefined;
-          return (
-            <li key={r.key}>
-              {`${r.shell} ${r.text}${where(r)}`}
-              {life === undefined ? null : <span className="text-muted">{`: ${life.before} -> ${life.after}${life.widens ? ' (widens)' : ''}`}</span>}
-            </li>
-          );
-        })}
-      </ul>
-    );
+          return { label: `Command ${i + 1}`, value: `${r.shell} ${r.text}${where(r)}${life === undefined ? '' : `: ${life.before} -> ${life.after}${life.widens ? ' (widens)' : ''}`}` };
+        });
 
   const only = rows.length === 1 ? lifetimeOf(rows[0] as AllowedEntryData) : undefined;
-  const notes: React.ReactNode[] = [];
+  const notes: string[] = [];
   if (prepared !== undefined) {
     notes.push(`Policy version ${prepared.fromVersion} -> ${prepared.toVersion}. Every trusted peer without a list of its own may then run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${name}.`);
     if (prepared.emptiedPeerLists.length > 0) {
@@ -205,16 +194,16 @@ export function AllowedEditDialog({ machine, rows, action, api, saferMode, onClo
     <ConfirmSignModal
       title={title}
       details={[
-        { label: 'Machine', value: <MachineName name={name} /> },
+        { label: 'Machine', value: name },
         { label: 'Shell', value: shells },
-        { label: rows.length === 1 ? 'Command' : 'Commands', value: commands },
-        ...(action === 'lifetime' && only !== undefined ? [{ label: 'Lifetime', value: <span>{`${only.before} -> ${only.after}`}</span> }] : []),
+        ...commands,
+        ...(action === 'lifetime' && only !== undefined ? [{ label: 'Lifetime', value: `${only.before} -> ${only.after}` }] : []),
       ]}
       notes={notes}
       warning={
         action === 'delete'
-          ? <>{rows.length === 1 ? 'This command stops' : 'These commands stop'} being allowed on <MachineName name={name} />: peers that run {rows.length === 1 ? 'it' : 'them'} are refused (or held for your answer) from then on. A deletion only restricts, and only the admin passphrase can sign it.</>
-          : <>This changes how long {rows.length === 1 ? 'this command is' : 'these commands are'} allowed on <MachineName name={name} /> for every peer that may run {rows.length === 1 ? 'it' : 'them'}{words === null ? '' : `: ${words}`}. Only the admin passphrase can sign it.</>
+          ? `${rows.length === 1 ? 'This command stops' : 'These commands stop'} being allowed on ${name}: peers that run ${rows.length === 1 ? 'it' : 'them'} are refused (or held for your answer) from then on. A deletion only restricts, and only the admin passphrase can sign it.`
+          : `This changes how long ${rows.length === 1 ? 'this command is' : 'these commands are'} allowed on ${name} for every peer that may run ${rows.length === 1 ? 'it' : 'them'}${words === null ? '' : `: ${words}`}. Only the admin passphrase can sign it.`
       }
       confirmLabel={action === 'delete' ? 'Delete and sign' : 'Change lifetime and sign'}
       busy={busy}
@@ -227,9 +216,9 @@ export function AllowedEditDialog({ machine, rows, action, api, saferMode, onClo
         <>
           <LifetimePicker choice={choice} onChange={(c) => { setChoice(c); setAcknowledged(false); setError(null); }} busy={busy} />
           {prepared !== undefined && prepared.widening && (
-            <span role="note" className={OUTCOME_WARNING}>Widens rights: at least one command is allowed for longer, for more calls, or for ever than before.</span>
+            <div role="note"><Notice variant="warning" label="Widens rights: at least one command is allowed for longer, for more calls, or for ever than before." /></div>
           )}
-          {preview !== null && 'problem' in preview && <div role="alert" className={TEXT_MUTED_SM}>{preview.problem}</div>}
+          {preview !== null && 'problem' in preview && <Notice variant="danger" label={preview.problem} />}
           {needsAck && (
             <label className="flex items-start gap-2 text-sm">
               <Checkbox aria-label={`I understand this lifetime is flagged: ${flags.join('; ')}`} checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />

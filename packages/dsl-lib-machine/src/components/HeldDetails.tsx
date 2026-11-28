@@ -1,8 +1,8 @@
 import React from 'react';
-import { TEXT_MUTED } from '../lib/styleTokens.js';
 import { CallerAskNote } from './CallerAskNote.js';
 import type { HeldRequestRow } from './HeldRequests.js';
 import { MachineName } from './MachineName.js';
+import { TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The Details panel of a held card: every fact and every long sentence the card leaves out of its one status line.
 

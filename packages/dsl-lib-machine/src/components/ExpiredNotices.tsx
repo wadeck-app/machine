@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { dismissFailureMessage, dismissNotice, type DismissTarget } from '../lib/dismissNotice.js';
-import { HELD_COMMAND, MONO_STYLE, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { MachineName } from './MachineName.js';
+import { MONO_STYLE, TEXT_MUTED_SM, HELD_COMMAND } from '../lib/styleTokens.js';
 
 /** Above this many rows the Clear expired button is offered. */
 export const CLEAR_ABOVE = 2;
@@ -71,8 +71,8 @@ export function ExpiredNotices({ rows, onRefresh }: ExpiredNoticesProps) {
         <h3 className="text-base font-semibold text-content">Expired (no end notice received)</h3>
         {visible.length > CLEAR_ABOVE && <ButtonAction label="Clear expired" variant="secondary" size="sm" disabled={busy} onClick={() => run({ expired: true }, visible.map(keyOf))} />}
       </div>
-      <div className={TEXT_MUTED_SM}>The deadline of these held requests has passed and the machine that held them never said how they ended: nobody waits for an answer any more. Dismiss removes them from this list only.</div>
-      {error !== null && <div role="alert" className={TEXT_ERROR}>{error}</div>}
+      <Notice variant="default" label="The deadline of these held requests has passed and the machine that held them never said how they ended: nobody waits for an answer any more. Dismiss removes them from this list only." />
+      {error !== null && <Notice variant="danger" label={error} />}
       <ul className="flex flex-col gap-2">
         {visible.map((r) => (
           <li key={keyOf(r)} aria-label={`Expired request ${r.command}`} data-testid="expired-row" className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2">
@@ -84,7 +84,7 @@ export function ExpiredNotices({ rows, onRefresh }: ExpiredNoticesProps) {
             </div>
             {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
             <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
-            {r.commandTruncated === true && <div className={`text-xs ${TEXT_MUTED_SM}`}>Truncated: only the first part of the command was reported.</div>}
+            {r.commandTruncated === true && <Notice variant="default" label="Truncated: only the first part of the command was reported." />}
             <div className="text-xs text-muted">{r.note}</div>
             <div>
               <ButtonAction label="Dismiss" variant="secondary" size="sm" disabled={busy} onClick={() => run({ machine: r.machine.uuid, id: r.id }, [keyOf(r)])} />

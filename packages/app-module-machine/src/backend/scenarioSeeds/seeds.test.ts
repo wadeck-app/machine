@@ -16,7 +16,7 @@ import {
 } from '../../commons/candidaciesState.js';
 import type { ApproveContextAnswer, ApproveRequest, CandidaciesAnswer, DistributeAnswer } from '../../commons/routeContracts.js';
 import { expectNoRealData } from './privacyScan.testUtil.js';
-import { ALLOWED_PUBLIC_KEYS, ALLOWED_RANDOMS, buildSeeds, FAKE_DAEMON_IMPORT, NOW, rawOf, startReal, type Real, type RealOptions } from './seedBuilders.testUtil.js';
+import { ALLOWED_PUBLIC_KEYS, ALLOWED_RANDOMS, ALLOWED_SCENARIO_KEY_STRINGS, buildSeeds, KEYS, FAKE_DAEMON_IMPORT, NOW, rawOf, startReal, type Real, type RealOptions } from './seedBuilders.testUtil.js';
 
 // The seeds of the Candidacies mock (src/commons/scenarioSeeds/<name>.json): plain JSON, the initial state of the mock. They are built by seedBuilders.testUtil.ts
 // from fake material and the REAL functions of the CLI, and every answer the pure state machine (src/commons) derives from them is compared here with what the REAL
@@ -268,12 +268,13 @@ describe('the transitions of the state machine answer what the REAL routes answe
     expect(json(approveCandidacy(state, c.id, approveBody(c, state)).answer)).toEqual(json(await real.call('POST /candidacies/:id/approve', { params: { id: c.id }, body: approveBody(c, state) })));
   });
 
-  it('the admin key: the real route hands the file through, the file is a fake envelope nothing can unlock', async () => {
+  it('the admin key: the real route hands the file through, the file is the envelope of the throwaway scenario key (a wrong passphrase opens nothing)', async () => {
     const state = readSeed('one-pending');
     real = await startReal({ now: NOW, relay: relayOf(state, 'one-pending'), daemon: { adminKeyFile: { ok: true, file: state.adminKeyFile } } });
     expect(json((await real.call('GET /admin-key', {})).body)).toEqual(json((adminKey(state).answer.body)));
     const envelope = JSON.parse(state.adminKeyFile) as AdminKeyEnvelope;
-    expect(envelope.hint).toContain('FAKE PLACEHOLDER');
+    expect(envelope.hint).toContain('scenario key');
+    expect(decryptAdminKey(envelope, 'scenario-passphrase-2026').publicKey).toBe(KEYS.admin.publicKey);
     expect(() => decryptAdminKey(envelope, 'any passphrase of at least twelve characters')).toThrow();
   });
 });
@@ -283,11 +284,10 @@ describe('the seeds hold nothing of a real network', () => {
     expectNoRealData(seedText(name));
   });
 
-  it.each(NAMES)('%s: every key-like string (40 characters of base64url or more) is one of the fake keys, a signature of the fake admin key, or the fake envelope', (name) => {
+  it.each(NAMES)('%s: every key-like string (40 characters of base64url or more) is one of the fake keys, a signature of the fake admin key, or the ciphertext of the throwaway scenario key (ALLOWED_SCENARIO_KEY_STRINGS, the only allow-listed secret-looking string)', (name) => {
     const text = seedText(name);
     const state = JSON.parse(text) as CandidaciesState;
-    const envelope = JSON.parse(state.adminKeyFile) as AdminKeyEnvelope;
-    const allowed = new Set<string>([...ALLOWED_PUBLIC_KEYS, ...ALLOWED_RANDOMS, ...state.trusted.map((t) => t.signature), envelope.ciphertext]);
+    const allowed = new Set<string>([...ALLOWED_PUBLIC_KEYS, ...ALLOWED_RANDOMS, ...state.trusted.map((t) => t.signature), ...ALLOWED_SCENARIO_KEY_STRINGS]);
     for (const token of text.match(/[A-Za-z0-9_-]{40,}/g) ?? []) expect(allowed.has(token), `unexpected key-like string ${token.slice(0, 12)}...`).toBe(true);
   });
 

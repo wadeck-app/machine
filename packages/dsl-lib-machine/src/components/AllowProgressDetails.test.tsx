@@ -22,10 +22,10 @@ describe('AllowProgressDetails', () => {
     const status = screen.getByTestId('allow-progress-steps');
     expect(status).toHaveAttribute('aria-live', 'polite');
     expect(within(status).getAllByRole('listitem').map((i) => i.textContent)).toEqual([
-      expect.stringMatching(/^done: Signed$/),
-      expect.stringMatching(/^done: Stored on the relay$/),
-      expect.stringMatching(/^in progress: thinkcentre installs the policy.*next inbox poll/),
-      expect.stringMatching(/^pending: The held command is released$/),
+      expect.stringMatching(/^doneSigned$/),
+      expect.stringMatching(/^doneStored on the relay$/),
+      expect.stringMatching(/^in progressthinkcentre installs the policy.*next inbox poll/),
+      expect.stringMatching(/^pendingThe held command is released$/),
     ]);
   });
 

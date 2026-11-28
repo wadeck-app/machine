@@ -102,7 +102,8 @@ describe('a finished request', () => {
     render(<RequestProgressCard {...props(denied(), { now: T0 + 4000 })} />);
     const c = card();
     expect(within(c).getByText('Not released')).toBeInTheDocument();
-    expect(within(c).getByText('denied: nothing ran').className).toMatch(/text-danger-text/);
+    // The cause is a danger Notice of the design system: announced as an alert.
+    expect(within(c).getByRole('alert')).toHaveTextContent('denied: nothing ran');
     act(() => { vi.advanceTimersByTime(60_000); });
     expect(within(c).getByRole('progressbar')).toBeInTheDocument();
     expect(within(c).getByText('denied: nothing ran')).toBeInTheDocument();
@@ -123,7 +124,7 @@ describe('a failed signature', () => {
     render(<RequestProgressCard {...props(signingFailed(), { onRetry })} />);
     const c = card();
     expect(within(c).getByText('Signing failed')).toBeInTheDocument();
-    expect(within(c).getByText('wrong passphrase: nothing was signed').className).toMatch(/text-danger-text/);
+    expect(within(c).getByRole('alert')).toHaveTextContent('wrong passphrase: nothing was signed');
     await userEvent.click(within(c).getByRole('button', { name: 'Allow again' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
@@ -137,7 +138,7 @@ describe('a failed signature', () => {
 describe('what the card tells next to the line', () => {
   it('a warning of the owner (the notice recipients were not sent) is one line under the stepper', () => {
     render(<RequestProgressCard {...props(stored(), { warning: 'the list of notice recipients was NOT sent' })} />);
-    expect(within(card()).getByText('the list of notice recipients was NOT sent').className).toMatch(/text-warning-text/);
+    expect(within(card()).getByText('the list of notice recipients was NOT sent').closest('[role="status"]')?.className).toMatch(/text-warning-text/);
   });
 
   it('uses theme tokens only', () => {

@@ -1,13 +1,12 @@
-import React, { useEffect, useId, useRef } from 'react';
-import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
+import React, { useEffect, useRef } from 'react';
+import { ButtonAction, Dialog, DialogFooter, FieldReadOnly, FieldSecret, HorizontalStack, Notice, VerticalStack, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { hintHelpText } from '../lib/passphraseHint.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
-import { MODAL_BACKDROP, MODAL_PANEL, MODAL_PANEL_WITH_ASIDE, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
-// A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
+// A confirmation dialog that asks for the admin passphrase (decision 76), built on the standard Dialog of dsl-ui (focus trap, Escape, backdrop, "Close dialog"). Used by the buttons that widen rights (the Allow button of the Requests page;
 // approve and revoke later). It is NOT a registry component on purpose (no @registryCategory): it can never be wired from a view, so the passphrase
 // it reads can only go to the code that renders it.
 //
@@ -18,14 +17,14 @@ import { MODAL_BACKDROP, MODAL_PANEL, MODAL_PANEL_WITH_ASIDE, MONO_STYLE, NOTICE
 // signs, and `take()` returns null (the signing code then uses the held key).
 
 export interface ConfirmSignModalProps {
-  /** Text, or text with machine names (MachineName). */
-  title: React.ReactNode;
-  /** What is about to happen, as rows (machine, shell, exact command ...). Values are shown as given, in a monospace font. */
-  details: Array<{ label: string; value: React.ReactNode }>;
+  /** Plain text (the Dialog title is a string). */
+  title: string;
+  /** What is about to happen, as rows (machine, shell, exact command ...). Values are shown as given, in a monospace read-only field. */
+  details: Array<{ label: string; value: string }>;
   /** Why this needs care (what it widens). Shown above the passphrase field. */
-  warning: React.ReactNode;
+  warning: string;
   /** Free text under the details (version change, who is not affected ...). */
-  notes?: React.ReactNode[];
+  notes?: string[];
   confirmLabel: string;
   /** True while the signature is made: the buttons are disabled. */
   busy?: boolean;
@@ -51,10 +50,7 @@ export interface ConfirmSignModalProps {
   onCancel: () => void;
 }
 
-const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
-
 export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
-  const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
@@ -65,30 +61,6 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   useEffect(() => {
     root.current?.querySelector<HTMLElement>('[data-footer] button')?.focus();
   }, []);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape' && !busy) {
-      e.stopPropagation();
-      onCancel();
-      return;
-    }
-    if (e.key !== 'Tab' || root.current === null) {
-      return;
-    }
-    const items = Array.from(root.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-    if (items.length === 0) {
-      return;
-    }
-    const first = items[0] as HTMLElement;
-    const last = items[items.length - 1] as HTMLElement;
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,57 +88,61 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
 
   const shown = localError ?? error;
   const content = (
-    <>
-        <h2 id={titleId} className="text-lg font-semibold text-content">{title}</h2>
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-          {details.map(d => (
-            <React.Fragment key={d.label}>
-              <dt className={TEXT_MUTED}>{d.label}</dt>
-              <dd className="break-all" style={MONO_STYLE}>{d.value}</dd>
-            </React.Fragment>
-          ))}
-        </dl>
+    <div ref={root}>
+      <VerticalStack gap="gap-3">
+        {details.map(d => (
+          <FieldReadOnly key={d.label} label={d.label} value={d.value} mono />
+        ))}
         {notes.map((n, i) => (
-          <p key={i} className={TEXT_MUTED_SM}>{n}</p>
+          <Notice key={i} variant="default" label={n} />
         ))}
         {children}
-        {needsPassphrase && warning !== '' && <p className={NOTICE_WARNING}>{warning}</p>}
-        <form className="flex flex-col gap-3" onSubmit={submit}>
-          {needsPassphrase && unlocked && <UnlockedKeyBar />}
-          {needsPassphrase && !unlocked && (
-            <>
-              {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
-              {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
-              <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-48 flex-1">
-                  {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
-                  <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...hintHelpText(hint)} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
-                </div>
-              {!askEveryTime && <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>}
-              </div>
-            </>
-          )}
-          {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
-          <div data-footer="" className="flex justify-end gap-2">
-            <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} />
-            {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
-          </div>
+        {needsPassphrase && warning !== '' && <Notice variant="warning" label={warning} />}
+        <form onSubmit={submit}>
+          <VerticalStack gap="gap-3">
+            {needsPassphrase && unlocked && <UnlockedKeyBar />}
+            {needsPassphrase && !unlocked && (
+              <>
+                {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
+                {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
+                <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
+                {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
+                <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...hintHelpText(hint)} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+                {!askEveryTime && <KeepUnlockedSelect busy={busy} />}
+              </>
+            )}
+            {shown !== null && <Notice variant="danger" label={shown} />}
+            <div data-footer="">
+              <DialogFooter>
+                <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} />
+                {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
+              </DialogFooter>
+            </div>
+          </VerticalStack>
         </form>
-    </>
+      </VerticalStack>
+    </div>
   );
   return (
-    <div className={MODAL_BACKDROP} onKeyDown={onKeyDown}>
-      <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} className={aside === undefined ? MODAL_PANEL : MODAL_PANEL_WITH_ASIDE}>
-        {aside === undefined ? (
-          content
-        ) : (
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div data-part="aside" className="shrink-0 sm:w-60">{aside}</div>
-            <div className="flex min-w-0 flex-1 flex-col gap-3">{content}</div>
-          </div>
-        )}
-      </div>
-    </div>
+    <Dialog
+      open
+      title={title}
+      size={aside === undefined ? 'lg' : 'xl'}
+      // Escape, the cross and the backdrop ask to close: not while the signature is made (the buttons are off too).
+      onOpenChange={(open) => {
+        if (!open && !busy) {
+          onCancel();
+        }
+      }}
+    >
+      {aside === undefined ? (
+        content
+      ) : (
+        <HorizontalStack gap="gap-4" align="items-start" itemSizes={['fixed', 'flex']}>
+          <div data-part="aside">{aside}</div>
+          {content}
+        </HorizontalStack>
+      )}
+    </Dialog>
   );
 }

@@ -25,6 +25,8 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     restoreMocks: true,
+    // dsl-ui is processed by vite so that test-setup.ts can replace its useToast (FieldReadOnly needs the ToastProvider of the app shell).
+    server: { deps: { inline: ['@wadeck-app/dsl-ui'] } },
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     // Timeouts guard against a test that HANGS (PBKDF2 unlock), never a performance limit.

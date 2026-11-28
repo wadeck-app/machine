@@ -4,11 +4,12 @@ import { compileRoutes, defineScenarios, matchScenarioRoute, type ScenarioDefini
 import { unlockAdminKey } from '@wadeck-app/machine-webcrypto';
 import { describe, expect, it } from 'vitest';
 import { MACHINES_SEED_NAMES } from '../../commons/machinesSeeds.js';
-import { SCENARIOS as scenarios } from '../../commons/scenarioList.js';
+import { SCENARIOS as scenarios, SCENARIO_PASSPHRASE } from '../../commons/scenarioList.js';
 import { expectNoRealData } from './privacyScan.testUtil.js';
+import { KEYS } from './seedBuilders.testUtil.js';
 
 // The scenarios of the module (src/dsl-scenarios, dev-only mocks of two pages). The routes themselves are proved in candidaciesMock.test.ts and machinesMock.test.ts;
-// here: the list, what the shell needs of each entry, that every route the views call is answered by the SDK's own matcher, that the placeholder admin key fails the way
+// here: the list, what the shell needs of each entry, that every route the views call is answered by the SDK's own matcher, that the throwaway admin key unlocks with the published passphrase and fails the way
 // the page reports, and that nothing Node or real ships in the scenario code.
 
 const CANDIDACY_SEEDS = [
@@ -44,7 +45,6 @@ const MACHINES_ROUTES = [
 
 const list: readonly ScenarioDefinition[] = scenarios;
 const onPage = (page: string): ScenarioDefinition[] => list.filter((s) => s.pages?.includes(page));
-const PLACEHOLDER_SAID = /placeholder/i;
 
 describe('the list of scenarios', () => {
   it('has a scenario per seed of the Candidacies page and per seed of the Machines page, nothing else', () => {
@@ -63,12 +63,6 @@ describe('the list of scenarios', () => {
       expect(s.hint?.trim() ?? '', s.id).not.toBe('');
       expect(s.hint, s.id).not.toContain('\n');
     }
-  });
-
-  it('the hint of a scenario where something can be signed says the admin key is a placeholder (a real signature is impossible there)', () => {
-    const signable = list.filter((s) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'pending-with-problems', 'candidate-expired', 'approval-codes-recallable', 'only-this-machine'].includes(s.id));
-    expect(signable.length).toBeGreaterThan(0);
-    for (const s of signable) expect(s.hint, s.id).toMatch(PLACEHOLDER_SAID);
   });
 
   it('create() answers every route of its page through the matcher of the SDK, and starts again at each call (Reset)', () => {
@@ -108,13 +102,16 @@ describe('the list of scenarios', () => {
   });
 });
 
-describe('the placeholder admin key, as the page meets it', () => {
-  it('is served by the scenarios, and unlocking it fails with the sentence of a wrong passphrase (the dialog shows it and stays open; nothing crashes)', async () => {
+describe('the throwaway admin key, as the page meets it', () => {
+  it('is served by the scenarios: the published passphrase unlocks it (the key of the seeds), another one fails with the sentence of a wrong passphrase (the dialog shows it and stays open)', async () => {
     for (const [page, id] of [['/candidacies', 'one-pending'], ['/', 'two-trusted-peers']] as const) {
       const scenario = onPage(page).find((s) => s.id === id) as ScenarioDefinition;
       const handler = scenario.create().routes['GET /api/modules/machine/admin-key'];
       const answer = (handler as NonNullable<typeof handler>)({ method: 'GET', path: '/api/modules/machine/admin-key', params: {}, query: new URLSearchParams(), body: undefined });
       const file = (answer as { body: { file: string } }).body.file;
+      const unlocked = await unlockAdminKey(file, SCENARIO_PASSPHRASE, { extractable: false });
+      expect(unlocked.publicKey).toBe(KEYS.admin.publicKey);
+      unlocked.lock();
       await expect(unlockAdminKey(file, 'a passphrase of at least twelve characters', { extractable: false })).rejects.toThrow('admin key file: wrong passphrase or damaged key file');
     }
   });

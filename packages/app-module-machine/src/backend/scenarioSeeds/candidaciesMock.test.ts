@@ -55,10 +55,10 @@ describe('the routes of the Candidacies page', () => {
     expect(list(routes).candidacies[0]).toMatchObject({ canDecide: false, canApprove: false });
   });
 
-  it('GET /admin-key hands the placeholder envelope of the seed', () => {
+  it('GET /admin-key hands the envelope of the throwaway scenario key', () => {
     const answer = call(make('one-pending'), 'GET /admin-key');
     expect(answer.status).toBe(200);
-    expect(JSON.parse((answer.body as { file: string }).file)).toMatchObject({ v: 2, hint: expect.stringContaining('FAKE PLACEHOLDER') });
+    expect(JSON.parse((answer.body as { file: string }).file)).toMatchObject({ v: 2, hint: expect.stringContaining('scenario key') });
   });
 
   it('GET /approve-context/:uuid answers the context of the candidate; a bad uuid is a 400 with the fix', () => {

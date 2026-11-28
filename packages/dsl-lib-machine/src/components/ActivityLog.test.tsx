@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLog, type ActivityPageData } from './ActivityLog.js';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
 // The Activity page: the commands this machine sent and received, with filters, a period and server-side pages. The app-core shell is a stub on
 // globalThis; the module backend is a fake that records the URL of every request (the filters and the page are its query string).
@@ -107,15 +108,15 @@ describe('the timeline', () => {
     });
     render(<ActivityLog />);
     await screen.findByText('echo 1');
-    const cell = (n: number, text: string): HTMLElement => within(screen.getAllByRole('row')[n] as HTMLElement).getByText(text, { selector: '[data-exit]' });
+    const cell = (n: number, text: string): HTMLElement => within(screen.getAllByRole('row')[n] as HTMLElement).getByText(text, { selector: '[data-exit] span' });
     expect(cell(1, '0').className).toMatch(/text-success-text/);
     expect(cell(2, '127').className).toMatch(/text-danger-text/);
     expect(cell(3, 'timed out').className).toMatch(/text-danger-text/);
     expect(cell(4, 'killed').className).toMatch(/text-danger-text/);
     expect(cell(5, '-').className).toMatch(/text-muted/);
     expect(cell(2, '127')).toHaveAttribute('title', 'Exit code 127: the command failed');
-    // The exit column is aligned on its own (right), apart from the badge.
-    expect(cell(1, '0').closest('td')?.className).toMatch(/text-right/);
+    // The code is a Badge of the design system inside the cell of its column.
+    expect(cell(1, '0').closest('[data-exit]')?.closest('td')).not.toBeNull();
   });
 
   it('shows the run time of the command and the wait in their own columns, with a subtle ~ and an explanation on an estimate', async () => {
@@ -132,18 +133,17 @@ describe('the timeline', () => {
     expect(first.getByText('312 ms')).toBeInTheDocument();
     expect(first.getByText('1 min 47 s')).toBeInTheDocument();
     expect(second.getByText('~300 ms')).toHaveAttribute('title', expect.stringContaining('Estimated'));
-    // Numbers never wrap, and the table keeps its columns in place while the pages change.
+    // Numbers never wrap (the nowrap column of the DataTable).
     expect(first.getByText('312 ms').closest('td')?.className).toMatch(/whitespace-nowrap/);
     expect(first.getByText('1 min 47 s').closest('td')?.className).toMatch(/whitespace-nowrap/);
   });
 
-  it('keeps the header in view when the table scrolls', async () => {
-    render(<ActivityLog />);
+  it('is the standard DataTable of the design system: nine column headers in one table, no scroll box of its own around it', async () => {
+    const { container } = render(<ActivityLog />);
     await screen.findByText('echo 1');
-    for (const h of screen.getAllByRole('columnheader')) {
-      expect(h.className).toMatch(/sticky/);
-      expect(h.className).toMatch(/top-0/);
-    }
+    expect(screen.getAllByRole('table')).toHaveLength(1);
+    expect(screen.getAllByRole('columnheader')).toHaveLength(9);
+    expect(container.querySelector('[class*="max-h-"]')).toBeNull();
   });
 
   it('asks the backend for the first page of 25 with no filter', async () => {
@@ -232,7 +232,8 @@ describe('the pages', () => {
     render(<ActivityLog />);
     await screen.findByText('echo 1');
     const count = screen.getByText(/1-25 of 1,234/);
-    expect(count).toHaveAttribute('aria-live', 'polite');
+    // A Notice of the design system: a status, announced politely.
+    expect(count.closest('[role="status"]')).not.toBeNull();
     expect(screen.getByText(/Page 1 of 50/)).toBeInTheDocument();
   });
 

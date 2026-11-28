@@ -135,3 +135,31 @@ Flow (`RevokeMachineDialog`, `lib/revokeFlow.ts`): PIN, `GET /revoke-context/:uu
 - The revocation stands whatever the delivery does (as the CLI). With no admin relay token it is installed here and the answer names `machine admin login` then `machine admin distribute <uuid>`.
 - Result: one headline (`Notice`), one line per peer (`DeliveryList`, shared with Approve), raw CLI report in a collapsed `Details` (open on failure); the revoked machine gets a line only when it could not be removed from the relay. The list refreshes as soon as the daemon answers.
 - Not verifiable without a real browser: dialog layout and the 8-column table at 1000 px (fallback: move UUID to a row expansion, as Candidacies did).
+
+## Custom styles audit (2026-11-28)
+
+Rule: the module UI uses standard dsl-ui components only (dsl-ui 2026.11.28-410). `lib/styleTokens.ts` keeps only what has no standard equivalent; `lib/standardOnly.test.ts` fails if a replaced token comes back. Lines are those before the change.
+
+| Token | Uses (file:line, role) | Standard replacement | State |
+|---|---|---|---|
+| NOTICE_SUCCESS | AllowRequestsTable:113 result; AllowedList:136 last change; HeldRequests:218 deny result; UnlockedKeyBar:101 unlocked bar | `Notice` success | replaced |
+| NOTICE_WARNING | ActivityLog:254 chain; AllowRequestsTable:113; AllowedList:136,144; CallerAskNote:27; ConfirmSignModal:133; InlineAllowForm:98; RequestsOverview:178,183,201 | `Notice` warning (RequestsOverview:178,183: danger, keeps role alert) | replaced |
+| NOTICE_NEUTRAL | ActivityLog:256; AllowRequestsTable:116; CallerAskNote:22; HeldRequests:219; RequestsOverview:169,170 | `Notice` default | replaced |
+| TEXT_ERROR | 16 inline errors: ActivityLog:250, AllowRequestsTable:111, AllowStyleSwitch:26, BatchAllowBar:102, CandidaciesTable:117, CompactLifetime:48, ConfirmSignModal:150, DenyForm:80, ExpiredNotices:75, FinalCodeDisplay:52, InlineAllow:137, InlineAllowForm:113, LifetimePicker:40, PassphraseSigner:158, RequestsOverview:171, SaferModeSwitch:21 | `Notice` danger (role alert) | replaced |
+| MODAL_BACKDROP, MODAL_PANEL, MODAL_PANEL_WITH_ASIDE | ConfirmSignModal:159-160 (every signing dialog) | `Dialog` + `DialogFooter` + `FieldReadOnly` (details) + `Notice` | replaced (DialogForm and ConfirmDialog cannot host the uncontrolled passphrase and its footer) |
+| OUTCOME_* | ActivityLog:75 result; AllowedEditDialog:230 widens; HeldRequests:273 reachability; HeldStatusRow:30,31,34,39 chips | `Badge` subtle | replaced |
+| EXIT_OK/FAIL/NONE | ActivityLog:76,293 exit code | `Badge` subtle | replaced |
+| HELD_ITEM | HeldRequests:257 card | `Card` padding sm + `VerticalStack` | replaced |
+| HELD_COUNTDOWN(_URGENT) | HeldRequests:278 | `Badge` warning/danger | replaced |
+| PROGRESS_CARD_*, PROGRESS_SLIM_SUCCESS | RequestProgressCard:54 | `Card`; tone in a `Badge`; cause and warning in `Notice` | replaced (no coloured card, no slim row: the collapsed card only hides the stepper) |
+| STEPPER_SEGMENT, SEGMENT_* | AllowProgress:16,34 | `Progress` + one `Badge` per step | replaced (Progress has no value text: the state words are the badge titles) |
+| STEP_* | AllowProgress:17; AllowProgressDetails:12; RequestProgressCard:29,30 | `Badge` (state word) | replaced |
+| TABLE_HEAD_ROW, TABLE_BODY_ROW, TABLE_ROW_MIDDLE | ActivityLog:273,281; AllowRequestsTable:124,136 | `DataTable` | replaced (no sticky header, no per-row testid) |
+| POPOVER_SURFACE | InfoTip:25 | `IconButton` with `tooltip` (Tooltip card) | replaced (card is dsl-ui's dark one) |
+| TEXT_MUTED_SM, block messages | loading, empty, counts, notes: ActivityLog:260,265,268; AllowedList:133,177; BatchAllowBar:99; ConfirmSignModal:129; AllowedEntryDetails:14-17; ExpiredNotices:74,87; FinalCodeDisplay:55; InlineAllow:129,132; LifetimePicker:41; RequestsOverview:173,189,204; UnlockedKeyBar:98; AllowedMachineBlock:116; HeldAnswer:106 | `Notice` default (HeldAnswer:106: danger) | replaced |
+| TEXT_MUTED_SM, TEXT_MUTED | inline: ActivityLog:280 page count; AllowedMachineBlock:101,108,119; ExpiredNotices:80; HeldRequests:247; AllowProgressDetails:31,36,47,52; DeliveryList:35; HeldAnswer:102; HeldDetails:19; HeldStatusRow:45 | none | no standard equivalent: ask dsl-owner (muted inline text) |
+| MONO_STYLE, MONO_FONT_STACK | MachineName:6 (every machine name); AllowedMachineBlock:26,113,129; AllowRequestsTable:141; DeliveryList:14,34,43; ExpiredNotices:81,86; FinalCodeDisplay:61; HeldAnswer:97; HeldRequests:255,267; RequestProgressCard:62; SecurityCodeCompare:24,28; AllowedEntryDetails:20 | DataTable `mono` column and FieldReadOnly `mono` cover tables and fields only | no standard equivalent: ask dsl-owner (inline monospace text) |
+| COMMAND_TEXT | AllowedMachineBlock:26,113,129; AllowedEntryDetails:20 | none | no standard equivalent: ask dsl-owner (inline command text) |
+| HELD_COMMAND | HeldRequests:267; ExpiredNotices:86 | none | no standard equivalent: ask dsl-owner (large monospace text) |
+
+Gaps of the standard `Dialog` that the module now lives with: no max height or inner scroll (a tall dialog, such as an approval with the timeline, runs off a small viewport); no way to focus the Cancel button first (done with an effect, the cross is the first tab stop); title is a string (machine names lose their monospace in titles, notes and warnings). `FieldReadOnly` needs the shell's `ToastProvider`: `src/test-setup.ts` stands one in for the component tests.

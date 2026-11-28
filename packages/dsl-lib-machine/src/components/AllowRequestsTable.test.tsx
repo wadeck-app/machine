@@ -66,15 +66,14 @@ describe('the table', () => {
     expect(within(rowOf('ls')).getByRole('button', { name: 'Allow ls' })).toBeInTheDocument();
   });
 
-  it('every cell of a row is centred vertically with the same padding above and below, so the button sits on the middle of a two-line row', () => {
+  it('is the standard DataTable: every cell of a row has the same padding above and below, so the button sits on the middle of a two-line row', () => {
     render(<AllowRequestsTable rows={ROWS} allow={ALLOW} />);
     const row = rowOf('df -h');
-    expect(row.className).toContain('align-middle');
     expect(row.className).not.toContain('align-top');
     const cells = Array.from(row.querySelectorAll('td'));
     expect(cells.length).toBeGreaterThan(0);
     for (const cell of cells) {
-      expect(cell.className).toContain('py-2');
+      expect(cell.className).toContain('py-1.5');
       expect(cell.className).not.toMatch(/\bp[tb]-/);
     }
   });
@@ -243,7 +242,7 @@ describe('signing in the page', () => {
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent(/desktop is not reachable directly: stored in the relay inbox.*Cause: connect timed out/);
     // The relay inbox is the warning colour, and nothing promises "within about a minute" any more.
-    expect(status).toHaveClass('border-warning');
+    expect(status).toHaveClass('bg-warning-bg');
     expect(status).not.toHaveTextContent(/within about a minute/);
   }, 120_000);
 
@@ -257,7 +256,7 @@ describe('signing in the page', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 20_000 });
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent('Delivered directly to desktop (installed, 0.4 s)');
-    expect(status).toHaveClass('border-success');
+    expect(status).toHaveClass('bg-success-bg');
   }, 120_000);
 });
 
@@ -375,7 +374,7 @@ describe('a notice row whose command is already allowed (decision 100)', () => {
     expect(dismisses()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { machine: REPORTER, id: NOTICE_ID }, headers: expect.anything() }]);
     expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
     expect(onRefresh).toHaveBeenCalledWith('requests');
-    await userEvent.click(within(dialog).getByRole('button', { name: /close/i }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('table')).toBeNull();
   });
 
@@ -386,7 +385,7 @@ describe('a notice row whose command is already allowed (decision 100)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Allow ls' }));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText(/could not be removed.*the daemon is not reachable.*Dismiss/is)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: /close/i }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     expect(within(screen.getByRole('table')).getByText('ls')).toBeInTheDocument();
   });
 

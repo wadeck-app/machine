@@ -287,7 +287,7 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   it('a refused notice is a row of the machine, in its own section, with the note and Allow', () => {
     render(<RequestsOverview {...props({ notices: [notice({ state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
     expect(screen.getByRole('heading', { name: 'Waiting for approval on laptop' })).toBeInTheDocument();
-    const row = screen.getByTestId('notice-row');
+    const row = screen.getByTestId('notice-note').closest('tr') as HTMLElement;
     expect(row).toHaveTextContent('whoami');
     expect(within(row).getByTestId('notice-note')).toHaveTextContent(NOTE);
     expect(within(row).getByRole('button', { name: 'Allow whoami' })).toBeInTheDocument();
@@ -493,10 +493,10 @@ describe('expired notices and Dismiss (decision 100)', () => {
 
   it('a refused request (no end by design) has a Dismiss too, which posts {machine, id} and removes the row', async () => {
     render(<RequestsOverview {...props({ notices: [notice(4, { state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
-    const row = screen.getByTestId('notice-row');
+    const row = screen.getByTestId('notice-note').closest('tr') as HTMLElement;
     expect(within(row).getByRole('button', { name: 'Allow whoami' })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Dismiss' }));
-    await waitFor(() => expect(screen.queryByTestId('notice-row')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('notice-note')).toBeNull());
     expect(dismissCalls()).toEqual([{ url: 'POST /api/modules/machine/dismiss-notice', body: { machine: THINK, id: idOf(4) } }]);
   });
 

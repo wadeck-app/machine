@@ -1,7 +1,7 @@
 {
   "now": 1795860000,
   "relayError": null,
-  "adminKeyFile": "{\"v\":2,\"publicKey\":\"vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU\",\"hint\":\"FAKE PLACEHOLDER: this file holds no key, no passphrase unlocks it\",\"kdf\":{\"name\":\"pbkdf2-sha256\",\"iterations\":600000,\"salt\":\"RkFLRS1QTEFDRUhPTERFUg\"},\"cipher\":{\"name\":\"aes-256-gcm\",\"iv\":\"RkFLRS1QTEFDRUhP\"},\"ciphertext\":\"RkFLRS1QTEFDRUhPTERFUi1OT1QtQS1LRVktTk9USElORy1UTy1VTkxPQ0stSEVSRQ\"}",
+  "adminKeyFile": "{\"v\":2,\"publicKey\":\"vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU\",\"hint\":\"scenario key, trusted by nothing: its passphrase is in the scenario hint\",\"kdf\":{\"name\":\"pbkdf2-sha256\",\"iterations\":600000,\"salt\":\"Lp2olVXgLwcZIDqCMmUuNw\"},\"cipher\":{\"name\":\"aes-256-gcm\",\"iv\":\"GoGY3WA5PsbWx83o\"},\"ciphertext\":\"Qc6SBfH7H--t7Lyq9DawBNF5vvoE0t46Dk89MZ-phsul0iQR4pdJrH4Tfkn6zJPBui6lF_FGaPLaodfRbpf0mw\"}",
   "admin": {
     "uuid": "00000000-0000-4000-8000-000000000001",
     "name": "midgard2",

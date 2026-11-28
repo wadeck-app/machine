@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import { loadContexts, prepareBatch, readAdminKeyHint, signAndSubmitBatch, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
 import { groupSelection, selectionSummary } from '../lib/batchAllow.js';
 import { readOnlyDefaultKind } from '../lib/quickAllow.js';
-import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
 import { InlineAllowForm } from './InlineAllowForm.js';
-import { MachineName } from './MachineName.js';
 
 /** One selected request, with the machine it is signed for and how the progress hook names that machine. */
 export interface BatchItem<R> {
@@ -96,10 +94,10 @@ export function BatchAllowBar<R>({ items, api, onEvent, onDone, onClear }: Batch
           <ButtonAction label="Clear" variant="secondary" onClick={onClear} />
         </div>
       )}
-      {phase.kind === 'loading' && <div className={TEXT_MUTED_SM}>Checking the current policies...</div>}
+      {phase.kind === 'loading' && <Notice variant="default" label="Checking the current policies..." />}
       {(phase.kind === 'info' || phase.kind === 'failed') && (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div role={phase.kind === 'failed' ? 'alert' : 'status'} className={phase.kind === 'failed' ? TEXT_ERROR : TEXT_MUTED_SM}>{phase.kind === 'failed' ? phase.message : phase.message}</div>
+          <Notice variant={phase.kind === 'failed' ? 'danger' : 'default'} label={phase.message} />
           <ButtonAction label="Close" variant="secondary" size="sm" onClick={() => setPhase({ kind: 'collapsed' })} />
         </div>
       )}
@@ -113,18 +111,7 @@ export function BatchAllowBar<R>({ items, api, onEvent, onDone, onClear }: Batch
             busy={busy}
             error={error}
             cancelLabel="Cancel"
-            warning={(words) => (
-              <>
-                Widens rights: every trusted peer may run {items.length === 1 ? 'this' : 'these'} on{' '}
-                {groups.map((g, i) => (
-                  <React.Fragment key={g.machine.uuid}>
-                    {i > 0 && ', '}
-                    <MachineName name={g.machine.name} />
-                  </React.Fragment>
-                ))}
-                , byte for byte, {words}.
-              </>
-            )}
+            warning={(words) => `Widens rights: every trusted peer may run ${items.length === 1 ? 'this' : 'these'} on ${groups.map((g) => g.machine.name).join(', ')}, byte for byte, ${words}.`}
             onCancel={() => setPhase({ kind: 'collapsed' })}
             onSubmit={(lifetime, take) => {
               // The passphrase is a local variable of this call: read and cleared from the field at once, never stored, never passed anywhere but the signature.

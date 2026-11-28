@@ -53,11 +53,11 @@ describe('the routes of the Machines page', () => {
     expect(out.count).toBe(3);
   });
 
-  it('GET /admin-key hands the placeholder envelope, and the page reads its hint from it', async () => {
+  it('GET /admin-key hands the envelope of the throwaway scenario key, and the page reads its hint from it', async () => {
     const routes = make('two-trusted-peers');
     const answer = call(routes, 'GET /admin-key');
     expect(answer.status).toBe(200);
-    expect(await readAdminKeyHint({ get: async () => answer.body } as never)).toContain('FAKE PLACEHOLDER');
+    expect(await readAdminKeyHint({ get: async () => answer.body } as never)).toContain('scenario key');
   });
 
   it('GET /revoke-context/:uuid is accepted by the real code of the page, and lists as recipients the peers that stay', async () => {

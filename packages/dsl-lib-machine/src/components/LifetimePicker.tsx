@@ -1,7 +1,6 @@
 import React from 'react';
-import { FieldSelect, FieldText } from '@wadeck-app/dsl-ui';
+import { FieldSelect, FieldText, Notice } from '@wadeck-app/dsl-ui';
 import { LIFETIME_PRESETS, lifetimeInput, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
-import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // The lifetime choice of an Allow (once, a preset duration, permanent, custom): the same controls in the confirmation dialog and in the inline forms.
 
@@ -37,8 +36,8 @@ export function LifetimePicker({ choice, onChange, busy = false }: LifetimePicke
           />
         </div>
       )}
-      {problem !== null && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
-      {choice.kind === 'once' && <div className={TEXT_MUTED_SM}>The command runs once, then the next identical request is refused (or held) again.</div>}
+      {problem !== null && <Notice variant="danger" label={problem} />}
+      {choice.kind === 'once' && <Notice variant="default" label="The command runs once, then the next identical request is refused (or held) again." />}
     </div>
   );
 }

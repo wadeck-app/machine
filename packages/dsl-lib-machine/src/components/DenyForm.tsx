@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { ButtonAction, FieldText } from '@wadeck-app/dsl-ui';
+import { ButtonAction, FieldText, Notice } from '@wadeck-app/dsl-ui';
 import type { AllowApi } from '../lib/allowFlow.js';
-import { TEXT_ERROR } from '../lib/styleTokens.js';
 
 /** The limits of machine-core's checkDenyReason: the agent reads the reason and the audit log keeps it. */
 export const REASON_MAX = 200;
@@ -77,7 +76,7 @@ export function DenyForm({ id, machine, api, onCancel, onDenied }: DenyFormProps
   return (
     <form className="flex flex-col gap-2" onSubmit={submit}>
       <FieldText label="Reason for the caller (optional)" description={`Shown to the agent and kept in the audit log: printable ASCII, at most ${REASON_MAX} characters, nothing secret.`} name="machine-deny-reason" autoComplete="off" maxLength={REASON_MAX} value={reason} disabled={busy} onChange={setReason} />
-      {error !== null && <div role="alert" className={TEXT_ERROR}>{error}</div>}
+      {error !== null && <Notice variant="danger" label={error} />}
       <div className="flex gap-2">
         <ButtonAction type="submit" label="Confirm deny" variant="danger" size="sm" disabled={busy} />
         <ButtonAction label="Cancel" variant="secondary" size="sm" onClick={onCancel} disabled={busy} />

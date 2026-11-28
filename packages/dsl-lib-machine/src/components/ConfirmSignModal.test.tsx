@@ -45,7 +45,7 @@ describe('the warning box of the signing dialog', () => {
     const { rerender } = render(<ConfirmSignModal {...base} />);
     expect(screen.getByText('careful')).toBeInTheDocument();
     rerender(<ConfirmSignModal {...base} warning="" />);
-    expect(screen.getByRole('dialog').querySelector('p.border-warning')).toBeNull();
+    expect(screen.queryByText('careful')).toBeNull();
   });
 });
 
@@ -159,5 +159,42 @@ describe('the aside and the busy label of the signing dialog', () => {
     expect(screen.getByRole('button', { name: 'Signing...' })).toBeDisabled();
     rerender(<ConfirmSignModal {...base} busy busyLabel="Telling the other machines..." />);
     expect(screen.getByRole('button', { name: 'Telling the other machines...' })).toBeDisabled();
+  });
+});
+
+describe('the standard dialog of the design system hosts the signing form', () => {
+  it('is the Dialog of dsl-ui: a modal named by its title, with the standard "Close dialog" cross, and the passphrase form and its footer buttons inside it', () => {
+    render(<ConfirmSignModal {...base} />);
+    const dialog = screen.getByRole('dialog', { name: 'Allow?' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByTestId('dialog-backdrop')).toContainElement(dialog);
+    expect(dialog).toContainElement(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(dialog).toContainElement(screen.getByLabelText('Admin passphrase'));
+    expect(dialog).toContainElement(screen.getByRole('button', { name: 'Allow and sign' }));
+  });
+
+  it('Escape and the cross ask to cancel, but not while the signature is made', async () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(<ConfirmSignModal {...base} onCancel={onCancel} />);
+    await userEvent.keyboard('{Escape}');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(onCancel).toHaveBeenCalledTimes(2);
+    rerender(<ConfirmSignModal {...base} onCancel={onCancel} busy />);
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(onCancel).toHaveBeenCalledTimes(2);
+  });
+
+  it('Cancel is the default focus, also with a passphrase field: Enter without thinking never signs', () => {
+    render(<ConfirmSignModal {...base} />);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  });
+
+  it('the footer submit button submits the form: Enter in the passphrase field confirms', async () => {
+    const onConfirm = vi.fn();
+    render(<ConfirmSignModal {...base} onConfirm={onConfirm} />);
+    await userEvent.type(screen.getByLabelText('Admin passphrase'), 'secret words{Enter}');
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });

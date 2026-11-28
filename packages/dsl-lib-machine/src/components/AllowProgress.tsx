@@ -1,8 +1,8 @@
 import React from 'react';
+import { Badge, type BadgeVariant, HorizontalStack, Progress, VerticalStack } from '@wadeck-app/dsl-ui';
 import { percentOf, stepsOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
-import { SEGMENT_ACTIVE, SEGMENT_DONE, SEGMENT_FAILED, SEGMENT_PENDING, STEPPER_SEGMENT, STEP_ACTIVE, STEP_DONE, STEP_FAILED, STEP_PENDING } from '../lib/styleTokens.js';
 
-// The thin stepper under a request (decision 86): one segment and ONE word per step, merged with the determinate bar. Every step comes from a real
+// The thin stepper under a request (decision 86): the determinate bar of dsl-ui (Progress) and ONE badge per step, one word each. Every step comes from a real
 // event (allowProgress.ts). The sentences (cause, explanation) are NOT here: the row above says the outcome, the Details disclosure the rest.
 
 export interface AllowProgressProps {
@@ -11,30 +11,23 @@ export interface AllowProgressProps {
   now: number;
 }
 
-/** The state of a step in words, for a screen reader (the value text of the bar). */
+/** The state of a step in words, for a screen reader (the title of the badge). */
 export const STATE_WORDS: Record<StepState, string> = { done: 'done', active: 'in progress', pending: 'pending', failed: 'failed', skipped: 'not needed' };
-const SEGMENT: Record<StepState, string> = { done: SEGMENT_DONE, active: SEGMENT_ACTIVE, pending: SEGMENT_PENDING, failed: SEGMENT_FAILED, skipped: SEGMENT_PENDING };
-const WORD_COLOUR: Record<StepState, string> = { done: STEP_DONE, active: STEP_ACTIVE, pending: STEP_PENDING, failed: STEP_FAILED, skipped: STEP_PENDING };
+const STEP_VARIANT: Record<StepState, BadgeVariant> = { done: 'success', active: 'primary', pending: 'default', failed: 'danger', skipped: 'default' };
 
 export function AllowProgress({ record, now }: AllowProgressProps) {
   const steps = stepsOf(record, now);
+  const value = percentOf(record);
   return (
-    <div
-      role="progressbar"
-      aria-label="Progress of the allow"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percentOf(record)}
-      aria-valuetext={steps.map((s) => `${s.short}: ${STATE_WORDS[s.state]}`).join(', ')}
-      data-testid="allow-progress"
-      className="flex gap-1"
-    >
-      {steps.map((s) => (
-        <div key={s.id} className="flex flex-1 flex-col gap-0.5">
-          <div className={`${STEPPER_SEGMENT} ${SEGMENT[s.state]}`} />
-          <span className={`text-xs ${WORD_COLOUR[s.state]}`}>{s.short}</span>
-        </div>
-      ))}
+    <div data-testid="allow-progress">
+      <VerticalStack gap="gap-1">
+        <Progress value={value} size="sm" variant={steps.some((s) => s.state === 'failed') ? 'danger' : value >= 100 ? 'success' : 'default'} />
+        <HorizontalStack gap="gap-1" align="items-center" wrap>
+          {steps.map((s) => (
+            <Badge key={s.id} label={s.short} variant={STEP_VARIANT[s.state]} tone="subtle" title={`${s.short}: ${STATE_WORDS[s.state]}`} />
+          ))}
+        </HorizontalStack>
+      </VerticalStack>
     </div>
   );
 }

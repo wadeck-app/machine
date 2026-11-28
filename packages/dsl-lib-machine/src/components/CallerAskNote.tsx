@@ -1,6 +1,6 @@
 import React from 'react';
+import { Notice } from '@wadeck-app/dsl-ui';
 import { askRisk, askSummary, type CallerAsk } from '../lib/callerAsk.js';
-import { NOTICE_NEUTRAL, NOTICE_WARNING } from '../lib/styleTokens.js';
 
 export interface CallerAskNoteProps {
   ask: CallerAsk;
@@ -19,13 +19,15 @@ export function CallerAskNote({ ask, where, warning = true }: CallerAskNoteProps
   const risk = askRisk(ask);
   return (
     <div className="flex flex-col gap-1">
-      <div data-testid="caller-ask" className={NOTICE_NEUTRAL}>
-        <span className="font-semibold">{where === 'dialog' ? 'Requested by the caller' : 'Requested by the caller (not your decision)'}</span>: {askSummary(ask)}.{' '}
-        {where === 'card' ? 'Allow starts from it and you can change it; nothing is applied until you sign.' : 'The lifetime below starts from it: change it if you want another.'}
+      <div data-testid="caller-ask">
+        <Notice
+          variant="default"
+          label={`${where === 'dialog' ? 'Requested by the caller' : 'Requested by the caller (not your decision)'}: ${askSummary(ask)}. ${where === 'card' ? 'Allow starts from it and you can change it; nothing is applied until you sign.' : 'The lifetime below starts from it: change it if you want another.'}`}
+        />
       </div>
       {warning && risk !== undefined && (
-        <div data-testid="caller-ask-warning" role="note" className={NOTICE_WARNING}>
-          Warning: {risk} was asked by the caller, not decided by you. Check it before you sign.
+        <div data-testid="caller-ask-warning" role="note">
+          <Notice variant="warning" label={`Warning: ${risk} was asked by the caller, not decided by you. Check it before you sign.`} />
         </div>
       )}
     </div>

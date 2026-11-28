@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Badge, ButtonAction, CompactSelect, HeaderActions, HorizontalStack, IconButton } from '@wadeck-app/dsl-ui';
+import { Badge, ButtonAction, CompactSelect, HeaderActions, HorizontalStack, IconButton, Notice } from '@wadeck-app/dsl-ui';
 import { Lock } from 'lucide-react';
 import { adminKeyHolder, formatCountdown, KEEP_CHOICES, type KeepChoice } from '../lib/adminKeyHolder.js';
-import { NOTICE_SUCCESS, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 const KEEP_OPTIONS = KEEP_CHOICES.map((c) => ({ value: c.value, label: c.label }));
 // The indicator exists once per page: while a pill is mounted, a bar (the dialogs and inline prompts) only says that no passphrase is needed.
@@ -95,12 +94,14 @@ export function UnlockedKeyBar({ variant = 'bar' }: UnlockedKeyBarProps) {
     );
   }
   if (pageHasPill) {
-    return <span className={TEXT_MUTED_SM}>No passphrase needed: the admin key is unlocked in this page.</span>;
+    return <Notice variant="default" label="No passphrase needed: the admin key is unlocked in this page." />;
   }
   return (
-    <div data-testid="unlocked-key-bar" className={`flex flex-wrap items-center justify-between gap-2 ${NOTICE_SUCCESS}`}>
-      <span>{`Admin key unlocked, locks in ${formatCountdown(expiresAt - now)}`}</span>
-      <ButtonAction label="Lock now" variant="secondary" size="sm" onClick={() => adminKeyHolder.lock()} />
+    <div data-testid="unlocked-key-bar">
+      <HorizontalStack gap="gap-2" align="items-center">
+        <Notice variant="success" label={`Admin key unlocked, locks in ${formatCountdown(expiresAt - now)}`} />
+        <ButtonAction label="Lock now" variant="secondary" size="sm" onClick={() => adminKeyHolder.lock()} />
+      </HorizontalStack>
     </div>
   );
 }

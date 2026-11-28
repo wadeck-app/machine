@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
+import { ButtonAction, FieldSecret, type FieldSecretHandle, Notice } from '@wadeck-app/dsl-ui';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeResolution } from '../lib/lifetimeChoice.js';
-import { NOTICE_WARNING, TEXT_ERROR } from '../lib/styleTokens.js';
 import { LifetimePicker } from './LifetimePicker.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
@@ -18,7 +17,7 @@ export interface InlineAllowFormProps {
   /** Names the form for a screen reader (the group of requests it signs). */
   label: string;
   /** The one line that says what widens, given the lifetime in words (`lifetimeWords`). Absent with `fixedChoice` (the card says it in its Details). */
-  warning?: (words: string) => React.ReactNode;
+  warning?: (words: string) => string;
   /** The lifetime is decided OUTSIDE the form (the select of the card): no picker, no warning, the form is only the key. */
   fixedChoice?: LifetimeChoice;
   /** The hint of the admin key (readable without the passphrase), shown above the field. Absent: none is stored. */
@@ -95,7 +94,7 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
       }}
     >
       {fixedChoice === undefined && <LifetimePicker choice={choice} onChange={setChoice} busy={busy} />}
-      {fixedChoice === undefined && warning !== undefined && <p className={NOTICE_WARNING}>{warning(words)}</p>}
+      {fixedChoice === undefined && warning !== undefined && <Notice variant="warning" label={warning(words)} />}
       {!unlocked && (
         <>
           {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
@@ -110,7 +109,7 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
           </div>
         </>
       )}
-      {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
+      {shown !== null && <Notice variant="danger" label={shown} />}
       <div className="flex justify-end gap-2">
         <ButtonAction label={cancelLabel} variant="secondary" size="sm" onClick={onCancel} disabled={busy} />
         <ButtonAction type="submit" label={busy ? 'Signing...' : 'Allow and sign'} variant="primary" size="sm" disabled={busy} />

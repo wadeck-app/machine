@@ -1,7 +1,6 @@
 import React from 'react';
-import { CompactSelect, FieldText } from '@wadeck-app/dsl-ui';
+import { CompactSelect, FieldText, Notice } from '@wadeck-app/dsl-ui';
 import { LIFETIME_PRESETS, lifetimeInput, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
-import { TEXT_ERROR } from '../lib/styleTokens.js';
 
 // The lifetime of an Allow as ONE small select on the row of the buttons of a card (the default is visible, changeable before the click). "Custom" adds a
 // kind select and a field next to it. The long explanation of each lifetime is not here: it is in the Details of the card.
@@ -45,7 +44,7 @@ export function CompactLifetime({ label = 'Lifetime', choice, onChange, disabled
           </div>
         </>
       )}
-      {shown !== null && <div role="alert" className={`w-full ${TEXT_ERROR}`}>{shown}</div>}
+      {shown !== null && <Notice variant="danger" label={shown} />}
     </>
   );
 }

@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
 import { adminKeyHolder } from './lib/adminKeyHolder.js';
 import { signingsSettled } from './lib/allowFlow.js';
 import { lifetimeMemory } from './lib/quickAllow.js';
@@ -21,3 +21,20 @@ afterEach(async () => {
   unobserve() {}
   disconnect() {}
 };
+
+// dsl-ui's FieldReadOnly (the read-only value fields of the signing dialogs) calls useToast, which throws outside a ToastProvider. The app shell provides one
+// (app-core-sdk docs/module-authoring.md); a component test renders without the shell, so the hook answers with a recording stand-in there. Nothing here toasts.
+vi.mock('@wadeck-app/dsl-ui/dist/components/overlay/Toast.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@wadeck-app/dsl-ui/dist/components/overlay/Toast.js')>();
+  const standIn = { success: () => undefined, error: () => undefined, info: () => undefined };
+  return {
+    ...original,
+    useToast: () => {
+      try {
+        return original.useToast();
+      } catch {
+        return standIn;
+      }
+    },
+  };
+});

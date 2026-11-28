@@ -50,15 +50,22 @@ const randomOf = (byte: number): string => Buffer.alloc(16, byte).toString('base
 export const RANDOMS = { macM2: randomOf(0x31), thinkcentre: randomOf(0x32) };
 export const ALLOWED_RANDOMS: string[] = Object.values(RANDOMS);
 
-/** An obviously fake envelope of the admin key file: right fields, nothing in it can be unlocked. */
-export const FAKE_ADMIN_KEY_FILE = JSON.stringify({
+/**
+ * THROWAWAY SCENARIO ADMIN KEY: the file served by the scenarios. It is the encrypted envelope (public data) of `KEYS.admin` above (32 bytes of 0xa1: obviously fake,
+ * trusted by no machine), locked with the PUBLISHED passphrase `SCENARIO_PASSPHRASE` of commons/scenarioList.ts, so the real code of the page can sign in a browser. It
+ * is a literal, not computed, so that regenerating the seeds (WRITE_SEEDS=1) is deterministic (a fresh encryption draws a new salt and iv). It was produced once with
+ * `encryptAdminKey(KEYS.admin, SCENARIO_PASSPHRASE, { iterations: 600000, hint })`; scenarioSigning.test.ts proves it still opens with the passphrase and holds KEYS.admin.
+ */
+export const SCENARIO_ADMIN_KEY_FILE = JSON.stringify({
   v: 2,
   publicKey: KEYS.admin.publicKey,
-  hint: 'FAKE PLACEHOLDER: this file holds no key, no passphrase unlocks it',
-  kdf: { name: 'pbkdf2-sha256', iterations: 600000, salt: 'RkFLRS1QTEFDRUhPTERFUg' },
-  cipher: { name: 'aes-256-gcm', iv: 'RkFLRS1QTEFDRUhP' },
-  ciphertext: 'RkFLRS1QTEFDRUhPTERFUi1OT1QtQS1LRVktTk9USElORy1UTy1VTkxPQ0stSEVSRQ',
+  hint: 'scenario key, trusted by nothing: its passphrase is in the scenario hint',
+  kdf: { name: 'pbkdf2-sha256', iterations: 600000, salt: 'Lp2olVXgLwcZIDqCMmUuNw' },
+  cipher: { name: 'aes-256-gcm', iv: 'GoGY3WA5PsbWx83o' },
+  ciphertext: 'Qc6SBfH7H--t7Lyq9DawBNF5vvoE0t46Dk89MZ-phsul0iQR4pdJrH4Tfkn6zJPBui6lF_FGaPLaodfRbpf0mw',
 });
+/** EXPLICIT ALLOW-LIST of the privacy scan: the only key-like string of a seed that is the scenario key (the ciphertext of the throwaway key above). Nothing else is added without a comment. */
+export const ALLOWED_SCENARIO_KEY_STRINGS: string[] = [(JSON.parse(SCENARIO_ADMIN_KEY_FILE) as { ciphertext: string }).ciphertext];
 
 export function registrationOf(name: string, uuid: string, key: FakeKey, serial = 1): SignedRegistrationWire {
   const body: RegistrationBody = { v: 1, uuid, name, identityPublicKey: key.publicKey, serial, validFrom: NOW - 30 * 86_400, validTo: NOW + 3650 * 86_400, adminKeyId: keyId(KEYS.admin.publicKey) };
@@ -211,7 +218,7 @@ const think = (ageSeconds: number, over?: Partial<RelayCandidacy>): RelayCandida
 const emptyState = (): CandidaciesState => ({
   now: NOW,
   relayError: null,
-  adminKeyFile: FAKE_ADMIN_KEY_FILE,
+  adminKeyFile: SCENARIO_ADMIN_KEY_FILE,
   admin: { uuid: UUID.midgard2, name: 'midgard2', identityPublicKey: KEYS.midgard2.publicKey, publicKey: KEYS.admin.publicKey, keyId: keyId(KEYS.admin.publicKey) },
   trusted: [],
   revoked: {},

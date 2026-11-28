@@ -1,8 +1,7 @@
-import { Tabs, type SortDir } from '@wadeck-app/dsl-ui';
+import { Tabs, type SortDir, Notice } from '@wadeck-app/dsl-ui';
 import { useMemo, useRef, useState } from 'react';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { EditOutcome } from '../lib/allowedEdit.js';
-import { NOTICE_SUCCESS, NOTICE_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowedMachineBlock, matches } from './AllowedMachineBlock.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useSaferMode } from './useSaferMode.js';
@@ -93,7 +92,6 @@ export interface AllowedListProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
-const LOAD_ERROR = 'flex flex-col items-start gap-2 rounded border border-danger bg-danger-bg p-3 text-sm text-danger-text';
 const NOT_READ = 'The list of allowed commands could not be read: the reason is in the notification of the page (the machine daemon or the module is not running, or this machine is not initialized). Fix it, then press Refresh.';
 
 /** The tab label: name and entries (the entries that match the search while one is typed), and a word when the policy could not be read. */
@@ -130,18 +128,18 @@ export function AllowedList({ data, search = '', loading = false, refreshing = f
   return (
     <section className="flex flex-col gap-3" aria-label="Allowed commands">
       <UnlockedKeyBar variant="chip" />
-      {data !== undefined && needle !== '' ? <span className={TEXT_MUTED_SM} aria-live="polite">{`${shownEntries} of ${data.entryCount} entries shown`}</span> : null}
+      {data !== undefined && needle !== '' ? <Notice variant="default" label={`${shownEntries} of ${data.entryCount} entries shown`} /> : null}
 
       {outcome !== null ? (
-        <div role={outcome.tone === 'danger' ? 'alert' : 'status'} aria-label="Last change" className={outcome.tone === 'success' ? NOTICE_SUCCESS : outcome.tone === 'warning' ? NOTICE_WARNING : LOAD_ERROR}>
-          {outcome.text}
+        <div role="group" aria-label="Last change">
+          <Notice variant={outcome.tone} label={outcome.text} />
         </div>
       ) : null}
 
       {data !== undefined ? (
         <>
           {data.warnings.map((w) => (
-            <p key={w} className={NOTICE_WARNING}>{w}</p>
+            <Notice key={w} variant="warning" label={w} />
           ))}
           {shown.length > 0 && active !== undefined ? (
             <Tabs
@@ -174,9 +172,9 @@ export function AllowedList({ data, search = '', loading = false, refreshing = f
           ) : null}
         </>
       ) : loading ? (
-        <p className={TEXT_MUTED_SM} aria-live="polite">Loading...</p>
+        <Notice variant="default" label="Loading..." />
       ) : (
-        <div role="alert" className={LOAD_ERROR}>{NOT_READ}</div>
+        <Notice variant="danger" label={NOT_READ} />
       )}
     </section>
   );

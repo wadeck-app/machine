@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Notice } from '@wadeck-app/dsl-ui';
 import { finalCode } from '@wadeck-app/machine-webcrypto';
-import { MONO_STYLE, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
 export interface FinalCodeDisplayProps {
   /** Candidate identity public key, unpadded base64url. */
@@ -49,10 +50,10 @@ export function FinalCodeDisplay({ candidatePublicKey, adminPublicKey, random, o
   }, [candidatePublicKey, adminPublicKey, random]);
 
   if (computed.state === 'error') {
-    return <div role="alert" className={TEXT_ERROR}>{computed.message}</div>;
+    return <Notice variant="danger" label={computed.message} />;
   }
   if (computed.state === 'pending') {
-    return <div className={TEXT_MUTED_SM}>Computing the security code...</div>;
+    return <Notice variant="default" label="Computing the security code..." />;
   }
   return (
     <div className="flex flex-col gap-3">

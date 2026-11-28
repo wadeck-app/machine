@@ -1,12 +1,11 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ButtonAction, Checkbox } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Checkbox, Notice, Badge, Card, VerticalStack } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
 import { agoText } from '../lib/agoText.js';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice } from '../lib/lifetimeChoice.js';
 import { cardFlags, lifetimeMemory, readOnlyDefaultKind, startChoiceOf } from '../lib/quickAllow.js';
 import { noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
-import { HELD_COMMAND, HELD_COUNTDOWN, HELD_COUNTDOWN_URGENT, HELD_ITEM, MONO_STYLE, NOTICE_NEUTRAL, NOTICE_SUCCESS, OUTCOME_NEUTRAL, OUTCOME_SUCCESS, OUTCOME_WARNING, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowStyle } from '../lib/allowStyle.js';
 import { AllowDialog } from './AllowDialog.js';
 import { BatchAllowBar, type BatchItem } from './BatchAllowBar.js';
@@ -17,6 +16,7 @@ import { HeldStatusRow } from './HeldStatusRow.js';
 import { MachineName } from './MachineName.js';
 import { RequestProgressCard } from './RequestProgressCard.js';
 import { useAllowProgress } from './useAllowProgress.js';
+import { MONO_STYLE, TEXT_MUTED_SM, HELD_COMMAND } from '../lib/styleTokens.js';
 
 export interface HeldRequestRow {
   /** What the Deny button posts: the id of the held request. */
@@ -107,7 +107,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
   const [denying, setDenying] = useState<string | null>(null);
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   // The one short line of a Deny (nothing else shows it). An Allow has none: its card says everything.
-  const [result, setResult] = useState<React.ReactNode | null>(null);
+  const [result, setResult] = useState<string | null>(null);
   // A line the owner has to read next to the progress of a request (the list of notice recipients was not sent ...).
   const [warnings, setWarnings] = useState<Readonly<Record<string, string>>>({});
   const api = useRef<AllowApi | null>(null);
@@ -151,23 +151,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
   };
 
   const denied = (row: HeldRequestRow, reason: string | undefined) => {
-    setResult(
-      <>
-        Denied {row.command}
-        {row.machine !== undefined ? (
-          <>
-            {' '}
-            on <MachineName name={row.machine.name} /> (<MachineName name={row.machine.name} /> was told)
-          </>
-        ) : (
-          <>
-            {' '}
-            from <MachineName name={row.peerText} />
-          </>
-        )}
-        : nothing was signed. The caller was told: {reason ?? NO_REASON_TEXT}
-      </>,
-    );
+    setResult(`Denied ${row.command}${row.machine !== undefined ? ` on ${row.machine.name} (${row.machine.name} was told)` : ` from ${row.peerText}`}: nothing was signed. The caller was told: ${reason ?? NO_REASON_TEXT}`);
     leave(row);
   };
 
@@ -215,8 +199,8 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
   return (
     <div className="flex flex-col gap-2">
       <h3 className="text-base font-semibold text-content">Held requests: a caller is waiting for your answer</h3>
-      {result !== null && <div role="status" className={NOTICE_SUCCESS}>{result}</div>}
-      {allow !== undefined && !canAllow && allow.note !== '' && visible.length > 0 && <div className={NOTICE_NEUTRAL}>{allow.note}</div>}
+      {result !== null && <Notice variant="success" label={result} />}
+      {allow !== undefined && !canAllow && allow.note !== '' && visible.length > 0 && <Notice variant="default" label={allow.note} />}
       <ul className="flex flex-col gap-2">
         {visible.map((r) => {
           const left = Math.max(0, r.secondsLeft - elapsedSince(r.fetchedAtMs ?? fetchedAt));
@@ -254,53 +238,57 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
             );
           }
           return (
-            <li key={r.id} aria-label={`Held request ${r.command}`} className={HELD_ITEM} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
-              <div data-testid="held-header" className="flex flex-wrap items-baseline justify-between gap-x-2">
-                <span className="flex flex-wrap items-baseline gap-x-2">
-                  {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
-                  <span className={`text-sm ${TEXT_MUTED_SM}`}>
-                    From <MachineName name={r.peerText} />
-                    {r.machine !== undefined && (
-                      <>
-                        {' '}
-                        on <MachineName name={r.machine.name} />
-                      </>
-                    )}{' '}
-                    in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
-                    {r.note === undefined && <>, asked {r.askedSecondsAgo === undefined ? r.askedText : agoText(r.askedSecondsAgo + elapsedSince(r.fetchedAtMs ?? fetchedAt))}</>}
-                  </span>
-                  {reach !== undefined && (
-                    <span data-testid="reachable-badge" className={reach.state === 'direct' ? OUTCOME_SUCCESS : reach.state === 'not-direct' ? OUTCOME_WARNING : OUTCOME_NEUTRAL}>
-                      Reachability: {reach.text}
+            <li key={r.id} aria-label={`Held request ${r.command}`} {...(r.note !== undefined ? { 'data-testid': 'notice-row' } : {})}>
+              <Card padding="sm">
+                <VerticalStack gap="gap-1.5">
+                  <div data-testid="held-header" className="flex flex-wrap items-baseline justify-between gap-x-2">
+                    <span className="flex flex-wrap items-baseline gap-x-2">
+                      {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
+                      <span className={`text-sm ${TEXT_MUTED_SM}`}>
+                        From <MachineName name={r.peerText} />
+                        {r.machine !== undefined && (
+                          <>
+                            {' '}
+                            on <MachineName name={r.machine.name} />
+                          </>
+                        )}{' '}
+                        in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
+                        {r.note === undefined && <>, asked {r.askedSecondsAgo === undefined ? r.askedText : agoText(r.askedSecondsAgo + elapsedSince(r.fetchedAtMs ?? fetchedAt))}</>}
+                      </span>
+                      {reach !== undefined && (
+                        <span data-testid="reachable-badge">
+                          <Badge label={`Reachability: ${reach.text}`} variant={reach.state === 'direct' ? 'success' : reach.state === 'not-direct' ? 'warning' : 'default'} tone="subtle" />
+                        </span>
+                      )}
                     </span>
+                    <Badge label={leftText(left)} variant={left <= URGENT_SECONDS ? 'danger' : 'warning'} tone="subtle" />
+                  </div>
+                  {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
+                  <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
+                  <HeldStatusRow row={r} choiceFlags={rowCanAllow ? cardFlags(choiceOf(r), undefined) : []} open={detailsOpen.has(r.id)} panelId={`${panelBase}-${r.id}`} onToggle={() => toggleDetails(r.id)} />
+                  <div id={`${panelBase}-${r.id}`}>
+                    {detailsOpen.has(r.id) && <HeldDetails row={r} machine={target} words={wordsOf(choiceOf(r))} />}
+                  </div>
+                  {left > 0 && denying !== r.id && api.current !== null && (
+                    <HeldAnswer
+                      key={r.id}
+                      row={r}
+                      machine={machineOf(r)}
+                      canAllow={rowCanAllow}
+                      inline={inline}
+                      saferMode={saferMode}
+                      api={api.current}
+                      choice={choiceOf(r)}
+                      onChoice={(c) => choose(r, c)}
+                      onEvent={progressFor(r)}
+                      onDone={(answer) => allowed(r, answer)}
+                      onOpenDialog={() => setSelected(r)}
+                      onDeny={() => setDenying(r.id)}
+                    />
                   )}
-                </span>
-                <span className={left <= URGENT_SECONDS ? HELD_COUNTDOWN_URGENT : HELD_COUNTDOWN}>{leftText(left)}</span>
-              </div>
-              {/* The command is untrusted text (a notice comes from another machine): a text node only, never interpreted. */}
-              <div className={HELD_COMMAND} style={MONO_STYLE}>{r.command}</div>
-              <HeldStatusRow row={r} choiceFlags={rowCanAllow ? cardFlags(choiceOf(r), undefined) : []} open={detailsOpen.has(r.id)} panelId={`${panelBase}-${r.id}`} onToggle={() => toggleDetails(r.id)} />
-              <div id={`${panelBase}-${r.id}`}>
-                {detailsOpen.has(r.id) && <HeldDetails row={r} machine={target} words={wordsOf(choiceOf(r))} />}
-              </div>
-              {left > 0 && denying !== r.id && api.current !== null && (
-                <HeldAnswer
-                  key={r.id}
-                  row={r}
-                  machine={machineOf(r)}
-                  canAllow={rowCanAllow}
-                  inline={inline}
-                  saferMode={saferMode}
-                  api={api.current}
-                  choice={choiceOf(r)}
-                  onChoice={(c) => choose(r, c)}
-                  onEvent={progressFor(r)}
-                  onDone={(answer) => allowed(r, answer)}
-                  onOpenDialog={() => setSelected(r)}
-                  onDeny={() => setDenying(r.id)}
-                />
-              )}
-              {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={(reason) => denied(r, reason)} />}
+                  {left > 0 && denying === r.id && api.current !== null && <DenyForm id={r.id} {...(r.machine !== undefined ? { machine: r.machine.uuid } : {})} api={api.current} onCancel={() => setDenying(null)} onDenied={(reason) => denied(r, reason)} />}
+                </VerticalStack>
+              </Card>
             </li>
           );
         })}

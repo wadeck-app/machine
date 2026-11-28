@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { AllowApi, AllowResult } from '../lib/allowFlow.js';
 import type { CallerAsk } from '../lib/callerAsk.js';
 import { lifetimeInput, type LifetimeChoice } from '../lib/lifetimeChoice.js';
 import { cardFlags } from '../lib/quickAllow.js';
-import { MONO_STYLE, TEXT_MUTED_SM, TEXT_MUTED } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
 import { CompactLifetime } from './CompactLifetime.js';
 import { InlineAllow } from './InlineAllow.js';
 import { useAdminKey } from './useAdminKey.js';
+import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The answer of a held card: ONE row (lifetime select, Allow, Deny). With the admin key unlocked in the page Allow signs at once with the lifetime of the
 // select, flagged lifetime or not (the badges only inform); in Safer mode (off by default) a FLAGGED lifetime (permanent, 50 calls or more, more than 7 days, or a caller ask of that size) needs a second click; with the key locked Allow
@@ -103,7 +103,7 @@ export function HeldAnswer({ row, machine, canAllow, inline, saferMode = false, 
           Flagged: {flags.join('; ')}. A flagged lifetime needs a second click: Confirm allow signs it, Cancel signs nothing.
         </div>
       )}
-      {problem !== null && !showSelect && <div role="alert" className={TEXT_MUTED_SM}>{problem}</div>}
+      {problem !== null && !showSelect && <Notice variant="danger" label={problem} />}
     </div>
   );
 }

@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
 import { allowRenewalOf, loadContext, prepareAllow, readAdminKeyHint, signAndSubmitAllow, type AllowApi, type AllowContext, type AllowResult } from '../lib/allowFlow.js';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeResolution } from '../lib/lifetimeChoice.js';
-import { TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import type { AllowDialogEvent } from './AllowDialog.js';
 import { InlineAllowForm } from './InlineAllowForm.js';
 import { MachineName } from './MachineName.js';
@@ -126,15 +125,15 @@ export function InlineAllow({ row, machine, choice, autoSign = false, api, onEve
   }, [api, machine.uuid, machine.name, row.shell, row.command, row.renewal, row.peer]);
 
   if (phase.kind === 'loading') {
-    return <div className={TEXT_MUTED_SM}>Checking the current policy...</div>;
+    return <Notice variant="default" label="Checking the current policy..." />;
   }
   if (phase.kind === 'signing') {
-    return <div role="status" className={TEXT_MUTED_SM}>Signing...</div>;
+    return <Notice variant="default" label="Signing..." />;
   }
   if (phase.kind === 'info' || phase.kind === 'failed') {
     return (
       <div className="flex flex-wrap items-center gap-2">
-        {phase.kind === 'failed' ? <div role="alert" className={TEXT_ERROR}>{phase.message}</div> : <MachineText text={phase.message} names={[machine.name]} />}
+        {phase.kind === 'failed' ? <Notice variant="danger" label={phase.message} /> : <MachineText text={phase.message} names={[machine.name]} />}
         <ButtonAction label="Close" variant="secondary" size="sm" onClick={onClose} />
       </div>
     );

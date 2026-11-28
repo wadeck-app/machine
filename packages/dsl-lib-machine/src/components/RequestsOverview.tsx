@@ -1,9 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ButtonAction, FieldSelect } from '@wadeck-app/dsl-ui';
+import { ButtonAction, FieldSelect, Notice } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { mergeExpired, mergeNotices, type NoticeData } from '../lib/noticeRows.js';
 import { elevateForRemote, fetchRemoteRequests, type RemoteOutcome } from '../lib/remoteRequestsFlow.js';
-import { NOTICE_NEUTRAL, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowStyleSwitch } from './AllowStyleSwitch.js';
 import { AllowRequestsTable, type PendingRequestRow } from './AllowRequestsTable.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
@@ -166,27 +165,21 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
           </div>
         )}
       </div>
-      {remote !== undefined && !remote.available && remote.note !== '' && <div className={NOTICE_NEUTRAL}>{remote.note}</div>}
-      {remote?.available === true && peers.length === 0 && <div className={NOTICE_NEUTRAL}>This machine trusts no other machine yet: there is nothing to load (see the Machines page).</div>}
-      {startError !== null && <div role="alert" className={TEXT_ERROR}>{startError}</div>}
+      {remote !== undefined && !remote.available && remote.note !== '' && <Notice variant="default" label={remote.note} />}
+      {remote?.available === true && peers.length === 0 && <Notice variant="default" label="This machine trusts no other machine yet: there is nothing to load (see the Machines page)." />}
+      {startError !== null && <Notice variant="danger" label={startError} />}
       {loaded !== null && (
-        <div className={TEXT_MUTED_SM}>
-          Other machines loaded at {clock(loaded.at)} ({loaded.outcomes.length - failures.length} of {loaded.outcomes.length} answered). They are not refreshed by themselves: reload to see newer requests.
-        </div>
+        <Notice variant="default" label={`Other machines loaded at ${clock(loaded.at)} (${loaded.outcomes.length - failures.length} of ${loaded.outcomes.length} answered). They are not refreshed by themselves: reload to see newer requests.`} />
       )}
       {noticesError !== '' && (
-        <div role="alert" className={NOTICE_WARNING}>
-          Request notices from the other machines may be missing: {noticesError}
-        </div>
+        <Notice variant="danger" label={`Request notices from the other machines may be missing: ${noticesError}`} />
       )}
       {failures.map((f) => (
-        <div key={f.peer.uuid} role="alert" className={NOTICE_WARNING}>
-          <MachineName name={f.peer.name} />: {f.message}
-        </div>
+        <Notice key={f.peer.uuid} variant="danger" label={`${f.peer.name}: ${f.message}`} />
       ))}
 
       <HeldRequests rows={rows} allow={allow} reachability={reachability} allowStyle={allowStyle.style} saferMode={saferMode.on} {...(onRefresh !== undefined ? { onRefresh } : {})} />
-      {rows.length === 0 && <div className={TEXT_MUTED_SM}>No held request{filter === ALL ? '' : ' for this machine'} ({counts}).</div>}
+      {rows.length === 0 && <Notice variant="default" label={`No held request${filter === ALL ? '' : ' for this machine'} (${counts}).`} />}
       <ExpiredNotices rows={expiredRows} {...(onRefresh !== undefined ? { onRefresh } : {})} />
 
       {showSelf && (
@@ -198,10 +191,10 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       {pages.map((page) => (
         <div key={page.machine.uuid} className="flex flex-col gap-2">
           <h3 className="text-base font-semibold text-content">Waiting for approval on <MachineName name={page.machine.name} /></h3>
-          {!page.chainOk && <div className={NOTICE_WARNING}>{page.chainText}</div>}
+          {!page.chainOk && <Notice variant="warning" label={page.chainText} />}
           <AllowRequestsTable rows={page.pending} allow={page.allow} emptyMessage={`No refused request on ${page.machine.name}`} />
           {page.notes.map((n) => (
-            <div key={n} className={TEXT_MUTED_SM}>{n}</div>
+            <Notice key={n} variant="default" label={n} />
           ))}
         </div>
       ))}
@@ -216,7 +209,7 @@ export function RequestsOverview({ self, machines = NO_MACHINES, held = NO_HELD,
       {asking && (
         <ConfirmSignModal
           title="Load the requests of the other machines?"
-          details={[{ label: 'Machines', value: peers.map((p, i) => <React.Fragment key={p.uuid}>{i > 0 && ', '}<MachineName name={p.name} /></React.Fragment>) }]}
+          details={[{ label: 'Machines', value: peers.map((p) => p.name).join(', ') }]}
           notes={['Each machine is asked for its held requests and its refused ones, over the authenticated channel, with a read-only request signed here. Nothing is run and nothing is changed on any machine; each machine records the exchange.']}
           warning="The admin passphrase unlocks the admin key in this page for the signatures only. It is not stored and not sent: only the signed requests leave the page."
           confirmLabel="Sign and load"

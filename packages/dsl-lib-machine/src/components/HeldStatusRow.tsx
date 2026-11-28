@@ -1,11 +1,11 @@
 import React from 'react';
-import { IconButton } from '@wadeck-app/dsl-ui';
+import { IconButton, Badge } from '@wadeck-app/dsl-ui';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { askRisk, choiceFromAsk } from '../lib/callerAsk.js';
 import { cardStatus, readOnlyVerdict } from '../lib/quickAllow.js';
-import { OUTCOME_NEUTRAL, OUTCOME_WARNING, TEXT_MUTED } from '../lib/styleTokens.js';
 import { InfoTip } from './InfoTip.js';
 import type { HeldRequestRow } from './HeldRequests.js';
+import { TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The ONE status line of a held card (what is not the command): badges that flag what must be seen before the click, one short grey line, the Details toggle.
 // Every fact and every long sentence lives in HeldDetails.
@@ -27,17 +27,17 @@ export function HeldStatusRow({ row, choiceFlags, open, panelId, onToggle }: Hel
   const status = cardStatus({ shell: row.shell, ...(row.renewal !== undefined ? { renewal: row.renewal } : {}), ...(row.ask !== undefined ? { ask: row.ask } : {}), isNotice: row.note !== undefined, ...(row.commandTruncated === true ? { commandTruncated: true } : {}) });
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-xs">
-      {row.renewal !== undefined && <span data-testid="renewal-badge" className={OUTCOME_WARNING}>Renewal</span>}
-      {callerRisk !== undefined && <span data-testid="caller-ask-warning" role="note" className={OUTCOME_WARNING}>Caller asks: {callerRisk}</span>}
+      {row.renewal !== undefined && <span data-testid="renewal-badge"><Badge label="Renewal" variant="warning" tone="subtle" /></span>}
+      {callerRisk !== undefined && <span data-testid="caller-ask-warning" role="note"><Badge label={`Caller asks: ${callerRisk}`} variant="warning" tone="subtle" /></span>}
       {/* The choice that is the caller's own ask is already flagged by its badge: only a DIFFERENT flagged choice is added. */}
       {choiceFlags.filter((f) => f !== callerRisk).map((f) => (
-        <span key={f} data-testid="choice-warning" role="note" className={OUTCOME_WARNING}>Chosen: {f}</span>
+        <span key={f} data-testid="choice-warning" role="note"><Badge label={`Chosen: ${f}`} variant="warning" tone="subtle" /></span>
       ))}
       {/* Neutral on purpose: it informs, it never warns. The rule that matched is in the tooltip so the owner sees WHY; the select below can still be changed. */}
       {readOnly.readOnly && (
         <span className="inline-flex shrink-0 items-center gap-0.5">
-          <span data-testid="read-only-chip" className={OUTCOME_NEUTRAL}>
-            read-only (recognised){startedHere ? ': permanent by default' : ''}
+          <span data-testid="read-only-chip">
+            <Badge label={`read-only (recognised)${startedHere ? ': permanent by default' : ''}`} variant="default" tone="subtle" />
           </span>
           <InfoTip label="About: read-only (recognised)" text={`${readOnly.why}${startedHere ? ' Allow starts from Permanent for it; you can pick anything else, and nothing is signed until you click.' : " The caller's own ask or the entry being renewed decides the starting lifetime instead."}`} />
         </span>

@@ -1,15 +1,14 @@
-import { DataTable, IconButton, type SortDir, type TableColumn } from '@wadeck-app/dsl-ui';
+import { DataTable, IconButton, type SortDir, type TableColumn, Notice } from '@wadeck-app/dsl-ui';
 import { Pencil, Trash2 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import type { AllowApi } from '../lib/allowFlow.js';
 import type { EditAction, EditOutcome } from '../lib/allowedEdit.js';
-import { COMMAND_TEXT, MONO_STYLE, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 import { AllowedEditDialog } from './AllowedEditDialog.js';
 import { AllowedEntryDetails } from './AllowedEntryDetails.js';
 import type { AllowedEntryData, AllowedMachineData } from './AllowedList.js';
+import { MONO_STYLE, TEXT_MUTED_SM, COMMAND_TEXT } from '../lib/styleTokens.js';
 
 const TYPED_TAG = 'ml-2 rounded border border-border px-1 text-xs text-muted';
-const ALERT = 'rounded border border-danger bg-danger-bg p-2 text-sm text-danger-text';
 
 /** True when the entry shows under the search word (empty: all): its command, shell, list, peer or lifetime contains it. */
 export const matches = (needle: string, e: AllowedEntryData): boolean =>
@@ -103,7 +102,7 @@ export function AllowedMachineBlock({ machine, rows, needle, sortCol, sortDir, o
         {machine.version !== null ? <span>{`version ${machine.version}`}</span> : null}
         {machine.signedText !== '' ? <span title={machine.signedIso}>{machine.signedText}</span> : null}
       </p>
-      {machine.problem !== '' ? <div role="alert" className={ALERT}>{machine.problem}</div> : null}
+      {machine.problem !== '' ? <Notice variant="danger" label={machine.problem} /> : null}
       {machine.emptyText !== '' ? (
         <p className={TEXT_MUTED_SM}>
           {machine.emptyText}
@@ -113,7 +112,7 @@ export function AllowedMachineBlock({ machine, rows, needle, sortCol, sortDir, o
           <code className={COMMAND_TEXT} style={MONO_STYLE}>{machine.fillCommand}</code>
         </p>
       ) : null}
-      {machine.version !== null && total === 0 ? <p className={TEXT_MUTED_SM}>{`Nothing is allowed for ${machine.name}: this policy has no entry, so every command is refused.`}</p> : null}
+      {machine.version !== null && total === 0 ? <Notice variant="default" label={`Nothing is allowed for ${machine.name}: this policy has no entry, so every command is refused.`} /> : null}
       {total > 0 ? (
         <>
           <p className={TEXT_MUTED_SM}>

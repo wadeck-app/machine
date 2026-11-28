@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice } from '@wadeck-app/dsl-ui';
+import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import type { ApprovalProgress } from '../lib/approvalTimeline.js';
 import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type Approvable, type ApproveContext, type ApproveResult, type ApproveRow } from '../lib/approveFlow.js';
-import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
@@ -77,7 +76,7 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
     };
   }, [api, row]);
 
-  const title = <>Approve <span>{row.name}</span>?</>;
+  const title = `Approve ${row.name}?`;
   // Inside the dialog, so the progress stays visible while the backdrop hides the page.
   const aside = steps !== undefined && steps.length > 0 ? <VerticalTimeline steps={steps} /> : undefined;
   const side = aside === undefined ? {} : { aside };
@@ -154,7 +153,7 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
       }
     };
     return (
-      <ConfirmSignModal title={<>{row.name} approved</>} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} {...side}>
+      <ConfirmSignModal title={`${row.name} approved`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} {...side}>
         <Notice label={distribution.headline} variant={distribution.tone} />
         {phase.noCode ? (
           // Enrolled before: its admin key is already pinned there, it prints no code and asks for no comparison.
@@ -187,14 +186,12 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
       onCancel={onClose}
       {...side}
     >
-      <p className="text-sm">
-        Enrolls {row.name}: this machine{inform.length === 0 ? '' : ` and ${inform.join(', ')}`} will trust it, and judge its commands by their own policies. The passphrase signs once, in this page: it is asked at every approval and never kept or sent.
-      </p>
+      <Notice variant="default" label={`Enrolls ${row.name}: this machine${inform.length === 0 ? '' : ` and ${inform.join(', ')}`} will trust it, and judge its commands by their own policies. The passphrase signs once, in this page: it is asked at every approval and never kept or sent.`} />
       {checked.warnings.map((w) => (
         <Notice key={w} variant="warning" label={w} />
       ))}
       <Collapsible title="Details">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <VerticalStack gap="gap-2">
           {[
             ['Name', row.name],
             ['Hostname', row.hostname === '' ? 'unknown' : row.hostname],
@@ -203,13 +200,10 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
             ['Valid for', VALID_FOR],
             ['Others told', checked.selfApproval ? 'nobody: the first machine of the network' : inform.length === 0 ? 'nobody' : inform.join(', ')],
           ].map(([label, value]) => (
-            <React.Fragment key={label}>
-              <dt className={TEXT_MUTED}>{label}</dt>
-              <dd className="m-0 break-all" style={MONO_STYLE}>{value}</dd>
-            </React.Fragment>
+            <FieldReadOnly key={label} label={label as string} value={value as string} mono />
           ))}
-        </dl>
-        <p className="mt-2 text-sm text-muted">Candidacy code recomputed in this page from the key and random the relay listed, and it matches: the relay did not swap the key.</p>
+          <Notice variant="default" label="Candidacy code recomputed in this page from the key and random the relay listed, and it matches: the relay did not swap the key." />
+        </VerticalStack>
       </Collapsible>
     </ConfirmSignModal>
   );

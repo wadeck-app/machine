@@ -1,7 +1,6 @@
 import React from 'react';
-import { RadioGroup } from '@wadeck-app/dsl-ui';
+import { RadioGroup, Notice } from '@wadeck-app/dsl-ui';
 import type { AllowStyle } from '../lib/allowStyle.js';
-import { TEXT_ERROR } from '../lib/styleTokens.js';
 
 export interface AllowStyleSwitchProps {
   value: AllowStyle;
@@ -23,7 +22,7 @@ export function AllowStyleSwitch({ value, onChange, problem }: AllowStyleSwitchP
   return (
     <div className="flex flex-col gap-1">
       <RadioGroup label="Allow style" orientation="horizontal" options={OPTIONS} value={value} onChange={(v) => onChange(v as AllowStyle)} />
-      {problem !== undefined && problem !== '' && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
+      {problem !== undefined && problem !== '' && <Notice variant="danger" label={problem} />}
     </div>
   );
 }

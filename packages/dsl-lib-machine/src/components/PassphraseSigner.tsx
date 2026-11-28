@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { adminKeyHint, signRegistration, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
-import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
-import { TEXT_ERROR } from '../lib/styleTokens.js';
+import { ButtonAction, FieldSecret, type FieldSecretHandle, Notice } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { hintHelpText } from '../lib/passphraseHint.js';
@@ -155,7 +154,7 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
           </div>
         </form>
       )}
-      {error !== null && <div role="alert" className={TEXT_ERROR}>{error}</div>}
+      {error !== null && <Notice variant="danger" label={error} />}
     </div>
   );
 }

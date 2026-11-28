@@ -1,12 +1,12 @@
 import React, { useEffect, useId, useState } from 'react';
-import { ButtonAction, IconButton } from '@wadeck-app/dsl-ui';
+import { Badge, type BadgeVariant, ButtonAction, Card, HorizontalStack, IconButton, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import { elapsedText, summaryOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
-import { MONO_STYLE, PROGRESS_CARD_ACTIVE, PROGRESS_CARD_DANGER, PROGRESS_CARD_SUCCESS, PROGRESS_SLIM_SUCCESS, STEP_ACTIVE, STEP_DONE, STEP_FAILED, TEXT_MUTED } from '../lib/styleTokens.js';
 import { AllowProgress } from './AllowProgress.js';
 import { AllowProgressDetails } from './AllowProgressDetails.js';
 import { MachineName } from './MachineName.js';
 import { StepMarker } from './StepMarker.js';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
 /** A success stays open this long after the end (the person sees the result), then collapses into one slim row. */
 export const COLLAPSE_AFTER_MS = 10_000;
@@ -26,8 +26,7 @@ export interface RequestProgressCardProps {
 }
 
 const ICON_STATE: Record<'active' | 'success' | 'danger', StepState> = { active: 'active', success: 'done', danger: 'failed' };
-const ICON_COLOUR = { active: STEP_ACTIVE, success: STEP_DONE, danger: STEP_FAILED };
-const TEXT_COLOUR = { active: 'text-content', success: STEP_DONE, danger: STEP_FAILED };
+const OUTCOME_VARIANT: Record<'active' | 'success' | 'danger', BadgeVariant> = { active: 'primary', success: 'success', danger: 'danger' };
 
 /**
  * A request that is only a progress display (after Allow): ONE line (status icon, command, machine, outcome, elapsed time, buttons) and the thin
@@ -51,38 +50,38 @@ export function RequestProgressCard({ row, record, now, canRetry, warning, onRet
     return () => clearTimeout(timer);
   }, [summary.succeeded, finishedAt]);
 
-  const className = collapsed ? PROGRESS_SLIM_SUCCESS : summary.tone === 'danger' ? PROGRESS_CARD_DANGER : summary.tone === 'success' ? PROGRESS_CARD_SUCCESS : PROGRESS_CARD_ACTIVE;
   const delivery = summary.delivery !== undefined && summary.delivery.tone === 'warning' ? summary.delivery : undefined;
 
   return (
-    <li aria-label={`Held request ${row.command}`} className={className}>
-      <div className="flex min-w-0 items-center gap-2 text-sm">
-        <span className={`shrink-0 ${ICON_COLOUR[summary.tone]}`}>
-          <StepMarker state={ICON_STATE[summary.tone]} />
-        </span>
-        <span className="min-w-0 truncate font-medium text-content" style={MONO_STYLE} title={row.command}>{row.command}</span>
-        <span className={`shrink-0 text-xs ${TEXT_MUTED}`}>
-          on <MachineName name={record.machineName} />
-        </span>
-        <span aria-live="polite" className={`shrink-0 ${TEXT_COLOUR[summary.tone]}`}>{summary.text}</span>
-        {record.signedSummary !== undefined && <span className={`min-w-0 truncate text-xs ${TEXT_MUTED}`} title={record.signedSummary.full}>{`Signed: ${record.signedSummary.short}`}</span>}
-        <span className="ml-auto flex shrink-0 items-center gap-1">
-          <span className={`text-xs tabular-nums ${TEXT_MUTED}`}>{elapsedText(record, now)}</span>
-          {summary.retryable && canRetry && <ButtonAction label="Allow again" variant="secondary" size="sm" onClick={onRetry} />}
-          <IconButton icon={open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />} aria-label="Details" aria-expanded={open} aria-controls={panelId} size="icon-xs" onClick={() => setOpen((v) => !v)} />
-          {summary.finished && <IconButton icon={<X size={14} aria-hidden="true" />} aria-label="Dismiss" size="icon-xs" onClick={onDismiss} />}
-        </span>
-      </div>
-      {!collapsed && <AllowProgress record={record} now={now} />}
-      {!collapsed && summary.cause !== undefined && <div className={`text-xs ${summary.tone === 'danger' ? 'text-danger-text' : TEXT_MUTED}`}>{summary.cause}</div>}
-      {!collapsed && delivery !== undefined && (
-        <div className={`text-xs ${TEXT_MUTED}`}>
-          {delivery.text}
-          {delivery.cause !== undefined && <span className="block">{delivery.cause}</span>}
-        </div>
-      )}
-      {warning !== undefined && <div className="text-xs text-warning-text">{warning}</div>}
-      <div id={panelId}>{open && <AllowProgressDetails record={record} />}</div>
+    <li aria-label={`Held request ${row.command}`}>
+      <Card padding="sm">
+        <VerticalStack gap="gap-1">
+          <HorizontalStack gap="gap-2" align="items-center" justify="justify-between" wrap>
+            <HorizontalStack gap="gap-2" align="items-center" wrap>
+              <StepMarker state={ICON_STATE[summary.tone]} />
+              <span style={MONO_STYLE} title={row.command}>{row.command}</span>
+              <span>
+                on <MachineName name={record.machineName} />
+              </span>
+              <span aria-live="polite">
+                <Badge label={summary.text} variant={OUTCOME_VARIANT[summary.tone]} tone="subtle" />
+              </span>
+              {record.signedSummary !== undefined && <span title={record.signedSummary.full}>{`Signed: ${record.signedSummary.short}`}</span>}
+            </HorizontalStack>
+            <HorizontalStack gap="gap-1" align="items-center">
+              <span>{elapsedText(record, now)}</span>
+              {summary.retryable && canRetry && <ButtonAction label="Allow again" variant="secondary" size="sm" onClick={onRetry} />}
+              <IconButton icon={open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />} aria-label="Details" aria-expanded={open} aria-controls={panelId} size="icon-xs" onClick={() => setOpen((v) => !v)} />
+              {summary.finished && <IconButton icon={<X size={14} aria-hidden="true" />} aria-label="Dismiss" size="icon-xs" onClick={onDismiss} />}
+            </HorizontalStack>
+          </HorizontalStack>
+          {!collapsed && <AllowProgress record={record} now={now} />}
+          {!collapsed && summary.cause !== undefined && <Notice variant={summary.tone === 'danger' ? 'danger' : 'default'} label={summary.cause} />}
+          {!collapsed && delivery !== undefined && <Notice variant="warning" label={delivery.cause === undefined ? delivery.text : `${delivery.text} ${delivery.cause}`} />}
+          {warning !== undefined && <Notice variant="warning" label={warning} />}
+          <div id={panelId}>{open && <AllowProgressDetails record={record} />}</div>
+        </VerticalStack>
+      </Card>
     </li>
   );
 }

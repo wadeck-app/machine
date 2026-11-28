@@ -3,7 +3,6 @@ import { ButtonAction, Collapsible, DataTable, Markdown, Notice, type TableColum
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { overlayApproval, type ApprovalProgress } from '../lib/approvalTimeline.js';
 import type { ApproveRow } from '../lib/approveFlow.js';
-import { TEXT_ERROR } from '../lib/styleTokens.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
@@ -114,7 +113,7 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
         </div>
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-2">
-        {problem !== null && <div role="alert" className={TEXT_ERROR}>{problem}</div>}
+        {problem !== null && <Notice variant="danger" label={problem} />}
         <DataTable<CandidacyTableRow>
           rows={rows}
           columns={columns}

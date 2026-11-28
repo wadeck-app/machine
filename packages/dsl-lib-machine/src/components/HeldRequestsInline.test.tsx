@@ -463,7 +463,7 @@ describe('ONE-CLICK Allow, admin key unlocked (inline style)', () => {
     const renewal = { reason: 'exhausted' as const, entry: 'orch stop', typed: false, own: false, maxCalls: 3, used: 3, note: 'entry used 3 of 3 call(s)' };
     render_([asked({ id: 'rn000001', command: 'orch stop', renewal })]);
     const item = itemOf('orch stop');
-    expect(within(item).getByTestId('renewal-badge').className).toMatch(/warning/);
+    expect(within(item).getByTestId('renewal-badge').firstElementChild?.className).toMatch(/warning/);
     expect(within(item).getByLabelText('Lifetime')).toHaveValue('custom');
     await userEvent.click(allowBtn('orch stop'));
     await posted(1);

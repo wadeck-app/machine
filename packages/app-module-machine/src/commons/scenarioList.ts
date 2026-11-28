@@ -31,9 +31,15 @@ export interface ScenarioDef {
   readonly create: () => { readonly routes: MockRoutes };
 }
 
-// What every scenario where something can be signed says: the key file is a placeholder, so the page runs up to the passphrase and no further.
-const PLACEHOLDER =
-  'The admin key of the mock is a placeholder no passphrase unlocks: a real signature is impossible here, so the dialog stops at its "wrong passphrase or damaged key file" message (the result view cannot be reached).';
+/**
+ * The passphrase of the admin key of the scenarios. It is a FIXTURE, not a secret: the key (an obviously fake one, see seedBuilders.testUtil.ts) exists only for the
+ * scenarios and is trusted by no machine. It is published here, in the hints and nowhere else (the hint of the key file cannot hold it: machine-core refuses a hint
+ * that contains the passphrase).
+ */
+export const SCENARIO_PASSPHRASE = 'scenario-passphrase-2026';
+
+// What every scenario where something can be signed says: the signature is real (a throwaway key, signed registrations), so the dialog goes up to the result view.
+const SIGN = `Scenario key: passphrase ${SCENARIO_PASSPHRASE}, trusted by nothing. Type it in the dialog to reach the result view; any other passphrase shows the "wrong passphrase" message.`;
 
 interface CandidaciesScenario {
   id: string;
@@ -44,17 +50,17 @@ interface CandidaciesScenario {
 
 const candidacies: CandidaciesScenario[] = [
   { id: 'empty', label: 'No candidacy', hint: 'Look at the empty table and the timeline with every step still to do.', seed: empty as CandidaciesState },
-  { id: 'one-pending', label: 'One candidacy pending', hint: `A first enrollment (mac-m2, 4 minutes old): open the row, then Reject it (the row goes) or press Approve. ${PLACEHOLDER}`, seed: onePending as CandidaciesState },
+  { id: 'one-pending', label: 'One candidacy pending', hint: `A first enrollment (mac-m2, 4 minutes old): open the row, then Reject it (the row goes) or press Approve. ${SIGN}`, seed: onePending as CandidaciesState },
   {
     id: 'several-pending',
     label: 'Several candidacies pending',
-    hint: `Two rows, the timeline follows the oldest; thinkcentre reuses a uuid bound to a revoked token (warning in the dialog). ${PLACEHOLDER}`,
+    hint: `Two rows, the timeline follows the oldest; thinkcentre reuses a uuid bound to a revoked token (warning in the dialog). ${SIGN}`,
     seed: severalPending as CandidaciesState,
   },
   {
     id: 'pending-revoked-earlier',
     label: 'Candidate revoked earlier',
-    hint: `mac-m2 was revoked at serial 3: the dialog warns REVOKED and prints no code to compare. ${PLACEHOLDER}`,
+    hint: `mac-m2 was revoked at serial 3: the dialog warns REVOKED and prints no code to compare. ${SIGN}`,
     seed: pendingRevokedEarlier as CandidaciesState,
   },
   {
@@ -68,19 +74,19 @@ const candidacies: CandidaciesScenario[] = [
   {
     id: 'approve-result-delivered',
     label: 'Approval: documents delivered',
-    hint: `Planned delivery: thinkcentre and mac-m2 take the documents directly. ${PLACEHOLDER}`,
+    hint: `Planned delivery: thinkcentre and mac-m2 take the documents directly. ${SIGN}`,
     seed: approveResultDelivered as CandidaciesState,
   },
   {
     id: 'approve-result-partial',
     label: 'Approval: delivery partial',
-    hint: `Planned delivery: mac-m2 delivered, thinkcentre waits in the relay inbox. ${PLACEHOLDER}`,
+    hint: `Planned delivery: mac-m2 delivered, thinkcentre waits in the relay inbox. ${SIGN}`,
     seed: approveResultPartial as CandidaciesState,
   },
   {
     id: 'approve-result-failed',
     label: 'Approval: delivery failed',
-    hint: `Planned delivery: the relay refuses the documents, both machines failed and the retry command is shown. ${PLACEHOLDER}`,
+    hint: `Planned delivery: the relay refuses the documents, both machines failed and the retry command is shown. ${SIGN}`,
     seed: approveResultFailed as CandidaciesState,
   },
   {
@@ -103,32 +109,32 @@ const machines: MachinesScenario[] = [
   {
     id: 'two-trusted-peers',
     label: 'Two trusted peers',
-    hint: `thinkcentre is reachable directly, mac-m2 is not (notice and reachability columns); Revoke opens the dialog. ${PLACEHOLDER}`,
+    hint: `thinkcentre is reachable directly, mac-m2 is not (notice and reachability columns); Revoke opens the dialog. ${SIGN}`,
   },
   {
     id: 'peer-revoked-earlier',
     label: 'A peer was revoked earlier',
-    hint: `mac-m2 (revoked, serial 3) is gone from the list; only thinkcentre can be revoked, and nobody else is left to tell. ${PLACEHOLDER}`,
+    hint: `mac-m2 (revoked, serial 3) is gone from the list; only thinkcentre can be revoked, and nobody else is left to tell. ${SIGN}`,
   },
   {
     id: 'revoke-delivered',
     label: 'Revoke: documents delivered',
-    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre takes the documents directly (success notice). ${PLACEHOLDER}`,
+    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre takes the documents directly (success notice). ${SIGN}`,
   },
   {
     id: 'revoke-partial',
     label: 'Revoke: delivery partial',
-    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre is offline, its document waits in the relay inbox (warning). ${PLACEHOLDER}`,
+    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre is offline, its document waits in the relay inbox (warning). ${SIGN}`,
   },
   {
     id: 'revoke-failed',
     label: 'Revoke: delivery failed',
-    hint: `Planned delivery after a Revoke of mac-m2: the relay refuses the document; the revocation stands and the retry command is shown. ${PLACEHOLDER}`,
+    hint: `Planned delivery after a Revoke of mac-m2: the relay refuses the document; the revocation stands and the retry command is shown. ${SIGN}`,
   },
   {
     id: 'relay-unreachable',
     label: 'Revoke: relay unreachable',
-    hint: `Planned delivery after a Revoke of mac-m2: the relay is down, nobody is told and mac-m2 is not removed from the relay (both listed as failed). ${PLACEHOLDER}`,
+    hint: `Planned delivery after a Revoke of mac-m2: the relay is down, nobody is told and mac-m2 is not removed from the relay (both listed as failed). ${SIGN}`,
   },
 ];
 

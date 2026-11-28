@@ -6,8 +6,6 @@ import { dismissFailureMessage } from '../lib/dismissNotice.js';
 import { choiceFromLimits, lifetimeInput, lifetimeWords, type LifetimeChoice, type LifetimeKind } from '../lib/lifetimeChoice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { LifetimePicker } from './LifetimePicker.js';
-import { MachineName } from './MachineName.js';
-import { MachineText } from './MachineText.js';
 import type { PendingRequestRow } from './AllowRequestsTable.js';
 import { CallerAskNote } from './CallerAskNote.js';
 
@@ -43,21 +41,13 @@ export interface AllowDialogProps {
 }
 
 /** The sentence under the lifetime summary: what the entry lets EVERY trusted peer do, and until when. */
-function warningText(machineName: string, peerText: string, words: string): React.ReactNode {
-  return (
-    <>
-      This widens what peers may run on <MachineName name={machineName} />: the command is allowed to EVERY trusted peer, not only <MachineName name={peerText} />, byte for byte, {words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call (the next matching call, from any peer, uses it up)' : words}. Only the admin passphrase can sign it.
-    </>
-  );
+function warningText(machineName: string, peerText: string, words: string): string {
+  return `This widens what peers may run on ${machineName}: the command is allowed to EVERY trusted peer, not only ${peerText}, byte for byte, ${words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call (the next matching call, from any peer, uses it up)' : words}. Only the admin passphrase can sign it.`;
 }
 
 /** The sentence under the lifetime summary of a RENEWAL: nothing new is added, the entry that exists is replaced. */
-function renewalWarningText(machineName: string, entry: string, words: string): React.ReactNode {
-  return (
-    <>
-      This RENEWS the entry {JSON.stringify(entry)} on <MachineName name={machineName} />: it replaces the used up or expired one (its counter starts again), for EVERY trusted peer, {words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call' : words}. Only the admin passphrase can sign it.
-    </>
-  );
+function renewalWarningText(machineName: string, entry: string, words: string): string {
+  return `This RENEWS the entry ${JSON.stringify(entry)} on ${machineName}: it replaces the used up or expired one (its counter starts again), for EVERY trusted peer, ${words === 'permanent, until you remove it' ? 'until you remove it' : words === 'allowed once' ? 'for ONE call' : words}. Only the admin passphrase can sign it.`;
 }
 
 /** The confirmation of ONE row: loads the context (after the PIN), shows the exact change and its lifetime, asks the passphrase, signs in the page and posts. */
@@ -164,39 +154,34 @@ export function AllowDialog({ row, machine, api, defaultLifetime = 'permanent', 
   };
 
   if (phase.kind === 'loading') {
-    return <ConfirmSignModal title={<>Allow on <MachineName name={machine.name} /></>} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
+    return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} notes={['Checking the current policy...']} />;
   }
   if (phase.kind === 'info' || phase.kind === 'failed') {
-    return <ConfirmSignModal title={<>Allow on <MachineName name={machine.name} /></>} details={[]} warning="" needsPassphrase={false} confirmLabel="" error={phase.kind === 'failed' ? phase.message : null} notes={phase.kind === 'info' ? [<MachineText key="info" text={phase.message} names={[machine.name]} />] : []} onConfirm={() => undefined} onCancel={onClose} />;
+    return <ConfirmSignModal title={`Allow on ${machine.name}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" error={phase.kind === 'failed' ? phase.message : null} notes={phase.kind === 'info' ? [phase.message] : []} onConfirm={() => undefined} onCancel={onClose} />;
   }
   const { prepared, context, hint } = phase;
-  const names = [machine.name];
   // What a renewal replaces and with which limits: both are said before the passphrase (the old ones are those of the policy this page verified, else those the daemon reported).
   const before = prepared.renewed[0]?.before.limits ?? (row.renewal === undefined ? undefined : { ...(row.renewal.maxCalls !== undefined ? { maxCalls: row.renewal.maxCalls } : {}), ...(row.renewal.expiresAt !== undefined ? { expiresAt: row.renewal.expiresAt } : {}) });
   const renewalLine = renewal !== undefined && resolution.ok ? renewalSummary(renewal.entry, before, resolution.limits(nowSeconds), nowSeconds) : undefined;
-  const notes: React.ReactNode[] = [
-    ...(renewalLine !== undefined ? [<MachineText key="renews" text={renewalLine} names={names} />] : []),
-    <MachineText key="version" text={`Policy version ${prepared.fromVersion} -> ${prepared.toVersion}. Every trusted peer may then run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`} names={names} />,
-    ...(prepared.peersWithOwnList.length > 0 ? [<MachineText key="own" text={`Not affected (their own list): ${prepared.peersWithOwnList.join(', ')}.`} names={prepared.peersWithOwnList} />] : []),
-    <MachineText
-      key="where"
-      text={context.delivery === 'install' ? `Signed here, then installed on ${machine.name} (this machine).` : `Signed here, then sent to ${machine.name} directly, or stored in its relay inbox when it is not reachable.`}
-      names={names}
-    />,
+  const notes: string[] = [
+    ...(renewalLine !== undefined ? [renewalLine] : []),
+    `Policy version ${prepared.fromVersion} -> ${prepared.toVersion}. Every trusted peer may then run ${prepared.defaultCount} command${prepared.defaultCount === 1 ? '' : 's'} on ${machine.name}.`,
+    ...(prepared.peersWithOwnList.length > 0 ? [`Not affected (their own list): ${prepared.peersWithOwnList.join(', ')}.`] : []),
+    context.delivery === 'install' ? `Signed here, then installed on ${machine.name} (this machine).` : `Signed here, then sent to ${machine.name} directly, or stored in its relay inbox when it is not reachable.`,
     ...(context.delivery === 'inbox' && context.noticeRecipients !== undefined
-      ? [<MachineText key="recipients" text={`The list of machines that receive request notices (information only, no right) goes with it${context.noticeRecipients.current === null ? ': none exists yet, a new one naming this machine is signed' : ' (the one already signed on this machine)'}.`} names={names} />]
+      ? [`The list of machines that receive request notices (information only, no right) goes with it${context.noticeRecipients.current === null ? ': none exists yet, a new one naming this machine is signed' : ' (the one already signed on this machine)'}.`]
       : []),
     ...(choice.kind !== 'permanent' && choice.kind !== 'once' && choice.kind !== 'custom' ? ['A duration counts from the moment you sign.'] : []),
   ];
   return (
     <ConfirmSignModal
-      title={<>Allow this command on <MachineName name={machine.name} />?</>}
+      title={`Allow this command on ${machine.name}?`}
       details={[
-        { label: 'Machine', value: <MachineName name={machine.name} /> },
+        { label: 'Machine', value: machine.name },
         { label: 'Shell', value: row.shell },
         { label: 'Command', value: row.command },
-        ...(renewal !== undefined ? [{ label: 'Renews', value: <>{row.shell} {JSON.stringify(renewal.entry)}</> }] : []),
-        { label: 'Asked by', value: <><MachineName name={row.peerText} /> ({row.countText})</> },
+        ...(renewal !== undefined ? [{ label: 'Renews', value: `${row.shell} ${JSON.stringify(renewal.entry)}` }] : []),
+        { label: 'Asked by', value: `${row.peerText} (${row.countText})` },
         { label: 'Lifetime', value: words ?? 'not valid yet: see the field below' },
       ]}
       notes={notes}
