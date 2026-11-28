@@ -2,6 +2,7 @@ import { INPUT_CHAR_NAMES } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inputSummary } from './allowText.js';
 import { cliRaw } from './testing.js';
 
 // A folder that never exists: these commands stop before any configuration is read.
@@ -65,5 +66,20 @@ describe('the flags of the declaration are refused where they mean nothing', () 
     const b = await cliRaw(NOWHERE, ['admin', 'allow', 'laptop', '--stdin', 'xml', '--stdin-chars', 'letters', '--', 'x']);
     expect(b.code).toBe(2);
     expect(b.err).toMatch(/text or json/);
+  });
+});
+
+// L3/L4: what the daemon does NOT judge is said to the owner before the passphrase, in the help and in the summary of the entry.
+describe('the owner is told what the daemon does not interpret', () => {
+  const SAYS = /RAW bytes[\s\S]*NOT interpreted[\s\S]*zero-width and private-use characters are not refused by utf8-text/;
+  it('`machine admin allow --help`', async () => {
+    const r = await cliRaw(NOWHERE, ['admin', 'allow', '--help']);
+    expect(r.out.replace(/\s+/g, ' ')).toMatch(/RAW bytes.*NOT interpreted.*zero-width and private-use characters are not refused by utf8-text/);
+  });
+  it('the summary printed before the passphrase', () => {
+    for (const format of ['text', 'json'] as const) {
+      const text = inputSummary({ format, maxBytes: 1024, chars: format === 'json' ? ['letters', 'json'] : ['letters'] }, []).join('\n');
+      expect(text, format).toMatch(SAYS);
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { INPUT_CHAR_NAMES, type InputCharName, type InputDeclaration } from './inputDeclaration.js';
+import { INPUT_CHAR_NAMES, INPUT_DEFAULT_MAX_BYTES, INPUT_MAX_BYTES_CEILING, type InputCharName, type InputDeclaration } from './inputDeclaration.js';
 
 // The payload a caller sends on stdin and what the target accepts of it (stdin-input.md, decision 114). Pure functions on bytes: no I/O.
 // The payload is DATA: it is validated here and then written to the pipe of the spawned process, nowhere else (R1).
@@ -117,7 +117,8 @@ function scanJson(text: string): string | undefined {
             return `the key ${JSON.stringify(key)} is refused at any depth (prototype pollution of a receiving JavaScript command)`;
           }
           if (top.keys.has(key)) {
-            return `the key ${JSON.stringify(key.length > 40 ? `${key.slice(0, 40)}...` : key)} appears twice in one object (parsers disagree on which one counts)`;
+            // Fixed text: the key is payload content and never goes into a message (R4).
+            return `a key appears twice in one object at depth ${stack.length} (parsers disagree on which one counts)`;
           }
           top.keys.add(key);
         }
@@ -142,6 +143,16 @@ function scanJson(text: string): string | undefined {
     i += 1;
   }
   return undefined;
+}
+
+/** The offset a JSON.parse error reports (UTF-16 units), or undefined when there is none or it is not inside the text. Never returns any part of the message. */
+function jsonErrorPosition(error: unknown, length: number): number | undefined {
+  const m = /\bin JSON at position (\d{1,9})\b/.exec((error as Error).message ?? '');
+  if (m === null) {
+    return undefined;
+  }
+  const n = Number(m[1]);
+  return n <= length ? n : undefined;
 }
 
 /**
@@ -183,7 +194,9 @@ export function checkInputPayload(payload: Uint8Array, declaration: InputDeclara
     try {
       JSON.parse(text);
     } catch (e) {
-      return { ok: false, reason: 'input-format', message: `the input is not valid JSON: ${(e as Error).message.slice(0, 120)}` };
+      // The message of the parser may quote an excerpt of the payload: only a number taken from it is kept (R4).
+      const position = jsonErrorPosition(e, text.length);
+      return { ok: false, reason: 'input-format', message: `the input is not valid JSON${position === undefined ? '' : ` (position ${position})`}: fix the syntax (strict JSON: double quotes, no trailing comma, no comment)` };
     }
   }
   return { ok: true };
@@ -248,7 +261,7 @@ export function displayInput(payload: Uint8Array, limit: number = INPUT_DISPLAY_
  * (json when it passes the JSON checks, else text) and the families it uses, each character named. A character with no name needs
  * `utf8-text`. Undefined when the bytes are not text this feature would ever accept. A proposal for the owner to edit, never applied by itself.
  */
-export function suggestInput(payload: Uint8Array): { format: 'text' | 'json'; chars: InputCharName[] } | undefined {
+export function suggestInput(payload: Uint8Array): { format: 'text' | 'json'; chars: InputCharName[]; maxBytes?: number } | undefined {
   let text: string;
   try {
     text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(payload);
@@ -276,5 +289,17 @@ export function suggestInput(payload: Uint8Array): { format: 'text' | 'json'; ch
   }
   const wholeText = used.has('utf8-text');
   const chars = INPUT_CHAR_NAMES.filter((n) => (wholeText ? n === 'utf8-text' || n === 'json' : used.has(n)) && (n !== 'json' || isJson));
-  return { format: isJson ? 'json' : 'text', chars: chars.length === 0 ? ['space'] : chars };
+  // Above the default maximum the entry needs its own: otherwise the allowed payload is refused input-too-large and the hold ends (L5).
+  const maxBytes = payload.length > INPUT_DEFAULT_MAX_BYTES ? Math.min(Math.ceil(payload.length / 1024) * 1024, INPUT_MAX_BYTES_CEILING) : undefined;
+  return { format: isJson ? 'json' : 'text', chars: chars.length === 0 ? ['space'] : chars, ...(maxBytes !== undefined ? { maxBytes } : {}) };
+}
+
+/** The flags of `machine admin allow` that suggestInput proposes (`--stdin`, `--stdin-max` when the payload is above the default, `--stdin-chars`); undefined when there is no suggestion. */
+export function suggestInputFlags(payload: Uint8Array): string | undefined {
+  const s = suggestInput(payload);
+  if (s === undefined) {
+    return undefined;
+  }
+  const max = s.maxBytes !== undefined ? ` --stdin-max ${s.maxBytes / 1024}k` : '';
+  return `--stdin ${s.format}${max} --stdin-chars ${s.chars.join('+')}`;
 }

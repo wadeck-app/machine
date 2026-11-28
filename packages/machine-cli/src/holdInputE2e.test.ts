@@ -96,3 +96,21 @@ describe('machine requests shows the payload of a held request', () => {
     expect((await cli(b, ['requests'])).out).not.toMatch(/stdin of/);
   });
 });
+
+describe('a held payload above the default maximum', () => {
+  it('the suggested allow command carries --stdin-max for it, and the owner sees only a preview of the payload (L5)', async () => {
+    const big = Buffer.from('a'.repeat(70 * 1024));
+    const pending = cli(a, ['run', 'laptop', '--address', address, '--shell', SHELL, '--wait', '10s', '--stdin', '-', '--json', '--', 'task remote-call'], undefined, { allowLoopbackPeers: true, readStdin: async () => big });
+    pending.catch(() => undefined);
+    // if the run ended instead of being held, say how (its refusal is the diagnosis)
+    const ended = await Promise.race([pending, waitingId().then(() => undefined)]);
+    if (ended !== undefined) throw new Error(`the run ended instead of being held: ${ended.out} ${ended.err}`);
+    const json = JSON.parse((await cli(b, ['requests', '--json'])).out) as { summary: { waiting: Array<{ inputPreview?: { text: string; cut: boolean; suggestion?: string } }> } };
+    const preview = json.summary.waiting[0]?.inputPreview;
+    expect(preview?.suggestion).toBe('--stdin text --stdin-max 70k --stdin-chars letters');
+    expect(preview?.cut).toBe(true);
+    expect(preview?.text.length).toBe(4096);
+    const listing = await cli(b, ['requests']);
+    expect(listing.out).toContain('--stdin text --stdin-max 70k --stdin-chars letters');
+  });
+});

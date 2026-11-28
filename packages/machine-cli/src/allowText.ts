@@ -102,6 +102,7 @@ export function inputSummary(input: InputDeclaration, added: readonly string[]):
     `Input on stdin: ${describeInput(input)}`,
     '  The payload is DATA: it is written to the stdin of the command and nowhere else (never its command line, its environment, a shell or a log); the audit log keeps its size and SHA-256 only.',
     `  Every character must be in the union above (a whitelist); NUL, the other control characters except the line feed, and bidirectional controls are always refused.${input.format === 'json' ? ' It must parse as strict JSON (nesting at most 32, no duplicate key, no __proto__, constructor or prototype key); the fields themselves are the command\'s to validate.' : ''}`,
+    '  The daemon judges the RAW bytes: JSON unicode escapes inside strings (backslash-u sequences, for NUL or a bidi control) are NOT interpreted here, the command that receives the payload decodes them and must validate its fields; zero-width and private-use characters are not refused by utf8-text.',
   ];
   if (added.length > 0) {
     lines.push(`  [info] --stdin json implies the "${added.join('+')}" family (the structure characters of JSON): added to the union.`);

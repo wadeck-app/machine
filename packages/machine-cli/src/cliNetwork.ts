@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { askFromFlags, InputDeclarationError, DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
+import { askFromFlags, InputDeclarationError, DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, malformedInputAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -735,7 +735,7 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder, reporter: R
     const heldNote = notHeldText !== undefined ? `\n[warn] ${notHeldText}` : '';
     // A target older than the ask refuses the 10-key body as malformed (fail closed): say what to do, not just that it is malformed.
     // A target older than the input refuses the signed body with an input as malformed (fail closed): nothing was run, say what to do.
-    const inputAdvice = payload !== undefined && answer.reason === 'malformed' ? `\n[warn] ${peer.name} is too old to accept an input on stdin (it refused the signed request as malformed, and an older target never ignores an input): run \`machine cli update\` ON ${peer.name}, then send it again` : '';
+    const inputAdvice = payload !== undefined && answer.reason === 'malformed' ? `\n[warn] ${malformedInputAdvice(peer.name)}` : '';
     const askAdvice = asked.ask !== undefined && answer.reason === 'malformed' ? `\n[warn] ${peer.name} may be too old to read what you ask (--times, --for and --why travel in the signed request): run \`machine cli update\` ON ${peer.name}, or run without them` : '';
     // The hold limits of the target now apply to every default run: say what to do.
     const limitAdvice = waitSeconds !== undefined ? holdLimitAdvice(answer.reason, peer.name) : undefined;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RUN_CODES, classifyRunFailure, failureDocument, refusalDocument, resultDocument } from './runOutcome.js';
+import { RUN_CODES, classifyRunFailure, failureDocument, malformedInputAdvice, refusalDocument, resultDocument } from './runOutcome.js';
 
 // `machine run --json`: EVERY outcome is exactly one JSON document (decision 114, D5). The `code` strings are a contract: stable, never renamed once released.
 
@@ -88,5 +88,28 @@ describe('classifyRunFailure: a thrown error to a code', () => {
     ['something else entirely', 'failed'],
   ])('%s -> %s', (message, code) => {
     expect(classifyRunFailure({ message, unreachable: message.includes('unreachable') || message.startsWith('could not connect') })).toBe(code);
+  });
+});
+
+describe('L2: the document is built from a whitelist, never from the spread of the peer answer', () => {
+  const answer = { type: 'result' as const, id: 'i', exitCode: 0, stdout: 'o', stderr: '', timedOut: false, truncated: false, outputNotUtf8: false, durationMs: 5 };
+  it('a hostile answer cannot add, override or smuggle a key', () => {
+    const hostile = { ...answer, code: 'refused:other', message: 'forged', evil: 'x', __extra: { a: 1 }, reason: 'busy' } as unknown as typeof answer;
+    const d = resultDocument(hostile);
+    expect(Object.keys(d).sort()).toEqual(['code', 'durationMs', 'exitCode', 'id', 'message', 'outputNotUtf8', 'stderr', 'stdout', 'timedOut', 'truncated', 'type']);
+    expect(d.code).toBe('ok');
+    expect(d.message).toBe('the command ran and exited with code 0');
+  });
+  it('decodedFrom stays when present', () => {
+    expect(Object.keys(resultDocument({ ...answer, decodedFrom: 'cp850' }))).toContain('decodedFrom');
+  });
+});
+
+describe('L1: malformed with a sent input is ambiguous, and says so', () => {
+  it('the advice names both causes and the fix', () => {
+    const t = malformedInputAdvice('think');
+    expect(t).toContain('malformed: the target is older than this feature or the request is damaged');
+    expect(t).toContain('machine cli update');
+    expect(t).toContain('think');
   });
 });

@@ -302,7 +302,8 @@ Administration (enrollment through the relay, or by files):
                                      backquote semicolon ampersand pipe dollar lt gt at hash percent star plus equal tilde caret brace-open brace-close bracket-open
                                      bracket-close, json (the structure characters, implied by --stdin json, the payload must parse as strict JSON), and utf8-text (ANY
                                      text: accents, punctuation, quotes, spaces, line feeds; stands alone). NUL, other control characters except the line feed and bidi
-                                     controls are always refused. The policy is then version 3. A policy with
+                                     controls are always refused. The daemon judges the RAW bytes: JSON unicode escapes inside strings (backslash-u sequences, e.g. for NUL or a bidi control) are
+                                     NOT interpreted, the receiving command decodes them and must validate its fields; zero-width and private-use characters are not refused by utf8-text. The policy is then version 3. A policy with
                                      a typed entry is version 2: a target that is not up to date refuses it (machine cli
                                      update there). --remove withdraws an entry by its text (--shell narrows it) or by
                                      --index <n>, the number \`machine allowed\` shows; several matches are listed, nothing is

@@ -467,5 +467,5 @@ export {
   type InputFlags,
   type InputFormat,
 } from './inputDeclaration.js';
-export { INPUT_DISPLAY_BYTES, INPUT_MAX_JSON_DEPTH, checkInputPayload, displayInput, inputDigest, suggestInput, type DisplayedInput, type InputCheck, type InputRefusal } from './stdinInput.js';
-export { RUN_CODES, classifyRunFailure, failureDocument, refusalDocument, resultDocument, type ErrorDocument, type RefusalDocument, type RefusedAnswer, type ResultAnswer, type ResultDocument, type RunCode, type RunDocument } from './runOutcome.js';
+export { INPUT_DISPLAY_BYTES, INPUT_MAX_JSON_DEPTH, checkInputPayload, displayInput, inputDigest, suggestInput, suggestInputFlags, type DisplayedInput, type InputCheck, type InputRefusal } from './stdinInput.js';
+export { RUN_CODES, classifyRunFailure, failureDocument, malformedInputAdvice, refusalDocument, resultDocument, type ErrorDocument, type RefusalDocument, type RefusedAnswer, type ResultAnswer, type ResultDocument, type RunCode, type RunDocument } from './runOutcome.js';

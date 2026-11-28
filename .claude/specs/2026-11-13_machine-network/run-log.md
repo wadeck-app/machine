@@ -103,7 +103,7 @@ Since decision 114 (D5) `machine run --json` prints exactly ONE document on stdo
 | `refused:input-format` | refused | not UTF-8, not JSON, too deep, duplicate or forbidden key, or the payload does not match the signed size and hash |
 | `refused:other` | refused | any other refusal (`busy`, `rate-limited`, `peer-revoked`, hold limits...): see `reason` |
 | `denied` | refused | the owner of the target denied a held request |
-| `target-too-old` | refused | an input was sent and the target refused the signed body as malformed: it does not know stdin (fail closed, nothing ran) |
+| `target-too-old` | refused | an input was sent and the target refused the signed body as malformed: it does not know stdin, or the request is damaged (the protocol carries no version of the target: the text says both, fail closed, nothing ran) |
 | `unreachable` | error | no address, no connection, the wake could not help |
 | `unknown-machine` | error | unknown, ambiguous or untrusted machine reference |
 | `usage` | error | bad arguments, missing or unreadable `--stdin` file, `--stdin -` on a terminal |

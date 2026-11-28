@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { appendAudit, GENESIS_HASH } from './audit.js';
 import type { Json } from './canonical.js';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_PENDING_LIMIT, allowCommand, describeHistory, shellQuote, summarizeRequests, type HistoryEntry, type SummarizeOptions } from './requests.js';
+import { suggestInputFlags } from './stdinInput.js';
 
 const THINK = '11111111-1111-4111-8111-111111111111';
 const LAPTOP = '22222222-2222-4222-8222-222222222222';
@@ -267,5 +268,13 @@ describe('summarizeRequests: waiting (held requests, hold-for-approval)', () => 
     const text = r.history.map((h) => describeHistory(h));
     expect(text[0]).toContain('held');
     expect(text[1]).toContain('denied');
+  });
+});
+
+describe('L5: the suggested allow command carries the maximum a held payload needs', () => {
+  it('the suggestion of the held input (with --stdin-max) is part of the command', () => {
+    const flags = suggestInputFlags(new Uint8Array(70 * 1024).fill(0x61));
+    expect(flags).toContain('--stdin-max 70k');
+    expect(allowCommand({ shell: 'sh', command: 'task x', inputPreview: { suggestion: flags } }, { name: 'laptop', policyMode: 'admin' })).toBe('machine admin allow laptop --shell sh --stdin text --stdin-max 70k --stdin-chars letters -- "task x"');
   });
 });

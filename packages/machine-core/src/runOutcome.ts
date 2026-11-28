@@ -75,7 +75,8 @@ function refusalCode(reason: string, sentInput: boolean): RunCode {
       return 'refused:input-format';
     case 'denied':
       return 'denied';
-    // An older target reads the signed body of a request with an input as malformed: it never ignores an input (fail closed), the caller says it is too old.
+    // An older target reads the signed body of a request with an input as malformed: it never ignores an input (fail closed). A current target also answers
+    // `malformed` for a damaged request and the protocol carries no version: the code is kept (released contract), the text says it is ambiguous (malformedInputAdvice).
     case 'malformed':
       return sentInput ? 'target-too-old' : 'refused:other';
     default:
@@ -91,7 +92,29 @@ export function resultDocument(answer: ResultAnswer): ResultDocument {
     : answer.truncated
       ? 'the command was stopped: its output exceeded the limit of the peer'
       : `the command ran and exited with code ${answer.exitCode === null ? 'none' : answer.exitCode}`;
-  return { ...answer, code, message };
+  // A whitelist, never the spread of the answer: a compromised target cannot add or override a key of the document (L2).
+  return {
+    type: 'result',
+    id: answer.id,
+    exitCode: answer.exitCode,
+    stdout: answer.stdout,
+    stderr: answer.stderr,
+    timedOut: answer.timedOut,
+    truncated: answer.truncated,
+    outputNotUtf8: answer.outputNotUtf8,
+    ...(answer.decodedFrom !== undefined ? { decodedFrom: answer.decodedFrom } : {}),
+    durationMs: answer.durationMs,
+    code,
+    message,
+  };
+}
+
+/**
+ * What the caller reads after `malformed` for a run that sent an input. The protocol carries no version of the target, so an older target (it never ignores an
+ * input) and a damaged request are told apart by nothing: the text says both (L1).
+ */
+export function malformedInputAdvice(peerName: string): string {
+  return `${peerName} refused the signed request as malformed: the target is older than this feature or the request is damaged. If ${peerName} is older, run \`machine cli update\` ON ${peerName}; if it is not, send the run again and report it if it repeats`;
 }
 
 /** A refusal of the target. `message` is the human sentence printed on stderr (cause and fix). */

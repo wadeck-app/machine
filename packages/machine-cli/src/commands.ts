@@ -1,5 +1,5 @@
 import { dismissStoredNotices } from './noticesStore.js';
-import { aliasConflicts, displayInput, isUuid, suggestInput, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
+import { aliasConflicts, displayInput, isUuid, suggestInputFlags, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
@@ -355,8 +355,8 @@ export function makeCommands(configDir: string, version: string | (() => string)
           continue;
         }
         const shown = displayInput(payload);
-        const suggested = suggestInput(payload);
-        inputs[hold.id] = { text: shown.text, cut: shown.cut, ...(suggested !== undefined ? { suggestion: `--stdin ${suggested.format} --stdin-chars ${suggested.chars.join('+')}` } : {}) };
+        const suggestion = suggestInputFlags(payload);
+        inputs[hold.id] = { text: shown.text, cut: shown.cut, ...(suggestion !== undefined ? { suggestion } : {}) };
       }
       return { ok: true, inputs };
     },

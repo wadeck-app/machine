@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InputDeclaration } from './inputDeclaration.js';
-import { INPUT_MAX_JSON_DEPTH, checkInputPayload, displayInput, inputDigest, suggestInput } from './stdinInput.js';
+import { INPUT_MAX_JSON_DEPTH, checkInputPayload, displayInput, inputDigest, suggestInput, suggestInputFlags } from './stdinInput.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const text = (chars: string[], maxBytes = 1000): InputDeclaration => ({ format: 'text', maxBytes, chars: chars as InputDeclaration['chars'] });
@@ -204,5 +204,65 @@ describe('suggestInput (the smallest declaration that covers an example payload:
       if (s === undefined) throw new Error('no suggestion');
       expect(checkInputPayload(enc(sample), { ...s, maxBytes: 1000 }).ok, sample).toBe(true);
     }
+  });
+});
+
+// R4 / hard rule 8: a refusal never carries a fragment of the payload (V8 quotes an excerpt of the source in its JSON errors).
+describe('refusal messages never hold a fragment of the payload', () => {
+  const SECRET = 'SECRETTOKENxyz';
+  const cases: Array<[string, string, Uint8Array, InputDeclaration]> = [
+    ['invalid JSON', 'input-format', enc(`{"k":"${SECRET}" oops}`), json(['letters', 'digits', 'space'])],
+    ['invalid JSON, trailing text', 'input-format', enc(`{"k":"${SECRET}"} trailing ${SECRET}`), json(['letters', 'digits', 'space'])],
+    ['invalid JSON, unterminated', 'input-format', enc(`{"k":"${SECRET}`), json(['letters', 'digits'])],
+    ['invalid JSON, bare word', 'input-format', enc(SECRET), json(['letters', 'digits'])],
+    ['invalid JSON, bare word in array', 'input-format', enc(`[1, ${SECRET}]`), json(['letters', 'digits', 'space', 'punct'])],
+    ['duplicate key', 'input-format', enc(`{"${SECRET}":1,"${SECRET}":2}`), json(['letters', 'digits'])],
+    ['duplicate key, long', 'input-format', enc(`{"${SECRET.repeat(5)}":1,"${SECRET.repeat(5)}":2}`), json(['letters', 'digits'])],
+    ['forbidden key', 'input-format', enc(`{"__proto__":"${SECRET}"}`), json(['letters', 'digits', 'punct'])],
+    ['depth', 'input-format', enc(`${'['.repeat(40)}"${SECRET}"${']'.repeat(40)}`), json(['letters', 'digits'])],
+    ['characters', 'input-chars', enc(`${SECRET};${SECRET}`), text(['letters', 'digits'])],
+    ['never-accepted character', 'input-chars', enc(`${SECRET}\u0000${SECRET}`), text(['utf8-text'])],
+    ['UTF-8', 'input-format', new Uint8Array([...enc(SECRET), 0xff, ...enc(SECRET)]), text(['utf8-text'])],
+    ['size', 'input-too-large', enc(SECRET.repeat(10)), text(['letters'], 20)],
+  ];
+  it.each(cases)('%s', (_name, reason, payload, declaration) => {
+    const r = refusal(payload, declaration);
+    // the case must reach the check it is named after, not an earlier one
+    expect(r.reason).toBe(reason);
+    expect(r.message).not.toContain('SECRET');
+    expect(r.message).not.toContain('xyz');
+  });
+  it('invalid JSON names a position, derived without the excerpt', () => {
+    const r = refusal(enc('{"a":1,}'), json(['letters', 'digits', 'punct']));
+    expect(r.message).toMatch(/^the input is not valid JSON( \(position \d+\))?: /);
+  });
+  it('a duplicate key names its depth, not the key', () => {
+    const r = refusal(enc('{"a":{"b":1,"b":2}}'), json(['letters', 'digits']));
+    expect(r.message).toContain('a key appears twice in one object at depth 2');
+    expect(r.message).not.toContain('"b"');
+  });
+});
+
+describe('suggestInputFlags (the held payload decides the maximum too)', () => {
+  const big = (n: number): Uint8Array => new Uint8Array(n).fill(0x61);
+  it('a payload within the 64 KiB default adds no --stdin-max', () => {
+    expect(suggestInputFlags(big(64 * 1024))).toBe('--stdin text --stdin-chars letters');
+  });
+  it('a payload above the default asks for its size, rounded up to the next k', () => {
+    expect(suggestInputFlags(big(64 * 1024 + 1))).toBe('--stdin text --stdin-max 65k --stdin-chars letters');
+    expect(suggestInputFlags(big(100 * 1024))).toBe('--stdin text --stdin-max 100k --stdin-chars letters');
+  });
+  it('is bounded by the ceiling of 512k', () => {
+    expect(suggestInputFlags(big(512 * 1024))).toBe('--stdin text --stdin-max 512k --stdin-chars letters');
+  });
+  it('the suggested maximum accepts the payload', () => {
+    const p = big(70 * 1024 + 5);
+    expect(suggestInput(p)?.maxBytes).toBe(71 * 1024);
+    const s = suggestInput(p);
+    if (s === undefined || s.maxBytes === undefined) throw new Error('no suggestion');
+    expect(checkInputPayload(p, { format: s.format, chars: s.chars, maxBytes: s.maxBytes }).ok).toBe(true);
+  });
+  it('no suggestion for bytes that are not text', () => {
+    expect(suggestInputFlags(new Uint8Array([0xff]))).toBeUndefined();
   });
 });

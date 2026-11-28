@@ -145,6 +145,27 @@ describe('an entry that declares an input', () => {
     expect(w.counts.size).toBe(0);
   });
 
+  // R4 / hard rule 8: whatever the refusal, nothing of the payload reaches the answer or the audit log (V8 JSON errors quote an excerpt of the source).
+  it.each([
+    ['invalid JSON', 'input-format', enc('SECRETTOKENxyz'), JSON_INPUT],
+    ['invalid JSON in an array', 'input-format', enc('[1, SECRETTOKENxyz]'), JSON_INPUT],
+    ['a duplicate key', 'input-format', enc('{"SECRETTOKENxyz":1,"SECRETTOKENxyz":2}'), JSON_INPUT],
+    ['a prototype key', 'input-format', enc('{"__proto__":"SECRETTOKENxyz"}'), JSON_INPUT],
+    ['too deep', 'input-format', enc(`${'['.repeat(33)}"SECRETTOKENxyz"${']'.repeat(33)}`), JSON_INPUT],
+    ['a character outside the union', 'input-chars', enc('{"a":"SECRETTOKENxyz;"}'), JSON_INPUT],
+    ['NUL', 'input-chars', enc('{"a":"SECRETTOKENxyz\u0000"}'), JSON_INPUT],
+    ['bytes that are not UTF-8', 'input-format', new Uint8Array([...enc('SECRETTOKENxyz'), 0xff]), { format: 'text', maxBytes: 100, chars: ['utf8-text'] } as InputDeclaration],
+    ['a payload that is too large', 'input-too-large', enc('SECRETTOKENxyz'.repeat(3)), { ...JSON_INPUT, maxBytes: 16 }],
+  ])('%s: the secret is in neither the answer nor the audit log', async (_name, reason, payload, declaration) => {
+    const w = await world([entry(declaration)]);
+    const s = await w.connect();
+    const r = (await w.run(s, payload)) as { reason: string; message: string };
+    expect(r.reason).toBe(reason);
+    expect(JSON.stringify(r)).not.toMatch(/SECRET|xyz/);
+    expect(w.audit.find((e) => e.event === 'refused')).toMatchObject({ reason });
+    expect(JSON.stringify(w.audit)).not.toMatch(/SECRET|xyz/);
+  });
+
   it('refuses bytes that are not UTF-8 (input-format)', async () => {
     const w = await world([entry({ format: 'text', maxBytes: 100, chars: ['utf8-text'] })]);
     const s = await w.connect();

@@ -101,6 +101,7 @@ const GROUPS: GroupHelp[] = [
           '--stdin-max <n>k   at most that size (default 64k, at most 512k, or a number of bytes)',
           '--stdin-chars <families>   the characters the payload may contain, a WHITELIST joined with + and mandatory: letters digits space punct | slash backslash dquote squote backquote semicolon ampersand pipe dollar lt gt at hash percent star plus equal tilde caret brace-open brace-close bracket-open bracket-close | json (implied by --stdin json) | utf8-text (any text; stands alone)',
           'stdin families   letters = Unicode letters and accents; digits 0-9; space = space and line feed; punct = . , : ! ? - _ ( ); utf8-text = ANY UTF-8 text (accents, punctuation, quotes, spaces, line feeds in strings) and safe only because the payload goes to stdin; NUL, tab, carriage return, other control characters and bidi controls are always refused',
+          'stdin raw bytes   the daemon judges the RAW bytes: JSON unicode escapes inside strings (backslash-u sequences, for NUL or a bidi control) are NOT interpreted, the command that receives the payload decodes them and must validate its fields; zero-width and private-use characters are not refused by utf8-text',
           '--out <file>   write the signed policy to a file instead of sending it',
           '--list   show what is allowed on the machine, numbered (no command)',
           '--remove   withdraw the command (by its text, --shell narrows it) or --index <n>, the number shown by --list or `machine allowed`',
