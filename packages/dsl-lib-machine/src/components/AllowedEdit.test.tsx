@@ -412,7 +412,8 @@ describe('batch editing with the shared table', () => {
     for (const name of ['Delete selected', 'Change lifetime']) {
       await user.click(within(screen.getByRole('toolbar', { name: 'Batch actions' })).getByRole('button', { name }));
       const d = await screen.findByRole('dialog');
-      await user.click(within(d).getByRole('button', { name: 'Cancel' }));
+      // The footer is rendered after the dialog opens (CI run 46168977277 found the dialog without its Cancel button on a slow runner): wait for it.
+      await user.click(await within(d).findByRole('button', { name: 'Cancel' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(screen.getByRole('toolbar', { name: 'Batch actions' })).toHaveTextContent('2 selected');
       expect(screen.getByRole('checkbox', { name: 'Select row default|sh|echo a' })).toBeChecked();
