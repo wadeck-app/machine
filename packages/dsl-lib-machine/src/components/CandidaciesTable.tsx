@@ -38,11 +38,11 @@ export interface CandidaciesTableProps {
 }
 
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
-  { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
-  { key: 'hostname', label: 'Hostname', nowrap: true, render: (r) => r.hostname },
+  { key: 'name', label: 'Name', render: (r) => r.name },
+  { key: 'hostname', label: 'Hostname', render: (r) => r.hostname },
   { key: 'observedIp', label: 'Seen from', nowrap: true, render: (r) => r.observedIp },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
-  { key: 'statusText', label: 'Status', nowrap: true, render: (r) => r.statusText },
+  { key: 'statusText', label: 'Status', render: (r) => r.statusText },
 ];
 
 // The same rule as the details of the row expansion: never empty, markdown of the module.
@@ -91,8 +91,8 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
       nowrap: true,
       render: (r) => (
         <span className="flex items-center justify-end gap-2">
-          {r.canApprove && <ButtonAction label="Approve" ariaLabel={`Approve ${r.name}`} variant="primary" onClick={() => { setProblem(null); track(undefined); setSelected(r); }} />}
-          {r.canDecide && <ButtonAction label="Reject" ariaLabel={`Reject ${r.name}`} variant="danger-outline" onClick={() => reject(r)} />}
+          {r.canApprove && <ButtonAction label="Approve" ariaLabel={`Approve ${r.name}`} variant="primary" size="xs" onClick={() => { setProblem(null); track(undefined); setSelected(r); }} />}
+          {r.canDecide && <ButtonAction label="Reject" ariaLabel={`Reject ${r.name}`} variant="danger-outline" size="xs" onClick={() => reject(r)} />}
         </span>
       ),
     },
