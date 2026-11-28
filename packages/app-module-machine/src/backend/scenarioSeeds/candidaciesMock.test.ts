@@ -83,6 +83,14 @@ describe('the routes of the Candidacies page', () => {
     expect(call(routes, 'POST /candidacies/:id/approve', { id: c.id }, approveBody(c)).status).toBe(409);
   });
 
+  it('Reject answers a message that names the machine when the page sends its name (the id otherwise)', () => {
+    const a = first('several-pending');
+    const named = call(make('several-pending'), 'POST /candidacies/:id/reject', { id: a.id }, { name: a.name });
+    expect((named.body as { message: string }).message).toBe(`${a.name} rejected: the candidate is told on its next check`);
+    const bare = call(make('several-pending'), 'POST /candidacies/:id/reject', { id: a.id });
+    expect((bare.body as { message: string }).message).toBe(`Candidacy ${a.id} rejected: the candidate is told on its next check`);
+  });
+
   it('Reject removes the row from the next GET, and rejecting it again is a 404', () => {
     const routes = make('several-pending');
     const a = first('several-pending');

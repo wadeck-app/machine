@@ -8,7 +8,7 @@ $type: PageContent
 sections:
   - $type: PageHeader
     title: Machines
-    subtitle: This machine and the peers it trusts, as the local machine daemon knows them. Revoke signs here, with the admin passphrase.
+    subtitle: This machine and the peers it trusts; Revoke signs here, with the admin passphrase.
   # The route answers `note` when this machine is not enrolled yet, and `presenceNote` for what the list cannot show.
   - $type: Card
     $if: $sources.machines.note
@@ -16,6 +16,13 @@ sections:
     items:
       - $type: Markdown
         text: $sources.machines.note
+  # This machine is alone on the network: the next step, with its command (Markdown renders it as code).
+  - $type: Card
+    $if: $sources.machines.nextStep
+    padding: sm
+    items:
+      - $type: Markdown
+        text: $sources.machines.nextStep
   # A discreet help line, not a notice: it says what the page does not show, it is not a fact about a machine.
   - $type: Text
     $if: $sources.machines.presenceNote
@@ -47,3 +54,6 @@ sections:
   - $type: machine:MachinesTable
     rows: $sources.machines.machines
     emptyMessage: No machine
+    # Read here, explicitly: a page that reads `$ctx.$sourceErrors` gets no generic shell toast for a failed source (the whole server message, never dismissed by itself);
+    # the alert above the table says it instead.
+    sourceErrors: $ctx.$sourceErrors

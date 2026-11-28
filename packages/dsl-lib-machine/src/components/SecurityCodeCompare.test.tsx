@@ -47,3 +47,35 @@ describe('SecurityCodeCompare', () => {
     expect(document.body.textContent).toMatch(/decisive confirmation is made on laptop/);
   });
 });
+
+describe('SecurityCodeCompare: layout and the comparison held back', () => {
+  it('shows the 25 digits as five groups of five in a grid of five columns, so a group is never cut and the line never breaks 20 + 5', () => {
+    render(<SecurityCodeCompare code={CODE} name="laptop" />);
+    const group = screen.getByLabelText('Security code');
+    const cells = Array.from(group.children);
+    expect(cells.map((c) => c.textContent)).toEqual(['12345', '67890', '12345', '67890', '12345']);
+    expect(group.className).toMatch(/grid-cols-5/);
+    expect(cells.every((c) => /whitespace-nowrap/.test(c.className))).toBe(true);
+  });
+
+  it('a code that is not five groups is shown as given, in one piece', () => {
+    render(<SecurityCodeCompare code="not a code" name="laptop" />);
+    expect(screen.getByLabelText('Security code')).toHaveTextContent('not a code');
+  });
+
+  it('held back (the documents are not delivered): no "Codes match" and no "Codes differ", ONE line says why, and the code stays readable', () => {
+    render(<SecurityCodeCompare code={CODE} name="laptop" onMatch={() => undefined} onDiffer={() => undefined} heldBack="Comparing the codes waits until every machine has its documents." />);
+    expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Codes differ' })).toBeNull();
+    expect(screen.getByText('Comparing the codes waits until every machine has its documents.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Security code')).toHaveTextContent(CODE);
+    // The sentence that describes the buttons is gone with them.
+    expect(document.body.textContent).not.toMatch(/only records your comparison/);
+  });
+
+  it('the command of the sentence is monospace, with no backtick', () => {
+    render(<SecurityCodeCompare code={CODE} name="laptop" />);
+    expect(document.body.textContent).not.toContain('`');
+    expect(screen.getByText('machine join')).toBeInTheDocument();
+  });
+});

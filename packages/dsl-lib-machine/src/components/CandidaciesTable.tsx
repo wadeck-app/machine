@@ -6,7 +6,9 @@ import type { ApproveRow } from '../lib/approveFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
+import { CodeText, CommandNotice } from './CommandNotice.js';
 import { LoadFailureNotice } from './LoadFailureNotice.js';
+import { RejectCandidacyDialog } from './RejectCandidacyDialog.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -44,7 +46,7 @@ export interface CandidaciesTableProps {
    * Runs a named action of the view (here `reject`, with its confirmation and its reload) for a row.
    * @ctxDefault
    */
-  onAction?: (action: string, row: CandidacyTableRow) => void;
+  onAction?: (action: string, row: CandidacyTableRow, options?: { body?: unknown }) => void;
   /**
    * Re-runs the page's sources, so the list is the relay's own after an approval. Defaults to the page's `$refresh`.
    * @ctxDefault $refresh
@@ -53,14 +55,15 @@ export interface CandidaciesTableProps {
 }
 
 // What the page says when nothing is pending: the next step, not only the absence.
-export const NO_CANDIDACY = 'No pending candidacy. To enroll a machine, run `machine join` on the new machine: its candidacy appears here.';
+export const NO_CANDIDACY = 'No pending candidacy. Run `machine join` on the new machine to enroll it.';
 
-// Four columns that fit at 1000 px without cutting a word; the hostname and the address are in the row expansion. The status is a short headline that never wraps:
-// the rest of a long status (the problems of the candidacy) is the first line of the row expansion.
+// Four columns that fit at 1024 px: the name, the age and the buttons never wrap (a word is never cut), the status is the column that gives way: a short headline
+// that WRAPS at its spaces, so the buttons stay in view next to the timeline. The hostname and the address are in the row expansion, and the rest of a long status
+// (the problems of the candidacy) is the first line of the row expansion.
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
   { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
-  { key: 'statusText', label: 'Status', nowrap: true, render: (r) => splitHeadline(r.statusText).headline },
+  { key: 'statusText', label: 'Status', render: (r) => splitHeadline(r.statusText).headline },
 ];
 
 // The same rule as the details of the row expansion: never empty, markdown of the module.
@@ -82,6 +85,8 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
   const [selected, setSelected] = useState<CandidacyTableRow | null>(null);
   const [progress, setProgress] = useState<ApprovalProgress | undefined>(undefined);
   const [problem, setProblem] = useState<string | null>(null);
+  // The candidacy whose rejection waits for the person's confirmation (a dialog that names it).
+  const [rejecting, setRejecting] = useState<CandidacyTableRow | null>(null);
   const latest = useRef<ApprovalProgress | undefined>(undefined);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
@@ -103,7 +108,8 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
       return;
     }
     setProblem(null);
-    onAction('reject', row);
+    // The name goes with the request: the route words its answer (the toast) with it instead of the id of the candidacy. It decides nothing.
+    onAction('reject', row, { body: { name: row.name } });
   };
 
   const columns: Array<TableColumn<CandidacyTableRow>> = [
@@ -115,7 +121,7 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
       render: (r) => (
         <span className="flex items-center justify-end gap-2">
           {r.canApprove && <ButtonAction label="Approve" ariaLabel={`Approve ${r.name}`} variant="primary" size="xs" onClick={() => { setProblem(null); track(undefined); setSelected(r); }} />}
-          {r.canDecide && <ButtonAction label="Reject" ariaLabel={`Reject ${r.name}`} variant="danger-outline" size="xs" onClick={() => reject(r)} />}
+          {r.canDecide && <ButtonAction label="Reject" ariaLabel={`Reject ${r.name}`} variant="danger-outline" size="xs" onClick={() => setRejecting(r)} />}
         </span>
       ),
     },
@@ -125,17 +131,23 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
   // No candidacy: five steps to do that follow nobody say nothing. The timeline appears with the candidacy it follows.
   const steps = timeline === undefined || rows.length === 0 ? undefined : overlayApproval(timeline, progress);
   return (
-    <div className="flex items-start gap-6">
+    <div className="flex items-start gap-4">
       {steps !== undefined && steps.length > 0 && (
-        <div className="w-60 shrink-0">
+        <div className="w-52 shrink-0">
           <VerticalTimeline steps={steps} />
         </div>
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-2">
-        {problem !== null && <Notice variant="danger" label={problem} />}
+        {problem !== null && <CommandNotice variant="danger" label={problem} />}
         {failure !== undefined && <LoadFailureNotice what="Could not load the candidacies" error={failure} />}
         {/* A failed load with nothing to show is the alert above, never the empty message (it would say "nothing pending"). */}
-        {(failure === undefined || rows.length > 0) && (
+        {/* Nothing pending: a padded block that says it and names the next step (an empty table header says nothing, and its message is plain text: no command in monospace). */}
+        {failure === undefined && rows.length === 0 && (
+          <div data-testid="empty-candidacies" className="rounded border border-border px-4 py-10 text-center text-sm text-content">
+            <CodeText text={emptyMessage} />
+          </div>
+        )}
+        {rows.length > 0 && (
           <DataTable<CandidacyTableRow>
             rows={rows}
             columns={columns}
@@ -156,6 +168,17 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDID
           </div>
         )}
       </div>
+      {rejecting !== null && (
+        <RejectCandidacyDialog
+          name={rejecting.name}
+          onCancel={() => setRejecting(null)}
+          onConfirm={() => {
+            const row = rejecting;
+            setRejecting(null);
+            reject(row);
+          }}
+        />
+      )}
       {selected !== null && <ApproveCandidacyDialog row={selected} api={api.current} onClose={close} onProgress={track} {...(steps === undefined ? {} : { steps })} />}
     </div>
   );

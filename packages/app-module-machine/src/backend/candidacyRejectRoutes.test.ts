@@ -81,6 +81,15 @@ describe('POST /candidacies/:id/reject', () => {
     expect(seen).toEqual([{ method: 'PUT', url: '/api/machines/candidacies/cand-1/decision', body: '{"decision":"reject"}' }]);
   });
 
+  it('the message names the machine when the page sends its name (the id of a candidacy says nothing to the person); without it the id is named', async () => {
+    await withRelay({ status: 204 });
+    expect((await call('cand-1', { name: 'mac-m2' })).body.message).toBe('mac-m2 rejected: the candidate is told on its next check');
+    expect((await call('cand-1')).body.message).toBe('Candidacy cand-1 rejected: the candidate is told on its next check');
+    // A name that is not a plain short text is not echoed.
+    expect((await call('cand-1', { name: 42 })).body.message).toContain('Candidacy cand-1 rejected');
+    expect((await call('cand-1', { name: 'x'.repeat(65) })).body.message).toContain('Candidacy cand-1 rejected');
+  });
+
   it('ignores any body: the decision is not chosen by the caller (this route cannot approve)', async () => {
     const seen = await withRelay({ status: 204 });
     await call('cand-1', { decision: 'approve', approval: { v: 2 } });

@@ -29,7 +29,6 @@ export function overlayApproval(steps: TimelineStep[], progress: ApprovalProgres
   if (progress === undefined || !progress.signed) {
     return steps;
   }
-  const retry = `machine admin distribute ${progress.candidate.uuid}`;
   return steps.map((step): TimelineStep => {
     if (DONE[step.id] === true) {
       return { ...step, status: 'done' };
@@ -76,7 +75,7 @@ export function overlayApproval(steps: TimelineStep[], progress: ApprovalProgres
         return { ...step, status: 'done', description: `${waiting} waiting in the relay inbox: ${waiting === 1 ? 'it installs them when it is back' : 'they install them when they are back'}.` };
       }
       if (progress.delivery === 'partial' || progress.delivery === 'failed') {
-        return { ...step, status: 'current', description: `Not delivered to every machine: run \`${retry}\`.` };
+        return { ...step, status: 'current', description: 'Not delivered to every machine: the result says what to run.' };
       }
       return { ...step, status: 'current' };
     }

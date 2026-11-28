@@ -147,6 +147,21 @@ describe('GET /machines', () => {
     expect(out.body.count).toBe(2);
     // The daemon list carries no presence or address: the answer says so instead of leaving the page to guess.
     expect(out.body.presenceNote).toContain('not shown');
+    expect(out.body.presenceNote).not.toMatch(/daemon/);
+    expect(out.body.nextStep).toBeUndefined();
+  });
+
+  it('this machine alone on the network: the answer says the next step, with the command', async () => {
+    await withDaemon({ list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [] } });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.status).toBe(200);
+    expect(out.body.nextStep).toBe('No other machine yet. Run `machine join` on the new machine, then approve it on the Candidacies page.');
+  });
+
+  it('this machine not enrolled yet: the note of the daemon says what to do, no "next step" of a network that does not exist', async () => {
+    await withDaemon({ list: { initialized: true, enrolled: false, note: 'this machine is not enrolled: run `machine join`', self: { uuid: UUID, name: 'alpha' }, peers: [] } });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.body.nextStep).toBeUndefined();
   });
 
   it('adds who receives request notices and which machine holds the list, from the daemon noticeHolders', async () => {

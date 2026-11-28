@@ -5,14 +5,14 @@ Browser-only mock backends of app-core "Scenarios" (SDK `module-authoring.md`, s
 ## Run
 
 1. Start the app-core dev server (port 5173) with this module installed from a bundle that includes `dsl-lib/scenarios.mjs`.
-2. Pick a scenario in the A/B dock ("Scenario" row, badge with Reset), or force it in the URL: `?ab.scenario.machine.<page-slug>=<id>`.
+2. Pick a scenario in the A/B dock ("Scenario" row, badge with Reset), or force it in the URL: `?scenario=<id>` (`?scenario=real` = the real backend).
 
-| Page | URL | `<page-slug>` |
-|---|---|---|
-| Candidacies | `/modules/machine/candidacies` | `candidacies` |
-| Machines | `/modules/machine` | `home` |
+| Page | URL |
+|---|---|
+| Candidacies | `/modules/machine/candidacies` |
+| Machines | `/modules/machine` |
 
-Example: `/modules/machine/candidacies?ab.scenario.machine.candidacies=one-pending`.
+Example: `/modules/machine/candidacies?scenario=one-pending`.
 
 ## Pieces
 

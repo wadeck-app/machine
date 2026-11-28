@@ -341,6 +341,9 @@ function candidacyRow(view: CandidacyListView, nowSeconds: number): CandidacyLis
   return { ...view, ageText: ageText(view.ageSeconds), bindingText, statusText, canDecide, canApprove };
 }
 
+/** What the Machines page says when this machine is alone on the network (Markdown: the command is code). The same text as the scenario of the page (commons/machinesState.ts). */
+const NEXT_STEP = 'No other machine yet. Run `machine join` on the new machine, then approve it on the Candidacies page.';
+
 /**
  * backendEntryPath target declared in manifest.json. app-core calls this once at module load with the module context:
  * routes become /api/modules/machine/<subPath>. Every handler reads the config files at each request (the daemon port,
@@ -385,8 +388,10 @@ export default function register(ctx: ModuleContextLike): void {
         count: machines.length,
         enrolled: list.enrolled === true,
         ...(typeof list.note === 'string' ? { note: list.note } : {}),
-        // The daemon `list` carries neither presence nor addresses (machine-cli adds them in the CLI from the relay): said here so the page never guesses.
-        presenceNote: 'Presence and addresses are not shown yet: the daemon list does not carry them (run machine list for the relay view).',
+        // This machine is alone on the network: the next step, so the page is not a one-row table with nothing to do.
+        ...(list.enrolled === true && machines.length === 1 ? { nextStep: NEXT_STEP } : {}),
+        // The list carries neither presence nor addresses (machine-cli adds them in the CLI from the relay): said here so the page never guesses.
+        presenceNote: 'Presence and addresses are not shown on this page: run machine list for the relay view.',
       });
     } catch (err) {
       const failure = failureOf(err);
@@ -552,7 +557,10 @@ export default function register(ctx: ModuleContextLike): void {
     const id = typeof req === 'object' && req !== null ? (req as { params?: { id?: unknown } }).params?.id : undefined;
     try {
       await rejectCandidacy(configDir(), typeof id === 'string' ? id : '');
-      return reply.code(200).send({ ok: true, id, message: `Candidacy ${String(id)} rejected: the candidate is told on its next check` });
+      // The page sends the name of the machine: the toast says "mac-m2 rejected", the id of a candidacy says nothing to the person. It only words the message, it decides nothing.
+      const sent = typeof req === 'object' && req !== null ? (req as { body?: { name?: unknown } }).body?.name : undefined;
+      const who = typeof sent === 'string' && sent.length > 0 && sent.length <= 64 ? sent : `Candidacy ${String(id)}`;
+      return reply.code(200).send({ ok: true, id, message: `${who} rejected: the candidate is told on its next check` });
     } catch (err) {
       const kind = err instanceof RelayRequestError ? REJECT_KINDS[err.status] : undefined;
       if (err instanceof RelayRequestError && kind !== undefined) return reply.code(err.status).send(errorBody(err.status, kind, err.message));

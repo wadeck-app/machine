@@ -1,5 +1,6 @@
 import React from 'react';
-import { Collapsible, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Collapsible, Text, VerticalStack } from '@wadeck-app/dsl-ui';
+import { CommandNotice } from './CommandNotice.js';
 import { loadFailureView, type SourceError } from '../lib/loadFailure.js';
 
 /**
@@ -10,7 +11,7 @@ export function LoadFailureNotice({ what, error }: { what: string; error: Source
   const view = loadFailureView(what, error);
   return (
     <VerticalStack gap="gap-1">
-      <Notice variant="danger" label={view.label} />
+      <CommandNotice variant="danger" label={view.label} />
       <Collapsible title="Details">
         <div className="break-words">
           <Text mono size="xs" text={view.details} />

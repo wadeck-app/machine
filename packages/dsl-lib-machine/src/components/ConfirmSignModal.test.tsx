@@ -200,3 +200,45 @@ describe('the standard dialog of the design system hosts the signing form', () =
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a wrong passphrase and the focus (UX review)', () => {
+  const WRONG = 'admin key file: wrong passphrase or damaged key file';
+
+  it('a wrong passphrase says what to do first, and keeps the message of the core as the detail', () => {
+    render(<ConfirmSignModal {...base} error={WRONG} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Nothing was signed. Retype the passphrase.');
+    expect(alert).toHaveTextContent(WRONG);
+    expect((alert.textContent ?? '').indexOf('Nothing was signed')).toBeLessThan((alert.textContent ?? '').indexOf('admin key file'));
+  });
+
+  it('any other error is shown as it is', () => {
+    render(<ConfirmSignModal {...base} error="the relay answered 503" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('the relay answered 503');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Retype the passphrase');
+  });
+
+  it('the focus returns to the passphrase field when an error appears (the person retypes at once)', async () => {
+    const { rerender } = render(<ConfirmSignModal {...base} />);
+    expect(screen.getByLabelText('Admin passphrase')).not.toHaveFocus();
+    rerender(<ConfirmSignModal {...base} error={WRONG} />);
+    await waitFor(() => expect(screen.getByLabelText('Admin passphrase')).toHaveFocus());
+  });
+
+  it('an empty passphrase also puts the focus back in the field', async () => {
+    render(<ConfirmSignModal {...base} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the admin passphrase to sign. Nothing was signed.');
+    expect(screen.getByLabelText('Admin passphrase')).toHaveFocus();
+  });
+
+  it('when the dialog becomes informational (the result view) the focus moves to Close, never to the page body', async () => {
+    const { rerender } = render(<ConfirmSignModal {...base} />);
+    // The person pressed the confirm button: the focus is on it, and it is gone in the result view.
+    screen.getByRole('button', { name: 'Allow and sign' }).focus();
+    rerender(<ConfirmSignModal {...base} title="laptop approved" needsPassphrase={false} />);
+    const close = screen.getByRole('button', { name: 'Close' });
+    await waitFor(() => expect(close).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+  });
+});

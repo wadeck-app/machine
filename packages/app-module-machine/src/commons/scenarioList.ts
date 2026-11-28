@@ -20,7 +20,7 @@ import severalPending from './scenarioSeeds/several-pending.json';
 // Plain objects (structurally the `ScenarioDefinition` of the SDK): src/dsl-scenarios/index.ts hands them to `defineScenarios`. They live in src/commons because the
 // module check forbids src/backend (where their tests are) to import src/dsl-scenarios. BROWSER code: no Node API, no package. The data is fake
 // (src/commons/scenarioSeeds, machinesSeeds.ts); the logic is the pure state machines of src/commons, so that Approve / Reject / Revoke change what the next request
-// returns. Pick one in the A/B dock of the dev server, see .claude/specs/2026-11-13_machine-network/scenarios.md.
+// returns. Pick one in the A/B dock of the dev server or with `?scenario=<id>`, see .claude/specs/2026-11-13_machine-network/scenarios.md.
 
 /** One scenario of the dock. */
 export interface ScenarioDef {

@@ -3,6 +3,7 @@ import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/d
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import type { ApprovalProgress } from '../lib/approvalTimeline.js';
 import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type Approvable, type ApproveContext, type ApproveResult, type ApproveRow } from '../lib/approveFlow.js';
+import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
@@ -34,6 +35,9 @@ export interface ApproveCandidacyDialogProps {
   /** The timeline of the approval as the page shows it (steps of the module with what this page proves laid over them): shown inside the dialog. Absent: no timeline. */
   steps?: TimelineStep[];
 }
+
+/** Why the comparison of the codes is not offered while the documents are missing. */
+const HELD_BACK = 'Comparing the codes waits until every machine has its documents.';
 
 /** The days an approval is valid for: the default of `machine admin approve`. */
 const VALID_FOR = '365 days';
@@ -146,6 +150,10 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
 
   if (phase.kind === 'done') {
     const { distribution } = phase.result;
+    // Some machine did not get its documents: comparing the codes now would be premature (the timeline keeps that step to do).
+    const documentsMissing = distribution.status === 'partial' || distribution.status === 'failed';
+    // The command the headline already gives: the machine rows do not say it again.
+    const retry = /`([^`]+)`/.exec(distribution.headline)?.[1];
     const answer = (value: 'match' | 'differ') => {
       setCodes(value);
       if (progress.current !== undefined) {
@@ -154,17 +162,17 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
     };
     return (
       <ConfirmSignModal title={`${row.name} approved`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose} {...side}>
-        <Notice label={distribution.headline} variant={distribution.tone} />
+        <CommandNotice label={distribution.headline} variant={distribution.tone} />
         {phase.noCode ? (
           // Enrolled before: its admin key is already pinned there, it prints no code and asks for no comparison.
           <Notice variant="info" label="No code to compare: this machine already trusts your admin key." />
         ) : (
-          <SecurityCodeCompare code={phase.result.finalCode} name={row.name} answered={codes !== undefined} onMatch={() => answer('match')} onDiffer={() => answer('differ')} />
+          <SecurityCodeCompare code={phase.result.finalCode} name={row.name} answered={codes !== undefined} onMatch={() => answer('match')} onDiffer={() => answer('differ')} {...(documentsMissing ? { heldBack: HELD_BACK } : {})} />
         )}
-        {codes === 'match' && <Notice variant="success" label={`Comparison recorded on this page. The decisive confirmation is still to be made on ${row.name}: \`machine join\` there asks you to confirm its code.`} />}
-        {codes === 'differ' && <Notice variant="danger" label={`Codes differ: do NOT use "${row.name}". Run \`machine admin revoke ${row.name}\` now, then reject the candidate and look for who sits between the machines.`} />}
+        {codes === 'match' && <CommandNotice variant="success" label={`Comparison recorded on this page. The decisive confirmation is still to be made on ${row.name}: \`machine join\` there asks you to confirm its code.`} />}
+        {codes === 'differ' && <CommandNotice variant="danger" label={`Codes differ: do NOT use "${row.name}". Run \`machine admin revoke ${row.name}\` now, then reject the candidate and look for who sits between the machines.`} />}
         {keepProblem !== null && <Notice variant="warning" label={keepProblem} />}
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial' || distribution.status === 'failed'} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={documentsMissing} {...(retry === undefined ? {} : { said: retry })} />
       </ConfirmSignModal>
     );
   }

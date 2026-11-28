@@ -15,6 +15,8 @@ const ADMIN = '00000000-0000-4000-8000-000000000001';
 const THINK = '00000000-0000-4000-8000-000000000002';
 const MAC = '00000000-0000-4000-8000-000000000003';
 
+// What the page says when this machine is alone on the network.
+const NEXT_STEP = 'No other machine yet. Run `machine join` on the new machine, then approve it on the Candidacies page.';
 const full = (key: string): string => `${key.split(' ')[0]} ${MODULE_PREFIX}${key.slice(key.indexOf(' ') + 1)}`;
 const make = (name: MachinesSeedName): MockRoutes => machinesRoutes(machinesSeed(name));
 const call = (routes: MockRoutes, key: string, params: Record<string, string> = {}, body?: unknown): MockResponse => {
@@ -41,6 +43,9 @@ describe('the routes of the Machines page', () => {
     const out = list(make('only-this-machine'));
     expect(out.machines.map((m) => [m.name, m.self, m.role])).toEqual([['midgard2', true, 'this machine']]);
     expect([out.count, out.enrolled]).toEqual([1, true]);
+    // Alone on the network: the page says what to do next, with the command (Markdown), and the help line does not talk about the daemon.
+    expect(out.nextStep).toBe(NEXT_STEP);
+    expect(out.presenceNote).not.toMatch(/daemon/);
   });
 
   it('two-trusted-peers: this machine first, then the peers with their reachability, aliases and notice columns', () => {
@@ -51,6 +56,7 @@ describe('the routes of the Machines page', () => {
     expect(out.machines.map((m) => m.receivesNotices)).toEqual(['yes', 'yes', 'no']);
     expect(out.noticesText).toBe('Request notices go to midgard2, thinkcentre (list serial 1).');
     expect(out.count).toBe(3);
+    expect(out.nextStep).toBeUndefined();
   });
 
   it('GET /admin-key hands the envelope of the throwaway scenario key, and the page reads its hint from it', async () => {

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Check, Circle, Minus } from 'lucide-react';
+import { CodeText } from './CommandNotice.js';
 import { InfoTip } from './InfoTip.js';
 
 /**
@@ -100,7 +101,7 @@ export function VerticalTimeline({ steps }: VerticalTimelineProps) {
               {step.info !== undefined && <InfoTip label={`About: ${step.title}`} text={step.info} />}
             </span>
             <span data-part="status" className={`text-xs ${STATUS_TEXT_CLASS[step.status]}`}>{STATUS_LABEL[step.status]}</span>
-            {step.description !== undefined && <span className={DESCRIPTION}>{step.description}</span>}
+            {step.description !== undefined && <span className={DESCRIPTION}><CodeText text={step.description} /></span>}
           </div>
         </li>
       ))}

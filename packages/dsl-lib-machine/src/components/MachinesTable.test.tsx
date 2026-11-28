@@ -88,15 +88,33 @@ describe('the table', () => {
     expect(within(tableRow('desktop')).queryByRole('button', { name: /^Revoke/ })).toBeNull();
   });
 
-  it('has no 36-character UUID column (it made the table scroll sideways next to the actions): the UUID is in the row details, the other columns stay, the actions cell does not wrap', async () => {
+  it('keeps five columns so the Revoke button is reachable at 1024 px without scrolling sideways (name, role, aliases, reachable, the action): the UUID, "Receives notices" and "Notice list held" are in the row details', async () => {
     render(<MachinesTable rows={ROWS} />);
     const headers = within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(expect.arrayContaining(['Name', 'Role', 'Aliases', 'Reachable', 'Receives notices', 'Notice list held']));
+    expect(headers).toEqual(expect.arrayContaining(['Name', 'Role', 'Aliases', 'Reachable']));
     expect(headers).not.toContain('UUID');
+    expect(headers).not.toContain('Receives notices');
+    expect(headers).not.toContain('Notice list held');
+    expect(headers.filter((h) => h !== '')).toHaveLength(4);
     expect(within(tableRow('laptop')).queryByText(LAPTOP.uuid)).toBeNull();
     await userEvent.click(within(tableRow('laptop')).getByRole('button', { name: /expand row/i }));
     expect(screen.getByText(new RegExp(LAPTOP.uuid))).toBeInTheDocument();
     expect(within(tableRow('laptop')).getByRole('button', { name: 'Revoke laptop' }).closest('td')?.className).toMatch(/whitespace-nowrap/);
+  });
+
+  it('the columns moved out of the table are in the row details, with their value', async () => {
+    render(<MachinesTable rows={[{ ...ROWS[0]!, receivesNotices: 'yes', listHeldText: 'holds the list' }]} />);
+    await userEvent.click(screen.getByRole('button', { name: /expand row/i }));
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(/receives notices: yes/);
+    expect(text).toMatch(/notice list held: holds the list/);
+  });
+
+  it('a value that is empty is not listed in the row details (no "notice list held: " with nothing after it)', async () => {
+    render(<MachinesTable rows={[ROWS[1]!]} />);
+    await userEvent.click(screen.getByRole('button', { name: /expand row/i }));
+    expect(document.body.textContent).not.toMatch(/notice list held/);
+    expect(document.body.textContent).toMatch(/receives notices: no/);
   });
 
   it('says so when no machine is known', () => {
@@ -165,9 +183,10 @@ describe('Revoke', () => {
     await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
     const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
-    expect(within(dialog).getByText('Documents NOT delivered to 1 machine. Run `' + RETRY + '`.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Documents NOT delivered to 1 machine.')).toBeInTheDocument();
     expect(within(dialog).getByText('Failed')).toBeInTheDocument();
-    expect(within(dialog).getByText(RETRY, { selector: '.font-mono' })).toBeInTheDocument();
+    // The command is said ONCE (the headline), as code; the machine row does not repeat it.
+    expect(within(dialog).getAllByText(RETRY, { selector: '.font-mono' })).toHaveLength(1);
     expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
   }, 60_000);
 

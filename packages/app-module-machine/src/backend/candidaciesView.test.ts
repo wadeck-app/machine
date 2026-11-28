@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // The view of the Candidacies page. The table and the timeline are ONE component (machine:CandidaciesTable): the approval dialog lays what the page proves over
 // the steps of the module, so both need the same state. The columns, their nowrap rule and the buttons live in the component (dsl-lib-machine tests).
-const yaml = readFileSync(fileURLToPath(new URL('../dsl-views/candidacies.yaml', import.meta.url)), 'utf8');
+// Windows checks the file out with CRLF line endings: the patterns match LF.
+const yaml = readFileSync(fileURLToPath(new URL('../dsl-views/candidacies.yaml', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 describe('candidacies view', () => {
   it('the table and the timeline are ONE component, bound to the sources (no hard-coded status, no standard DataTable here)', () => {
@@ -35,14 +36,20 @@ describe('candidacies view', () => {
 });
 
 describe('candidacies view: the Reject action (a restricting action, no signature)', () => {
-  it('posts to the reject route with the row id, asks a confirmation and reloads the list; the component calls it by name', () => {
+  it('posts to the reject route with the row id, reloads the list (the confirmation is the dialog of the component); the component calls it by name', () => {
     expect(yaml).toMatch(/\$actions:\s*\n\s+reject:/);
     expect(yaml).toContain('url: POST /api/modules/machine/candidacies/{id}/reject');
-    expect(yaml).toMatch(/confirm:.*reject/i);
     expect(yaml).toContain('reloadSources: [candidacies]');
   });
 
   it('carries no style of its own', () => {
     expect(yaml).not.toMatch(/className|style:/);
+  });
+});
+
+describe('candidacies view: the confirmation of Reject is the component\'s dialog (UX review)', () => {
+  it('the action has no `confirm`: the generic "Please confirm" cannot name the machine, the dialog of the component does', () => {
+    expect(yaml).not.toMatch(/^\s+confirm:/m);
+    expect(yaml).toContain('POST /api/modules/machine/candidacies/{id}/reject');
   });
 });

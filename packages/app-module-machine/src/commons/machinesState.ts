@@ -52,6 +52,8 @@ export interface MachinesAnswer {
   reachableNote?: string;
   count: number;
   enrolled: boolean;
+  /** This machine is alone on the network: what to do next (Markdown). */
+  nextStep?: string;
   presenceNote: string;
 }
 
@@ -104,7 +106,9 @@ const ok = <T>(body: T): RouteAnswer<T> => ({ status: 200, body });
 const refuse = <T>(state: MachinesState, status: number, kind: string, error: string): MachinesStep<T> => ({ state, answer: fail(status, kind, error) });
 
 const retryOf = (uuid: string): string => `machine admin distribute ${uuid}`;
-const PRESENCE_NOTE = 'Presence and addresses are not shown yet: the daemon list does not carry them (run machine list for the relay view).';
+const PRESENCE_NOTE = 'Presence and addresses are not shown on this page: run machine list for the relay view.';
+/** What the page says when this machine is alone on the network (Markdown: the command is code). The same text as the real route (backend/index.ts). */
+export const NEXT_STEP = 'No other machine yet. Run `machine join` on the new machine, then approve it on the Candidacies page.';
 
 /** `GET /machines`. */
 export function listMachines(state: MachinesState): MachinesStep<MachinesAnswer> {
@@ -128,6 +132,7 @@ export function listMachines(state: MachinesState): MachinesStep<MachinesAnswer>
       noticesText: `Request notices go to ${receivers.join(', ')} (list serial 1).`,
       count: peers.length + 1,
       enrolled: true,
+      ...(peers.length === 0 ? { nextStep: NEXT_STEP } : {}),
       presenceNote: PRESENCE_NOTE,
     }),
   };

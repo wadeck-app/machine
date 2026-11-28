@@ -327,7 +327,7 @@ export function approveCandidacy(state: CandidaciesState, id: string, body: Appr
 }
 
 /** `POST /candidacies/:id/reject`: the row is gone from the list. */
-export function rejectCandidacy(state: CandidaciesState, id: string): Step<RejectAnswer> {
+export function rejectCandidacy(state: CandidaciesState, id: string, name?: string): Step<RejectAnswer> {
   const refuse = (status: number, kind: string, error: string): Step<RejectAnswer> => ({ state, answer: fail(status, kind, error) });
   if (!CANDIDACY_ID.test(id)) return refuse(400, 'bad_request', 'the candidacy id must be 1 to 128 letters, digits, "-" or "_" (it is the id the relay listed): reload the page and press Reject on the row again');
   if (state.relayError !== null) return { state, answer: { status: state.relayError.status, body: { ...state.relayError } } };
@@ -339,7 +339,8 @@ export function rejectCandidacy(state: CandidaciesState, id: string): Step<Rejec
   if (c.status !== 'pending') return refuse(409, 'not_pending', 'the candidacy is no longer pending (it was already approved or rejected, or it expired): nothing was changed here. Reload the page to see its current state');
   return {
     state: { ...state, candidacies: state.candidacies.filter((x) => x.id !== id) },
-    answer: ok({ ok: true, id, message: `Candidacy ${id} rejected: the candidate is told on its next check` }),
+    // The page sends the name of the machine: the message says "mac-m2 rejected" like the real route, the id otherwise.
+    answer: ok({ ok: true, id, message: `${name !== undefined && name.length > 0 && name.length <= 64 ? name : `Candidacy ${id}`} rejected: the candidate is told on its next check` }),
   };
 }
 

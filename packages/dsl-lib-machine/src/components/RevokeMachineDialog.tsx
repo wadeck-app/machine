@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import { loadRevokeContext, signAndRevoke, type RevokeContext, type RevokeResult, type RevokeRow } from '../lib/revokeFlow.js';
+import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
 
@@ -93,10 +94,12 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
 
   if (phase.kind === 'done') {
     const { distribution } = phase.result;
+    // The command the headline already gives: the machine rows do not say it again.
+    const retry = /`([^`]+)`/.exec(distribution.headline)?.[1];
     return (
       <ConfirmSignModal title={`${row.name} revoked`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
-        <Notice label={distribution.headline} variant={distribution.tone} />
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} />
+        <CommandNotice label={distribution.headline} variant={distribution.tone} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(retry === undefined ? {} : { said: retry })} />
       </ConfirmSignModal>
     );
   }

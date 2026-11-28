@@ -181,7 +181,7 @@ export interface RouteContracts {
   'GET /admin-key': { request: Record<string, never>; answer: AdminKeyAnswer };
   'GET /approve-context/:uuid': { request: { uuid: string }; answer: ApproveContextAnswer };
   'POST /candidacies/:id/approve': { request: { id: string; body: ApproveRequest }; answer: ApproveAnswer };
-  'POST /candidacies/:id/reject': { request: { id: string }; answer: RejectAnswer };
+  'POST /candidacies/:id/reject': { request: { id: string; name?: string }; answer: RejectAnswer };
   'POST /approve-distribute': { request: { body: DistributeRequest }; answer: DistributeAnswer };
   'POST /approval-codes': { request: { body: ApprovalCodeRequest }; answer: OkAnswer };
 }

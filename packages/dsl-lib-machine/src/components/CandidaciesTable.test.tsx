@@ -7,7 +7,7 @@ import {
   signRegistration as coreSignRegistration,
   type RegistrationBody,
 } from '@wadeck-app/machine-core';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimelineStep } from './VerticalTimeline.js';
@@ -102,11 +102,38 @@ describe('the table', () => {
     expect(screen.getByText(/MACBOOK-PRO-DE-WADECK/)).toBeInTheDocument();
   });
 
-  it('Reject goes through the page action of the view, with the row (its confirmation and reload stay the page\'s)', async () => {
+  it('Reject asks first, in a dialog that names the machine ("Reject laptop?", buttons Cancel and Reject), then goes through the page action of the view with the row (its reload stays the page\'s)', async () => {
     const onAction = vi.fn();
     render(<CandidaciesTable rows={[rowOf('c1', A)]} onAction={onAction} />);
     await userEvent.click(screen.getByRole('button', { name: 'Reject laptop' }));
-    expect(onAction).toHaveBeenCalledWith('reject', expect.objectContaining({ id: 'c1' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Reject laptop?');
+    expect(dialog).toHaveTextContent('laptop is refused and must post a new candidacy to ask again');
+    expect(within(dialog).getByText('machine join --resume')).toBeInTheDocument();
+    expect(dialog.textContent).not.toContain('`');
+    // Nothing is sent until the person confirms; Cancel is the default focus.
+    expect(onAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+    // The name goes with the request, so the route can answer "laptop rejected" instead of the id of the candidacy.
+    expect(onAction).toHaveBeenCalledWith('reject', expect.objectContaining({ id: 'c1' }), { body: { name: 'laptop' } });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Cancel in the Reject dialog sends nothing', async () => {
+    const onAction = vi.fn();
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} onAction={onAction} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reject laptop' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('Reject without the action wired says so with the fix and opens no dialog', async () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Reject laptop' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Reject' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Reject is not wired to this page');
   });
 
   it('the row expansion shows the details (never empty)', async () => {
@@ -191,10 +218,15 @@ describe('Approve', () => {
 describe('the status column and the empty and failed states (UX review)', () => {
   const LONG = 'Cannot be approved: the candidacy carries no uuid (posted by an older `machine join`, or the relay dropped it): reject it, and ask the candidate to run `machine join --resume`';
 
-  it('the status cell is a short headline that never wraps; the whole sentence is in the row expansion', async () => {
+  it('the status cell is a short headline that WRAPS (it takes the width left, so the actions are never pushed out of view at 1024 px); the whole sentence is in the row expansion', async () => {
     render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: LONG, canApprove: false })]} onAction={vi.fn()} />);
     const cell = within(tableRow('laptop')).getByText('Cannot be approved').closest('td') as HTMLElement;
-    expect(cell.className).toMatch(/whitespace-nowrap/);
+    expect(cell.className).not.toMatch(/whitespace-nowrap/);
+    // Name, age and the buttons never wrap: they keep their width.
+    const row = tableRow('laptop');
+    expect(within(row).getByText('laptop').closest('td')?.className).toMatch(/whitespace-nowrap/);
+    expect(within(row).getByText('30 s').closest('td')?.className).toMatch(/whitespace-nowrap/);
+    expect(within(row).getByRole('button', { name: 'Reject laptop' }).closest('td')?.className).toMatch(/whitespace-nowrap/);
     expect(cell).not.toHaveTextContent('carries no uuid');
     await userEvent.click(screen.getByRole('button', { name: 'Expand row' }));
     expect(screen.getByText(/the candidacy carries no uuid/)).toBeInTheDocument();
@@ -205,9 +237,14 @@ describe('the status column and the empty and failed states (UX review)', () => 
     expect(within(tableRow('laptop')).getByText('Pending')).toBeInTheDocument();
   });
 
-  it('nothing pending: the empty message names the next step, and no timeline of five "To do" steps without a headline is drawn', () => {
+  it('nothing pending: the empty state says it and names the next step, with the command in monospace (no backtick), padded and in one line; no timeline of five "To do" steps is drawn', () => {
     render(<CandidaciesTable rows={[]} timeline={TIMELINE} onAction={vi.fn()} />);
-    expect(screen.getByText(/run `machine join` on the new machine/)).toBeInTheDocument();
+    expect(screen.getByText('machine join')).toBeInTheDocument();
+    const empty = screen.getByTestId('empty-candidacies');
+    expect(empty).toHaveTextContent('No pending candidacy. Run machine join on the new machine to enroll it.');
+    expect(empty.textContent).not.toContain('`');
+    expect(empty.className).toMatch(/\bpy-\d+/);
+    expect(screen.queryByRole('table')).toBeNull();
     expect(screen.queryByText('Candidacy received')).toBeNull();
     expect(screen.queryByText('To do')).toBeNull();
   });
@@ -216,8 +253,11 @@ describe('the status column and the empty and failed states (UX review)', () => 
     const message = 'this machine holds no admin relay token (no relay-admin.json): approving needs it. Run `machine admin login` and confirm the request';
     render(<CandidaciesTable rows={[]} timeline={TIMELINE} sourceErrors={{ candidacies: { message, status: 503 } }} onAction={vi.fn()} />);
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('Could not load the candidacies: this machine holds no admin relay token. Run `machine admin login`.');
-    expect(screen.queryByText(/run `machine join` on the new machine/)).toBeNull();
+    expect(alert).toHaveTextContent('Could not load the candidacies: this machine holds no admin relay token.');
+    // The command is monospace text next to the alert, never between literal backticks.
+    expect(screen.getByText('machine admin login')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Run `machine admin login`/);
+    expect(screen.queryByTestId('empty-candidacies')).toBeNull();
     expect(screen.queryByText('No pending candidacy')).toBeNull();
     expect(screen.queryByText('Candidacy received')).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();

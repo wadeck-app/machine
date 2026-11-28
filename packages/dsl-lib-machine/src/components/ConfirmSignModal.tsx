@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ButtonAction, Dialog, DialogFooter, FieldReadOnly, FieldSecret, HorizontalStack, Notice, VerticalStack, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { hintHelpText } from '../lib/passphraseHint.js';
@@ -50,6 +50,14 @@ export interface ConfirmSignModalProps {
   onCancel: () => void;
 }
 
+/** What the core says when the key cannot be unlocked (machine-webcrypto adminKey.ts): the same message for a wrong passphrase and a damaged file. */
+const WRONG_PASSPHRASE = /wrong passphrase or damaged key file/;
+
+/** The message the dialog shows: a wrong passphrase says what to do first (nothing was signed, retype), the message of the core follows as the detail. */
+function shownMessage(message: string): string {
+  return WRONG_PASSPHRASE.test(message) ? `Nothing was signed. Retype the passphrase. Detail: ${message}` : message;
+}
+
 export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
@@ -81,6 +89,12 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   };
 
   const shown = localError ?? error;
+  // An error (wrong passphrase, empty field) puts the focus back where the person retypes: the field is inert while busy, so this runs once it is usable again.
+  useEffect(() => {
+    if (shown !== null && !busy) {
+      passphrase.current?.focus();
+    }
+  }, [shown, busy]);
   const content = (
     <div>
       <VerticalStack gap="gap-3">
@@ -105,7 +119,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
                 {!askEveryTime && <KeepUnlockedSelect busy={busy} />}
               </>
             )}
-            {shown !== null && <Notice variant="danger" label={shown} />}
+            {shown !== null && <Notice variant="danger" label={shownMessage(shown)} />}
             <DialogFooter>
               {/* Cancel is the default focus (autoFocus): Enter without thinking must never sign. */}
               <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} autoFocus />
@@ -118,6 +132,9 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   );
   return (
     <Dialog
+      // The Dialog takes its initial focus (the button marked autoFocus) when it opens only: a new key opens it again when it turns informational (the result view), so the focus
+      // goes to Close instead of falling to the page body when the confirm button, which had it, goes away.
+      key={needsPassphrase ? 'asks' : 'informs'}
       open
       title={title}
       size={aside === undefined ? 'lg' : 'xl'}

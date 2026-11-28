@@ -21,3 +21,22 @@ describe('machines view', () => {
     expect(/presenceNote: '([^']*)'/.exec(src)?.[1] ?? '').not.toContain('`');
   });
 });
+
+describe('machines view: what the page says (UX review)', () => {
+  it('the subtitle is ONE sentence, and the daemon is not named in the page texts', () => {
+    const subtitle = /^\s+subtitle:\s*(.*)$/m.exec(yaml)?.[1] ?? '';
+    expect(subtitle).not.toBe('');
+    expect(subtitle).not.toMatch(/\.\s+\S/);
+    expect(subtitle).not.toMatch(/daemon/i);
+    expect(subtitle.length).toBeLessThanOrEqual(120);
+  });
+
+  it('the next step of a machine alone on the network is a Card of Markdown (the command is code)', () => {
+    expect(yaml).toMatch(/\$if: \$sources\.machines\.nextStep\n\s+padding: sm\n\s+items:\n\s+- \$type: Markdown\n\s+text: \$sources\.machines\.nextStep/);
+  });
+
+  it('the help line does not name the daemon', () => {
+    const src = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+    expect(/presenceNote: '([^']*)'/.exec(src)?.[1] ?? '').not.toMatch(/daemon/);
+  });
+});

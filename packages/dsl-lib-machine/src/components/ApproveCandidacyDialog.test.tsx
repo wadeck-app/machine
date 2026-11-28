@@ -121,6 +121,16 @@ const approve = async (passphrase = PASSPHRASE): Promise<void> => {
   await userEvent.click(screen.getByRole('button', { name: 'Approve and sign' }));
 };
 
+// The elements whose whole text is `text`, not inside the raw report (the "Details" of the result is a <pre>).
+const outsideDetails = (text: string): HTMLElement[] => screen.queryAllByText(text).filter((e) => e.closest('pre') === null);
+
+// The text of the dialog without the raw report of the CLI (the "Details" is a <pre>, shown as the daemon wrote it).
+const withoutReport = (): string => {
+  const copy = screen.getByRole('dialog').cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('pre').forEach((p) => p.remove());
+  return copy.textContent ?? '';
+};
+
 const CODE = coreFinalCode(CANDIDATE.identity.publicKey, admin.publicKey, RANDOM);
 const resultShown = async () => screen.findByLabelText('Security code', {}, { timeout: 20_000 });
 
@@ -255,11 +265,20 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent('server');
     expect(items[0]).toHaveTextContent('Delivered');
-    expect(items[0]).toHaveTextContent('nothing to do');
+    // Nothing to do is not a line of its own: a delivered machine says its state and its reason, no more.
+    expect(items[0]).not.toHaveTextContent('nothing to do');
     expect(items[1]).toHaveTextContent('laptop');
     expect(items[1]).toHaveTextContent('Waiting in the relay inbox');
     expect(items[1]).toHaveTextContent('offline');
     expect(items[1]).toHaveTextContent('installs by itself when it is back, nothing to do');
+  }, 60_000);
+
+  it('the result view takes the focus (Close), the page body never has it', async () => {
+    setup(stubApi());
+    await approve();
+    await resultShown();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
   }, 60_000);
 
   it('the raw report is folded in "Details": hidden until opened, then the text of the CLI, each line once', async () => {
@@ -321,7 +340,11 @@ describe('ApproveCandidacyDialog: the approval', () => {
     const api = stubApi();
     const { onProgress } = setup(api);
     await approve('not the passphrase');
-    expect(await screen.findByRole('alert', {}, { timeout: 20_000 })).toBeInTheDocument();
+    const alert = await screen.findByRole('alert', {}, { timeout: 20_000 });
+    // What to do first, the message of the core as the detail, and the focus is back in the field.
+    expect(alert).toHaveTextContent('Nothing was signed. Retype the passphrase.');
+    expect(alert).toHaveTextContent('wrong passphrase or damaged key file');
+    await waitFor(() => expect(screen.getByLabelText('Admin passphrase')).toHaveFocus());
     await waitFor(() => expect(screen.getByLabelText('Admin passphrase')).toHaveValue(''));
     expect(api.sent.filter((s) => s.method === 'POST')).toEqual([]);
     // The page proved nothing: the timeline goes back to what the module computed.
@@ -342,14 +365,21 @@ describe('ApproveCandidacyDialog: the approval', () => {
     setup(api);
     await approve();
     await resultShown();
-    expect(screen.getByRole('alert')).toHaveTextContent(`machine admin distribute ${CANDIDATE.uuid}`);
     expect(screen.getByRole('alert')).toHaveTextContent(/NOT told/);
+    // The command is monospace text, ONCE outside the raw report (headline); no literal backtick anywhere in the dialog.
+    expect(outsideDetails(RETRY)).toHaveLength(1);
+    expect(withoutReport()).not.toContain('`');
+    // The documents are not delivered: the comparison is not offered, one line says why, the code is still readable.
+    expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Codes differ' })).toBeNull();
+    expect(screen.getByText(/Comparing the codes waits until every machine has its documents/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Security code')).toHaveTextContent(CODE);
     // A failure opens the Details: the cause is what the person needs to act.
     expect(screen.getByText(/the daemon is not running/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Machines told' })).toBeNull();
   }, 60_000);
 
-  it('a delivery that partly failed: the failed machine says what to run, the others say nothing to do', async () => {
+  it('a delivery that partly failed: the retry command is said ONCE (the headline, as code), the machine rows do not repeat it, and the comparison is held back', async () => {
     const failed = { uuid: PEER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`${RETRY}\`` };
     const answer = REPORT({ failed: true, machines: [failed, INBOX_LAPTOP], text: { out: '', err: '[error] server (x): peer document not stored: relay down\n' } });
     setup(stubApi({ post: { '/approve-distribute': answer } }));
@@ -358,8 +388,11 @@ describe('ApproveCandidacyDialog: the approval', () => {
     const items = within(screen.getByRole('list', { name: 'Machines told' })).getAllByRole('listitem');
     expect(items[0]).toHaveTextContent('Failed');
     expect(items[0]).toHaveTextContent('documents not stored');
-    expect(items[0]).toHaveTextContent(RETRY);
-    expect(items[1]).toHaveTextContent('nothing to do');
+    expect(items[0]).not.toHaveTextContent(RETRY);
+    expect(items[1]).toHaveTextContent('installs by itself when it is back');
+    expect(outsideDetails(RETRY)).toHaveLength(1);
+    expect(withoutReport()).not.toContain('`');
+    expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
     expect(screen.getByText(/relay down/)).toBeInTheDocument();
   }, 60_000);
 
@@ -377,7 +410,9 @@ describe('ApproveCandidacyDialog: the approval', () => {
     await approve();
     await resultShown();
     await userEvent.click(screen.getByRole('button', { name: 'Codes differ' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('machine admin revoke laptop');
+    expect(screen.getByRole('alert')).toHaveTextContent('Codes differ: do NOT use "laptop".');
+    expect(screen.getByText('machine admin revoke laptop')).toBeInTheDocument();
+    expect(withoutReport()).not.toContain('`');
     expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
     expect((onProgress as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toMatchObject({ codes: 'differ' });
   }, 60_000);
@@ -389,7 +424,8 @@ describe('ApproveCandidacyDialog: the approval', () => {
     await resultShown();
     await userEvent.click(screen.getByRole('button', { name: 'Codes match' }));
     expect((onProgress as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toMatchObject({ codes: 'match' });
-    expect(screen.getByText(/Comparison recorded on this page.*laptop/s)).toBeInTheDocument();
+    expect(screen.getAllByRole('status').map((n) => n.textContent)).toContain('Comparison recorded on this page.');
+    expect(document.body.textContent).toMatch(/decisive confirmation is still to be made on laptop: machine join there asks you to confirm its code/);
     expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
   }, 60_000);
 });

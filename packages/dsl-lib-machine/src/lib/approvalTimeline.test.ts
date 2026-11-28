@@ -51,12 +51,15 @@ describe('overlayApproval', () => {
     expect(out.find((s) => s.id === 'distributed')?.description).toBeUndefined();
   });
 
-  it('a delivery that failed or partly failed is NOT done: it stays current and names the exact retry command', () => {
+  it('a delivery that failed or partly failed is NOT done: it stays current and says why', () => {
     for (const delivery of ['failed', 'partial'] as const) {
       const out = overlayApproval(server(), progress({ signed: true, approved: true, delivery }));
       const step = out.find((s) => s.id === 'distributed');
       expect(step?.status).toBe('current');
-      expect(step?.description).toContain(`machine admin distribute ${UUID}`);
+      // The command is said once, in the result of the dialog (as code): the step points to it instead of repeating it.
+      expect(step?.description).not.toContain('machine admin distribute');
+      expect(step?.description).not.toContain('`');
+      expect(step?.description).toMatch(/Not delivered to every machine/);
     }
   });
 

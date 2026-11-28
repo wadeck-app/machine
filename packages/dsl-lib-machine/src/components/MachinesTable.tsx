@@ -35,7 +35,8 @@ export interface MachinesTableProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
-// The columns of the page, then one narrow column for the action: a word is never cut (the cells that must not wrap say so). The UUID (36 characters) is in the row details: as a column it made the table scroll sideways.
+// Four columns, then one narrow column for the action: a word is never cut (the cells that must not wrap say so), and the Revoke button stays in view at 1024 px.
+// The UUID (36 characters), "Receives notices" and "Notice list held" are in the row details: as columns they made the table scroll sideways.
 const EXPANSION = { $type: 'MachineDetails' };
 const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
   { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
@@ -43,14 +44,22 @@ const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
   { key: 'aliasesText', label: 'Aliases', nowrap: true, render: (r) => r.aliasesText ?? '' },
   // A headline that never wraps; the daemon's whole sentence is in the row details.
   { key: 'reachable', label: 'Reachable', nowrap: true, render: (r) => splitHeadline(r.reachable ?? '').headline },
-  { key: 'receivesNotices', label: 'Receives notices', nowrap: true, render: (r) => r.receivesNotices ?? '' },
-  { key: 'listHeldText', label: 'Notice list held', nowrap: true, render: (r) => r.listHeldText ?? '' },
 ];
 
-// The row details: the uuid, and the whole reachability sentence when the cell shows only its headline.
+// The row details: the uuid, the whole reachability sentence when the cell shows only its headline, and the notice columns that are not in the table (an empty value is not listed).
 function detailsText(row: MachineTableRow): string {
   const { detail } = splitHeadline(row.reachable ?? '');
-  return detail === '' ? `- uuid: ${row.uuid}` : `- uuid: ${row.uuid}\n- reachable: ${row.reachable ?? ''}`;
+  const lines = [`- uuid: ${row.uuid}`];
+  if (detail !== '') {
+    lines.push(`- reachable: ${row.reachable ?? ''}`);
+  }
+  if ((row.receivesNotices ?? '') !== '') {
+    lines.push(`- receives notices: ${row.receivesNotices}`);
+  }
+  if ((row.listHeldText ?? '') !== '') {
+    lines.push(`- notice list held: ${row.listHeldText}`);
+  }
+  return lines.join('\n');
 }
 
 /**

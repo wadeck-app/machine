@@ -5,11 +5,11 @@ $sources:
 
 # One component for the timeline and the table (machine:CandidaciesTable): the approval dialog lays what the page proves over the steps of the module, so both
 # share its state. Approve signs IN THE BROWSER with the admin passphrase asked at every approval (admin-ui.md, "Approve from the page"); Reject is the standard
-# action below, called by name from the component (a restricting action: no signature, no passphrase; the route is sensitive, the app-core PIN is asked by the shell).
+# action below, called by name from the component, which asks first in a dialog that names the machine (hence no `confirm` here: the generic "Please confirm" cannot say
+# which machine it is about). A restricting action: no signature, no passphrase; the route is sensitive, the app-core PIN is asked by the shell.
 $actions:
   reject:
     url: POST /api/modules/machine/candidacies/{id}/reject
-    confirm: Reject this candidacy? The machine is refused and must post a new candidacy (machine join --resume) to ask again.
     reloadSources: [candidacies]
     errorPrefix: Could not reject the candidacy
 
@@ -34,4 +34,6 @@ sections:
     timeline: $sources.candidacies.timeline
     approvals: $sources.candidacies.approvals
     approvalsProblem: $sources.candidacies.approvalsProblem
-    # The empty message (with the next step) and the alert of a failed load (`$sourceErrors`) are the component's.
+    # The empty state (with the next step) and the alert of a failed load are the component's. It reads the failed sources of the page HERE, explicitly: a page that reads
+    # `$ctx.$sourceErrors` gets no generic shell toast for a failed source (the whole server message, never dismissed by itself); the alert above the table says it instead.
+    sourceErrors: $ctx.$sourceErrors
