@@ -15,6 +15,7 @@ import {
   type RelayCandidacy,
 } from '../../commons/candidaciesState.js';
 import type { ApproveContextAnswer, ApproveRequest, CandidaciesAnswer, DistributeAnswer } from '../../commons/routeContracts.js';
+import { expectNoRealData } from './privacyScan.testUtil.js';
 import { ALLOWED_PUBLIC_KEYS, ALLOWED_RANDOMS, buildSeeds, FAKE_DAEMON_IMPORT, NOW, rawOf, startReal, type Real, type RealOptions } from './seedBuilders.testUtil.js';
 
 // The seeds of the Candidacies mock (src/commons/scenarioSeeds/<name>.json): plain JSON, the initial state of the mock. They are built by seedBuilders.testUtil.ts
@@ -279,13 +280,7 @@ describe('the transitions of the state machine answer what the REAL routes answe
 
 describe('the seeds hold nothing of a real network', () => {
   it.each(NAMES)('%s: only made-up uuids, documentation addresses, fake keys, no real name', (name) => {
-    const text = seedText(name);
-    for (const uuid of text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []) expect(uuid).toMatch(/^00000000-0000-4000-8000-00000000000[1-3]$/);
-    for (const prefix of ['554e0e45', '51319efa', '14695579']) expect(text.toLowerCase()).not.toContain(prefix);
-    for (const ip of text.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? []) expect(ip).toMatch(/^(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}$/);
-    for (const url of text.match(/https?:\/\/[^\s"'`)\\]+/g) ?? []) expect(url).toMatch(/^https:\/\/relay\.example\.net$/);
-    expect(text).not.toMatch(/wadeck|infomaniak|poc-node|C:\\\\Users|\/Users\/|AppData/i);
-    expect(text).not.toMatch(/Bearer|"token"|passphrase":/);
+    expectNoRealData(seedText(name));
   });
 
   it.each(NAMES)('%s: every key-like string (40 characters of base64url or more) is one of the fake keys, a signature of the fake admin key, or the fake envelope', (name) => {

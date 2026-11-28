@@ -1,0 +1,152 @@
+import type { MockRoutes } from './mockRoutes.js';
+import { candidaciesRoutes } from './candidaciesMock.js';
+import type { CandidaciesState } from './candidaciesState.js';
+import { machinesRoutes } from './machinesMock.js';
+import { machinesSeed, type MachinesSeedName } from './machinesSeeds.js';
+import approvalCodesRecallable from './scenarioSeeds/approval-codes-recallable.json';
+import approveResultDelivered from './scenarioSeeds/approve-result-delivered.json';
+import approveResultFailed from './scenarioSeeds/approve-result-failed.json';
+import approveResultPartial from './scenarioSeeds/approve-result-partial.json';
+import candidateExpired from './scenarioSeeds/candidate-expired.json';
+import empty from './scenarioSeeds/empty.json';
+import onePending from './scenarioSeeds/one-pending.json';
+import pendingRevokedEarlier from './scenarioSeeds/pending-revoked-earlier.json';
+import pendingWithProblems from './scenarioSeeds/pending-with-problems.json';
+import relayError503 from './scenarioSeeds/relay-error-503.json';
+import relayUnreachable502 from './scenarioSeeds/relay-unreachable-502.json';
+import severalPending from './scenarioSeeds/several-pending.json';
+
+// The scenarios of the module (dev-only mocks of a page, see "Scenarios" of module-authoring.md): the Candidacies page (`/candidacies`) and the Machines page (`/`).
+// Plain objects (structurally the `ScenarioDefinition` of the SDK): src/dsl-scenarios/index.ts hands them to `defineScenarios`. They live in src/commons because the
+// module check forbids src/backend (where their tests are) to import src/dsl-scenarios. BROWSER code: no Node API, no package. The data is fake
+// (src/commons/scenarioSeeds, machinesSeeds.ts); the logic is the pure state machines of src/commons, so that Approve / Reject / Revoke change what the next request
+// returns. Pick one in the A/B dock of the dev server, see .claude/specs/2026-11-13_machine-network/scenarios.md.
+
+/** One scenario of the dock. */
+export interface ScenarioDef {
+  readonly id: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly pages: readonly string[];
+  readonly create: () => { readonly routes: MockRoutes };
+}
+
+// What every scenario where something can be signed says: the key file is a placeholder, so the page runs up to the passphrase and no further.
+const PLACEHOLDER =
+  'The admin key of the mock is a placeholder no passphrase unlocks: a real signature is impossible here, so the dialog stops at its "wrong passphrase or damaged key file" message (the result view cannot be reached).';
+
+interface CandidaciesScenario {
+  id: string;
+  label: string;
+  hint: string;
+  seed: CandidaciesState;
+}
+
+const candidacies: CandidaciesScenario[] = [
+  { id: 'empty', label: 'No candidacy', hint: 'Look at the empty table and the timeline with every step still to do.', seed: empty as CandidaciesState },
+  { id: 'one-pending', label: 'One candidacy pending', hint: `A first enrollment (mac-m2, 4 minutes old): open the row, then Reject it (the row goes) or press Approve. ${PLACEHOLDER}`, seed: onePending as CandidaciesState },
+  {
+    id: 'several-pending',
+    label: 'Several candidacies pending',
+    hint: `Two rows, the timeline follows the oldest; thinkcentre reuses a uuid bound to a revoked token (warning in the dialog). ${PLACEHOLDER}`,
+    seed: severalPending as CandidaciesState,
+  },
+  {
+    id: 'pending-revoked-earlier',
+    label: 'Candidate revoked earlier',
+    hint: `mac-m2 was revoked at serial 3: the dialog warns REVOKED and prints no code to compare. ${PLACEHOLDER}`,
+    seed: pendingRevokedEarlier as CandidaciesState,
+  },
+  {
+    id: 'pending-with-problems',
+    label: 'Candidacy with problems',
+    hint: 'No uuid in the candidacy: the status text names the problem, Approve is not offered, Reject still works.',
+    seed: pendingWithProblems as CandidaciesState,
+  },
+  { id: 'relay-error-503', label: 'Relay not configured (503)', hint: 'No admin token: the page shows the 503 error with the fix (`machine admin login`).', seed: relayError503 as CandidaciesState },
+  { id: 'relay-unreachable-502', label: 'Relay unreachable (502)', hint: 'The relay does not answer: the page shows the 502 error ("the relay is unreachable").', seed: relayUnreachable502 as CandidaciesState },
+  {
+    id: 'approve-result-delivered',
+    label: 'Approval: documents delivered',
+    hint: `Planned delivery: thinkcentre and mac-m2 take the documents directly. ${PLACEHOLDER}`,
+    seed: approveResultDelivered as CandidaciesState,
+  },
+  {
+    id: 'approve-result-partial',
+    label: 'Approval: delivery partial',
+    hint: `Planned delivery: mac-m2 delivered, thinkcentre waits in the relay inbox. ${PLACEHOLDER}`,
+    seed: approveResultPartial as CandidaciesState,
+  },
+  {
+    id: 'approve-result-failed',
+    label: 'Approval: delivery failed',
+    hint: `Planned delivery: the relay refuses the documents, both machines failed and the retry command is shown. ${PLACEHOLDER}`,
+    seed: approveResultFailed as CandidaciesState,
+  },
+  {
+    id: 'approval-codes-recallable',
+    label: 'Security codes kept',
+    hint: 'mac-m2 was approved 4 minutes ago: look at its code on the last step of the timeline, and the older reminder below (2 days).',
+    seed: approvalCodesRecallable as CandidaciesState,
+  },
+  { id: 'candidate-expired', label: 'Candidacy expired', hint: 'Posted 20 minutes ago, expired for 5: the row says why it cannot be decided (no Approve, no Reject).', seed: candidateExpired as CandidaciesState },
+];
+
+interface MachinesScenario {
+  id: MachinesSeedName;
+  label: string;
+  hint: string;
+}
+
+const machines: MachinesScenario[] = [
+  { id: 'only-this-machine', label: 'Only this machine', hint: 'A single row (this machine) and no Revoke button: nothing else is trusted yet.' },
+  {
+    id: 'two-trusted-peers',
+    label: 'Two trusted peers',
+    hint: `thinkcentre is reachable directly, mac-m2 is not (notice and reachability columns); Revoke opens the dialog. ${PLACEHOLDER}`,
+  },
+  {
+    id: 'peer-revoked-earlier',
+    label: 'A peer was revoked earlier',
+    hint: `mac-m2 (revoked, serial 3) is gone from the list; only thinkcentre can be revoked, and nobody else is left to tell. ${PLACEHOLDER}`,
+  },
+  {
+    id: 'revoke-delivered',
+    label: 'Revoke: documents delivered',
+    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre takes the documents directly (success notice). ${PLACEHOLDER}`,
+  },
+  {
+    id: 'revoke-partial',
+    label: 'Revoke: delivery partial',
+    hint: `Planned delivery after a Revoke of mac-m2: thinkcentre is offline, its document waits in the relay inbox (warning). ${PLACEHOLDER}`,
+  },
+  {
+    id: 'revoke-failed',
+    label: 'Revoke: delivery failed',
+    hint: `Planned delivery after a Revoke of mac-m2: the relay refuses the document; the revocation stands and the retry command is shown. ${PLACEHOLDER}`,
+  },
+  {
+    id: 'relay-unreachable',
+    label: 'Revoke: relay unreachable',
+    hint: `Planned delivery after a Revoke of mac-m2: the relay is down, nobody is told and mac-m2 is not removed from the relay (both listed as failed). ${PLACEHOLDER}`,
+  },
+];
+
+export const SCENARIOS: readonly ScenarioDef[] = [
+  ...candidacies.map((s) => ({
+    id: s.id,
+    label: s.label,
+    hint: s.hint,
+    pages: ['/candidacies'],
+    // A fresh state at every call: picking the scenario again, or Reset, starts again from the seed.
+    create: () => ({ routes: candidaciesRoutes(s.seed, () => Date.now() / 1000) }),
+  })),
+  ...machines.map((s) => ({
+    id: s.id,
+    label: s.label,
+    hint: s.hint,
+    pages: ['/'],
+    create: () => ({ routes: machinesRoutes(machinesSeed(s.id)) }),
+  })),
+];
+
