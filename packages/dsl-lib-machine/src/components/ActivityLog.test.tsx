@@ -90,13 +90,13 @@ describe('the timeline', () => {
     expect(sent.getByText('1 min ago')).toHaveAttribute('title', '2026-11-21T10:01:00.000Z');
   });
 
-  it('a command wraps at its spaces and never inside a word ("versi/on"): the cell of the table breaks anywhere, the text inside it does not (UX review 5)', async () => {
+  it('a command wraps at its spaces and never inside a word ("versi/on"): the column is `wrap: words` of the DataTable, the text is the cell itself (no wrapper)', async () => {
     render(<ActivityLog />);
     const command = await screen.findByText('echo 1');
-    expect(command.className).toMatch(/break-normal/);
-    // The cell itself (dsl-ui DataTable, a content column) is `break-all`: the text must override it, so it must be a child of the cell, not the cell.
-    expect(command.tagName).toBe('SPAN');
-    expect(command.closest('td')).not.toBe(command);
+    expect(command.tagName).toBe('TD');
+    expect(command.className).toMatch(/break-words/);
+    expect(command.className).not.toMatch(/break-all/);
+    expect(command.querySelector('span')).toBeNull();
   });
 
   it('has a column each for the result, the exit code, the run time and the wait', async () => {

@@ -3,7 +3,7 @@ import { ButtonAction, DataTable, Markdown, type TableColumn } from '@wadeck-app
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
-import { CellText, WrapText } from './CellText.js';
+import { CellText } from './CellText.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
 import { AliasesDialog } from './AliasesDialog.js';
 import { RenameMachineDialog } from './RenameMachineDialog.js';
@@ -48,7 +48,7 @@ const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
   { key: 'role', label: 'Role', nowrap: true, render: (r) => r.role },
   { key: 'aliasesText', label: 'Aliases', nowrap: true, render: (r) => <CellText text={r.aliasesText ?? ''} width="max-w-40" /> },
   // A headline that wraps at its spaces; the daemon's whole sentence is in the row details.
-  { key: 'reachable', label: 'Reachable', render: (r) => <WrapText text={splitHeadline(r.reachable ?? '').headline} /> },
+  { key: 'reachable', label: 'Reachable', wrap: 'words', render: (r) => splitHeadline(r.reachable ?? '').headline },
 ];
 
 // The row details: the whole name and aliases (the cells are cut), the uuid, the whole reachability sentence when the cell shows only its headline, and the notice columns

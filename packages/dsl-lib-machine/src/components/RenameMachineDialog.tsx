@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Collapsible, FieldText, Notice, Text } from '@wadeck-app/dsl-ui';
+import { Collapsible, FieldReadOnly, FieldText, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import { loadRenameContext, previewRename, RETRY_SAME_NAME_NOTE, signAndRename, type RenameContext, type RenameResult, type RenameRow } from '../lib/renameFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
-import { DetailRows } from './DetailRows.js';
 
 // The confirmation of ONE rename (admin-ui.md, "Rename and aliases from the page"): what `machine admin rename <machine> <new-name>` does, with the admin passphrase and the
 // unlocked key living ONLY in this page. The passphrase is asked at EVERY rename (ConfirmSignModal `askEveryTime`), taken once, and used for one unlock that signs the
@@ -187,8 +186,8 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
       {preview?.ok === true && <Notice variant="info" label={`Will be renamed: ${row.name} -> ${preview.name}${preview.normalized ? ` (typed "${typed}", made valid).` : '.'}`} />}
       {preview?.ok === true && preview.capped && <Notice variant="warning" label="A name has at most 32 characters: the end of what you typed was cut." />}
       <Collapsible title="Details">
-        <DetailRows
-          rows={[
+        <VerticalStack gap="gap-2">
+          {[
             { label: 'Name', value: `${row.name} -> ${newName ?? '(type the new name)'}` },
             { label: 'Uuid', value: row.uuid },
             { label: 'Identity key', value: ctx.machine.keyId },
@@ -197,8 +196,10 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
             { label: 'Told', value: informed.join(', ') },
             { label: 'Keeps working', value: 'policies, local aliases, connection settings and notice recipients: they follow the machine by its uuid' },
             { label: 'Stops working', value: `references by the old name ("${row.name}"): use the new name, the uuid or an alias` },
-          ]}
-        />
+          ].map((r) => (
+            <FieldReadOnly key={r.label} label={r.label} value={r.value} mono wrap="words" />
+          ))}
+        </VerticalStack>
       </Collapsible>
     </ConfirmSignModal>
   );

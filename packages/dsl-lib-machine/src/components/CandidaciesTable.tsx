@@ -5,7 +5,7 @@ import { overlayApproval, type ApprovalProgress } from '../lib/approvalTimeline.
 import type { ApproveRow } from '../lib/approveFlow.js';
 import type { SourceError } from '../lib/loadFailure.js';
 import { statusHeadlineOf } from '../lib/problemHeadline.js';
-import { CellText, WrapText } from './CellText.js';
+import { CellText } from './CellText.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
 import { CodeText, CommandNotice } from './CommandNotice.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
@@ -65,7 +65,7 @@ export const NO_CANDIDACY = 'No pending candidacy. Run `machine join` on the new
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
   { key: 'name', label: 'Name', nowrap: true, render: (r) => <CellText text={r.name} width="max-w-32" /> },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
-  { key: 'statusText', label: 'Status', render: (r) => <WrapText text={statusHeadlineOf(r)} /> },
+  { key: 'statusText', label: 'Status', wrap: 'words', render: (r) => statusHeadlineOf(r) },
 ];
 
 // The same rule as the details of the row expansion: never empty, markdown of the module.

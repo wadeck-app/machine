@@ -143,6 +143,10 @@ describe('Revoke', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
     expect(within(dialog).getByText(LAPTOP.uuid)).toBeInTheDocument();
     expect(within(dialog).getByText(keyId(LAPTOP.identity.publicKey))).toBeInTheDocument();
+    // The standard FieldReadOnly with `wrap: words` (dsl-ui 419): one `code` per row that breaks between words; no custom description list, no override of the break class.
+    expect(dialog.querySelectorAll('code.break-words')).toHaveLength(6);
+    expect(dialog.querySelector('dl')).toBeNull();
+    expect(dialog.querySelector('.break-normal')).toBeNull();
     // The hint is the standard help text of the field (under it, described by it), never a custom box.
     expect(document.getElementById(field.getAttribute('aria-describedby') ?? 'none')).toHaveTextContent('Hint: the street of my first school');
     // Asked at every revocation: no "Keep unlocked for".
@@ -296,8 +300,11 @@ describe('long names and aliases never hide Revoke (UX review 4, a)', () => {
   it('the Reachable headline wraps at its spaces only (it gives way before the action does) and never in the middle of a word', () => {
     render(<MachinesTable rows={[ROWS[0]!, ROW]} />);
     const text = within(tableRow(LONG_NAME)).getByText('directly reachable');
-    expect(text.className).toMatch(/^break-normal$/);
-    expect(text.closest('td')?.className).not.toMatch(/whitespace-nowrap/);
+    // The column is `wrap: words` of the DataTable: the cell itself breaks between words, no wrapper element overrides it.
+    expect(text.tagName).toBe('TD');
+    expect(text.className).toMatch(/break-words/);
+    expect(text.className).not.toMatch(/break-all|whitespace-nowrap/);
+    expect(text.querySelector('span')).toBeNull();
   });
 
   it('a machine with no alias has no empty "aliases:" line in the row details', async () => {

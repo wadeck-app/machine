@@ -1,12 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Collapsible, FieldReadOnly, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import type { ApprovalProgress } from '../lib/approvalTimeline.js';
 import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type Approvable, type ApproveContext, type ApproveResult, type ApproveRow } from '../lib/approveFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
-import { DetailRows } from './DetailRows.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -212,16 +211,16 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
       ))}
       <Collapsible title="Details">
         <VerticalStack gap="gap-2">
-          <DetailRows
-            rows={[
-              { label: 'Name', value: row.name },
-              { label: 'Hostname', value: row.hostname === '' ? 'unknown' : row.hostname },
-              { label: 'Uuid', value: row.uuid ?? '' },
-              { label: 'Seen from', value: row.observedIp === '' ? 'unknown' : row.observedIp },
-              { label: 'Valid for', value: VALID_FOR },
-              { label: 'Others told', value: checked.selfApproval ? 'nobody: the first machine of the network' : inform.length === 0 ? 'nobody' : inform.join(', ') },
-            ]}
-          />
+          {[
+            { label: 'Name', value: row.name },
+            { label: 'Hostname', value: row.hostname === '' ? 'unknown' : row.hostname },
+            { label: 'Uuid', value: row.uuid ?? '' },
+            { label: 'Seen from', value: row.observedIp === '' ? 'unknown' : row.observedIp },
+            { label: 'Valid for', value: VALID_FOR },
+            { label: 'Others told', value: checked.selfApproval ? 'nobody: the first machine of the network' : inform.length === 0 ? 'nobody' : inform.join(', ') },
+          ].map((r) => (
+            <FieldReadOnly key={r.label} label={r.label} value={r.value} mono wrap="words" />
+          ))}
           <Notice variant="default" label="Candidacy code recomputed in this page from the key and random the relay listed, and it matches: the relay did not swap the key." />
         </VerticalStack>
       </Collapsible>

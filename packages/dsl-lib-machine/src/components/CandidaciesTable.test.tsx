@@ -234,8 +234,11 @@ describe('long texts never hide the actions (UX review 4, a)', () => {
   it('the status wraps at its spaces only: no word is cut in the middle (the cell breaks nowhere inside a word)', () => {
     render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: 'Warning: uuid already bound to a token', canApprove: false })]} onAction={vi.fn()} />);
     const text = within(tableRow('laptop')).getByText('Warning: uuid already bound to a token');
-    expect(text.className).toMatch(/^break-normal$/);
+    // The column is `wrap: words` of the DataTable: the cell itself breaks between words, no wrapper element overrides it.
+    expect(text.tagName).toBe('TD');
+    expect(text.className).toMatch(/break-words/);
     expect(text.className).not.toMatch(/break-all/);
+    expect(text.querySelector('span')).toBeNull();
   });
 
   it('the reason a candidacy cannot be approved is in the status, in a few words', async () => {

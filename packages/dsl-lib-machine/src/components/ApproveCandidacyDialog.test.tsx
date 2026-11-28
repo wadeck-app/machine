@@ -168,6 +168,10 @@ describe('ApproveCandidacyDialog: before the passphrase', () => {
     expect(screen.getByText('203.0.113.7')).toBeInTheDocument();
     expect(screen.getByText('server')).toBeInTheDocument();
     expect(screen.getByText(/recomputed in this page/i)).toBeInTheDocument();
+    // The standard FieldReadOnly with `wrap: words` (dsl-ui 419): one `code` per row that breaks between words; no custom description list, no override of the break class.
+    expect(screen.getByRole('dialog').querySelectorAll('code.break-words')).toHaveLength(6);
+    expect(screen.getByRole('dialog').querySelector('dl')).toBeNull();
+    expect(screen.getByRole('dialog').querySelector('.break-normal')).toBeNull();
     // The candidacy code itself is not displayed (decision 55): only the security code, after the approval.
     expect(document.body.textContent).not.toContain(candidacyCode(CANDIDATE.identity.publicKey, RANDOM));
     expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');

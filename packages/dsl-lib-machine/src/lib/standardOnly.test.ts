@@ -21,6 +21,9 @@ const REPLACED = [
 
 const dir = path.resolve(__dirname, '..');
 const sources = (d: string): string[] => fs.readdirSync(path.join(dir, d)).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f)).map((f) => path.join(dir, d, f));
+// A source as text with LF line ends (a checkout may hold CRLF).
+const read = (f: string): string => fs.readFileSync(f, 'utf8').split('\r\n').join('\n');
+const component = (name: string): string => read(path.join(dir, 'components', name));
 
 describe('the module uses the standard components only', () => {
   it.each(REPLACED)('no component or helper uses the custom token %s', (token) => {
@@ -39,6 +42,37 @@ describe('the module uses the standard components only', () => {
     const re = new RegExp(`\\b${token}\\b`);
     const offenders = sources('components').filter((f) => re.test(fs.readFileSync(f, 'utf8'))).map((f) => path.basename(f)).filter((f) => !allowed.includes(f));
     expect(offenders).toEqual([]);
+  });
+
+  // dsl-ui 419 breaks a DataTable column and a FieldReadOnly between words with `wrap: words` (the default `anywhere` is break-all). The wrapper element and the description list
+  // that stood in for that prop must not come back. (A `break-words` text outside a table or a field, like CommandNotice, is not one: no standard component covers it.)
+  it.each(['WrapText', 'DetailRows', 'break-normal'])('no source uses the workaround %s: the standard `wrap: words` does it', (token) => {
+    const re = new RegExp(`(?<![\\w-])${token}(?![\\w-])`);
+    const offenders = [...sources('components'), ...sources('lib')].filter((f) => re.test(read(f))).map((f) => path.basename(f));
+    expect(offenders).toEqual([]);
+  });
+
+  it('the files of the workaround are gone', () => {
+    const present = ['DetailRows.tsx', 'DetailRows.test.tsx'].filter((f) => fs.existsSync(path.join(dir, 'components', f)));
+    expect(present).toEqual([]);
+  });
+
+  // The columns whose cell is a sentence or a command say `wrap: 'words'` (the nowrap, truncated and fixed-width ones never break).
+  it.each([
+    ['ActivityLog.tsx', "key: 'command'"],
+    ['CandidaciesTable.tsx', "key: 'statusText'"],
+    ['MachinesTable.tsx', "key: 'reachable'"],
+  ])('%s: the column %s breaks between words by the standard prop', (file, column) => {
+    const line = component(file).split('\n').find((l) => l.includes(column));
+    expect(line, `${file} has no column ${column}`).toBeDefined();
+    expect(line).toMatch(/wrap: 'words'/);
+  });
+
+  // The folded Details of the dialogs are FieldReadOnly rows that break between words, never the default (break-all).
+  it.each(['RenameMachineDialog.tsx', 'AliasesDialog.tsx', 'RevokeMachineDialog.tsx', 'ApproveCandidacyDialog.tsx'])('%s: every FieldReadOnly of the Details has wrap="words"', (file) => {
+    const tags = component(file).match(/<FieldReadOnly\b[^>]*>/g) ?? [];
+    expect(tags.length, `${file} shows its Details without FieldReadOnly`).toBeGreaterThan(0);
+    expect(tags.filter((t) => !/\bwrap="words"/.test(t))).toEqual([]);
   });
 
   it('no component moves the initial focus by an effect: ButtonAction has autoFocus', () => {

@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction, Collapsible, FieldSelect, FieldText, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Collapsible, FieldReadOnly, FieldSelect, FieldText, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
 import { MAX_ALIASES } from '@wadeck-app/machine-webcrypto';
 import { loadAliasesContext, previewAliasChange, signAndChangeAlias, type AliasChange, type AliasesContext, type AliasesResult, type AliasPreview } from '../lib/aliasesFlow.js';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
-import { WrapText } from './CellText.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
-import { DetailRows } from './DetailRows.js';
 
 // The network aliases (decision 116; admin-ui.md, "Rename and aliases from the page"): the admin-signed labels that mean the same machine on every machine of the network.
 // One dialog: the list (what is in force), an add form, a Remove per alias. EACH change is its own signature: a confirmation names it, the admin passphrase is asked now
@@ -161,14 +159,16 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
           <CommandNotice key={c.alias} variant="warning" label={`"${c.alias}" is also a local alias of ${nameOf(context, c.local)}: the local alias wins on this machine. Remove it with \`machine alias rm ${c.alias}\` to follow the network alias.`} />
         ))}
         <Collapsible title="Details">
-          <DetailRows
-            rows={[
+          <VerticalStack gap="gap-2">
+            {[
               { label: 'Alias', value: preview.alias },
               { label: 'Points to', value: pointsTo },
               { label: 'After', value: `${preview.entries.length} network ${preview.entries.length === 1 ? 'alias' : 'aliases'}, signed as one list and sent to every other trusted machine as a sealed document` },
               { label: 'Told', value: told.length === 0 ? 'nobody' : told.join(', ') },
-            ]}
-          />
+            ].map((r) => (
+              <FieldReadOnly key={r.label} label={r.label} value={r.value} mono wrap="words" />
+            ))}
+          </VerticalStack>
         </Collapsible>
       </ConfirmSignModal>
     );
@@ -229,7 +229,7 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
             {entries.map((e) => (
               <li key={e.alias} className="flex items-center justify-between gap-3">
                 <span className="min-w-0 flex-1">
-                  <Text mono text={e.alias} /> <WrapText text="points to" /> <Text mono text={nameOf(context, e.uuid)} /> <Text tone="muted" mono text={`(${short(e.uuid)})`} />
+                  <Text mono text={e.alias} /> points to <Text mono text={nameOf(context, e.uuid)} /> <Text tone="muted" mono text={`(${short(e.uuid)})`} />
                 </span>
                 <span className="shrink-0">
                   <ButtonAction label="Remove" ariaLabel={`Remove alias ${e.alias}`} variant="danger-outline" size="xs" onClick={() => remove(e.alias)} />

@@ -372,6 +372,10 @@ describe('Rename (UX review 5)', () => {
     await userEvent.click(toggle);
     expect(dialog).toHaveTextContent(/Keeps working/);
     expect(dialog.innerHTML).not.toMatch(/break-all/);
+    // The standard FieldReadOnly with `wrap: words` (dsl-ui 419): one `code` per row that breaks between words; no custom description list, no override of the break class.
+    expect(dialog.querySelectorAll('code.break-words')).toHaveLength(8);
+    expect(dialog.querySelector('dl')).toBeNull();
+    expect(dialog.querySelector('.break-normal')).toBeNull();
     noShowMore(dialog);
   });
 
@@ -501,6 +505,10 @@ describe('Aliases (UX review 5)', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await userEvent.click(toggle);
     expect(confirm.innerHTML).not.toMatch(/break-all/);
+    // The standard FieldReadOnly with `wrap: words` (dsl-ui 419): one `code` per row that breaks between words; no custom description list, no override of the break class.
+    expect(confirm.querySelectorAll('code.break-words')).toHaveLength(4);
+    expect(confirm.querySelector('dl')).toBeNull();
+    expect(confirm.querySelector('.break-normal')).toBeNull();
   });
 
   it('a refusal names the machine (no truncated uuid), under the field', async () => {

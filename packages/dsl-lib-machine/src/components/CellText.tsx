@@ -19,8 +19,3 @@ export function CellText({ text, width }: CellTextProps) {
     </span>
   );
 }
-
-/** Text that wraps at its spaces and never inside a word (a long word stays whole: the column then takes its width instead of cutting it). For the cells that give way first. */
-export function WrapText({ text }: { text: string }) {
-  return <span className="break-normal">{text}</span>;
-}

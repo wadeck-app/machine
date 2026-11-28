@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice } from '@wadeck-app/dsl-ui';
+import { Collapsible, FieldReadOnly, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import { loadRevokeContext, signAndRevoke, type RevokeContext, type RevokeResult, type RevokeRow } from '../lib/revokeFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
-import { DetailRows } from './DetailRows.js';
 
 // The confirmation of ONE revocation (admin-ui.md, "Revoke from the page"): what `machine admin revoke <machine>` does, with the admin passphrase and the unlocked key
 // living ONLY in this page. The passphrase is asked at EVERY revocation (ConfirmSignModal `askEveryTime`: no unlock window), taken once, and used for one unlock that
@@ -130,16 +129,18 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
     >
       <Notice variant="default" label={`Revokes ${row.name}: this machine stops trusting it now, and ${inform.length === 0 ? 'there is no other machine to tell' : `${inform.join(', ')} will be told to stop too`}. It can come back only through a new approval.`} />
       <Collapsible title="Details">
-        <DetailRows
-          rows={[
+        <VerticalStack gap="gap-2">
+          {[
             { label: 'Name', value: row.name },
             { label: 'Uuid', value: row.uuid },
             { label: 'Identity key', value: context.revoked.keyId },
             { label: 'Serial', value: `${context.revoked.serial}: this registration and every older one stop being trusted` },
             { label: 'Others told', value: inform.length === 0 ? 'nobody' : inform.join(', ') },
             { label: 'Relay', value: 'its record and inbox are removed' },
-          ]}
-        />
+          ].map((r) => (
+            <FieldReadOnly key={r.label} label={r.label} value={r.value} mono wrap="words" />
+          ))}
+        </VerticalStack>
       </Collapsible>
     </ConfirmSignModal>
   );
