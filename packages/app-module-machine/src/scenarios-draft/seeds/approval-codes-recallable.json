@@ -1,0 +1,101 @@
+{
+  "now": 1795860000,
+  "relayError": null,
+  "adminKeyFile": "{\"v\":2,\"publicKey\":\"vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU\",\"hint\":\"FAKE PLACEHOLDER: this file holds no key, no passphrase unlocks it\",\"kdf\":{\"name\":\"pbkdf2-sha256\",\"iterations\":600000,\"salt\":\"RkFLRS1QTEFDRUhPTERFUg\"},\"cipher\":{\"name\":\"aes-256-gcm\",\"iv\":\"RkFLRS1QTEFDRUhP\"},\"ciphertext\":\"RkFLRS1QTEFDRUhPTERFUi1OT1QtQS1LRVktTk9USElORy1UTy1VTkxPQ0stSEVSRQ\"}",
+  "admin": {
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "name": "midgard2",
+    "identityPublicKey": "7TI0snbUztpX1ZutFPuvWnc8DzGMmZ3jpg1TxaWzTAU",
+    "publicKey": "vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU",
+    "keyId": "730a5edc28c2f8daf2d9dce3a01d5f20"
+  },
+  "trusted": [
+    {
+      "body": {
+        "v": 1,
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "name": "thinkcentre",
+        "identityPublicKey": "VRVPQgZepaG-oFRjgmviaE65LfksEAAnqrquV8pVQgc",
+        "serial": 1,
+        "validFrom": 1793268000,
+        "validTo": 2111220000,
+        "adminKeyId": "730a5edc28c2f8daf2d9dce3a01d5f20"
+      },
+      "signature": "5ixwa_kth0xspkJYpx5DgZ0oDXUP_RYJsK7h5gastV2ldWDVDnXmISaa27CSPkn9x5qKFRkdaIRopSLEEJhqDQ"
+    },
+    {
+      "body": {
+        "v": 1,
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "name": "mac-m2",
+        "identityPublicKey": "1AS8RFZa7buJkVDlsLOzK5RBvwy3iEwzEw2o28J90s8",
+        "serial": 1,
+        "validFrom": 1793268000,
+        "validTo": 2111220000,
+        "adminKeyId": "730a5edc28c2f8daf2d9dce3a01d5f20"
+      },
+      "signature": "PeEERYgLlS16Y5dEu982yfGyTEVzbywWBTGfZW_107OVi6JGoeEmLQZePWrwInPtbO9mmg1aKobtRTVxVHfwDg"
+    }
+  ],
+  "revoked": {},
+  "candidacies": [
+    {
+      "id": "cand-mac-m2-01",
+      "name": "mac-m2",
+      "hostname": "mac-m2.lan",
+      "observedIp": "192.0.2.10",
+      "uuid": "00000000-0000-4000-8000-000000000003",
+      "createdAt": 1795859460,
+      "expiresAt": 1795860360,
+      "status": "approved",
+      "uuidBound": false,
+      "identityPublicKey": "1AS8RFZa7buJkVDlsLOzK5RBvwy3iEwzEw2o28J90s8",
+      "random": "MTExMTExMTExMTExMTExMQ",
+      "code": "9RSW-M3F5-AYC4-FZ33",
+      "problems": []
+    }
+  ],
+  "approvals": [
+    {
+      "uuid": "00000000-0000-4000-8000-000000000003",
+      "name": "mac-m2",
+      "code": "45407 76765 76710 82848 47284",
+      "at": 1795859760
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "name": "thinkcentre",
+      "code": "48435 56117 75027 69388 86541",
+      "at": 1795687200
+    }
+  ],
+  "approvalsProblem": "",
+  "timelineSteps": [
+    {
+      "id": "received",
+      "title": "Candidacy received",
+      "info": "Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here."
+    },
+    {
+      "id": "checked",
+      "title": "Details checked",
+      "info": "Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect."
+    },
+    {
+      "id": "signed",
+      "title": "Passphrase and signature",
+      "info": "Threat: a local process signing for you. The passphrase is typed in the approval dialog of this page (or in the terminal that runs `machine admin approve`), used for ONE signature made in the browser and never sent: the daemon and the module backend only receive what is already signed."
+    },
+    {
+      "id": "distributed",
+      "title": "Documents distributed",
+      "info": "Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one. A machine that is offline gets them from the relay inbox when it is back."
+    },
+    {
+      "id": "final-code",
+      "title": "Security code compared",
+      "info": "Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay."
+    }
+  ],
+  "distributions": {}
+}

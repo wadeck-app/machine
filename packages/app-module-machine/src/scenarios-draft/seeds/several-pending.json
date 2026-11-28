@@ -1,0 +1,165 @@
+{
+  "now": 1795860000,
+  "relayError": null,
+  "adminKeyFile": "{\"v\":2,\"publicKey\":\"vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU\",\"hint\":\"FAKE PLACEHOLDER: this file holds no key, no passphrase unlocks it\",\"kdf\":{\"name\":\"pbkdf2-sha256\",\"iterations\":600000,\"salt\":\"RkFLRS1QTEFDRUhPTERFUg\"},\"cipher\":{\"name\":\"aes-256-gcm\",\"iv\":\"RkFLRS1QTEFDRUhP\"},\"ciphertext\":\"RkFLRS1QTEFDRUhPTERFUi1OT1QtQS1LRVktTk9USElORy1UTy1VTkxPQ0stSEVSRQ\"}",
+  "admin": {
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "name": "midgard2",
+    "identityPublicKey": "7TI0snbUztpX1ZutFPuvWnc8DzGMmZ3jpg1TxaWzTAU",
+    "publicKey": "vHy8tWNjdfodgkNNRmck2SN39TuYBpXdSdJtDOEiBaU",
+    "keyId": "730a5edc28c2f8daf2d9dce3a01d5f20"
+  },
+  "trusted": [],
+  "revoked": {},
+  "candidacies": [
+    {
+      "id": "cand-thinkcentre-01",
+      "name": "thinkcentre",
+      "hostname": "thinkcentre.lan",
+      "observedIp": "198.51.100.20",
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "createdAt": 1795859700,
+      "expiresAt": 1795860600,
+      "status": "pending",
+      "uuidBound": true,
+      "identityPublicKey": "VRVPQgZepaG-oFRjgmviaE65LfksEAAnqrquV8pVQgc",
+      "random": "MjIyMjIyMjIyMjIyMjIyMg",
+      "code": "JG6R-JDMH-T5J7-X5RC",
+      "problems": [],
+      "boundTokenLabel": "(revoked token)",
+      "boundToCandidateToken": false
+    },
+    {
+      "id": "cand-mac-m2-01",
+      "name": "mac-m2",
+      "hostname": "mac-m2.lan",
+      "observedIp": "192.0.2.10",
+      "uuid": "00000000-0000-4000-8000-000000000003",
+      "createdAt": 1795859280,
+      "expiresAt": 1795860180,
+      "status": "pending",
+      "uuidBound": false,
+      "identityPublicKey": "1AS8RFZa7buJkVDlsLOzK5RBvwy3iEwzEw2o28J90s8",
+      "random": "MTExMTExMTExMTExMTExMQ",
+      "code": "9RSW-M3F5-AYC4-FZ33",
+      "problems": []
+    }
+  ],
+  "approvals": [],
+  "approvalsProblem": "",
+  "timelineSteps": [
+    {
+      "id": "received",
+      "title": "Candidacy received",
+      "info": "Threat: a stranger posts a candidacy to get a machine enrolled. Nothing is trusted until the admin approves it here."
+    },
+    {
+      "id": "checked",
+      "title": "Details checked",
+      "info": "Threat: a lookalike machine. The name, hostname and address shown are informative, not proof: compare them with the machine you expect."
+    },
+    {
+      "id": "signed",
+      "title": "Passphrase and signature",
+      "info": "Threat: a local process signing for you. The passphrase is typed in the approval dialog of this page (or in the terminal that runs `machine admin approve`), used for ONE signature made in the browser and never sent: the daemon and the module backend only receive what is already signed."
+    },
+    {
+      "id": "distributed",
+      "title": "Documents distributed",
+      "info": "Threat: peers keep an old view of the network. The signed documents are sent to the peers so that every machine trusts the new one. A machine that is offline gets them from the relay inbox when it is back."
+    },
+    {
+      "id": "final-code",
+      "title": "Security code compared",
+      "info": "Threat: the relay swaps a public key (candidate or admin). Compare the security code on the candidate machine, never the one displayed by the relay."
+    }
+  ],
+  "distributions": {
+    "00000000-0000-4000-8000-000000000003": {
+      "ok": true,
+      "subject": {
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "name": "mac-m2"
+      },
+      "failed": false,
+      "report": {
+        "delivered": 0,
+        "alreadyThere": 0,
+        "failures": [],
+        "aborted": false,
+        "machines": 1,
+        "direct": [
+          {
+            "toUuid": "00000000-0000-4000-8000-000000000003",
+            "toName": "mac-m2",
+            "kind": "peer",
+            "outcome": "installed",
+            "ms": 120
+          }
+        ],
+        "fallbacks": [],
+        "noticeDirectNames": [
+          "mac-m2"
+        ]
+      },
+      "text": {
+        "out": "[ok] Delivered directly to mac-m2 (installed, 0.1 s)\n[ok] request notices list delivered directly to mac-m2\n",
+        "err": ""
+      },
+      "machines": [
+        {
+          "uuid": "00000000-0000-4000-8000-000000000003",
+          "name": "mac-m2",
+          "state": "delivered",
+          "code": "direct",
+          "reason": "took the documents directly",
+          "next": "nothing to do"
+        }
+      ],
+      "retry": "machine admin distribute 00000000-0000-4000-8000-000000000003"
+    },
+    "00000000-0000-4000-8000-000000000002": {
+      "ok": true,
+      "subject": {
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "name": "thinkcentre"
+      },
+      "failed": false,
+      "report": {
+        "delivered": 0,
+        "alreadyThere": 0,
+        "failures": [],
+        "aborted": false,
+        "machines": 1,
+        "direct": [
+          {
+            "toUuid": "00000000-0000-4000-8000-000000000002",
+            "toName": "thinkcentre",
+            "kind": "peer",
+            "outcome": "installed",
+            "ms": 120
+          }
+        ],
+        "fallbacks": [],
+        "noticeDirectNames": [
+          "thinkcentre"
+        ]
+      },
+      "text": {
+        "out": "[ok] Delivered directly to thinkcentre (installed, 0.1 s)\n[ok] request notices list delivered directly to thinkcentre\n",
+        "err": ""
+      },
+      "machines": [
+        {
+          "uuid": "00000000-0000-4000-8000-000000000002",
+          "name": "thinkcentre",
+          "state": "delivered",
+          "code": "direct",
+          "reason": "took the documents directly",
+          "next": "nothing to do"
+        }
+      ],
+      "retry": "machine admin distribute 00000000-0000-4000-8000-000000000002"
+    }
+  }
+}
