@@ -1,4 +1,5 @@
 import type { Limits, PolicyBody, PolicyEntry } from '@wadeck-app/machine-core';
+import { inputEqual } from './inputDeclaration.js';
 import { limitsEqual } from './lifetime.js';
 import { canonicalEntry, hasAngleBracket, parseEntryText, parseTemplate, type EntryText } from './template.js';
 import { TemplateError } from './typedParams.js';
@@ -16,6 +17,9 @@ type Shell = PolicyEntry['shell'];
 const entryText = (entry: PolicyEntry): string => (entry.template !== undefined ? entry.template : (entry.command as string));
 const isTyped = (entry: PolicyEntry): entry is Extract<PolicyEntry, { template: string }> => entry.template !== undefined;
 const hasTypedEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some(isTyped));
+const hasInputEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some((e) => e.input !== undefined));
+/** machine-core `policyBodyVersion`: 1 exact entries, 2 a typed entry or a renewal, 3 an input declaration. */
+const policyBodyVersion = (lists: PolicyEntry[][]): 1 | 2 | 3 => (hasInputEntry(lists) ? 3 : hasTypedEntry(lists) || lists.some((list) => list.some((e) => e.limits?.renewals !== undefined)) ? 2 : 1);
 
 /** `peer` (a machine UUID) edits the OWN list of that peer instead of the default list. */
 export type PolicyChange =
@@ -66,7 +70,6 @@ const withGeneration = (entry: PolicyEntry, renewals: number): PolicyEntry => {
   }
   return { ...rest, limits: { ...(limits.maxCalls !== undefined ? { maxCalls: limits.maxCalls } : {}), ...(limits.expiresAt !== undefined ? { expiresAt: limits.expiresAt } : {}), renewals } } as PolicyEntry;
 };
-const hasRenewals = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some((e) => e.limits?.renewals !== undefined));
 const hasLimits = (entry: PolicyEntry): boolean => entry.limits !== undefined && (entry.limits.maxCalls !== undefined || entry.limits.expiresAt !== undefined);
 
 /**
@@ -125,9 +128,9 @@ export function nextPolicyBody(current: PolicyBody | undefined, ctx: EditContext
         const after = withGeneration(change.entry, (existing.limits?.renewals ?? 0) + 1);
         renewed = [{ before: existing, after }];
         next = base.map((e, i) => (i === at ? after : e));
-      } else if (limitsEqual(existing.limits, change.entry.limits) && entryText(existing) === entryText(change.entry)) {
+      } else if (limitsEqual(existing.limits, change.entry.limits) && inputEqual(existing.input, change.entry.input) && entryText(existing) === entryText(change.entry)) {
         return { changed: false, reason: 'already-allowed' };
-      } else if (limitsEqual(existing.limits, change.entry.limits)) {
+      } else if (limitsEqual(existing.limits, change.entry.limits) && inputEqual(existing.input, change.entry.input)) {
         // Same entry, other labels only: nothing to sign.
         return { changed: false, reason: 'already-allowed' };
       } else {
@@ -165,7 +168,7 @@ export function nextPolicyBody(current: PolicyBody | undefined, ctx: EditContext
   const newDefaults = change.peer === undefined ? copy : (JSON.parse(JSON.stringify(defaults)) as PolicyEntry[]);
   const body: PolicyBody = {
     // Version 2 only when a typed entry or a renewal generation exists: an exact-only policy stays readable by an older target.
-    v: hasTypedEntry([newDefaults, ...Object.values(peers)]) || hasRenewals([newDefaults, ...Object.values(peers)]) ? 2 : 1,
+    v: policyBodyVersion([newDefaults, ...Object.values(peers)]),
     target: ctx.target,
     version: base + 1,
     baseVersion: base,
@@ -298,7 +301,7 @@ function resolveRefs(current: PolicyBody | undefined, ctx: EditContext, refs: En
 function editedBody(current: PolicyBody, ctx: EditContext, defaults: PolicyEntry[], peers: PolicyBody['peers']): PolicyBody {
   const lists = [defaults, ...Object.values(peers)];
   return {
-    v: hasTypedEntry(lists) || lists.some((list) => list.some((e) => e.limits?.renewals !== undefined)) ? 2 : 1,
+    v: policyBodyVersion(lists),
     target: ctx.target,
     version: current.version + 1,
     baseVersion: current.version,

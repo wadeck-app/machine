@@ -166,7 +166,11 @@ describe('registration, policy, revocation signing: verified by machine-core, by
       { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', command: 'a', limits: { maxCalls: 1, renewals: 1.5 } }] },
       { ...goodPolicy, v: 1, defaults: [{ shell: 'sh', command: 'a', limits: { maxCalls: 1, renewals: 1 } }] },
       // Typed entries (policy version 2): the same refusals, the same messages.
-      { ...goodPolicy, v: 3 },
+      { ...goodPolicy, v: 4 },
+      // An input declaration (policy version 3, decision 114): the same refusals, the same messages.
+      { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', command: 'a', input: { format: 'json', maxBytes: 10, chars: ['letters', 'json'] } }] },
+      { ...goodPolicy, v: 3, defaults: [{ shell: 'sh', command: 'a', input: { format: 'json', maxBytes: 10, chars: ['letters'] } }] },
+      { ...goodPolicy, v: 3, defaults: [{ shell: 'sh', command: 'a', input: { format: 'text', maxBytes: 0, chars: ['letters'] } }] },
       { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', template: 'ls <n:int(5,1)>' }] },
       { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', template: 'ls <n' }] },
       { ...goodPolicy, v: 2, defaults: [{ shell: 'sh', template: 'ls' }] },

@@ -19,6 +19,7 @@ import {
   signPolicy,
   templateExamples,
   type AdminKeyEnvelope,
+  type InputDeclaration,
   type LifetimeInput,
   type PolicyBody,
   type PolicyEntry,
@@ -29,7 +30,7 @@ import { PASSPHRASE_ATTEMPTS, askHint, type PassphraseIo, type Prompt } from './
 import { unchangedMessage } from './adminAllow.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { unsafeTypedWarnings } from './allowSafety.js';
-import { buildAllowEntry, entryLine, leftOutLines, platformOfShell, renewalLines, typedSummary } from './allowText.js';
+import { buildAllowEntry, entryLine, inputSummary, leftOutLines, platformOfShell, renewalLines, typedSummary } from './allowText.js';
 import { FileUsageStore } from './stores.js';
 import { join } from 'node:path';
 import { writeFileAtomic } from './fsutil.js';
@@ -279,6 +280,9 @@ export interface LocalAllowOptions extends LocalIo {
   command?: string;
   /** `allow`: --times, --for or --until (permanent when none). */
   lifetime?: LifetimeInput;
+  /** `--stdin text|json --stdin-chars ...`: the input the entry accepts (decision 114). */
+  input?: InputDeclaration;
+  inputAdded?: readonly string[];
   /** `allow --renew`: replace the entry even with the same limits; its counter starts again. */
   renew?: boolean;
   /** `remove`: the 1-based place in the list shown by `machine allowed` (or `--list`), instead of the command. */
@@ -348,7 +352,7 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
     o.say(`[info] shell "${shell}" chosen from this machine's platform (the commands run here): pass --shell cmd|ps|bash|sh to allow another\n`);
   }
   // The entry is built (and every refusal of its text or lifetime said) before anything else happens.
-  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now()) : undefined;
+  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now(), o.input) : undefined;
   const edit = nextPolicyBody(
     current,
     { target: self.uuid, adminKeyId: mode.localKeyId, now: o.now(), windowSeconds: DEFAULT_APPLY_WINDOW_SECONDS },
@@ -380,6 +384,9 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
       o.say(`${summary.join('\n')}\n\n`);
     }
     for (const warning of unsafeTypedWarnings(entry)) o.say(warning);
+    if (entry.input !== undefined) {
+      o.say(`${inputSummary(entry.input, o.inputAdded ?? []).join('\n')}\n\n`);
+    }
   }
   if (edit.seededPeerList && peerUuid !== undefined) {
     const kept = (body.peers[peerUuid] as PolicyEntry[]).length - 1;

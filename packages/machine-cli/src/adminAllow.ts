@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPolicyBody, commandForHint, isTyped, nextPolicyBody, parseTemplate, POLICY_DOMAIN, resolveMachineRef, resolveRunShell, signPolicy, templateExamples, verifyDocument, type LifetimeInput, type PolicyBody, type PolicyEdit, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
+import { assertPolicyBody, commandForHint, type InputDeclaration, isTyped, nextPolicyBody, parseTemplate, POLICY_DOMAIN, resolveMachineRef, resolveRunShell, signPolicy, templateExamples, verifyDocument, type LifetimeInput, type PolicyBody, type PolicyEdit, type PolicyEntry, type Shell, type SignedPolicy } from '@wadeck-app/machine-core';
 import type { Json } from '@wadeck-app/machine-core';
 import { adminKeyFile, readAdminPin, unlockAdminKey, type Prompt } from './admin.js';
-import { buildAllowEntry, entryLine, platformOfShell, renewalLines, typedSummary } from './allowText.js';
+import { buildAllowEntry, entryLine, inputSummary, platformOfShell, renewalLines, typedSummary } from './allowText.js';
 import { unsafeTypedWarnings } from './allowSafety.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
@@ -58,6 +58,9 @@ export interface AllowOptions {
   lifetime?: LifetimeInput;
   /** `allow --renew`: replace the entry even with the same limits; its counter starts again (hold-for-approval.md, "Renewal"). */
   renew?: boolean;
+  /** `allow --stdin text|json --stdin-chars ...`: the input the entry accepts (decision 114), and the families the format added to what was typed. */
+  input?: InputDeclaration;
+  inputAdded?: readonly string[];
   /** `remove`: the 1-based place in the list shown by `machine allowed`, instead of the command. */
   index?: number;
   /** Absent: the platform of this machine (said), for `allow`; every shell, for `remove`. */
@@ -161,7 +164,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
     o.say(`[info] shell "${shell}" chosen from this machine's platform (the platform of "${target.name}" is not known here): pass --shell cmd|ps|bash|sh if it differs\n`);
   }
   // The entry is built (and every refusal of its text or lifetime said) before anything else happens.
-  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now()) : undefined;
+  const entry = o.mode === 'allow' ? buildAllowEntry(command, shell, o.lifetime ?? {}, o.now(), o.input) : undefined;
   // For a typed entry the `machine run` hint shows a command the validator accepts.
   const hintCommand = entry !== undefined && isTyped(entry) ? (templateExamples(parseTemplate(entry.template, shell), platformOfShell(shell)).accepted[0] ?? command) : command;
   const edit = nextPolicyBody(
@@ -198,8 +201,13 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
       o.say(`${summary.join('\n')}\n\n`);
     }
     for (const warning of unsafeTypedWarnings(entry)) o.say(warning);
+    if (entry.input !== undefined) {
+      o.say(`${inputSummary(entry.input, o.inputAdded ?? []).join('\n')}\n\n`);
+    }
   }
-  if (body.v === 2) {
+  if (body.v === 3) {
+    o.say(`[info] this policy is version 3 (it holds an input declaration): "${target.name}" must run a build that knows it, otherwise it refuses it with "unsupported version 3": run \`machine cli update\` there first\n`);
+  } else if (body.v === 2) {
     o.say(`[info] this policy is version 2 (it holds typed entries or a renewed entry): "${target.name}" must run a build that knows them, otherwise it refuses it with "unsupported version 2": run \`machine cli update\` there first\n`);
   }
   if (!toSelf && current === undefined) {

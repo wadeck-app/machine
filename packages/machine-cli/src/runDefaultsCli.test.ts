@@ -176,7 +176,8 @@ describe('machine run: the wait is the default', () => {
     const pending = run(['--json']);
     await denyAll(await waitingCount(1));
     const r = await pending;
-    expect(r.out).toBe('');
+    // The refusal is one document too (decision 114, D5): the notice stays on stderr.
+    expect(JSON.parse(r.out)).toMatchObject({ type: 'refused', code: 'denied' });
     expect(r.err).toMatch(/waiting up to 10m for laptop/);
   });
 

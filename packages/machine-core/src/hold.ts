@@ -4,6 +4,7 @@
 // argument (epoch seconds).
 
 import type { CallerAsk } from './callerAsk.js';
+import { inputDigest } from './stdinInput.js';
 import type { WaitingRenewal } from './requests.js';
 
 /** Shortest and longest wait a caller may ask for (CLI limits). */
@@ -120,6 +121,8 @@ export interface Hold {
   renewal?: WaitingRenewal;
   /** What the caller asked the owner for (`--times`, `--for`, `--why`): validated by the target, shown to the owner as the caller's wish, never applied by itself. */
   ask?: CallerAsk;
+  /** The request carries a payload for stdin (decision 114): its size and hash. The bytes are in the table, in memory only (`inputOf`). */
+  input?: { bytes: number; sha256: string };
 }
 
 export interface HoldLimits {
@@ -143,13 +146,15 @@ export type HoldCheck = { state: 'waiting' } | { state: 'deadline' } | { state: 
 export class HoldTable {
   private readonly holds = new Map<string, Hold>();
   private readonly denials = new Map<string, { reason?: string }>();
+  /** The payloads of held requests (stdin-input.md, "Held requests"): memory only, bounded by the hold limits times the payload ceiling, gone with the hold. */
+  private readonly inputs = new Map<string, Uint8Array>();
   private readonly limits: () => HoldLimits;
 
   constructor(limits: HoldLimitsSource = {}) {
     this.limits = typeof limits === 'function' ? limits : () => limits;
   }
 
-  admit(input: { id: string; peer: string; shell: string; command: string; now: number; requestedSeconds: number; capSeconds: number; renewal?: WaitingRenewal; ask?: CallerAsk }): AdmitResult {
+  admit(input: { id: string; peer: string; shell: string; command: string; now: number; requestedSeconds: number; capSeconds: number; renewal?: WaitingRenewal; ask?: CallerAsk; input?: Uint8Array }): AdmitResult {
     const limits = this.limits();
     const perPeer = limits.perPeer ?? DEFAULT_HELD_PER_PEER;
     const perMachine = limits.perMachine ?? DEFAULT_HELD_PER_MACHINE;
@@ -179,9 +184,18 @@ export class HoldTable {
       capped: wait.capped,
       ...(input.renewal !== undefined ? { renewal: input.renewal } : {}),
       ...(input.ask !== undefined ? { ask: input.ask } : {}),
+      ...(input.input !== undefined ? { input: inputDigest(input.input) } : {}),
     };
     this.holds.set(hold.id, hold);
+    if (input.input !== undefined) {
+      this.inputs.set(hold.id, input.input);
+    }
     return { ok: true, hold };
+  }
+
+  /** The payload a held request carries, or undefined (none, or the hold is over). Local to the daemon: never sent anywhere but to the owner's own screen. */
+  inputOf(id: string): Uint8Array | undefined {
+    return this.inputs.get(id);
   }
 
   get(id: string): Hold | undefined {
@@ -196,6 +210,7 @@ export class HoldTable {
   end(id: string): void {
     this.holds.delete(id);
     this.denials.delete(id);
+    this.inputs.delete(id);
   }
 
   /** A Deny by the owner (restricting, unsigned, hard rule 4). The id may be a unique prefix. The first Deny of a hold wins. */

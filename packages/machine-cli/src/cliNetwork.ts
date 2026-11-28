@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { askFromFlags, DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
+import { askFromFlags, InputDeclarationError, DEFAULT_WAIT_NOTICE_DELAY_MS, MAX_DENY_REASON_LENGTH, NO_DENY_REASON_MESSAGE, printable, PROGRESS_INTERVAL_SECONDS, SHELLS, defaultWaitNotice, holdLimitAdvice, notHeldWarning, parseAddress, progressPrinter, resolveRunShell, resolveRunWait, type RunWait, type Shell } from '@wadeck-app/machine-core';
 import { refusalListLine } from './allowedView.js';
 import { runAllowed } from './cliAllowed.js';
 import { whenText } from './humanTime.js';
@@ -38,6 +38,9 @@ import { recordRun, type RunRecorder } from './runLogRecord.js';
 import { readRunDefaults } from './runDefaultsStore.js';
 import { catchUpRevocations } from './revocationSync.js';
 import { runPingCommand } from './cliPing.js';
+import { createRunReporter, type RunReporter } from './runReport.js';
+import { readStdinPayload } from './stdinSource.js';
+import { inputOf } from './allowText.js';
 import { pendingPolicyLine } from './pendingPolicy.js';
 import { unknownSubcommandMessage } from './cliHelp.js';
 import { runPolicyModeCommand } from './cliPolicy.js';
@@ -203,6 +206,13 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       }
       if (args.out && existsSync(args.out) && !args.force) return fail(`${args.out} already exists: choose another file or pass --force to overwrite it`);
       const mode = args.list ? 'list' : args.remove ? 'remove' : 'allow';
+      let declared: ReturnType<typeof inputOf>;
+      try {
+        declared = inputOf(args);
+      } catch (e) {
+        if (e instanceof InputDeclarationError) return fail(`${e.message}. Nothing was signed`, EXIT.usage);
+        throw e;
+      }
       try {
         const r = await runAllow(configDir, {
           reference: first,
@@ -211,6 +221,7 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
           ...(index !== undefined ? { index } : {}),
           ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
           ...(mode === 'allow' && args.renew ? { renew: true } : {}),
+          ...(declared !== undefined ? { input: declared.declaration, inputAdded: declared.added } : {}),
           ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
           ...(args.out !== undefined ? { out: args.out } : {}),
           prompt,
@@ -570,9 +581,15 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
 
   if (command === 'run') {
     // Every failure of `run` that is not the remote command's own exit code is 255, usage errors included.
+    // With --json every outcome is exactly ONE document on stdout (decision 114, D5): the reporter prints the first and ignores the rest.
+    const reporter = createRunReporter(args.json, io.stdout);
+    const reported: CommandContext = { ...ctx, fail: (message, code) => (reporter.failure(message), ctx.fail(message, code)) };
     try {
-      return await recordRun({ configDir: ctx.configDir, stderr: ctx.io.stderr }, (recorder) => runRemote(ctx, recorder)); // run-log
+      const code = await recordRun({ configDir: ctx.configDir, stderr: ctx.io.stderr }, (recorder) => runRemote(reported, recorder, reporter)); // run-log
+      reporter.ensure();
+      return code;
     } catch (e) {
+      reporter.thrown(e);
       return fail((e as Error).message, EXIT.peer);
     }
   }
@@ -580,42 +597,57 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
   return undefined;
 }
 
-async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<number> { // run-log
+async function runRemote(ctx: CommandContext, recorder: RunRecorder, reporter: RunReporter): Promise<number> { // run-log
   const { args, rest, io, configDir } = ctx;
+  // The refusals of the arguments are usage errors (the code of the --json document); a later failure names its own kind.
+  const usageFail = (message: string): number => (reporter.as('usage'), ctx.fail(message, EXIT.peer));
   const fail = ctx.fail;
   const ref = rest[0];
   if (ref === undefined || rest.length > 1 || args.passthrough.length === 0) {
-    return fail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] [--times <n> | --for <duration>|permanent] [--why <text>] -- <command...>', EXIT.peer);
+    return usageFail('usage: machine run <machine> [--address <host:port>] [--shell cmd|ps|bash|sh] [--stdin <file|->] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] [--times <n> | --for <duration>|permanent] [--why <text>] -- <command...>');
   }
   // What to do when the target does not allow the command yet: flags, then the machine setting, then the built-in default (wait 10m). A bad flag, a contradiction and a damaged setting are refused before anything is read or sent.
   let wait: RunWait;
   try {
     wait = resolveRunWait({ ...(args.onRefusal !== undefined ? { onRefusal: args.onRefusal } : {}), ...(args.wait !== undefined ? { wait: args.wait } : {}), ...(args.noWait ? { noWait: true } : {}) }, readRunDefaults(configDir));
   } catch (e) {
-    return fail((e as Error).message, EXIT.peer);
+    return usageFail((e as Error).message);
   }
   const waitSeconds = wait.onRefusal === 'wait' ? wait.seconds : undefined;
   // What you ask the OWNER for: checked here with the parser of `machine admin allow` before anything is read or sent; the owner decides, the target validates again.
   const asked = askFromFlags({ times: args.times, for: args.for, why: args.why });
   if (!asked.ok) {
-    return fail(asked.message, EXIT.peer);
+    return usageFail(asked.message);
   }
   if (asked.ask !== undefined && waitSeconds === undefined) {
-    return fail('--times, --for and --why are what you ask the OWNER of the target, who only sees a request that is HELD: this run does not wait (--no-wait, --on-refusal fail or the machine setting `machine run-defaults`), so nobody would read them; remove them, or run with the wait (default) or --wait <10s..60m>', EXIT.peer);
+    return usageFail('--times, --for and --why are what you ask the OWNER of the target, who only sees a request that is HELD: this run does not wait (--no-wait, --on-refusal fail or the machine setting `machine run-defaults`), so nobody would read them; remove them, or run with the wait (default) or --wait <10s..60m>');
   }
   // An unknown --shell is refused before anything is read or sent; the shell itself is chosen below, once the connections.json of the peer is read.
-  if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return fail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`, EXIT.peer);
+  if (args.shell !== undefined && !(SHELLS as readonly string[]).includes(args.shell)) return usageFail(`unknown shell "${args.shell}": expected one of ${SHELLS.join(', ')}`);
   if (args.address !== undefined && !parseAddress(args.address)) {
-    return fail(`invalid --address "${args.address}": expected <host>:<port>, for example 192.168.1.20:47921 or [::1]:47921`, EXIT.peer);
+    return usageFail(`invalid --address "${args.address}": expected <host>:<port>, for example 192.168.1.20:47921 or [::1]:47921`);
   }
   // The command is sent byte for byte. Several words are joined with single spaces, which is only faithful when no word
   // holds spaces or quotes: otherwise the user must quote the whole command as one argument.
   if (args.passthrough.length > 1 && args.passthrough.some((word) => /[\s"'`]/.test(word))) {
-    return fail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is sent exactly as written', EXIT.peer);
+    return usageFail('the command has words with spaces or quotes: pass the whole command as ONE quoted argument, for example -- "grep \'foo bar\' file", so that it is sent exactly as written');
   }
   const command = args.passthrough.join(' ');
 
-  const trusted = resolveTrustedPeer(ctx, ref, { reference: EXIT.peer, failure: EXIT.peer });
+  // The payload for the stdin of the command (decision 114): read before anything is connected, so a missing file or a terminal costs nothing.
+  let payload: Buffer | undefined;
+  if (args.stdin !== undefined) {
+    const read = await readStdinPayload(args.stdin, io);
+    if (!read.ok) {
+      if (read.kind === 'too-large') {
+        reporter.refusal({ type: 'refused', reason: 'input-too-large', message: read.message }, read.message, { sentInput: false });
+        return ctx.fail(read.message, EXIT.peer);
+      }
+      return usageFail(read.message);
+    }
+    payload = read.payload;
+  }
+  const trusted = resolveTrustedPeer({ ...ctx, fail: (message, code) => (reporter.as(message.startsWith('that is this machine') ? 'usage' : 'unknown-machine'), ctx.fail(message, code)) }, ref, { reference: EXIT.peer, failure: EXIT.peer });
   if ('exit' in trusted) return trusted.exit;
   const { self, peer } = trusted;
   // How this machine reaches the peer (decision 62): pinned addresses win over the relay record, and the type or --wake / --no-wake decides whether a peer that cannot be reached is woken.
@@ -667,6 +699,7 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
       command,
       now: epochSeconds(),
       ...(asked.ask !== undefined ? { ask: asked.ask } : {}),
+      ...(payload !== undefined ? { input: payload } : {}),
       ...(waitSeconds !== undefined
         ? {
             waitSeconds,
@@ -701,15 +734,19 @@ async function runRemote(ctx: CommandContext, recorder: RunRecorder): Promise<nu
     const notHeldText = notHeld ? notHeldWarning(peer.name, wait) : undefined;
     const heldNote = notHeldText !== undefined ? `\n[warn] ${notHeldText}` : '';
     // A target older than the ask refuses the 10-key body as malformed (fail closed): say what to do, not just that it is malformed.
+    // A target older than the input refuses the signed body with an input as malformed (fail closed): nothing was run, say what to do.
+    const inputAdvice = payload !== undefined && answer.reason === 'malformed' ? `\n[warn] ${peer.name} is too old to accept an input on stdin (it refused the signed request as malformed, and an older target never ignores an input): run \`machine cli update\` ON ${peer.name}, then send it again` : '';
     const askAdvice = asked.ask !== undefined && answer.reason === 'malformed' ? `\n[warn] ${peer.name} may be too old to read what you ask (--times, --for and --why travel in the signed request): run \`machine cli update\` ON ${peer.name}, or run without them` : '';
     // The hold limits of the target now apply to every default run: say what to do.
     const limitAdvice = waitSeconds !== undefined ? holdLimitAdvice(answer.reason, peer.name) : undefined;
     // A Deny: the text is the owner's (a peer's text reaches this terminal: control characters become `?`, T-42), and the fixed no-reason sentence already says "denied".
     const why = answer.reason === 'denied' ? (answer.message === NO_DENY_REASON_MESSAGE ? answer.message : `denied: ${printable(answer.message, MAX_DENY_REASON_LENGTH + 3)}`) : `${answer.reason}: ${answer.message}`;
-    return fail(`refused by ${peer.name}: ${why}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${askAdvice}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`, EXIT.peer);
+    const refusedText = `refused by ${peer.name}: ${why}${how}${limitAdvice !== undefined ? `. ${limitAdvice}` : ''}${heldNote}${askAdvice}${inputAdvice}${pending !== undefined ? `\n${pending}` : ''}${listed !== undefined ? `\n${listed}` : ''}`;
+    reporter.refusal(answer, refusedText, { sentInput: payload !== undefined });
+    return fail(refusedText, EXIT.peer);
   }
   if (args.json) {
-    io.stdout(`${JSON.stringify(answer, null, 2)}\n`);
+    reporter.result(answer);
   } else {
     if (answer.stdout) io.stdout(answer.stdout);
     if (answer.stderr) io.stderr(answer.stderr);

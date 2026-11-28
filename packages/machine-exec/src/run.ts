@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
 import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Shell } from '@wadeck-app/machine-core';
@@ -15,6 +16,12 @@ export interface RunOptions {
   /** Environment to scrub; defaults to this process's. */
   env?: Record<string, string | undefined>;
   cwd?: string;
+  /**
+   * The payload of an entry that declares an input (stdin-input.md, R1): written to the stdin PIPE of the spawned process and the stream is ended; it is never
+   * put on the command line or in the environment. Absent: stdin is closed as before (a command that waits for input gets end-of-file). An empty payload is an
+   * empty stream. A command that does not read is not an error (EPIPE, or EOF on Windows, is ignored).
+   */
+  stdin?: Uint8Array;
   /** The OEM code page of the machine, used to decode output that is not UTF-8 (Windows cmd and ps only). Defaults to the registry value, read once. Tests inject it. */
   oemCodePage?: () => Promise<number | undefined>;
   /** Called once when the shell process exists (the spawn succeeded). It is never called when the launch fails. */
@@ -101,14 +108,24 @@ export async function runCommand(options: RunOptions): Promise<RunResult> {
     const child = spawn(spec.file, spec.args, {
       env: scrubEnv(sourceEnv, process.platform),
       cwd: options.cwd ?? homedir(),
-      // No stdin: a command that waits for input gets end-of-file instead of hanging.
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // No stdin unless the entry declares an input: a command that waits for input gets end-of-file instead of hanging.
+      stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] as ['ignore' | 'pipe', 'pipe', 'pipe'],
       windowsVerbatimArguments: spec.windowsVerbatimArguments,
       windowsHide: true,
       // Unix: own process group, so the whole group can be ended.
       detached: process.platform !== 'win32',
-    });
+    }) as ChildProcessByStdio<Writable | null, Readable, Readable>;
     child.once('spawn', () => options.onStarted?.());
+    if (options.stdin !== undefined && child.stdin !== null) {
+      // A command that exits or closes its stdin without reading makes the write fail with EPIPE: that is the command's business, not an error.
+      child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+        if (e.code === 'EPIPE' || e.code === 'EOF' || e.code === 'ERR_STREAM_DESTROYED' || e.code === 'ECONNRESET') return;
+        clearTimeout(timer);
+        stop();
+        reject(new Error(`cannot write the input to "${options.shell}": ${e.message}`));
+      });
+      child.stdin.end(Buffer.from(options.stdin));
+    }
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let outBytes = 0;

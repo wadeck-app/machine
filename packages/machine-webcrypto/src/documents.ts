@@ -2,6 +2,7 @@ import type { DocumentBody, DocumentInput, PolicyBody, PolicyEntry, Registration
 import { decodeBase64urlAny, decodeBase64urlStrict, encodeBase64url } from './base64url.js';
 import { assertAliasesBody } from './aliases.js';
 import { canonicalize, type Json } from './canonical.js';
+import { InputDeclarationError, assertInputDeclaration } from './inputDeclaration.js';
 import { sha256 } from './keys.js';
 import { sealTo } from './seal.js';
 import { signBody } from './signed.js';
@@ -132,7 +133,7 @@ function assertEntries(list: unknown, where: string, version: number): void {
     const entry = raw as Record<string, unknown>;
     if (typeof entry !== 'object' || entry === null) throw new Error(`policy: every entry of ${where} must be an object`);
     for (const key of Object.keys(entry)) {
-      if (!['shell', 'command', 'template', 'limits'].includes(key)) {
+      if (!['shell', 'command', 'template', 'limits', 'input'].includes(key)) {
         throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
       }
     }
@@ -170,6 +171,18 @@ function assertEntries(list: unknown, where: string, version: number): void {
       canonical = canonicalEntry(entry.shell as PolicyEntry['shell'], { kind: 'exact', command: entry.command });
       shown = entry.command;
     }
+    if ('input' in entry) {
+      if (entry.input === undefined) throw new Error(`policy: input of an entry of ${where} must be omitted, not undefined`);
+      if (version < 3) {
+        throw new Error(`policy: ${where} holds an input declaration but the body is version ${version}: input needs version 3 (${UPDATE_HINT} on the target)`);
+      }
+      try {
+        assertInputDeclaration(entry.input, where);
+      } catch (e) {
+        if (e instanceof InputDeclarationError) throw new Error(e.message);
+        throw e;
+      }
+    }
     if ('limits' in entry && entry.limits === undefined) throw new Error(`policy: limits of an entry of ${where} must be omitted, not undefined`);
     if (entry.limits !== undefined) {
       const limits = entry.limits as Record<string, unknown>;
@@ -199,7 +212,7 @@ function assertEntries(list: unknown, where: string, version: number): void {
 }
 
 /** The highest policy body version this build reads (the same constants as machine-core policy.ts). */
-const POLICY_MAX_VERSION = 2;
+const POLICY_MAX_VERSION = 3;
 const UPDATE_HINT = 'run `machine cli update` on this machine';
 /** The whole body as JSON: 200 entries of 2048 characters are about 400 KiB. */
 const MAX_BODY_CHARS = 512 * 1024;
@@ -224,7 +237,7 @@ export function assertPolicyBody(value: unknown, options: PolicyReadOptions = {}
   for (const key of fields) {
     if (!(key in r)) throw new Error(`policy: missing field "${key}"`);
   }
-  if (r.v !== 1 && r.v !== 2) {
+  if (r.v !== 1 && r.v !== 2 && r.v !== 3) {
     throw new Error(`policy: unsupported version ${String(r.v)} (this build reads versions 1 to ${readsUpTo}): ${UPDATE_HINT}`);
   }
   if (r.v > readsUpTo) {

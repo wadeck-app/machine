@@ -39,6 +39,7 @@ export async function ok(configDir: string, args: string[], prompt?: () => Promi
 }
 
 export interface PolicyDraftEntry {
+  input?: { format: string; maxBytes: number; chars: string[] };
   shell: string;
   command: string;
   limits?: { maxCalls: number };
@@ -65,7 +66,7 @@ export async function provision(root: string, a: string, b: string, policy: Poli
   await ok(b, ['peer', 'import', join(root, 'for-b.json')]);
 
   const target = readMachine(b).uuid;
-  writeFileSync(join(root, 'draft.json'), JSON.stringify({ v: 1, target, version: 1, baseVersion: 0, defaults: policy, peers: {} }));
+  writeFileSync(join(root, 'draft.json'), JSON.stringify({ v: policy.some((e) => e.input !== undefined) ? 3 : 1, target, version: 1, baseVersion: 0, defaults: policy, peers: {} }));
   await ok(a, ['admin', 'sign-policy', join(root, 'draft.json'), '--out', join(root, 'policy-b.json')], prompt);
   await ok(b, ['policy', 'install', join(root, 'policy-b.json')]);
   // The admin passphrase, for tests that sign again from the admin machine.

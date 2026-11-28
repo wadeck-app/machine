@@ -60,13 +60,17 @@ The command line is stored as typed. Commands must never carry a secret, the sam
 
 ## `machine run --json` shape
 
-`machine run --json` prints the peer's answer as is (one document on stdout; the process exit code is the command's, 255 for a failure of machine). A refusal is not this document: it is an error on stderr, exit 255. Pinned by `runJsonShape.test.ts` (exact key set and types): adding, removing or retyping a field fails it, and changes this table.
+Since decision 114 (D5) `machine run --json` prints exactly ONE document on stdout for EVERY outcome: a result, a refusal of the target, an unreachable peer, an unknown machine, a usage error (a command line that does not parse included). The exit code of the process is unchanged (the remote code, 255 for a failure of machine, 2 for a command line that does not parse); the human text still goes to stderr. Pinned by `runJsonShape.test.ts` and `runStdinCli.test.ts` (exact key set and types of every kind): adding, removing or retyping a field fails them, and changes these tables.
+
+**Result** (`type` `result`): the answer of the peer as is, plus `code` and `message`.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `type` | string | always `"result"` |
+| `type` | string | `"result"` |
+| `code` | string | `ok` (the command ran, whatever its exit code), or `timeout` when the peer stopped it at its time limit (`timedOut` true) |
+| `message` | string | one human sentence |
 | `id` | string | request id (uuid), the one of the audit and the run log |
-| `exitCode` | number or null | exit code of the command; `null` when it was killed (timeout, output cap) |
+| `exitCode` | number or null | RAW exit code of the command; `null` when it was killed (timeout, output cap) |
 | `stdout` | string | output, possibly cut (see `truncated`) |
 | `stderr` | string | error output, possibly cut |
 | `timedOut` | boolean | the command exceeded the time limit of the peer (60 s) and was stopped |
@@ -74,6 +78,36 @@ The command line is stored as typed. Commands must never carry a secret, the sam
 | `outputNotUtf8` | boolean | the output was not valid UTF-8 and was decoded lossily |
 | `decodedFrom` | string, optional | code page the output was converted from (`cp850`); absent otherwise and from a peer older than decision 70 |
 | `durationMs` | number | run time of the command measured by the peer |
+
+**Refusal of the target** (`type` `refused`) and **failure of machine** (`type` `error`): the same eight keys, `exitCode` null, `stdout` and `stderr` empty, `timedOut` and `truncated` false, so a script reads one shape. A refusal also has `reason` (the raw reason of the target, for people) and `id` when the request has one.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `type` | string | `"refused"` or `"error"` |
+| `code` | string | see below |
+| `message` | string | the human sentence printed on stderr (cause and fix) |
+| `exitCode`, `stdout`, `stderr`, `timedOut`, `truncated` | null, "", "", false, false | there is no command behind it |
+| `reason` | string, refusals only | raw reason of the target |
+| `id` | string, refusals only, when known | request id |
+
+**Codes** (stable: never renamed or removed once released, a new case adds a string at the end; `RUN_CODES` of machine-core):
+
+| `code` | `type` | When |
+|---|---|---|
+| `ok` | result | the command ran |
+| `timeout` | result, or error | the peer stopped the command at its time limit; or no answer came within the wait of the caller (error, `timedOut` false) |
+| `refused:not-allowed` | refused | the target has no entry for the command (`not-listed`, `no-policy`, `expired`, `exhausted`) |
+| `refused:input-not-allowed` | refused | the entry declares no input |
+| `refused:input-too-large` | refused | above the maximum of the entry (the message names it), or above the 512 KiB ceiling (refused here, nothing sent) |
+| `refused:input-chars` | refused | a character outside the declared union, or never accepted |
+| `refused:input-format` | refused | not UTF-8, not JSON, too deep, duplicate or forbidden key, or the payload does not match the signed size and hash |
+| `refused:other` | refused | any other refusal (`busy`, `rate-limited`, `peer-revoked`, hold limits...): see `reason` |
+| `denied` | refused | the owner of the target denied a held request |
+| `target-too-old` | refused | an input was sent and the target refused the signed body as malformed: it does not know stdin (fail closed, nothing ran) |
+| `unreachable` | error | no address, no connection, the wake could not help |
+| `unknown-machine` | error | unknown, ambiguous or untrusted machine reference |
+| `usage` | error | bad arguments, missing or unreadable `--stdin` file, `--stdin -` on a terminal |
+| `failed` | error | any other failure of machine |
 
 ## Not covered
 

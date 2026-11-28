@@ -91,6 +91,13 @@ export interface WaitingRequest {
   renewal?: WaitingRenewal;
   /** What the caller asked the owner for (`machine run --times/--for/--why`): the caller's wish, never a decision. Absent when it asked nothing. */
   ask?: CallerAsk;
+  /** The request carries a payload for stdin (decision 114): size and SHA-256, from the audit line (never the content). */
+  input?: { bytes: number; sha256: string };
+  /**
+   * Added by the CLI of the machine that holds the request, from the memory of its daemon (never from the log): the payload escaped (T-42), and the smallest
+   * declaration that covers it, as flags for the owner to edit. Absent when the daemon does not answer or no longer holds the request.
+   */
+  inputPreview?: { text: string; cut: boolean; suggestion?: string };
 }
 
 export interface HistoryEntry {
@@ -192,6 +199,20 @@ function kindOf(event: string): HistoryKind {
   return 'session';
 }
 
+/** The size and hash of a held payload read from an audit line: strict, undefined when it is not exactly that. */
+function parseHeldInput(raw: unknown): { bytes: number; sha256: string } | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const r = Object.fromEntries(Object.entries(raw));
+  const bytes = r['bytes'];
+  const sha256 = r['sha256'];
+  if (Object.keys(r).length !== 2 || typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0 || typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) {
+    return undefined;
+  }
+  return { bytes, sha256 };
+}
+
 export function summarizeRequests(lines: readonly string[], options: SummarizeOptions): RequestsSummary {
   const verification = verifyAuditChain(lines);
   const trusted = verification.ok ? lines.length : verification.line - 1;
@@ -248,7 +269,8 @@ export function summarizeRequests(lines: readonly string[], options: SummarizeOp
         const renewal = parseWaitingRenewal(entry['renewal']);
         // An ask that is not valid (an edited line) is dropped, the request is still listed: the target wrote only valid ones.
         const asked = entry['ask'] === undefined ? undefined : parseCallerAsk(entry['ask']);
-        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline, ...(renewal !== undefined ? { renewal } : {}), ...(asked?.ok === true ? { ask: asked.ask } : {}) });
+        const input = parseHeldInput(entry['input']);
+        heldById.set(id, { id, peer, ...nameOf(peer), shell, command, since: at, deadline, ...(renewal !== undefined ? { renewal } : {}), ...(asked?.ok === true ? { ask: asked.ask } : {}), ...(input !== undefined ? { input } : {}) });
       } else skipped += 1;
     }
     if (verified && event === 'hold-ended' && id !== undefined) {
@@ -362,14 +384,16 @@ export function shellQuote(command: string): string {
  * The command that allows a pending request: `machine admin allow <machine> ...` (mode admin, run on the admin machine) or
  * `machine policy allow ...` (mode local, run ON that machine).
  */
-export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'> & { renewal?: WaitingRenewal; ask?: CallerAsk }, machine: { name: string; policyMode: 'admin' | 'local' }): string {
+export function allowCommand(group: Pick<PendingGroup, 'shell' | 'command'> & { renewal?: WaitingRenewal; ask?: CallerAsk; inputPreview?: { suggestion?: string } }, machine: { name: string; policyMode: 'admin' | 'local' }): string {
   const { renewal } = group;
   // A renewal replaces the entry that exists: its text (the template of a typed entry), `--renew` (the counter starts again even with the same limits)
   // and the limits it had (an expired entry cannot give its duration back: the owner writes it).
   // The ask of the caller is a SUGGESTION in the command the owner edits and runs (`--times n` / `--for d`; permanent adds nothing); it wins over the previous limits of a renewal.
   const asked = askAllowFlags(group.ask);
   const limits = asked !== '' ? asked : renewal === undefined ? '' : renewal.maxCalls !== undefined && renewal.reason === 'exhausted' ? ` --times ${renewal.maxCalls}` : ' --for <duration>';
-  const tail = `${renewal === undefined ? '' : '--renew '}--shell ${group.shell}${limits} -- ${shellQuote(renewal === undefined ? group.command : renewal.entry)}`;
+  // The payload of a held request: the smallest declaration that covers it is a SUGGESTION in the command the owner edits and runs (D1).
+  const stdin = group.inputPreview?.suggestion !== undefined ? ` ${group.inputPreview.suggestion}` : '';
+  const tail = `${renewal === undefined ? '' : '--renew '}--shell ${group.shell}${limits}${stdin} -- ${shellQuote(renewal === undefined ? group.command : renewal.entry)}`;
   return machine.policyMode === 'local' ? `machine policy allow ${tail}` : `machine admin allow ${machine.name} ${tail}`;
 }
 

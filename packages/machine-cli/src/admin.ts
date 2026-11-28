@@ -10,6 +10,7 @@ import {
   PASSPHRASE_MIN_LENGTH,
   PASSPHRASE_RECOMMENDED_LENGTH,
   decryptAdminKey,
+  describeInput,
   encryptAdminKey,
   entryText,
   generatePassphrase,
@@ -245,7 +246,7 @@ async function unlock(configDir: string, pin: AdminPin, prompt: Prompt) {
 function describeEntries(entries: PolicyEntry[], indent: string): string[] {
   if (entries.length === 0) return [`${indent}(none: everything is refused)`];
   // The typed entry is shown as signed, with its tag (the admin signs this exact text).
-  return entries.map((e) => `${indent}${e.shell}  ${JSON.stringify(entryText(e))}${isTyped(e) ? '  [typed]' : ''}${e.limits ? `  limits ${JSON.stringify(e.limits)}` : ''}`);
+  return entries.map((e) => `${indent}${e.shell}  ${JSON.stringify(entryText(e))}${isTyped(e) ? '  [typed]' : ''}${e.input ? `  [${describeInput(e.input)}]` : ''}${e.limits ? `  limits ${JSON.stringify(e.limits)}` : ''}`);
 }
 
 /** Everything the admin is about to sign, exactly as signed: commands are shown JSON-escaped so nothing hides in them. */

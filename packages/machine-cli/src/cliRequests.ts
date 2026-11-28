@@ -115,6 +115,17 @@ export async function runRequests(ctx: CommandContext): Promise<number> {
   if (!answer.ok) return fail(answer.message, EXIT.reference);
 
   const { summary } = answer;
+  // The payload of a held request lives in the memory of the daemon only (decision 114): asked of the daemon that holds it, never read from the log. Without a daemon (or when it
+  // does not answer) the rows keep the size and the hash from the log, and say where the payload is.
+  if (args.history !== true && summary.waiting.some((w) => w.input !== undefined)) {
+    try {
+      const client = createDaemonClient({ configDir, commands: makeCommands(configDir, appVersion) });
+      const held = (await client.send('heldInputs', {})) as { inputs?: Record<string, { text: string; cut: boolean; suggestion?: string }> };
+      summary.waiting = summary.waiting.map((w) => (held.inputs?.[w.id] !== undefined ? { ...w, inputPreview: held.inputs[w.id] as NonNullable<typeof w.inputPreview> } : w));
+    } catch (e) {
+      io.stderr(`[warn] the payload of a held request could not be read from the daemon (${(e as Error).message}): only its size and hash are shown\n`);
+    }
+  }
   if (!summary.chain.ok) {
     io.stderr(`[warn] audit log is broken at line ${summary.chain.line}: ${summary.chain.message}. The ${summary.chain.trustedEntries} entries before it are verified; ${summary.chain.unverifiedEntries} after it are shown as [UNVERIFIED] and never listed as pending${summary.chain.unreadableLines > 0 ? `; ${summary.chain.unreadableLines} line(s) cannot be read at all` : ''}. Keep a copy of ${answer.logFile} for the investigation, then move it away to start a new log (the daemon refuses to start on a broken log)\n`);
   }

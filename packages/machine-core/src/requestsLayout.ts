@@ -168,7 +168,31 @@ function askLines(rows: Array<{ id: string; ask: CallerAsk | undefined; where?: 
   return lines;
 }
 
-function allowLines(rows: Array<Pick<WaitingRequest, 'shell' | 'command' | 'ask'>>, input: RequestsLayoutInput): string[] {
+/**
+ * The payload a held request carries (decision 114, D1): its size and hash, and the payload itself escaped when the daemon of this machine handed it over. The owner reads
+ * it BEFORE signing: the entry that allows it declares what such a payload may contain.
+ */
+function inputLines(rows: WaitingRequest[]): string[] {
+  const lines: string[] = [];
+  for (const row of rows) {
+    if (row.input === undefined) {
+      continue;
+    }
+    const id = row.id.slice(0, 8);
+    lines.push(fit(`  stdin of ${id}: ${row.input.bytes} bytes, sha256 ${row.input.sha256.slice(0, 16)}...`));
+    if (row.inputPreview === undefined) {
+      lines.push(fit('  the payload is kept in the memory of the daemon that holds the request (lost with it): ask there with `machine requests`, it is not in the audit log'));
+      continue;
+    }
+    lines.push(fit(`    ${ascii(row.inputPreview.text)}${row.inputPreview.cut ? ' [cut: the first 4 KiB]' : ''}`));
+    if (row.inputPreview.suggestion !== undefined) {
+      lines.push(fit(`  add to the allow command: ${row.inputPreview.suggestion} (smallest families that cover it)`));
+    }
+  }
+  return lines;
+}
+
+function allowLines(rows: Array<Pick<WaitingRequest, 'shell' | 'command' | 'ask' | 'inputPreview'>>, input: RequestsLayoutInput): string[] {
   const { machine, full } = input;
   if (full) {
     return rows.map((r) => `  allow: ${allowCommand(r, machine)}`);
@@ -270,6 +294,7 @@ export function layoutRequests(raw: RequestsLayoutInput): string[] {
         }
       }
       lines.push(...askLines(waiting.map((w) => ({ id: w.id, ask: w.ask }))));
+      lines.push(...inputLines(waiting));
       lines.push(...allowLines(waiting, input));
     }
     if (heldNotices.length > 0) {

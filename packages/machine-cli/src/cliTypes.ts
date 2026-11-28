@@ -36,6 +36,10 @@ export interface CliIo {
   cliMeta?: Partial<CliMetaDeps>;
   /** Tests only (no command line option exists): let `machine run` and `machine list` use loopback addresses of a peer record. */
   allowLoopbackPeers?: boolean;
+  /** Tests only: the standard input of `machine run --stdin -` (default: process.stdin, read up to the 512 KiB ceiling). */
+  readStdin?: () => Promise<Buffer>;
+  /** Tests only: the standard input is a terminal (default: process.stdin.isTTY). `--stdin -` is then refused with the fix. */
+  stdinIsTty?: boolean;
   /** Tests only: how often `machine run --wait` prints its progress line (default 30 s). */
   waitProgressMs?: number;
   /** Tests only: how long `machine run` waits for an answer before it says that the wait is on by default (2 s). */
@@ -83,7 +87,12 @@ export interface Parsed {
   times?: string;
   for?: string;
   until?: string;
-  /** `run --why <text>`: why the caller asks, shown to the owner as the caller's words (validated by machine-core askFromFlags). */
+  /** `machine run --stdin <file|->`: the payload for the stdin of the command. `machine admin allow` / `machine policy allow --stdin <text|json>`: the format of the input the entry declares (decision 114). */
+  stdin?: string;
+  /** `admin allow` / `policy allow`: `--stdin-max <n>k` (default 64k, at most 512k) and `--stdin-chars <families>` (the whitelist union, mandatory with --stdin). */
+  stdinMax?: string;
+  stdinChars?: string;
+  /** `machine run --why <text>`: why the caller asks, shown to the owner as the caller's words (validated by machine-core askFromFlags). */
   why?: string;
   /** `admin allow --remove` / `policy allow --remove`: the number shown by `machine allowed` instead of the command. Text, validated by the command. */
   index?: string;

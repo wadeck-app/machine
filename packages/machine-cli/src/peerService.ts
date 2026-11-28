@@ -21,8 +21,12 @@ import {
   type RequestsListAnswer,
   type RequestsListData,
   authorize,
+  INPUT_MAX_BYTES_CEILING,
+  checkInputPayload,
+  inputDigest,
   renewalNote,
   type CallerAsk,
+  type InputDeclaration,
   type WaitingRenewal,
   newRequest,
   signRequest,
@@ -63,6 +67,30 @@ export const DEFAULT_HOLD_POLL_MS = 1000;
 const HOLDABLE_REASONS: readonly string[] = ['not-listed', 'no-policy', 'expired', 'exhausted'];
 /** What the owner is told of a refusal that was answered without a hold (`--no-wait`): the command is not on the list. An used-up entry is a known one, not news. */
 const NOTIFIED_REASONS: readonly string[] = ['not-listed', 'no-policy'];
+
+/** The base64 text of the payload on the frame: strict (canonical) so that one payload has one spelling. Undefined when it is not base64. */
+function decodeInputFrame(text: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text) || text.length % 4 !== 0) {
+    return undefined;
+  }
+  const bytes = Buffer.from(text, 'base64');
+  return bytes.toString('base64') === text ? bytes : undefined;
+}
+
+/** The refusal that tells the caller why the payload was not accepted: what the entry (the one the caller's command matched) declares, checked in the order of the spec. */
+function inputRefusal(entry: { input?: InputDeclaration }, payload: Uint8Array | undefined): { reason: string; message: string; detail?: string } | undefined {
+  if (payload === undefined) {
+    return undefined;
+  }
+  if (entry.input === undefined) {
+    return {
+      reason: 'input-not-allowed',
+      message: 'this command is allowed without an input: its entry declares none, so no payload is accepted (the owner of this machine declares it with `machine admin allow <machine> ... --stdin text|json --stdin-chars <families> -- <command>`; the families are listed by `machine admin allow --help`)',
+    };
+  }
+  const checked = checkInputPayload(payload, entry.input);
+  return checked.ok ? undefined : { reason: checked.reason, message: checked.message, detail: checked.message };
+}
 
 export interface UsageStore {
   count(key: string): number;
@@ -484,14 +512,16 @@ class PeerService {
    * request once an entry signed under hard rule 4 matches, or the final refusal. The caller sends nothing meanwhile: the pending read of
    * the session tells a disconnect, and is handed back to the serve loop afterwards.
    */
-  private async hold(session: PeerSession, carrier: Carrier, request: { id: string; shell: string; command: string; ask?: CallerAsk }, waitSeconds: number, holds: HoldDeps, check: () => Step, first: Extract<Step, { ok: false }>): Promise<HoldOutcome> {
+  private async hold(session: PeerSession, carrier: Carrier, request: { id: string; shell: string; command: string; ask?: CallerAsk; input?: Uint8Array }, waitSeconds: number, holds: HoldDeps, check: () => Step, first: Extract<Step, { ok: false }>): Promise<HoldOutcome> {
     const { deps } = this;
     const { table } = holds;
     const { id, shell, command, ask } = request;
     const { renewal } = first;
-    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS, ...(renewal !== undefined ? { renewal } : {}), ...(ask !== undefined ? { ask } : {}) });
+    // What the audit log and the notices may say of the payload: its size and hash (R4). The bytes live in the hold table and nowhere else.
+    const inputLog: Record<string, Json> = request.input !== undefined ? { input: { ...inputDigest(request.input) } } : {};
+    const admitted = table.admit({ id, peer: session.peerId, shell, command, now: deps.now(), requestedSeconds: waitSeconds, capSeconds: holds.capSeconds ?? DEFAULT_TARGET_WAIT_CAP_SECONDS, ...(renewal !== undefined ? { renewal } : {}), ...(ask !== undefined ? { ask } : {}), ...(request.input !== undefined ? { input: request.input } : {}) });
     if (!admitted.ok) {
-      return { kind: 'answer', answer: this.refuse(session, id, admitted.reason, admitted.message, { shell, command }) };
+      return { kind: 'answer', answer: this.refuse(session, id, admitted.reason, admitted.message, { shell, command, ...inputLog }) };
     }
     const { hold } = admitted;
     if (!this.startMarked) {
@@ -501,7 +531,7 @@ class PeerService {
     const info: HeldInfo = { waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped };
     // No audit, no hold: `machine requests` lists the waiting requests from this entry.
     try {
-      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped, ...(renewal !== undefined ? { renewal: renewal as unknown as Json } : {}), ...(ask !== undefined ? { ask: ask as unknown as Json } : {}) });
+      this.recordStrict({ event: 'held', source: session.peerId, id, shell, command, deadline: hold.deadline, waitSeconds: hold.waitSeconds, requestedSeconds: hold.requestedSeconds, capped: hold.capped, ...(renewal !== undefined ? { renewal: renewal as unknown as Json } : {}), ...(ask !== undefined ? { ask: ask as unknown as Json } : {}), ...inputLog });
     } catch (e) {
       table.end(id);
       this.problem(`cannot write the audit log (${(e as Error).message}): requests are not held until it works again`);
@@ -522,14 +552,14 @@ class PeerService {
     const finish = (outcome: string, extra: Record<string, Json> = {}, announced = true): void => {
       table.end(id);
       this.holdChanged(holds);
-      this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...extra });
+      this.recordQuiet({ event: 'hold-ended', source: session.peerId, id, shell, command, outcome, ...inputLog, ...extra });
       if (announced) {
         announce(outcome as NoticeOutcome);
       }
     };
     const refusal = (reason: string, text: string, allowedShells?: string[], detail: Record<string, Json> = {}): HoldOutcome => ({
       kind: 'answer',
-      answer: { ...this.refuse(session, id, reason, text, { shell, command, ...detail }, allowedShells), held: info } as PeerAnswer,
+      answer: { ...this.refuse(session, id, reason, text, { shell, command, ...inputLog, ...detail }, allowedShells), held: info } as PeerAnswer,
     });
 
     let watch: Promise<Watched> = Promise.resolve({ kind: 'closed', error: new Error('unused') });
@@ -904,6 +934,30 @@ class PeerService {
       waitSeconds = rawWait;
     }
 
+    // The payload (decision 114): the SIGNED body carries its size and SHA-256, the frame carries the bytes (base64). They must agree BEFORE anything else looks at
+    // the payload, so that what is held, checked and written to the command is exactly what the caller signed for (R3).
+    const rawInput = (message as { input?: unknown }).input;
+    const signedInput = body.input;
+    const inputLog: Record<string, Json> = signedInput !== undefined ? { input: { bytes: signedInput.bytes, sha256: signedInput.sha256 } } : {};
+    let payload: Uint8Array | undefined;
+    if (rawInput !== undefined || signedInput !== undefined) {
+      const mismatch = (why: string): PeerAnswer => this.refuse(session, body.id, 'input-format', why, { shell: body.shell, command: body.command, ...inputLog });
+      if (signedInput === undefined) {
+        return mismatch('the request carries an input that its signed body does not declare: the input is refused (update the caller: `machine cli update`)');
+      }
+      if (rawInput === undefined) {
+        return mismatch(`the signed request declares an input of ${signedInput.bytes} bytes but carries none: nothing was run`);
+      }
+      payload = typeof rawInput === 'string' && rawInput.length === 4 * Math.ceil(signedInput.bytes / 3) ? decodeInputFrame(rawInput) : undefined;
+      if (payload === undefined) {
+        return mismatch('the input of the request is not the base64 text of the bytes it declares: nothing was run');
+      }
+      const seen = inputDigest(payload);
+      if (seen.bytes !== signedInput.bytes || seen.sha256 !== signedInput.sha256) {
+        return mismatch('the input does not match the size and hash in the signed request: it was altered or swapped after signing; nothing was run');
+      }
+    }
+
     const platform = deps.platform ?? (process.platform === 'win32' ? 'windows' : 'posix');
     // The shell and the command are recorded (they passed verifyRequest: known shell, 1 to 2048 printable ASCII): `machine requests` lists them.
     // The same check runs again after a hold: an Allow is only a new policy, never a decision of this function.
@@ -911,14 +965,19 @@ class PeerService {
       const policy = deps.policy();
       const policyMode = deps.policyMode?.() ?? 'admin';
       if (!policy) {
-        return { ok: false, reason: 'no-policy', message: noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), logged: { shell: body.shell, command: body.command } };
+        return { ok: false, reason: 'no-policy', message: noPolicyMessage(policyMode === 'local' ? 'local' : 'admin', deps.self.name), logged: { shell: body.shell, command: body.command, ...inputLog } };
       }
       const result = authorize(policy, body.source, { shell: body.shell, command: body.command }, deps.now(), (key) => deps.usage.count(key), policyMode, deps.self.name, platform);
       if (result.allowed) {
+        // The entry that matched decides what the payload may be: refused here, before the call is counted or audited as accepted, and again after a hold.
+        const refusedInput = inputRefusal(result.entry, payload);
+        if (refusedInput !== undefined) {
+          return { ok: false, reason: refusedInput.reason, message: refusedInput.message, logged: { shell: body.shell, command: body.command, ...inputLog, ...(refusedInput.detail !== undefined ? { detail: refusedInput.detail } : {}) } };
+        }
         return { ok: true, decision: result };
       }
       // `detail` (the closest typed entry, the token and the rule that failed) goes to the LOCAL audit log only, never to the caller.
-      const logged: Record<string, Json> = { shell: body.shell, command: body.command };
+      const logged: Record<string, Json> = { shell: body.shell, command: body.command, ...inputLog };
       if (result.detail !== undefined) {
         logged.detail = result.detail;
       }
@@ -936,7 +995,7 @@ class PeerService {
     let announce: Announce | undefined;
     // The same command is allowed under another shell: the caller used the wrong one, and no Allow of this one is expected: not held.
     if (!step.ok && waitSeconds !== undefined && deps.holds !== undefined && HOLDABLE_REASONS.includes(step.reason) && (step.allowedShells === undefined || step.allowedShells.length === 0)) {
-      const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command, ...(body.ask !== undefined ? { ask: body.ask } : {}) }, waitSeconds, deps.holds, check, step);
+      const outcome = await this.hold(session, carrier, { id: body.id, shell: body.shell, command: body.command, ...(body.ask !== undefined ? { ask: body.ask } : {}), ...(payload !== undefined ? { input: payload } : {}) }, waitSeconds, deps.holds, check, step);
       if (outcome.kind === 'dropped') {
         return undefined;
       }
@@ -975,7 +1034,7 @@ class PeerService {
     // No audit, no execution: the acceptance is recorded BEFORE the command can run.
     try {
       // A typed entry that matched is named (its template as signed), so the log says which rule let this command through.
-      this.recordStrict({ event: 'accepted', source: session.peerId, id: body.id, shell: body.shell, command: body.command, ...(decision.template !== undefined ? { template: decision.template } : {}) });
+      this.recordStrict({ event: 'accepted', source: session.peerId, id: body.id, shell: body.shell, command: body.command, ...(decision.template !== undefined ? { template: decision.template } : {}), ...inputLog });
     } catch (e) {
       this.problem(`cannot write the audit log (${(e as Error).message}): commands are refused until it works again`);
       return refusedAfterAllow(this.refuse(session, body.id, 'audit-unavailable', `this machine cannot write its audit log (${(e as Error).message}); nothing was run. Fix the disk or permissions of the machine's audit log`));
@@ -995,6 +1054,8 @@ class PeerService {
       result = await (deps.run ?? runCommand)({
         shell: body.shell,
         command: body.command,
+        // Only an entry that declares an input gets a pipe (R2): its payload, or an empty stream when the caller sent none.
+        ...(decision.entry.input !== undefined ? { stdin: payload ?? new Uint8Array(0) } : {}),
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: deps.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
         // The shell process exists: the held command was really released.
@@ -1058,6 +1119,8 @@ export interface RunOnPeerInput {
   timeoutMs?: number;
   /** Ask the target to HOLD the request up to this many seconds when it is not allowed yet (`--wait`). The target may cap it. */
   waitSeconds?: number;
+  /** The payload for the stdin of the command (stdin-input.md): its size and SHA-256 go in the signed body, its bytes in the frame (base64). */
+  input?: Uint8Array;
   /** While a wait is pending: called every `everyMs` with the seconds left of the wait asked for. */
   progress?: { everyMs: number; onTick: (secondsLeft: number) => void };
   /** Called once when no answer came within `afterMs`: the request is held, or the command is slow. A quick answer never calls it. */
@@ -1066,9 +1129,12 @@ export interface RunOnPeerInput {
 
 /** Ask a connected peer to run one command and return its answer, which may be a refusal with its cause. */
 export async function runOnPeer(session: PeerSession, input: RunOnPeerInput): Promise<PeerAnswer> {
+  if (input.input !== undefined && input.input.length > INPUT_MAX_BYTES_CEILING) {
+    throw new Error(`the input is ${input.input.length} bytes: the protocol carries at most ${INPUT_MAX_BYTES_CEILING / 1024} KiB (${INPUT_MAX_BYTES_CEILING} bytes) on stdin; send less, nothing was sent`);
+  }
   const timeoutMs = input.timeoutMs ?? holdAnswerTimeoutMs(input.waitSeconds ?? 0, DEFAULT_TIMEOUT_MS);
-  const body = newRequest({ source: input.source, target: input.target, shell: input.shell, command: input.command, now: input.now, ...(input.ask !== undefined ? { ask: input.ask } : {}) });
-  session.send({ type: 'run', request: signRequest(body, input.identity.privateKeyPkcs8), ...(input.waitSeconds !== undefined ? { waitSeconds: input.waitSeconds } : {}) });
+  const body = newRequest({ source: input.source, target: input.target, shell: input.shell, command: input.command, now: input.now, ...(input.ask !== undefined ? { ask: input.ask } : {}), ...(input.input !== undefined ? { input: inputDigest(input.input) } : {}) });
+  session.send({ type: 'run', request: signRequest(body, input.identity.privateKeyPkcs8), ...(input.waitSeconds !== undefined ? { waitSeconds: input.waitSeconds } : {}), ...(input.input !== undefined ? { input: Buffer.from(input.input).toString('base64') } : {}) });
   const startedAt = Date.now();
   let ticker: NodeJS.Timeout | undefined;
   if (input.waitSeconds !== undefined && input.progress !== undefined) {

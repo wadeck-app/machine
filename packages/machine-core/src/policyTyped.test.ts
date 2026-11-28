@@ -44,7 +44,7 @@ describe('policy body v2: the format', () => {
   });
 
   it('an unknown version is refused with the same fix', () => {
-    expect(() => assertPolicyBody(body([], { v: 3 as never }))).toThrow(/unsupported version 3.*machine cli update/);
+    expect(() => assertPolicyBody(body([], { v: 4 as never }))).toThrow(/unsupported version 4.*machine cli update/);
   });
 
   it('refuses a malformed template at load, naming the list and the cause', () => {

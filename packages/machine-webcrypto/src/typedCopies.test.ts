@@ -14,7 +14,7 @@ import { classifyReadOnly as coreReadOnly, checkValue as coreCheck, matchTemplat
 const here = dirname(fileURLToPath(import.meta.url));
 const core = join(here, '..', '..', 'machine-core', 'src');
 const normalize = (text: string): string => text.replace(/\r\n/g, '\n');
-const FILES = ['typedParams.ts', 'template.ts', 'lifetime.ts', 'readOnly.ts'];
+const FILES = ['typedParams.ts', 'template.ts', 'lifetime.ts', 'readOnly.ts', 'inputDeclaration.ts'];
 
 describe('the typed-parameter modules are byte for byte the ones of machine-core', () => {
   it.each(FILES)('%s', (file) => {

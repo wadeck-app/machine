@@ -18,6 +18,7 @@ import { runRequests } from './cliRequests.js';
 import { logOnlyFlagProblem, runActivityLog } from './cliActivity.js'; // run-log
 import { runActivityFollow } from './cliFollow.js'; // run-log
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
+import { failureDocument } from '@wadeck-app/machine-core';
 import { aliasListText, conflictWarning } from './aliasView.js';
 import { makeCommands, type AliasAnswer, type AliasOverviewAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { DEFAULT_PEER_HOST, startMachineDaemon } from './daemonEntry.js';
@@ -97,7 +98,7 @@ Commands:
                                      left on this machine; version, when it was signed here) and a line saying the installed list is asked there with
                                      \`machine policy allow --list\`; for this machine the installed policy and its mode. Read-only, no passphrase
   alias list | set <alias> <ref> | rm <alias>
-  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] [--times <n> | --for <duration>|permanent] [--why <text>] -- <command...>
+  run <machine> [--address <host:port>] [--wake | --no-wake] [--shell cmd|ps|bash|sh] [--stdin <file|->] [--no-wait | --wait <10s..60m> | --on-refusal wait|fail] [--times <n> | --for <duration>|permanent] [--why <text>] -- <command...>
                                      run one allowed command on a peer. Without --address the addresses come from
                                      the relay (the signed address record of the peer, verified against its
                                      registration), tried in order with 3 s each; --address overrides it and is the
@@ -115,6 +116,10 @@ Commands:
                                      (--no-wait with --wait) is refused. Precedence: these flags, the machine setting
                                      (\`machine run-defaults\`), the built-in default (wait 10m). Scripts that relied on an immediate
                                      refusal must pass --no-wait
+                                     --stdin <file|-> sends that file (or the standard input of this command, '-') to the STDIN of the command, at most 512 KiB: it is data, never
+                                     part of the command line, the environment or a log (the audit log keeps its size and SHA-256). The target accepts it only when the
+                                     allow entry declares it (admin allow --stdin text|json --stdin-chars <families>), else it is refused (refused:input-not-allowed).
+                                     A target older than this feature refuses it (target-too-old, nothing runs). Works with --json, --no-wait, --no-wake and --shell
                                      --times <n> (1 to 10000), --for <duration>|permanent (30m, 2h, 7d, at most 365d; never with --times) and --why <text> (printable
                                      ASCII, 200 characters) tell the OWNER of a held request what you would like: they pre-fill its Allow and are shown as
                                      YOUR request, flagged when permanent or large; the owner always edits and signs, nothing is applied by itself. They
@@ -274,7 +279,7 @@ Administration (enrollment through the relay, or by files):
                                      stolen machine could allow offline guessing, an encrypted copy of the key is on every
                                      machine). --generate, or an empty answer, makes a random one (100 bits, shown once). An optional hint
                                      (Enter = none, or --hint) is shown above every passphrase prompt on every machine
-  admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] -- <command...>
+  admin allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--stdin text|json --stdin-chars <families> [--stdin-max <n>k]] [--out <file>] -- <command...>
                                      allow ONE command on a machine (for every trusted peer): builds the next policy
                                      version from the last one signed here, shows the difference, asks y/N and the admin
                                      passphrase, signs, and sends it through the relay inbox (or installs it here when the
@@ -291,7 +296,13 @@ Administration (enrollment through the relay, or by files):
                                      2027-02-01T18:00Z; at most 365 days away). Allowing an entry again with other limits
                                      replaces them ("limits updated"); --renew replaces an entry that is used up or expired even with the SAME limits and
                                      starts its counter again (the generation is signed: a version 2 policy). A typed entry on a program that cannot be made safe
-                                     (sudo, git -c, orch add, ...) is signed with a loud [warn], never refused. A policy with
+                                     (sudo, git -c, orch add, ...) is signed with a loud [warn], never refused. An INPUT on stdin (decision 114): --stdin text|json declares that the command may receive a
+                                     payload (data on its stdin, never on its command line), --stdin-max <n>k its size (default 64k, at most 512k) and --stdin-chars the
+                                     characters it may contain, a mandatory whitelist: letters digits space punct, the explicit characters slash backslash dquote squote
+                                     backquote semicolon ampersand pipe dollar lt gt at hash percent star plus equal tilde caret brace-open brace-close bracket-open
+                                     bracket-close, json (the structure characters, implied by --stdin json, the payload must parse as strict JSON), and utf8-text (ANY
+                                     text: accents, punctuation, quotes, spaces, line feeds; stands alone). NUL, other control characters except the line feed and bidi
+                                     controls are always refused. The policy is then version 3. A policy with
                                      a typed entry is version 2: a target that is not up to date refuses it (machine cli
                                      update there). --remove withdraws an entry by its text (--shell narrows it) or by
                                      --index <n>, the number \`machine allowed\` shows; several matches are listed, nothing is
@@ -402,8 +413,10 @@ Everything after "--" in \`run\` is the command, sent exactly as written.
 Exit codes: 0 ok, 1 failure (relay failures included, reason on stderr), 2 usage error, 3 unknown or ambiguous machine reference.
 \`run\` returns the exit code of the remote command; its own failures (refused by the peer, unknown machine,
 no connection) are 255 with the reason on stderr.
-\`run --json\` prints the peer's answer: type "result", id, exitCode (number, null when timed out or cut), stdout, stderr,
-timedOut, truncated, outputNotUtf8, decodedFrom (only when converted from a code page), durationMs (shape pinned by a test).
+\`run --json\` prints exactly ONE document for every outcome (exit codes unchanged). A command that ran: type "result", code, message, id, exitCode (RAW, null when
+timed out or cut), stdout, stderr, timedOut, truncated, outputNotUtf8, decodedFrom (only when converted from a code page), durationMs. A refusal or a failure of machine:
+type "refused" or "error", code, message, exitCode null, empty output. Stable codes: ok, refused:not-allowed, refused:input-not-allowed, refused:input-too-large,
+refused:input-chars, refused:input-format, refused:other, unreachable, timeout, denied, target-too-old, unknown-machine, usage, failed (shape pinned by tests).
 `;
 
 /** The revoked machines of `machine status`, apart from the peers: not trusted here, each with the uuid that names it for `forget-relay-record`. */
@@ -489,6 +502,9 @@ function parse(argv: string[]): Parsed {
     else if (a === '--hint') out.hint = valueOf('--hint');
     else if (a === '--peer') out.peer = valueOf('--peer');
     else if (a === '--why') out.why = valueOf('--why');
+    else if (a === '--stdin') out.stdin = valueOf('--stdin');
+    else if (a === '--stdin-max') out.stdinMax = valueOf('--stdin-max');
+    else if (a === '--stdin-chars') out.stdinChars = valueOf('--stdin-chars');
     else if (a === '--times' || a === '--for' || a === '--until' || a === '--index') {
       // The lifetime of an allowed entry and the number of --remove --index: the value is validated by the command that uses it.
       out[a.slice(2) as 'times' | 'for' | 'until' | 'index'] = valueOf(a);
@@ -567,6 +583,11 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   try {
     args = parse(argv);
   } catch (e) {
+    // `machine run ... --json` prints one document for EVERY outcome, a command line that does not parse included (decision 114, D5).
+    const own = argv.indexOf('--') === -1 ? argv : argv.slice(0, argv.indexOf('--'));
+    if (own[0] === 'run' && own.includes('--json')) {
+      io.stdout(`${JSON.stringify(failureDocument('usage', (e as Error).message), null, 2)}\n`);
+    }
     io.stderr(`[fail] ${(e as Error).message}\n`);
     return EXIT.usage;
   }
@@ -591,10 +612,12 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     return EXIT.usage;
   }
 
-  const fail = (message: string, code: number = EXIT.failure): number => {
+  const failPlain = (message: string, code: number = EXIT.failure): number => {
     io.stderr(`[fail] ${message}\n`);
     return code;
   };
+  // `machine run --json`: the refusals of the command line itself (before anything is sent) are a document too; the run prints its own from there on (cliNetwork).
+  const fail = command === 'run' && args.json ? (message: string, code: number = EXIT.failure): number => (io.stdout(`${JSON.stringify(failureDocument(code === EXIT.usage ? 'usage' : 'failed', message), null, 2)}\n`), failPlain(message, code)) : failPlain;
   const emit = (value: unknown, text: string): void => io.stdout(args.json ? `${JSON.stringify(value, null, 2)}\n` : text);
 
   // Commands that take no positional argument refuse one instead of silently ignoring a typo.
@@ -622,6 +645,16 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
   const runAsk = command === 'run' && args.until === undefined;
   if (lifetimeFlag !== undefined && !adminAllow && !policyAllow && !runAsk) {
     return fail(`${lifetimeFlag[0]} only applies to \`machine admin allow\` and \`machine policy allow\` (the lifetime of an allowed entry: permanent by default, --times N, --for <duration> or --until <date>) and to \`machine run\` (what you ask its owner for: --times, --for, --why; the owner decides)`, EXIT.usage);
+  }
+  const allowCommand = adminAllow || policyAllow;
+  if (args.stdin !== undefined && command !== 'run' && !allowCommand) {
+    return fail('--stdin only applies to `machine run` (--stdin <file|->: the payload for the stdin of the command) and to `machine admin allow` / `machine policy allow` (--stdin text|json: the input the entry accepts)', EXIT.usage);
+  }
+  if ((args.stdinMax !== undefined || args.stdinChars !== undefined) && !(allowCommand && args.stdin !== undefined)) {
+    return fail('--stdin-max and --stdin-chars declare the input of an entry: they only apply to `machine admin allow` and `machine policy allow` together with --stdin text|json (for example `machine admin allow <machine> --stdin json --stdin-chars letters+digits+space -- <command>`)', EXIT.usage);
+  }
+  if (allowCommand && args.stdin !== undefined && (args.list || args.remove)) {
+    return fail('--stdin declares the input of an entry you allow: it cannot be combined with --list or --remove', EXIT.usage);
   }
   if (args.why !== undefined && command !== 'run') {
     return fail('--why only applies to `machine run` (the reason you give the owner of the target when your command is held: `machine run <machine> --why "rerun after the fix" -- <command>`)', EXIT.usage);
@@ -749,7 +782,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
 
   try {
     const configDir = resolveConfigDir(args.configDir, env);
-    const ctx: CommandContext = { args, rest, io, configDir, env, fail, emit };
+    const ctx: CommandContext = { args, rest, io, configDir, env, fail: failPlain, emit };
 
     // The result of a background update, once, on stderr. Not for `daemon` (it reads the state for its update-loop guard) nor `cli` (the updater and post-update).
     if (command !== 'daemon' && command !== 'cli') printUpdateNotice(configDir, io.cliMeta?.version ?? appVersion(), io.stderr);

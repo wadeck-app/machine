@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Json } from './canonical.js';
 import { NOT_YET_VALID_LEEWAY_SECONDS, TIME_SYNC_FIX, formatDuration } from './clockSkew.js';
+import { InputDeclarationError, assertInputDeclaration, type InputDeclaration } from './inputDeclaration.js';
 import { INVALID_ADMIN_KEY_MESSAGE, tryKeyId } from './keys.js';
 import { signDocument, verifyDocument } from './signed.js';
 import { canonicalEntry, looksLikePlaceholder, matchTemplate, parseTemplate, type Template } from './template.js';
@@ -43,6 +44,8 @@ export interface ExactEntry {
   command: string;
   template?: never;
   limits?: Limits;
+  /** The payload this command accepts on stdin (policy version 3, stdin-input.md). Absent: no input is accepted, stdin is closed as before. */
+  input?: InputDeclaration;
 }
 
 /** A typed entry (policy version 2): fixed words and `<label:type>` placeholders, see typed-parameters.md. */
@@ -51,6 +54,7 @@ export interface TypedEntry {
   template: string;
   command?: never;
   limits?: Limits;
+  input?: InputDeclaration;
 }
 
 export type PolicyEntry = ExactEntry | TypedEntry;
@@ -61,12 +65,23 @@ export const isTyped = (entry: PolicyEntry): entry is TypedEntry => entry.templa
 /** True when a list holds a typed entry (such a policy needs body version 2). */
 export const hasTypedEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some(isTyped));
 
-/** The highest policy body version this build reads. Exact-only policies stay at version 1 so that older targets keep reading them. */
-export const POLICY_MAX_VERSION = 2;
+/** True when a list holds an entry that declares an input (such a policy needs body version 3). */
+export const hasInputEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some((e) => e.input !== undefined));
+/** True when a list holds a renewed entry (limits.renewals: body version 2). */
+const hasRenewedEntry = (lists: PolicyEntry[][]): boolean => lists.some((list) => list.some((e) => e.limits?.renewals !== undefined));
+
+/** The lowest body version that can hold these lists: 1 exact entries only, 2 a typed entry or a renewal, 3 an input declaration. Older targets keep reading what they can. */
+export function policyBodyVersion(lists: PolicyEntry[][]): 1 | 2 | 3 {
+  if (hasInputEntry(lists)) return 3;
+  return hasTypedEntry(lists) || hasRenewedEntry(lists) ? 2 : 1;
+}
+
+/** The highest policy body version this build reads. */
+export const POLICY_MAX_VERSION = 3;
 export const UPDATE_HINT = 'run `machine cli update` on this machine';
 
 export interface PolicyBody {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   /** UUID of the ONE machine this policy is written for. */
   target: string;
   version: number;
@@ -125,7 +140,7 @@ function assertEntries(list: unknown, where: string, version: number): asserts l
     const entry = raw as Record<string, unknown>;
     if (typeof entry !== 'object' || entry === null) throw new Error(`policy: every entry of ${where} must be an object`);
     for (const key of Object.keys(entry)) {
-      if (!['shell', 'command', 'template', 'limits'].includes(key)) {
+      if (!['shell', 'command', 'template', 'limits', 'input'].includes(key)) {
         throw new Error(`policy: unknown field "${key}" in an entry of ${where}`);
       }
     }
@@ -162,6 +177,18 @@ function assertEntries(list: unknown, where: string, version: number): asserts l
       }
       canonical = canonicalEntry(entry.shell as Shell, { kind: 'exact', command: entry.command });
       shown = entry.command;
+    }
+    if ('input' in entry) {
+      if (entry.input === undefined) throw new Error(`policy: input of an entry of ${where} must be omitted, not undefined`);
+      if (version < 3) {
+        throw new Error(`policy: ${where} holds an input declaration but the body is version ${version}: input needs version 3 (${UPDATE_HINT} on the target)`);
+      }
+      try {
+        assertInputDeclaration(entry.input, where);
+      } catch (e) {
+        if (e instanceof InputDeclarationError) throw new Error(e.message);
+        throw e;
+      }
     }
     if ('limits' in entry && entry.limits === undefined) throw new Error(`policy: limits of an entry of ${where} must be omitted, not undefined`);
     if (entry.limits !== undefined) {
@@ -211,7 +238,7 @@ export function assertPolicyBody(value: unknown, options: PolicyReadOptions = {}
   for (const key of fields) {
     if (!(key in r)) throw new Error(`policy: missing field "${key}"`);
   }
-  if (r.v !== 1 && r.v !== 2) {
+  if (r.v !== 1 && r.v !== 2 && r.v !== 3) {
     throw new Error(`policy: unsupported version ${String(r.v)} (this build reads versions 1 to ${readsUpTo}): ${UPDATE_HINT}`);
   }
   if (r.v > readsUpTo) {

@@ -41,6 +41,8 @@ const shapeOf = (value: object): Record<string, string> => {
 };
 
 const BASE_SHAPE = {
+  code: 'string',
+  message: 'string',
   durationMs: 'number',
   exitCode: 'number',
   id: 'string',
@@ -90,10 +92,10 @@ const runJson = async (command: string[]): Promise<Record<string, unknown>> => {
 };
 
 describe('machine run --json: the full shape of the document', () => {
-  it('success: exactly the nine documented keys, with their types, and no decodedFrom', async () => {
+  it('success: exactly the eleven documented keys, with their types, and no decodedFrom', async () => {
     const doc = await runJson(['echo', 'listed']);
     expect(shapeOf(doc)).toEqual(BASE_SHAPE);
-    expect(doc).toMatchObject({ type: 'result', exitCode: 0, timedOut: false, truncated: false, outputNotUtf8: false });
+    expect(doc).toMatchObject({ type: 'result', code: 'ok', exitCode: 0, timedOut: false, truncated: false, outputNotUtf8: false });
     expect(doc.stdout).toContain('listed');
     expect(doc.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.durationMs as number).toBeGreaterThanOrEqual(0);
@@ -108,7 +110,7 @@ describe('machine run --json: the full shape of the document', () => {
   it('timeout: timedOut true and exitCode null (the only change of type), the other keys unchanged', async () => {
     const doc = await runJson(['echo', 'case-timeout']);
     expect(shapeOf(doc)).toEqual({ ...BASE_SHAPE, exitCode: 'null' });
-    expect(doc).toMatchObject({ type: 'result', exitCode: null, timedOut: true, truncated: false, stdout: 'partial' });
+    expect(doc).toMatchObject({ type: 'result', code: 'timeout', exitCode: null, timedOut: true, truncated: false, stdout: 'partial' });
   });
 
   it('truncated output: truncated true and exitCode null, the other keys unchanged', async () => {
@@ -117,7 +119,7 @@ describe('machine run --json: the full shape of the document', () => {
     expect(doc).toMatchObject({ type: 'result', exitCode: null, timedOut: false, truncated: true });
   });
 
-  it('output converted from a code page: decodedFrom (a string) is the tenth and only optional key', async () => {
+  it('output converted from a code page: decodedFrom (a string) is the twelfth and only optional key', async () => {
     const doc = await runJson(['echo', 'case-codepage']);
     expect(shapeOf(doc)).toEqual({ ...BASE_SHAPE, decodedFrom: 'string' });
     expect(doc).toMatchObject({ outputNotUtf8: true, decodedFrom: 'cp850' });

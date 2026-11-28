@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { decodeBase64urlStrict, verifyBytes } from './keys.js';
 import { signingInput } from './canonical.js';
 import { parseCallerAsk, type CallerAsk } from './callerAsk.js';
+import { INPUT_MAX_BYTES_CEILING } from './inputDeclaration.js';
 import { SHELLS, commandTextProblem, type Shell } from './policy.js';
 import { isUuid } from './reference.js';
 import { signDocument } from './signed.js';
@@ -30,6 +31,11 @@ export interface RequestBody {
    * An older target refuses the shape as malformed: nothing runs (fail closed). It only pre-fills the owner's Allow, it grants nothing.
    */
   ask?: CallerAsk;
+  /**
+   * The payload sent on stdin (stdin-input.md, decision 114): its size and SHA-256, inside the signed body (R3). Present only when a payload travels (a tenth or
+   * eleventh key); an older target refuses the shape as malformed, so it never ignores an input (fail closed). The payload itself is NOT signed: its hash is.
+   */
+  input?: { bytes: number; sha256: string };
 }
 
 export interface SignedRequest {
@@ -37,7 +43,7 @@ export interface SignedRequest {
   signature: string;
 }
 
-export function newRequest(input: { source: string; target: string; shell: Shell; command: string; now: number; lifetimeSeconds?: number; ask?: CallerAsk }): RequestBody {
+export function newRequest(input: { source: string; target: string; shell: Shell; command: string; now: number; lifetimeSeconds?: number; ask?: CallerAsk; input?: { bytes: number; sha256: string } }): RequestBody {
   return {
     v: 1,
     id: randomUUID(),
@@ -49,6 +55,7 @@ export function newRequest(input: { source: string; target: string; shell: Shell
     issuedAt: input.now,
     expiresAt: input.now + (input.lifetimeSeconds ?? DEFAULT_REQUEST_LIFETIME_SECONDS),
     ...(input.ask !== undefined ? { ask: input.ask } : {}),
+    ...(input.input !== undefined ? { input: { bytes: input.input.bytes, sha256: input.input.sha256 } } : {}),
   };
 }
 
@@ -88,11 +95,20 @@ function wellFormed(signed: unknown): signed is SignedRequest {
   if (typeof b.shell !== 'string' || !(SHELLS as readonly string[]).includes(b.shell)) return false;
   if (typeof b.command !== 'string' || commandTextProblem(b.command) !== undefined) return false;
   if (!Number.isSafeInteger(b.issuedAt) || !Number.isSafeInteger(b.expiresAt) || (b.expiresAt as number) <= (b.issuedAt as number)) return false;
-  // The ask is a tenth key, only when the caller asked something; its content is checked after the signature (a refusal with the fix, not a generic malformed).
+  // The ask and the input are optional keys (9 to 11 in all); the content of the ask is checked after the signature (a refusal with the fix, not a generic malformed).
+  let keys = 9;
   if ('ask' in b) {
-    return Object.keys(b).length === 10 && typeof b.ask === 'object' && b.ask !== null && !Array.isArray(b.ask);
+    if (typeof b.ask !== 'object' || b.ask === null || Array.isArray(b.ask)) return false;
+    keys += 1;
   }
-  return Object.keys(b).length === 9;
+  if ('input' in b) {
+    const i = b.input as Record<string, unknown> | null;
+    if (typeof i !== 'object' || i === null || Array.isArray(i) || Object.keys(i).length !== 2) return false;
+    if (!Number.isSafeInteger(i.bytes) || (i.bytes as number) < 0 || (i.bytes as number) > INPUT_MAX_BYTES_CEILING) return false;
+    if (typeof i.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(i.sha256)) return false;
+    keys += 1;
+  }
+  return Object.keys(b).length === keys;
 }
 
 export function verifyRequest(signed: unknown, ctx: VerifyRequestContext): RequestResult {

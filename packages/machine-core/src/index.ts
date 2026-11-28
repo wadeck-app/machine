@@ -47,6 +47,8 @@ export {
   entryMatches,
   entryText,
   hasTypedEntry,
+  hasInputEntry,
+  policyBodyVersion,
   isTyped,
   renewalNote,
   POLICY_MAX_VERSION,
@@ -448,3 +450,22 @@ export {
 export { IDLE_DEFAULT_MINUTES, IDLE_GAP_SECONDS, IDLE_MAX_MINUTES, IDLE_MIN_MINUTES, IDLE_RDP_DEFAULT_MINUTES, IDLE_RESUME_CAUSE, IDLE_RESUME_COUNTER_FILE, IDLE_RESUME_FILE, IDLE_SSH_DEFAULT_MINUTES, IDLE_WAKE_GRACE_DEFAULT_MINUTES, IDLE_WAKE_GRACE_MAX_MINUTES, IDLE_WAKE_GRACE_MIN_MINUTES, idleCadenceSeconds, idleCadenceText, idleGapSeconds, idleResume, idleSuspendDelaySeconds, idleSuspendDelayText, idleSuspendInstalledCadenceSeconds, idleSuspendInstalledWakeGraceMinutes, idleSuspendServiceUnit, idleSuspendTimerUnit, parseIdleWakeGraceMinutes, type IdleCadenceSeconds, type IdleResumeFacts, type IdleResumeRecord, IDLE_SSH_NOTTY_BYTES_PER_SECOND, IDLE_SSH_RATE_UNKNOWN, IDLE_SSH_SAMPLES_FILE, IDLE_SUSPEND_SCRIPT_PATH, IDLE_SUSPEND_TIMER_PATH, idleDecision, idleSuspendInstalledMinutes, idleSuspendInstalledRdpMinutes, idleSuspendInstalledSshMinutes, idleSuspendScript, parseIdleMinutes, parseIdleRdpMinutes, parseIdleSshMinutes, parseLoadHundredths, type IdleDecision, type IdleFacts, type IdleScriptOptions, type IdleSshConnection } from './idleSuspend.js';
 export { IDLE_DARWIN_LABEL, IDLE_DARWIN_MEASUREMENTS, IDLE_DARWIN_PLIST_PATH, IDLE_DARWIN_UNAVAILABLE, IDLE_DARWIN_VERSION, IdleDarwinNotImplemented, idleDarwinProbe, idleSuspendDarwinPlan, idleSuspendDarwinPlist, idleSuspendDarwinScript, type IdleDarwinOptions, type IdleDarwinProbeId } from './idleSuspendDarwin.js';
 export { idleSuspendSchedulerFor, idleSuspendScriptFor, type IdleSchedulerFile, type IdleSuspendPlatform } from './idleSuspendPlatform.js';
+export {
+  INPUT_CHAR_NAMES,
+  INPUT_DEFAULT_MAX_BYTES,
+  INPUT_FORMATS,
+  INPUT_MAX_BYTES_CEILING,
+  InputDeclarationError,
+  assertInputDeclaration,
+  describeInput,
+  inputEqual,
+  parseInputChars,
+  parseInputDeclaration,
+  parseInputSize,
+  type InputCharName,
+  type InputDeclaration,
+  type InputFlags,
+  type InputFormat,
+} from './inputDeclaration.js';
+export { INPUT_DISPLAY_BYTES, INPUT_MAX_JSON_DEPTH, checkInputPayload, displayInput, inputDigest, suggestInput, type DisplayedInput, type InputCheck, type InputRefusal } from './stdinInput.js';
+export { RUN_CODES, classifyRunFailure, failureDocument, refusalDocument, resultDocument, type ErrorDocument, type RefusalDocument, type RefusedAnswer, type ResultAnswer, type ResultDocument, type RunCode, type RunDocument } from './runOutcome.js';

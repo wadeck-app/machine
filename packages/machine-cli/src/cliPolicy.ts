@@ -1,4 +1,5 @@
-import { SHELLS, type Shell } from '@wadeck-app/machine-core';
+import { InputDeclarationError, SHELLS, type Shell } from '@wadeck-app/machine-core';
+import { inputOf } from './allowText.js';
 import type { Prompt } from './admin.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { NotInitializedError } from './errors.js';
@@ -86,6 +87,13 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
       }
     }
     const mode = args.list ? 'list' : args.remove ? 'remove' : 'allow';
+    let declared: ReturnType<typeof inputOf>;
+    try {
+      declared = inputOf(args);
+    } catch (e) {
+      if (e instanceof InputDeclarationError) return fail(`${e.message}. Nothing was signed`, EXIT.usage);
+      throw e;
+    }
     const r = await runLocalAllow(configDir, {
       ...local,
       mode,
@@ -93,6 +101,7 @@ export async function runPolicyModeCommand(ctx: CommandContext, io: { prompt: Pr
       ...(index !== undefined ? { index } : {}),
       ...(mode === 'allow' ? { lifetime: { ...(args.times !== undefined ? { times: args.times } : {}), ...(args.for !== undefined ? { for: args.for } : {}), ...(args.until !== undefined ? { until: args.until } : {}) } } : {}),
       ...(mode === 'allow' && args.renew ? { renew: true } : {}),
+      ...(declared !== undefined ? { input: declared.declaration, inputAdded: declared.added } : {}),
       ...(args.shell !== undefined ? { shell: args.shell as Shell } : {}),
       ...(args.peer !== undefined ? { peer: args.peer } : {}),
       defaultShell: process.platform === 'win32' ? 'cmd' : 'sh',

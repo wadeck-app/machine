@@ -1,5 +1,5 @@
 import { dismissStoredNotices } from './noticesStore.js';
-import { aliasConflicts, isUuid, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
+import { aliasConflicts, displayInput, isUuid, suggestInput, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
@@ -341,6 +341,24 @@ export function makeCommands(configDir: string, version: string | (() => string)
      */
     retryDelivery(payload?: unknown): Promise<RetryDeliveryAnswer> {
       return retryDelivery(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * The payloads of the requests held right now (decision 114, D1), escaped for the owner's screen, with the smallest declaration that covers each. Only the daemon holds them
+     * (memory only): run in-process there is none. Read-only, local, nothing is signed or sent.
+     */
+    heldInputs(): { ok: true; inputs: Record<string, { text: string; cut: boolean; suggestion?: string }> } {
+      const inputs: Record<string, { text: string; cut: boolean; suggestion?: string }> = {};
+      for (const hold of holds?.list() ?? []) {
+        const payload = holds?.inputOf(hold.id);
+        if (payload === undefined) {
+          continue;
+        }
+        const shown = displayInput(payload);
+        const suggested = suggestInput(payload);
+        inputs[hold.id] = { text: shown.text, cut: shown.cut, ...(suggested !== undefined ? { suggestion: `--stdin ${suggested.format} --stdin-chars ${suggested.chars.join('+')}` } : {}) };
+      }
+      return { ok: true, inputs };
     },
 
     /**
