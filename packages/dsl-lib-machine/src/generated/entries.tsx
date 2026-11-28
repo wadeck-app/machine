@@ -1222,13 +1222,14 @@ export const FieldReadOnlyEntry: ComponentRegistryEntry = {
 	nodeSchema: null as never,
 	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['FieldReadOnlyNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
 	render: ({ node, ctx }: RegistryRenderProps) => {
+		const wrap = coerceProp(resolveExpressionValue(node['wrap'], ctx), 'FieldReadOnly.wrap', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['wrap']
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldReadOnly.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldReadOnly.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['description']
 		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldReadOnly.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['helpText']
 		const value = coerceProp(resolveExpressionValue(node['value'], ctx), 'FieldReadOnly.value', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['value']
 		const mono = coerceProp(resolveExpressionValue(node['mono'], ctx), 'FieldReadOnly.mono', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['mono']
 		const copyable = coerceProp(resolveExpressionValue(node['copyable'], ctx), 'FieldReadOnly.copyable', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['copyable']
-		return <FieldReadOnly label={label} description={description} helpText={helpText} value={value} mono={mono} copyable={copyable} />
+		return <FieldReadOnly wrap={wrap} label={label} description={description} helpText={helpText} value={value} mono={mono} copyable={copyable} />
 	},
 }
 
@@ -2321,7 +2322,7 @@ FieldDateRangeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind",
 FieldDateTimeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","datePlaceholder","description","disabled","error","helpText","is12Hour","isDateDisabled","label","maxDate","minDate","minuteStep","onOpenChange","open","required","timePlaceholder"] : [];
 FieldMultiSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","label","maxSelected","name","options","placeholder","required"] : [];
 FieldNumberEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","label","max","min","onUnlimitedChange","required","suffix","unlimited","unlimitedValue"] : [];
-FieldReadOnlyEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["copyable","description","helpText","label","mono","value"] : [];
+FieldReadOnlyEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["copyable","description","helpText","label","mono","value","wrap"] : [];
 FieldReadOnlyEntry.requiresContext = ["ToastContext"];
 FieldSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","hideLabel","label","options","placeholder","required","size"] : [];
 FieldTagsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allowDuplicates","bind","description","disabled","error","helpText","label","maxTags","name","placeholder","required"] : [];
@@ -2398,7 +2399,7 @@ TooltipEntry.allowedChildren = {"items":["atomic","composite"]};
 TooltipEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["align","content","delay","describe","items","maxWidth","rows","side"] : [];
 BulkActionsToolbarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items","onClearSelection","selectedCount"] : [];
 DataTableEntry.allowedChildren = {"filtersTop":["filter"],"filters":["filter"]};
-DataTableEntry.itemKeys = {"columns":{"keys":["field","key","label","width","truncate","nowrap","mono","muted","sortable","format","dateStyle","badge","href","external","title"],"byType":{"actions":{"keys":["type","items","width"],"arrays":{"items":{"keys":["label","action","variant","condition","enabledWhen","disabledReason","icon"]}}},"link":{"keys":["type","to","label","icon","position","external","width"]}}}};
+DataTableEntry.itemKeys = {"columns":{"keys":["field","key","label","width","truncate","nowrap","wrap","mono","muted","sortable","format","dateStyle","badge","href","external","title"],"byType":{"actions":{"keys":["type","items","width"],"arrays":{"items":{"keys":["label","action","variant","condition","enabledWhen","disabledReason","icon"]}}},"link":{"keys":["type","to","label","icon","position","external","width"]}}}};
 DataTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actionPending","actionPendingRows","batchActions","batchActionsPosition","collapseLabel","columns","defaultFilters","emptyMessage","expandLabel","expansion","expansionCondition","fill","filters","filtersTop","fontMono","id","loading","navigateTo","onAction","onBatchAction","onRowClick","onSortColChange","onSortDirChange","refreshing","rowKey","rows","selectable","sortCol","sortDir"] : [];
 DataTableEntry.providesContext = ["DataTableSelectionCtx","DataTableFilterCtx"];
 DataTableEntry.requiresContext = ["RouterContext"];
