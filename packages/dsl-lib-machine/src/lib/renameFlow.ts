@@ -101,12 +101,12 @@ function isCapped(typed: string): boolean {
 }
 
 /**
- * What the core says about a refused name, as a dialog shows it: the machines it names by a uuid prefix are named by their name, and the command that removes a local
- * alias is the one the CLI really has (`machine alias rm`, never `machine alias remove`: machine-webcrypto words it so, the CLI has no such verb).
+ * What the core says about a refused name, as a dialog shows it: a machine the core still names only by a uuid prefix is named by its name. The remove command
+ * is worded by the core itself (`machine alias rm`, `machine admin alias rm`): nothing is rewritten here.
  */
 function wordedForDialog(context: RenameContext, message: string, typed: string): string {
   const known = [context.aliases[typed], context.networkAliases[typed]].filter((u): u is string => u !== undefined);
-  return nameShortIds(message, context.machines, known).replaceAll('machine alias remove ', 'machine alias rm ');
+  return nameShortIds(message, context.machines, known);
 }
 
 /** The plan the CLI makes (`buildRenamedRegistration`), run on the context: what the new name will be, or why it is refused (cause and fix). Signs nothing. */

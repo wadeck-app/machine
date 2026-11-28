@@ -116,6 +116,11 @@ export type AliasChangeResult =
 
 const short = (uuid: string): string => uuid.slice(0, 8);
 const skeleton = (name: string): string => name.toLowerCase().replace(/-/g, '');
+/** `machine "name" (id)` when the machine is listed, `machine id` otherwise: a name tells the reader more than a truncated uuid. */
+const labelOf = (machines: readonly { uuid: string; name: string }[], uuid: string, id: string = short(uuid)): string => {
+  const known = machines.find((m) => m.uuid === uuid);
+  return known === undefined ? `machine ${id}` : `machine "${known.name}" (${id})`;
+};
 const bySort = (a: AliasEntry, b: AliasEntry): number => (a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0);
 
 function fail(reason: AliasChangeFailure, message: string): AliasChangeResult {
@@ -141,7 +146,7 @@ export function planAliasChange(input: AliasChangeInput): AliasChangeResult {
     return fail('invalid-alias', `invalid alias ${JSON.stringify(alias)}: ${problem}`);
   }
   if (input.revoked.includes(change.uuid)) {
-    return fail('revoked', `machine ${change.uuid} is revoked here: an alias never points to a revoked machine`);
+    return fail('revoked', `${labelOf(machines, change.uuid, change.uuid)} is revoked here: an alias never points to a revoked machine`);
   }
   if (!machines.some((m) => m.uuid === change.uuid)) {
     return fail('unknown-machine', `machine ${change.uuid} is not a trusted machine of this network: an alias points to a machine this one trusts (\`machine list\` shows them)`);
@@ -159,7 +164,7 @@ export function planAliasChange(input: AliasChangeInput): AliasChangeResult {
     return { ok: true, alias, entries: [...current].sort(bySort), changed: false, normalized: normalized.changed };
   }
   if (same !== undefined) {
-    return fail('alias-taken', `the alias "${alias}" already points to machine ${short(same.uuid)}: remove it first (\`machine admin alias rm ${alias}\`), then set it again`);
+    return fail('alias-taken', `the alias "${alias}" already points to ${labelOf(machines, same.uuid)}: remove it first (\`machine admin alias rm ${alias}\`), then set it again`);
   }
   const resembles = current.find((e) => skeleton(e.alias) === skeleton(alias));
   if (resembles !== undefined) {

@@ -134,6 +134,21 @@ describe('planAliasChange', () => {
     if (!r.ok) expect(r.message).toMatch(/machine admin alias rm box/);
   });
 
+  it('names the machine an alias already points to, never only a truncated id', () => {
+    const r = set('box', LAPTOP, [{ alias: 'box', uuid: THINK }]);
+    if (r.ok) throw new Error('expected a refusal');
+    expect(r.message).toContain(`already points to machine "thinkcentre" (${THINK.slice(0, 8)})`);
+    const gone = planAliasChange({ change: { action: 'set', alias: 'box', uuid: LAPTOP }, current: [{ alias: 'box', uuid: GONE }], machines, revoked: [] });
+    if (gone.ok) throw new Error('expected a refusal');
+    expect(gone.message).toContain(`already points to machine ${GONE.slice(0, 8)}:`);
+  });
+
+  it('names a revoked machine when it is known', () => {
+    const r = set('box', THINK, [], [THINK]);
+    if (r.ok) throw new Error('expected a refusal');
+    expect(r.message).toContain(`machine "thinkcentre" (${THINK}) is revoked here`);
+  });
+
   it('refuses an alias that only differs from another alias by hyphens', () => {
     expect(set('b-ox', LAPTOP, [{ alias: 'box', uuid: THINK }])).toMatchObject({ ok: false, reason: 'lookalike-alias' });
   });

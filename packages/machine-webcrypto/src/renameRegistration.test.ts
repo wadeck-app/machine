@@ -39,3 +39,21 @@ describe('buildRenamedRegistration (copy of machine-core)', () => {
     expect(r).toEqual({ ok: true, body: { ...current, name: 'box', serial: 8, validFrom: NOW } });
   });
 });
+
+describe('alias refusals name the machine and the real CLI verb (same text as machine-core)', () => {
+  it('local alias: machine named, `machine alias rm`, never `machine alias remove`', () => {
+    const r = buildRenamedRegistration({ ...base, aliases: { box: V } });
+    const message = (r as { message: string }).message;
+    expect(message).toContain('is a local alias of another machine "mac-m2" (7a1c2d3e)');
+    expect(message).toContain('`machine alias rm box`');
+    expect(message).not.toContain('alias remove');
+  });
+  it('network alias: machine named, and the short id alone when the machine is not listed', () => {
+    const named = buildRenamedRegistration({ ...base, networkAliases: { box: W } });
+    expect((named as { message: string }).message).toContain('is a network alias of another machine "desk" (8b1c2d3e)');
+    const other = '99999999-9999-4999-8999-999999999999';
+    const unlisted = { ...base, networkAliases: { box: other } };
+    expect((buildRenamedRegistration(unlisted) as { message: string }).message).toContain('is a network alias of another machine (99999999)');
+    expect(buildRenamedRegistration(unlisted)).toEqual(coreRename(unlisted));
+  });
+});

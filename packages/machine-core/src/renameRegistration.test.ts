@@ -126,6 +126,23 @@ describe('buildRenamedRegistration', () => {
     expect(buildRenamedRegistration(input({ networkAliases: { 'mac-m2': MAC } }))).toMatchObject({ ok: true });
   });
 
+  it('names the machine behind a local alias (name first, short id as a hint) and gives the real CLI verb to remove it', () => {
+    const { input } = setup();
+    const r = buildRenamedRegistration(input({ aliases: { 'mac-m2': LAPTOP } }));
+    const message = (r as { message: string }).message;
+    expect(message).toContain('is a local alias of another machine "laptop" (22222222)');
+    expect(message).toContain('`machine alias rm mac-m2`');
+    expect(message).not.toContain('alias remove');
+  });
+
+  it('names the machine behind a network alias, and keeps only the short id when the machine is not in the list', () => {
+    const { input } = setup();
+    const named = buildRenamedRegistration(input({ networkAliases: { 'mac-m2': DESKTOP } }));
+    expect((named as { message: string }).message).toContain('is a network alias of another machine "desktop" (33333333)');
+    const unnamed = buildRenamedRegistration(input({ networkAliases: { 'mac-m2': '99999999-9999-4999-8999-999999999999' } }));
+    expect((unnamed as { message: string }).message).toContain('is a network alias of another machine (99999999)');
+  });
+
   it('accepts a name that is already a local alias of the SAME machine', () => {
     const { input } = setup();
     expect(buildRenamedRegistration(input({ aliases: { 'mac-m2': MAC } }))).toMatchObject({ ok: true });

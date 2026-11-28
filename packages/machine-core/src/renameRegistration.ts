@@ -28,6 +28,11 @@ export interface RenameRegistrationInput {
 
 const short = (uuid: string): string => uuid.slice(0, 8);
 const skeleton = (name: string): string => name.toLowerCase().replace(/-/g, '');
+/** `another machine "name" (id)` when the machine is listed, `another machine (id)` otherwise: a name tells the reader more than a truncated uuid. */
+const anotherMachine = (machines: readonly { uuid: string; name: string }[], uuid: string): string => {
+  const known = machines.find((m) => m.uuid.toLowerCase() === uuid.toLowerCase());
+  return known === undefined ? `another machine (${short(uuid)})` : `another machine "${known.name}" (${short(uuid)})`;
+};
 
 function fail(reason: RenameFailure, message: string): RenameResult {
   return { ok: false, reason, message };
@@ -67,11 +72,11 @@ export function buildRenamedRegistration(input: RenameRegistrationInput): Rename
   }
   const aliased = Object.prototype.hasOwnProperty.call(input.aliases, newName) ? input.aliases[newName] : undefined;
   if (aliased !== undefined && aliased.toLowerCase() !== uuid.toLowerCase()) {
-    return fail('alias-conflict', `"${newName}" is a local alias of another machine (${short(aliased)}), and an alias wins over a name: after the rename, "${newName}" would still mean that other machine here. Remove the alias first (\`machine alias remove ${newName}\`) or pick another name`);
+    return fail('alias-conflict', `"${newName}" is a local alias of ${anotherMachine(input.machines, aliased)}, and an alias wins over a name: after the rename, "${newName}" would still mean that other machine here. Remove the alias first (\`machine alias rm ${newName}\`) or pick another name`);
   }
   const networked = input.networkAliases !== undefined && Object.prototype.hasOwnProperty.call(input.networkAliases, newName) ? input.networkAliases[newName] : undefined;
   if (networked !== undefined && networked.toLowerCase() !== uuid.toLowerCase()) {
-    return fail('alias-conflict', `"${newName}" is a network alias of another machine (${short(networked)}): after the rename, "${newName}" would be ambiguous on every machine. Remove the alias first (\`machine admin alias rm ${newName}\`) or pick another name`);
+    return fail('alias-conflict', `"${newName}" is a network alias of ${anotherMachine(input.machines, networked)}: after the rename, "${newName}" would be ambiguous on every machine. Remove the alias first (\`machine admin alias rm ${newName}\`) or pick another name`);
   }
   return { ok: true, body: { ...current, name: newName, serial: current.serial + 1, validFrom: input.now } };
 }
