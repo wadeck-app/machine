@@ -82,6 +82,8 @@ function detailsText(row: MachineTableRow): string {
 export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceErrors, onRefresh }: MachinesTableProps) {
   // The action open and the row it started from: one dialog at a time.
   const [selected, setSelected] = useState<{ action: 'revoke' | 'rename' | 'aliases'; row: MachineTableRow } | null>(null);
+  // The name a renamed machine has now (set when the daemon trusts it, used when the dialog closes to find its button again).
+  const [renamedTo, setRenamedTo] = useState<string | undefined>(undefined);
   const api = useRef<AllowApi | null>(null);
   const root = useRef<HTMLDivElement>(null);
   // The dialog gives the focus back to the Revoke button that opened it (to the list when the row is gone), never to the page body.
@@ -136,10 +138,13 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
           row={selected.row}
           api={api.current}
           onClose={() => {
-            focus.leave(`Rename ${selected.row.name}`);
+            // A rename changes the name of the row's buttons: the focus goes to the one it has now, once the list says it.
+            focus.leave(`Rename ${selected.row.name}`, renamedTo === undefined ? undefined : `Rename ${renamedTo}`);
+            setRenamedTo(undefined);
             setSelected(null);
           }}
-          onRenamed={() => {
+          onRenamed={(newName) => {
+            setRenamedTo(newName);
             void onRefresh?.('machines');
           }}
         />

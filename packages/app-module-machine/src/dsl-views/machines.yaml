@@ -8,7 +8,7 @@ $type: PageContent
 sections:
   - $type: PageHeader
     title: Machines
-    subtitle: This machine and the peers it trusts; Revoke signs here, with the admin passphrase.
+    subtitle: This machine and the peers it trusts; Revoke, Rename and Aliases sign here, with the admin passphrase.
   # The route answers `note` when this machine is not enrolled yet, and `presenceNote` for what the list cannot show.
   - $type: Card
     $if: $sources.machines.note
@@ -27,6 +27,11 @@ sections:
   - $type: Text
     $if: $sources.machines.presenceNote
     text: $sources.machines.presenceNote
+    tone: muted
+    size: sm
+  # Why this machine's own row has no Rename and no Revoke (static: it is true whatever the daemon says).
+  - $type: Text
+    text: "This machine's row has no Rename or Revoke: renaming it would need a renewed registration of it for every peer, which a rename does not issue; to change its name, enroll it again under another name."
     tone: muted
     size: sm
   # Who receives request notices (decisions 83, 84): the sentence when a list is known, and the fix when the daemon cannot tell.

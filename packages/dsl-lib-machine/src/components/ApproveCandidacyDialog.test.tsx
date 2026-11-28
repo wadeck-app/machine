@@ -360,7 +360,7 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(api.sent.some((s) => s.path === '/approval-codes')).toBe(false);
   }, 60_000);
 
-  it('a failed delivery: ONE alert with what happened (no command in it), Retry delivery, the cause open in the Details; the code is still shown (the approval stands)', async () => {
+  it('a failed delivery: ONE alert with what happened (no command in it), Retry delivery, the cause in the folded Details; the code is still shown (the approval stands)', async () => {
     const api = stubApi({ post: { '/approve-distribute': new Error('the daemon is not running') } });
     setup(api);
     await approve();
@@ -381,7 +381,9 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(screen.queryByRole('button', { name: 'Codes differ' })).toBeNull();
     expect(screen.getByText(/Comparing the codes waits until every machine has its documents/)).toBeInTheDocument();
     expect(screen.getByLabelText('Security code')).toHaveTextContent(CODE);
-    // A failure opens the Details: the cause is what the person needs to act.
+    // The report is folded even on a failure (UX review 5): the lines and the buttons come first; opened, it holds the cause.
+    expect(screen.queryByText(/the daemon is not running/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/the daemon is not running/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Machines told' })).toBeNull();
   }, 60_000);
@@ -400,6 +402,8 @@ describe('ApproveCandidacyDialog: the approval', () => {
     expect(items[1]).toHaveTextContent('installs by itself when it is back');
     expect(document.body.textContent).not.toContain(RETRY);
     expect(screen.queryByRole('button', { name: 'Codes match' })).toBeNull();
+    expect(screen.queryByText(/relay down/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/relay down/)).toBeInTheDocument();
     const before = api.sent.length;
     await userEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));

@@ -104,7 +104,29 @@ describe('the list of scenarios', () => {
 
   it('a route no scenario defines is not answered (the shell then fails it with a 404 naming it, never sends it to the real backend)', () => {
     const compiled = compileRoutes((onPage('/candidacies')[0] as ScenarioDefinition).create().routes);
-    expect(matchScenarioRoute(compiled, 'GET', '/api/modules/machine/requests')).toBeUndefined();
+    expect(matchScenarioRoute(compiled, 'GET', '/api/modules/machine/allowed')).toBeUndefined();
+  });
+
+  // UX review 5: the shell reads the count of each tab of the manifest (the "indicator of menu:machine/<tab>") whatever page the scenario fakes; an unanswered one is a 404 in
+  // the console of every scenario. The count of a scenario is a fake 0 or the pending number: never the real backend.
+  it('every count route of the manifest tabs is answered by every scenario, with a number in the field the manifest names', () => {
+    const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../../../manifest.json', import.meta.url)), 'utf8')) as { extensionPoints: Array<{ count?: { route: string; field: string } }> };
+    const counts = manifest.extensionPoints.flatMap((p) => (p.count === undefined ? [] : [p.count]));
+    expect(counts.map((c) => c.route).sort()).toEqual(['/candidacies', '/requests']);
+    for (const s of list) {
+      const routes = s.create().routes;
+      const compiled = compileRoutes(routes);
+      for (const c of counts) {
+        const path = `/api/modules/machine${c.route}`;
+        expect(matchScenarioRoute(compiled, 'GET', path), `${s.id}: ${path}`).toBeDefined();
+        const handler = routes[`GET ${path}`] as NonNullable<(typeof routes)[string]>;
+        const answer = handler({ method: 'GET', path, params: {}, query: new URLSearchParams(), body: undefined }) as { status?: number; body: Record<string, unknown> };
+        // The error scenarios fail the candidacies source ON PURPOSE (503, 502, 500): their tab count fails the same way, which is the fact the scenario shows.
+        if (s.id.includes('error') || s.id.includes('unreachable-502')) continue;
+        expect(answer.status ?? 200, `${s.id}: ${path}`).toBe(200);
+        expect(typeof answer.body[c.field], `${s.id}: ${path} ${c.field}`).toBe('number');
+      }
+    }
   });
 });
 

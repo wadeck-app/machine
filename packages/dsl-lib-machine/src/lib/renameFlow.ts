@@ -2,6 +2,7 @@ import { buildRename, buildRenamedRegistration, normalizeMachineName, unlockAdmi
 import type { SignedNoticeRecipients, SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinnedKey, readKeyFile, trackSigning, type AllowApi } from './allowFlow.js';
 import { postDeliveryRetry } from './deliveryRetry.js';
+import { nameShortIds } from './machineIds.js';
 import { distributionOf, hasDeliveryShape, isObject, type PageDistribution } from './pageDelivery.js';
 
 // Rename from the page without React (admin-ui.md, "Rename and aliases from the page"; threat-model.md). What `machine admin rename <machine> <new-name>` does, with the admin
@@ -70,8 +71,43 @@ export async function loadRenameContext(api: AllowApi, row: RenameRow): Promise<
 }
 
 export type RenamePreview =
-  | { ok: true; name: string; /** The typed name was not valid as typed and was made valid. */ normalized: boolean; /** The serial the new registration takes. */ serial: number }
+  | {
+      ok: true;
+      name: string;
+      /** The typed name was not valid as typed and was made valid. */
+      normalized: boolean;
+      /** The typed name was longer than the 32 characters a name may have: the end was cut (the dialog says so, it never cuts silently). */
+      capped: boolean;
+      /** The serial the new registration takes. */
+      serial: number;
+    }
   | { ok: false; /** Empty when nothing is typed yet: the dialog shows no message then. */ message: string };
+
+/** The longest name a machine may have (machine-core `machineNameProblem`). */
+export const MAX_NAME_LENGTH = 32;
+
+/**
+ * True when making `typed` a valid name cut its end at 32 characters. The steps are those of `normalizeMachineName` before its cut (machine-webcrypto reference.ts: accents
+ * removed, lowercase, every other run a single hyphen, hyphens trimmed); a test keeps the two in step.
+ */
+function isCapped(typed: string): boolean {
+  const full = typed
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return full.length > MAX_NAME_LENGTH;
+}
+
+/**
+ * What the core says about a refused name, as a dialog shows it: the machines it names by a uuid prefix are named by their name, and the command that removes a local
+ * alias is the one the CLI really has (`machine alias rm`, never `machine alias remove`: machine-webcrypto words it so, the CLI has no such verb).
+ */
+function wordedForDialog(context: RenameContext, message: string, typed: string): string {
+  const known = [context.aliases[typed], context.networkAliases[typed]].filter((u): u is string => u !== undefined);
+  return nameShortIds(message, context.machines, known).replaceAll('machine alias remove ', 'machine alias rm ');
+}
 
 /** The plan the CLI makes (`buildRenamedRegistration`), run on the context: what the new name will be, or why it is refused (cause and fix). Signs nothing. */
 export function previewRename(context: RenameContext, typed: string, now: number): RenamePreview {
@@ -93,9 +129,9 @@ export function previewRename(context: RenameContext, typed: string, now: number
     now,
   });
   if (!planned.ok) {
-    return { ok: false, message: planned.message };
+    return { ok: false, message: wordedForDialog(context, planned.message, normalized.name) };
   }
-  return { ok: true, name: normalized.name, normalized: normalized.changed, serial: planned.body.serial };
+  return { ok: true, name: normalized.name, normalized: normalized.changed, capped: isCapped(typed), serial: planned.body.serial };
 }
 
 export interface RenameResult {
@@ -113,6 +149,9 @@ export interface RenameHooks {
   /** The signatures are made and the key is locked: the one event that happens before the network. */
   onSigned?: () => void;
 }
+
+/** One clause for the terminal command of a rename, whose same name twice looks like a mistake: it is the CLI's own form to send the documents again (UX review 5). */
+export const RETRY_SAME_NAME_NOTE = 'Giving the same name twice is how `machine admin rename` sends the documents again; nothing is renamed.';
 
 /** The command that sends the documents of a rename again (same name twice: nothing to change, only to send). */
 const retryCommand = (name: string): string => `machine admin rename ${name} ${name}`;

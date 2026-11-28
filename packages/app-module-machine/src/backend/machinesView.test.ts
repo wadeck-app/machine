@@ -40,3 +40,28 @@ describe('machines view: what the page says (UX review)', () => {
     expect(/presenceNote: '([^']*)'/.exec(src)?.[1] ?? '').not.toMatch(/daemon/);
   });
 });
+
+describe('machines view: Rename and Aliases (UX review 5)', () => {
+  it('the subtitle says that Revoke, Rename and Aliases all sign on this page, in one short sentence', () => {
+    const subtitle = /^\s+subtitle:\s*(.*)$/m.exec(yaml)?.[1] ?? '';
+    expect(subtitle).toMatch(/Revoke/);
+    expect(subtitle).toMatch(/Rename/);
+    expect(subtitle).toMatch(/Aliases/);
+    expect(subtitle).toMatch(/sign/);
+    expect(subtitle).toMatch(/admin passphrase/);
+  });
+
+  it('a muted small Text always says why this machine row has no Rename (and no Revoke), and what to do instead', () => {
+    const blocks = yaml.split(/\n(?=\s*- \$type: )/);
+    const note = blocks.find((b) => /^\s*- \$type: Text\n/.test(b) && /^\s+text: .*no Rename/m.test(b));
+    expect(note, 'the YAML has no Text that explains the missing Rename on this machine').toBeDefined();
+    expect(note).toContain('tone: muted');
+    expect(note).toContain('size: sm');
+    expect(note).not.toContain('$if');
+    expect(note).toMatch(/enroll it again/);
+    const text = /^\s+text: (.*)$/m.exec(note ?? '')?.[1] ?? '';
+    expect(text).not.toBe('');
+    expect(text).not.toMatch(/daemon/i);
+    expect(text).not.toContain('`');
+  });
+});

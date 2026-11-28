@@ -50,9 +50,9 @@ describe('the seeds of the Machines page', () => {
 });
 
 describe('the routes of the Machines page', () => {
-  it('answers exactly the nine routes the page calls, under the module prefix', () => {
+  it('answers exactly the nine routes the page calls plus the two counts of its menu, under the module prefix', () => {
     expect(Object.keys(make('two-trusted-peers')).sort()).toEqual(
-      ['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke', 'GET /rename-context/:uuid', 'POST /rename', 'GET /aliases-context', 'POST /aliases', 'POST /delivery-retry'].map(full).sort(),
+      ['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke', 'GET /rename-context/:uuid', 'POST /rename', 'GET /aliases-context', 'POST /aliases', 'POST /delivery-retry', 'GET /requests', 'GET /candidacies'].map(full).sort(),
     );
   });
 

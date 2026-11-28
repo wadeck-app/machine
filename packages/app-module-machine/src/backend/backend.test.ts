@@ -151,6 +151,28 @@ describe('GET /machines', () => {
     expect(out.body.nextStep).toBeUndefined();
   });
 
+  it('the Aliases cell marks the origin of each alias when one is a network alias (the daemon list carries `aliases` and `networkAliases`), for this machine too (UX review 5)', async () => {
+    await withDaemon({
+      list: {
+        initialized: true,
+        enrolled: true,
+        self: { uuid: UUID, name: 'alpha', aliases: ['home'], networkAliases: ['home'] },
+        peers: [
+          { uuid: '11111111-1111-4111-8111-111111111111', name: 'beta', aliases: ['b', 'bee'], networkAliases: ['bee'] },
+          { uuid: '22222222-2222-4222-8222-222222222222', name: 'gamma', aliases: ['g'], networkAliases: [] },
+          { uuid: '33333333-3333-4333-8333-333333333333', name: 'delta', aliases: [] },
+        ],
+      },
+    });
+    const out = await call(routes(), 'GET /machines');
+    expect(out.body.machines.map((m: { name: string; aliasesText: string }) => [m.name, m.aliasesText])).toEqual([
+      ['alpha', 'home (network)'],
+      ['beta', 'b (local), bee (network)'],
+      ['gamma', 'g'],
+      ['delta', ''],
+    ]);
+  });
+
   it('this machine alone on the network: the answer says the next step, with the command', async () => {
     await withDaemon({ list: { initialized: true, enrolled: true, self: { uuid: UUID, name: 'alpha' }, peers: [] } });
     const out = await call(routes(), 'GET /machines');

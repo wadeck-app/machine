@@ -2,6 +2,7 @@ import { aliasConflicts, buildAliases, planAliasChange, unlockAdminKey, type Ali
 import type { SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinnedKey, readKeyFile, trackSigning, type AllowApi } from './allowFlow.js';
 import { postDeliveryRetry } from './deliveryRetry.js';
+import { nameShortIds } from './machineIds.js';
 import { distributionOf, hasDeliveryShape, isObject, type PageDistribution } from './pageDelivery.js';
 
 // Network aliases from the page without React (admin-ui.md, "Rename and aliases from the page"; decision 116). What `machine admin alias set|rm` does, with the admin passphrase
@@ -68,9 +69,13 @@ export type AliasPreview =
 export function previewAliasChange(context: AliasesContext, change: AliasChange): AliasPreview {
   const plan = planAliasChange({ change, current: context.current?.body.entries ?? [], machines: context.machines, revoked: context.revoked });
   if (!plan.ok) {
-    return { ok: false, message: plan.message };
+    // The uuid the message may talk about (the machine of a set, the one an alias already points to) settles a prefix that several machines share.
+    const known = [change.action === 'set' ? change.uuid : undefined, ...(context.current?.body.entries ?? []).map((e) => e.uuid)].filter((u): u is string => u !== undefined);
+    return { ok: false, message: nameShortIds(plan.message, context.machines, known) };
   }
-  const conflicts = aliasConflicts(context.localAliases, Object.fromEntries(plan.entries.map((e) => [e.alias, e.uuid])));
+  // Only the alias of THIS change: another label that already clashes (a standing conflict) is not what the person is signing, and a removal ends the clash of its label.
+  const conflicts =
+    change.action === 'set' ? aliasConflicts(context.localAliases, Object.fromEntries(plan.entries.map((e) => [e.alias, e.uuid]))).filter((c) => c.alias === plan.alias) : [];
   return { ok: true, alias: plan.alias, entries: plan.entries, changed: plan.changed, normalized: plan.normalized, conflicts };
 }
 

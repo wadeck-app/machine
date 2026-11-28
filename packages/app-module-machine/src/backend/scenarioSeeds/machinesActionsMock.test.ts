@@ -134,6 +134,40 @@ describe('GET /aliases-context', () => {
   });
 });
 
+describe('the Aliases column of GET /machines (UX review 5)', () => {
+  const cell = (routes: MockRoutes, name: string): string | undefined => (call(routes, 'GET /machines').body as MachinesAnswer).machines.find((m) => m.name === name)?.aliasesText;
+
+  it('shows the network aliases next to the local ones, each with its origin (a label a local alias shadows is the local one)', () => {
+    const routes = make('alias-set');
+    // The network list holds tc for mac-m2 and work for thinkcentre; the local alias tc for thinkcentre wins on this machine.
+    expect(cell(routes, 'thinkcentre')).toBe('tc (local), work (network)');
+    expect(cell(routes, 'mac-m2')).toBe('');
+  });
+
+  it('a row with only local aliases stays plain; a machine without alias is empty', () => {
+    const routes = make('alias-conflict');
+    expect(cell(routes, 'thinkcentre')).toBe('tc');
+    expect(cell(routes, 'mac-m2')).toBe('');
+  });
+
+  it('after an alias is added the machine row shows it at once (network, signed by the page)', () => {
+    const routes = make('alias-conflict');
+    const entries = [{ alias: 'box', uuid: MAC }];
+    const current = aliasesContext(routes).current;
+    const body = { signed: { body: { v: 1, adminKeyId: KEYS.admin.publicKey.slice(0, 32), serial: (current?.body.serial ?? 0) + 1, issuedAt: 1, entries }, signature: 'MOCK-UNSIGNED-NOT-A-SIGNATURE' }, documents: [] };
+    expect(call(routes, 'POST /aliases', {}, body).status).toBe(200);
+    expect(cell(routes, 'mac-m2')).toBe('box (network)');
+    expect(cell(routes, 'thinkcentre')).toBe('tc');
+  });
+
+  it('this machine row shows the aliases that point to it', () => {
+    const routes = make('alias-conflict');
+    const body = { signed: { body: { v: 1, adminKeyId: KEYS.admin.publicKey.slice(0, 32), serial: 1, issuedAt: 1, entries: [{ alias: 'home', uuid: ADMIN }] }, signature: 'MOCK-UNSIGNED-NOT-A-SIGNATURE' }, documents: [] };
+    expect(call(routes, 'POST /aliases', {}, body).status).toBe(200);
+    expect(cell(routes, 'midgard2')).toBe('home (network)');
+  });
+});
+
 describe('POST /aliases', () => {
   const listWith = (routes: MockRoutes, entries: Array<{ alias: string; uuid: string }>, serial?: number) => {
     const current = aliasesContext(routes).current;

@@ -128,7 +128,7 @@ describe('previewRename: what the dialog says before the passphrase', () => {
     expect((previewRename(context(), 'laptop', NOW) as { message: string }).message).toMatch(/nothing to change/);
     expect((previewRename(context(), 'server', NOW) as { message: string }).message).toMatch(/already used by machine "server".*pick another name/);
     expect((previewRename(context(), 'ser-ver', NOW) as { message: string }).message).toMatch(/only by hyphens/);
-    expect((previewRename(context({ aliases: { box: PEER.uuid } }), 'box', NOW) as { message: string }).message).toMatch(/local alias.*machine alias remove box/);
+    expect((previewRename(context({ aliases: { box: PEER.uuid } }), 'box', NOW) as { message: string }).message).toMatch(/local alias.*machine alias rm box/);
     expect((previewRename(context({ networkAliases: { box: PEER.uuid } }), 'box', NOW) as { message: string }).message).toMatch(/network alias.*machine admin alias rm box/);
   });
 });
@@ -216,5 +216,31 @@ describe('signAndRename: one passphrase, one unlock, the key locked before the n
   it('an answer without the list of machines is loud: the rename may be installed, the page says how to check and what to run', async () => {
     const answer = { ok: true, subject: { uuid: LAPTOP.uuid, name: 'box' }, failed: false, report: {}, text: { out: '[ok] x\n', err: '' }, retry: RETRY };
     await expect(signAndRename(stubApi({ post: answer }), context(), 'box', PASSPHRASE, NOW)).rejects.toThrow(/unexpected answer.*Machines page.*update the machine module.*machine admin rename box box/s);
+  });
+});
+
+describe('previewRename (UX review 5)', () => {
+  it('says the 32 characters cap when the typed name is longer: the name is cut and the preview tells it', () => {
+    const typed = 'a-machine-name-that-is-far-longer-than-thirty-two-characters';
+    const p = previewRename(context(), typed, NOW);
+    expect(p).toMatchObject({ ok: true, name: 'a-machine-name-that-is-far-longe', capped: true, normalized: true });
+    expect((p as { name: string }).name.length).toBe(32);
+  });
+  it('a name within the cap is not capped (spaces and capitals collapsing under 32 characters included)', () => {
+    expect(previewRename(context(), 'My Box', NOW)).toMatchObject({ ok: true, capped: false });
+    expect(previewRename(context(), 'box', NOW)).toMatchObject({ ok: true, capped: false });
+    expect(previewRename(context(), `${'ab '.repeat(10)}x`, NOW)).toMatchObject({ ok: true, capped: false });
+  });
+  it('a refusal names the machine, never ends with a truncated uuid, and says the real command to remove an alias', () => {
+    const msg = (p: ReturnType<typeof previewRename>): string => (p as { message: string }).message;
+    expect(msg(previewRename(context(), 'server', NOW))).toBe('the name "server" is already used by machine "server": pick another name, or rename that machine first');
+    const local = msg(previewRename(context({ aliases: { box: PEER.uuid } }), 'box', NOW));
+    expect(local).toContain('a local alias of another machine "server"');
+    expect(local).not.toMatch(/\([0-9a-f]{8}\)/);
+    expect(local).toContain('`machine alias rm box`');
+    expect(local).not.toContain('alias remove');
+    const network = msg(previewRename(context({ networkAliases: { box: PEER.uuid } }), 'box', NOW));
+    expect(network).toContain('a network alias of another machine "server"');
+    expect(network).toContain('`machine admin alias rm box`');
   });
 });

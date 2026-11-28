@@ -191,11 +191,13 @@ describe('Revoke', () => {
     return screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
   };
 
-  it('a partial delivery: the headline says how many were not told (no command), the cause is open, Retry delivery is offered, the command is folded and said once', async () => {
+  it('a partial delivery: the headline says how many were not told (no command), the report is folded (UX review 5), Retry delivery is offered, the command is folded and said once', async () => {
     answers.revoke = partial();
     const dialog = await revokeAndSign();
     expect(within(dialog).getByText('Documents NOT delivered to 1 machine.')).toBeInTheDocument();
     expect(within(dialog).getByText('Failed')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/relay down/)).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
     expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Retry delivery' })).toBeInTheDocument();
     // Said ONCE, and only when the person opens the folded section: not in the headline, the machine row or the open report.

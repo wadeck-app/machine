@@ -28,5 +28,8 @@ export function machinesRoutes(seed: MachinesState): MockRoutes {
     [key('GET /aliases-context')]: () => run((s) => aliasesContext(s), READ_MS),
     [key('POST /aliases')]: (req) => run((s) => aliasesApply(s, req.body as AliasesRequest), WRITE_MS),
     [key('POST /delivery-retry')]: (req) => run((s) => retryDelivery(s, req.body), WRITE_MS),
+    // The tab counts of the manifest (the shell reads them whatever page is faked): a fake 0, never the real backend.
+    [key('GET /requests')]: () => ({ status: 200, body: { count: 0 } }),
+    [key('GET /candidacies')]: () => ({ status: 200, body: { count: 0 } }),
   };
 }

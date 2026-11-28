@@ -244,3 +244,26 @@ describe('ALIASES_SUBJECT_UUID', () => {
     expect(ALIASES_SUBJECT_UUID).toBe(NETWORK_ALIASES_SUBJECT_UUID);
   });
 });
+
+describe('previewAliasChange (UX review 5)', () => {
+  it('only the conflicts of the alias being set are told: another label that already clashes is not this change', () => {
+    const base = context({ current: listOf([{ alias: 'tc', uuid: LAPTOP.uuid }]), localAliases: { tc: PEER.uuid } });
+    // The standing conflict on "tc" exists, but this change sets "box".
+    expect(previewAliasChange(base, SET_BOX)).toMatchObject({ ok: true, alias: 'box', conflicts: [] });
+    // Setting the clashing label itself tells it.
+    const own = previewAliasChange(context({ localAliases: { box: PEER.uuid } }), SET_BOX);
+    expect(own).toMatchObject({ ok: true, conflicts: [{ alias: 'box', local: PEER.uuid, network: LAPTOP.uuid }] });
+  });
+  it('removing an alias tells no conflict', () => {
+    const base = context({ current: listOf([{ alias: 'tc', uuid: LAPTOP.uuid }]), localAliases: { tc: PEER.uuid } });
+    expect(previewAliasChange(base, { action: 'rm', alias: 'tc' })).toMatchObject({ ok: true, conflicts: [] });
+  });
+  it('a refusal names the machine instead of ending with a truncated uuid', () => {
+    const msg = (p: ReturnType<typeof previewAliasChange>): string => (p as { message: string }).message;
+    const withBox = context({ current: listOf([{ alias: 'box', uuid: PEER.uuid }]) });
+    expect(msg(previewAliasChange(withBox, SET_BOX))).toContain('already points to machine "server"');
+    expect(msg(previewAliasChange(context(), { action: 'set', alias: 'ser-ver', uuid: LAPTOP.uuid }))).not.toMatch(/\([0-9a-f]{8}\)/);
+    expect(msg(previewAliasChange(context(), { action: 'set', alias: 'server', uuid: LAPTOP.uuid }))).toContain('already the name of machine "server"');
+    expect(msg(previewAliasChange(context(), { action: 'set', alias: 'server', uuid: LAPTOP.uuid }))).not.toMatch(/\([0-9a-f]{8}\)/);
+  });
+});

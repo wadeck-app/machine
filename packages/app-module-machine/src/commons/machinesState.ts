@@ -1,3 +1,4 @@
+import { aliasesCellText } from './aliasCell.js';
 import { nothingRetained, retriedAnswer, retryUuid } from './deliveryRetryMock.js';
 import type { DistributeAnswer, RouteAnswer, SignedDocumentWire, SignedRegistrationWire } from './routeContracts.js';
 
@@ -126,15 +127,25 @@ const PRESENCE_NOTE = 'Presence and addresses are not shown on this page: run ma
 /** What the page says when this machine is alone on the network (Markdown: the command is code). The same text as the real route (backend/index.ts). */
 export const NEXT_STEP = 'No other machine yet. Run `machine join` on the new machine, then approve it on the Candidacies page.';
 
+/**
+ * The Aliases cell of a machine, as the daemon list builds it: its local aliases, then the network aliases that point to it (a label that a local alias of this machine
+ * points elsewhere is shadowed: the local one wins, so it is not listed here), each with its origin when the row has a network alias (`aliasesCellText`).
+ */
+function aliasesOf(state: MachinesState, uuid: string, local: readonly string[]): string {
+  const localLabels = new Set(state.peers.flatMap((p) => p.aliases));
+  const network = (state.networkAliases?.body.entries ?? []).filter((e) => e.uuid === uuid && !localLabels.has(e.alias)).map((e) => e.alias);
+  return aliasesCellText([...local, ...network], network);
+}
+
 /** `GET /machines`. */
 export function listMachines(state: MachinesState): MachinesStep<MachinesAnswer> {
-  const self: MachineRow = { uuid: state.admin.uuid, name: state.admin.name, self: true, role: 'this machine', aliasesText: '', reachableState: 'self', reachable: 'this machine', receivesNotices: 'yes', listHeldText: 'holds the list' };
+  const self: MachineRow = { uuid: state.admin.uuid, name: state.admin.name, self: true, role: 'this machine', aliasesText: aliasesOf(state, state.admin.uuid, []), reachableState: 'self', reachable: 'this machine', receivesNotices: 'yes', listHeldText: 'holds the list' };
   const peers = state.peers.map((p): MachineRow => ({
     uuid: p.registration.body.uuid,
     name: p.registration.body.name,
     self: false,
     role: 'peer',
-    aliasesText: p.aliases.join(', '),
+    aliasesText: aliasesOf(state, p.registration.body.uuid, p.aliases),
     reachableState: p.reachableState,
     reachable: p.reachable,
     receivesNotices: p.receivesNotices ? 'yes' : 'no',

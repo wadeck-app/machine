@@ -69,6 +69,8 @@ export function candidaciesRoutes(seed: CandidaciesState, clock: () => number): 
     [key('POST /candidacies/:id/reject')]: (req) => run((s) => rejectCandidacy(s, req.params['id'] ?? '', nameOf(req.body)), WRITE_MS),
     [key('POST /approve-distribute')]: (req) => run((s) => distribute(s, req.body as DistributeRequest), WRITE_MS),
     [key('POST /delivery-retry')]: (req) => run((s) => retryDelivery(s, req.body), WRITE_MS),
+    // The count of the Requests tab (the shell reads it whatever page is faked): a fake 0, never the real backend.
+    [key('GET /requests')]: () => ({ status: 200, body: { count: 0 } }),
     [key('POST /approval-codes')]: (req) => run((s) => keepApprovalCode(s, req.body as ApprovalCodeRequest), READ_MS),
     [key('GET /admin-login')]: () => loginRun((now) => loginStatus(login, now), READ_MS),
     [key('POST /admin-login')]: () => loginRun((now, needsToken) => loginStart(login, now, needsToken), WRITE_MS),

@@ -1,4 +1,5 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
+import { aliasesCellText } from '../commons/aliasCell.js';
 import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
 import { listApprovalCodes, type RecordedApproval } from './approvalCodes.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
@@ -229,16 +230,20 @@ const notInitialized = (value: NotInitialized): Failure => (errorBody(409, 'not_
 interface ListAnswerLike {
   enrolled?: unknown;
   note?: unknown;
-  self?: { uuid?: unknown; name?: unknown };
-  peers?: Array<{ uuid?: unknown; name?: unknown; aliases?: unknown }>;
+  self?: { uuid?: unknown; name?: unknown; aliases?: unknown; networkAliases?: unknown };
+  peers?: Array<{ uuid?: unknown; name?: unknown; aliases?: unknown; networkAliases?: unknown }>;
 }
+
+const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+
+// `aliases` is local and network merged; `networkAliases` (absent on an older daemon) says which of them come from the admin-signed list (UX review 5).
+const cellOf = (m: { aliases?: unknown; networkAliases?: unknown }): string => aliasesCellText(strings(m.aliases), Array.isArray(m.networkAliases) ? strings(m.networkAliases) : undefined);
 
 function machineRows(answer: ListAnswerLike): Array<{ uuid: string; name: string; self: boolean; role: string; aliasesText: string }> {
   const rows: Array<{ uuid: string; name: string; self: boolean; role: string; aliasesText: string }> = [];
-  if (answer.self !== undefined) rows.push({ uuid: String(answer.self.uuid), name: String(answer.self.name), self: true, role: 'this machine', aliasesText: '' });
+  if (answer.self !== undefined) rows.push({ uuid: String(answer.self.uuid), name: String(answer.self.name), self: true, role: 'this machine', aliasesText: cellOf(answer.self) });
   for (const peer of answer.peers ?? []) {
-    const aliases = Array.isArray(peer.aliases) ? peer.aliases.map(String) : [];
-    rows.push({ uuid: String(peer.uuid), name: String(peer.name), self: false, role: 'peer', aliasesText: aliases.join(', ') });
+    rows.push({ uuid: String(peer.uuid), name: String(peer.name), self: false, role: 'peer', aliasesText: cellOf(peer) });
   }
   return rows;
 }

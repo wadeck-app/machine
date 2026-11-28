@@ -54,7 +54,7 @@ Routes: `GET /candidacies`, `GET /approve-context/:uuid`, `GET /admin-key`, `POS
 
 ## Machines scenarios (`/`)
 
-Routes: `GET /machines`, `GET /revoke-context/:uuid`, `GET /rename-context/:uuid`, `GET /aliases-context`, `GET /admin-key`, `POST /revoke`, `POST /rename`, `POST /aliases`, `POST /delivery-retry`.
+Routes: `GET /machines`, `GET /revoke-context/:uuid`, `GET /rename-context/:uuid`, `GET /aliases-context`, `GET /admin-key`, `POST /revoke`, `POST /rename`, `POST /aliases`, `POST /delivery-retry`, plus the tab counts of the manifest (`GET /requests`, `GET /candidacies`: a fake `{ count: 0 }`; the Candidacies scenarios answer `GET /requests` the same way), so the shell logs no 404 for "indicator of menu:machine/..." (only the error scenarios fail their own count, on purpose). The Aliases column lists local and network aliases (`tc (local), work (network)`; a label a local alias shadows is the local one), and shows an alias as soon as it is added.
 
 | Id | Shows |
 |---|---|

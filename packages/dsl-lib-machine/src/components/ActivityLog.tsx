@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, type BadgeVariant, ButtonAction, CompactSelect, DataTable, Notice, RefreshButton, SearchBar, type TableColumn, Text } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
 import type { SourceError } from '../lib/loadFailure.js';
+import { WrapText } from './CellText.js';
 import { MachineName } from './MachineName.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
 
@@ -149,7 +150,8 @@ const COLUMNS: Array<TableColumn<ActivityRowData>> = [
   { key: 'directionText', label: 'Direction', nowrap: true, render: (r) => r.directionText },
   { key: 'fromText', label: 'From → To', nowrap: true, render: (r) => <><MachineName name={r.fromText} /> &rarr; <MachineName name={r.toText} /></> },
   { key: 'shell', label: 'Shell', muted: true, nowrap: true, render: (r) => (r.shell === '' ? '-' : r.shell) },
-  { key: 'command', label: 'Command', mono: true, render: (r) => (r.command === '' ? '-' : r.command) },
+  // The content columns of the DataTable break at ANY character (`break-all`: "versi/on"): the text overrides it and wraps at its spaces (a long token stays whole).
+  { key: 'command', label: 'Command', mono: true, render: (r) => <WrapText text={r.command === '' ? '-' : r.command} /> },
   {
     key: 'resultText',
     label: 'Result',

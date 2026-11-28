@@ -14,8 +14,12 @@ const STATE_VARIANT = { delivered: 'success', inbox: 'info', failed: 'danger' } 
 /** What the daemon says when there is nothing to do: not a line of its own. */
 const NOTHING_TO_DO = /^nothing to do.?$/i;
 
-/** What replaces the command in the raw report: it is given once, in the folded terminal section. */
+/**
+ * What replaces the command in the raw report: it is given once, in the folded terminal section. With a Retry delivery button the report sends the person to it FIRST
+ * (the terminal is for when the daemon holds nothing to send again), so the two never contradict each other (UX review 5).
+ */
 const SAID_BELOW = 'the terminal command (under "Run it in a terminal instead")';
+const SAID_BELOW_WITH_RETRY = 'Retry delivery (or, only if Retry delivery says nothing is kept, the terminal command under "Run it in a terminal instead")';
 
 /** A next action is a line only when it says something: not the bare "nothing to do", not a command the headline already gave. */
 function shownNext(next: string, said: string | undefined): boolean {
@@ -23,23 +27,23 @@ function shownNext(next: string, said: string | undefined): boolean {
 }
 
 /** The raw report without the command (it is in the folded terminal section): every mention, with or without its backticks, points there. */
-function withoutCommand(text: string, command: string | undefined): string {
+function withoutCommand(text: string, command: string | undefined, saidBelow: string): string {
   if (command === undefined || command === '') {
     return text;
   }
-  return text.split(`\`${command}\``).join(SAID_BELOW).split(command).join(SAID_BELOW);
+  return text.split(`\`${command}\``).join(saidBelow).split(command).join(saidBelow);
 }
 
 export interface DeliveryListProps {
   machines: DeliveryMachine[];
-  /** The raw report of the CLI, without the lines it repeats. */
+  /** The raw report of the CLI, without the lines it repeats. It is always folded (UX review 5): the machine lines and the buttons come first, the report is there to read when they are not enough. */
   text: string;
-  /** A failure opens the report: the cause is what the person needs to act. */
-  openDetails: boolean;
   /** A command the result already says above (the retry command of its headline): a next action that holds it is not repeated on every machine. */
   said?: string;
   /** The terminal command that finishes the job (asks the admin passphrase): folded under "Run it in a terminal instead", with Copy. Absent: nothing to finish. */
   retryCommand?: string;
+  /** One clause that explains the command when it looks odd (`machine admin rename box box`: the same name twice): shown with it, in the folded section. */
+  retryNote?: string;
   /**
    * Sends the delivery again without the passphrase (the dialog then shows the new report). Resolves when the new report is shown; rejects with the sentence of whoever
    * refused, shown here as an alert. Absent: no button (delivered, or nothing can be retried).
@@ -49,7 +53,7 @@ export interface DeliveryListProps {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-export function DeliveryList({ machines, text, openDetails, said, retryCommand, onRetry }: DeliveryListProps) {
+export function DeliveryList({ machines, text, said, retryCommand, retryNote, onRetry }: DeliveryListProps) {
   const [retrying, setRetrying] = useState(false);
   const [problem, setProblem] = useState<string | undefined>(undefined);
   const [copyNote, setCopyNote] = useState<{ ok: boolean; text: string } | undefined>(undefined);
@@ -112,16 +116,29 @@ export function DeliveryList({ machines, text, openDetails, said, retryCommand, 
         </HorizontalStack>
       )}
       {problem !== undefined && <Notice variant="danger" label={problem} />}
-      <Collapsible title="Details" defaultOpen={openDetails}>
-        <pre style={MONO_STYLE} className="m-0 whitespace-pre-wrap break-words text-xs">{withoutCommand(text, retryCommand)}</pre>
+      <Collapsible title="Details">
+        <pre style={MONO_STYLE} className="m-0 whitespace-pre-wrap break-words text-xs">{withoutCommand(text, retryCommand, onRetry === undefined ? SAID_BELOW : SAID_BELOW_WITH_RETRY)}</pre>
       </Collapsible>
       {retryCommand !== undefined && retryCommand !== '' && (
         <Collapsible title="Run it in a terminal instead">
           <VerticalStack gap="gap-2">
-            <Text size="sm" text="On this machine, in a terminal (it asks the admin passphrase; safe to run again):" />
-            <div className="break-all">
+            <Text
+              size="sm"
+              text={
+                onRetry === undefined
+                  ? 'On this machine, in a terminal (it asks the admin passphrase; safe to run again):'
+                  : 'Only when Retry delivery says the daemon holds nothing to send again (it restarted since): on this machine, in a terminal (it asks the admin passphrase; safe to run again):'
+              }
+            />
+            {/* `break-words`: the command breaks only when it is longer than the line (a long uuid), never because it could. */}
+            <div className="break-words">
               <Text mono size="sm" text={retryCommand} />
             </div>
+            {retryNote !== undefined && retryNote !== '' && (
+              <p className="m-0 text-sm text-muted">
+                <CodeText text={retryNote} />
+              </p>
+            )}
             <HorizontalStack gap="gap-2" align="items-center" wrap>
               <ButtonAction label="Copy command" variant="neutral" size="xs" onClick={() => void copy(retryCommand)} />
               {copyNote !== undefined && <Text tone={copyNote.ok ? 'success' : 'danger'} size="sm" text={copyNote.text} />}

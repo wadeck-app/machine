@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Collapsible, Notice } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import { loadRevokeContext, signAndRevoke, type RevokeContext, type RevokeResult, type RevokeRow } from '../lib/revokeFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
+import { DetailRows } from './DetailRows.js';
 
 // The confirmation of ONE revocation (admin-ui.md, "Revoke from the page"): what `machine admin revoke <machine>` does, with the admin passphrase and the unlocked key
 // living ONLY in this page. The passphrase is asked at EVERY revocation (ConfirmSignModal `askEveryTime`: no unlock window), taken once, and used for one unlock that
@@ -106,7 +107,7 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
     return (
       <ConfirmSignModal title={`${row.name} revoked`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
         <CommandNotice label={distribution.headline} variant={distribution.tone} />
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
       </ConfirmSignModal>
     );
   }
@@ -129,18 +130,16 @@ export function RevokeMachineDialog({ row, api, onClose, onRevoked }: RevokeMach
     >
       <Notice variant="default" label={`Revokes ${row.name}: this machine stops trusting it now, and ${inform.length === 0 ? 'there is no other machine to tell' : `${inform.join(', ')} will be told to stop too`}. It can come back only through a new approval.`} />
       <Collapsible title="Details">
-        <VerticalStack gap="gap-2">
-          {[
-            ['Name', row.name],
-            ['Uuid', row.uuid],
-            ['Identity key', context.revoked.keyId],
-            ['Serial', `${context.revoked.serial}: this registration and every older one stop being trusted`],
-            ['Others told', inform.length === 0 ? 'nobody' : inform.join(', ')],
-            ['Relay', 'its record and inbox are removed'],
-          ].map(([label, value]) => (
-            <FieldReadOnly key={label} label={label as string} value={value as string} mono />
-          ))}
-        </VerticalStack>
+        <DetailRows
+          rows={[
+            { label: 'Name', value: row.name },
+            { label: 'Uuid', value: row.uuid },
+            { label: 'Identity key', value: context.revoked.keyId },
+            { label: 'Serial', value: `${context.revoked.serial}: this registration and every older one stop being trusted` },
+            { label: 'Others told', value: inform.length === 0 ? 'nobody' : inform.join(', ') },
+            { label: 'Relay', value: 'its record and inbox are removed' },
+          ]}
+        />
       </Collapsible>
     </ConfirmSignModal>
   );

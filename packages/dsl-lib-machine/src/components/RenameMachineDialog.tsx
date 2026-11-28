@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Collapsible, FieldReadOnly, FieldText, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Collapsible, FieldText, Notice, Text } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
-import { loadRenameContext, previewRename, signAndRename, type RenameContext, type RenameResult, type RenameRow } from '../lib/renameFlow.js';
+import { loadRenameContext, previewRename, RETRY_SAME_NAME_NOTE, signAndRename, type RenameContext, type RenameResult, type RenameRow } from '../lib/renameFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
+import { DetailRows } from './DetailRows.js';
 
 // The confirmation of ONE rename (admin-ui.md, "Rename and aliases from the page"): what `machine admin rename <machine> <new-name>` does, with the admin passphrase and the
 // unlocked key living ONLY in this page. The passphrase is asked at EVERY rename (ConfirmSignModal `askEveryTime`), taken once, and used for one unlock that signs the
@@ -21,8 +22,8 @@ export interface RenameMachineDialogProps {
   row: RenameRow;
   api: AllowApi;
   onClose: () => void;
-  /** The daemon trusts the new name (whatever the delivery to the others): the page list must catch up. */
-  onRenamed: () => void;
+  /** The daemon trusts the new name (whatever the delivery to the others): the page list must catch up. `newName`: the name the machine has now. */
+  onRenamed: (newName: string) => void;
 }
 
 const day = (epoch: number): string => new Date(epoch * 1000).toISOString().slice(0, 10);
@@ -32,6 +33,9 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
   const [typed, setTyped] = useState('');
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const nameField = useRef<HTMLInputElement>(null);
+  // The name field takes the focus when the form first appears, not again after a failed signature (the passphrase takes it then).
+  const focusedName = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -54,10 +58,25 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
     };
   }, [api, row]);
 
+  useEffect(() => {
+    if (phase.kind === 'ready' && !focusedName.current) {
+      focusedName.current = true;
+      nameField.current?.focus();
+    }
+  }, [phase.kind]);
+
   const context = phase.kind === 'ready' || phase.kind === 'signing' ? phase.context : undefined;
   const preview = useMemo(() => (context === undefined ? undefined : previewRename(context, typed, Math.floor(Date.now() / 1000))), [context, typed]);
 
   const title = `Rename ${row.name}?`;
+
+  // What is wrong with the name, told together with an empty passphrase when the person presses the button (and the focus goes to the name).
+  const nameProblem = (): { message: string; focus: () => void } | null => {
+    if (preview === undefined || preview.ok) {
+      return null;
+    }
+    return { message: preview.message === '' ? 'Type the new name first.' : `${preview.message}.`, focus: () => nameField.current?.focus() };
+  };
 
   const confirm = (take: () => string | null) => {
     if (phase.kind !== 'ready' || preview === undefined) {
@@ -80,7 +99,7 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
       (result) => {
         passphrase = '';
         // The daemon trusts the new name: the page list catches up now, behind the dialog.
-        onRenamed();
+        onRenamed(result.newName);
         if (mounted.current) {
           setPhase({ kind: 'done', result });
         }
@@ -117,7 +136,12 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
     return (
       <ConfirmSignModal title={`${oldName} renamed to ${newName}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
         <CommandNotice label={distribution.headline} variant={distribution.tone} />
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
+        <DeliveryList
+          machines={distribution.machines}
+          text={distribution.text}
+          {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand, retryNote: RETRY_SAME_NAME_NOTE } : {})}
+          {...(onRetry === undefined ? {} : { onRetry })}
+        />
       </ConfirmSignModal>
     );
   }
@@ -131,20 +155,22 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
       title={title}
       details={[]}
       warning=""
-      confirmLabel="Rename and sign"
+      confirmLabel="Sign and rename"
       busy={phase.kind === 'signing'}
       busyLabel="Signing and telling the machines..."
       error={error}
       hint={hint ?? null}
       askEveryTime
+      autoFocusCancel={false}
+      checkBeforeSigning={nameProblem}
       onConfirm={confirm}
       onCancel={onClose}
     >
-      <Notice
-        variant="default"
-        label={`Renames ${row.name}: only its name changes (same uuid, same key, same expiry). ${ctx.others.length === 0 ? `${row.name} is told its new name.` : `${ctx.others.map((r) => r.body.name).join(', ')} and ${row.name} are told.`}`}
-      />
+      {/* Each message stays under 140 characters: the Notice of dsl-ui offers "Show more" above that, even when three lines hide nothing. */}
+      <Notice variant="default" label={`Renames ${row.name}: only its name changes (same uuid, same key, same expiry).`} />
+      <Text size="sm" tone="muted" text={ctx.others.length === 0 ? `${row.name} is told its new name.` : `${ctx.others.map((r) => r.body.name).join(', ')} and ${row.name} are told.`} />
       <FieldText
+        ref={nameField}
         label="New name"
         description="Lowercase letters, digits and hyphens, at most 32 characters. A name that is not valid as typed is made valid."
         name="machine-new-name"
@@ -158,22 +184,21 @@ export function RenameMachineDialog({ row, api, onClose, onRenamed }: RenameMach
         }}
         {...(fieldError === undefined ? {} : { error: fieldError })}
       />
-      {preview?.ok === true && preview.normalized && <Notice variant="info" label={`It will be named "${preview.name}" (typed: "${typed}").`} />}
+      {preview?.ok === true && <Notice variant="info" label={`Will be renamed: ${row.name} -> ${preview.name}${preview.normalized ? ` (typed "${typed}", made valid).` : '.'}`} />}
+      {preview?.ok === true && preview.capped && <Notice variant="warning" label="A name has at most 32 characters: the end of what you typed was cut." />}
       <Collapsible title="Details">
-        <VerticalStack gap="gap-2">
-          {[
-            ['Name', `${row.name} -> ${newName ?? '(type the new name)'}`],
-            ['Uuid', row.uuid],
-            ['Identity key', ctx.machine.keyId],
-            ['Serial', `${ctx.machine.serial} -> ${preview?.ok === true ? preview.serial : ctx.machine.serial + 1}`],
-            ['Registration', `expires ${day(ctx.current.body.validTo)}, unchanged: a rename never extends it`],
-            ['Told', informed.join(', ')],
-            ['Keeps working', 'policies, local aliases, connection settings and notice recipients: they follow the machine by its uuid'],
-            ['Stops working', `references by the old name ("${row.name}"): use the new name, the uuid or an alias`],
-          ].map(([label, value]) => (
-            <FieldReadOnly key={label} label={label as string} value={value as string} mono />
-          ))}
-        </VerticalStack>
+        <DetailRows
+          rows={[
+            { label: 'Name', value: `${row.name} -> ${newName ?? '(type the new name)'}` },
+            { label: 'Uuid', value: row.uuid },
+            { label: 'Identity key', value: ctx.machine.keyId },
+            { label: 'Serial', value: `${ctx.machine.serial} -> ${preview?.ok === true ? preview.serial : ctx.machine.serial + 1}` },
+            { label: 'Registration', value: `expires ${day(ctx.current.body.validTo)}, unchanged: a rename never extends it` },
+            { label: 'Told', value: informed.join(', ') },
+            { label: 'Keeps working', value: 'policies, local aliases, connection settings and notice recipients: they follow the machine by its uuid' },
+            { label: 'Stops working', value: `references by the old name ("${row.name}"): use the new name, the uuid or an alias` },
+          ]}
+        />
       </Collapsible>
     </ConfirmSignModal>
   );

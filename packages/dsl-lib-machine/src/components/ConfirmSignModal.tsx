@@ -45,6 +45,14 @@ export interface ConfirmSignModalProps {
    * returns null. For the actions whose key must never outlive the one signature (approving a machine, decision of #146: no unlock window).
    */
   askEveryTime?: boolean;
+  /**
+   * What is wrong with the OTHER fields of the dialog (an empty or refused name), checked when the person presses the confirm button BEFORE the passphrase is read. Its
+   * message and the empty passphrase are told together, in one alert ("Type the new name first. Enter the admin passphrase to sign. Nothing was signed."), and `focus`
+   * (the first field to fix) takes the focus. Absent or null: nothing else to check.
+   */
+  checkBeforeSigning?: () => { message: string; focus?: () => void } | null;
+  /** False: Cancel does not take the initial focus (a dialog whose first field does, with its own ref). Default true: Enter without thinking must never sign. */
+  autoFocusCancel?: boolean;
   /** Called with `take` when the person confirms; `take()` returns the typed passphrase and empties the field, or null when the admin key is unlocked in this page (no passphrase then). */
   onConfirm: (take: () => string | null) => void;
   onCancel: () => void;
@@ -58,9 +66,11 @@ function shownMessage(message: string): string {
   return WRONG_PASSPHRASE.test(message) ? `Nothing was signed. Retype the passphrase. Detail: ${message}` : message;
 }
 
-export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
+export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, checkBeforeSigning, autoFocusCancel = true, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
+  // Set when another field took the focus for a problem: the effect below must not pull it back to the passphrase.
+  const focusTaken = useRef(false);
   const held = useAdminKey().unlocked;
   const unlocked = held && !askEveryTime;
 
@@ -69,15 +79,32 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
     if (busy) {
       return;
     }
+    const other = checkBeforeSigning?.() ?? null;
     // Unlocked: nothing to type. The key is read again at signing time; an expiry in between is said by the signing code, with the fix.
     if (!askEveryTime && adminKeyHolder.current() !== null) {
+      if (other !== null) {
+        focusTaken.current = true;
+        other.focus?.();
+        setLocalError(`${other.message} Nothing was signed.`);
+        return;
+      }
       setLocalError(null);
       onConfirm(() => null);
       return;
     }
     const field = passphrase.current;
-    if (field === null || field.read() === '') {
-      setLocalError('Enter the admin passphrase to sign. Nothing was signed.');
+    const emptyPassphrase = field === null || field.read() === '';
+    if (other !== null || emptyPassphrase) {
+      // Every problem at once: fixing one and meeting the next on the following click is the slow way.
+      const said = [other?.message, emptyPassphrase ? 'Enter the admin passphrase to sign.' : undefined].filter((m): m is string => m !== undefined);
+      if (other !== null) {
+        focusTaken.current = true;
+        other.focus?.();
+      }
+      setLocalError(`${said.join(' ')} Nothing was signed.`);
+      return;
+    }
+    if (field === null) {
       return;
     }
     setLocalError(null);
@@ -92,6 +119,11 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   // An error (wrong passphrase, empty field) puts the focus back where the person retypes: the field is inert while busy, so this runs once it is usable again.
   useEffect(() => {
     if (shown !== null && !busy) {
+      if (focusTaken.current) {
+        // A field to fix (the name) took the focus when the problem was told: the passphrase keeps it for the next time.
+        focusTaken.current = false;
+        return;
+      }
       passphrase.current?.focus();
     }
   }, [shown, busy]);
@@ -129,7 +161,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
             )}
             <DialogFooter>
               {/* Cancel is the default focus (autoFocus): Enter without thinking must never sign. */}
-              <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} autoFocus />
+              <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} autoFocus={autoFocusCancel || !needsPassphrase} />
               {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
             </DialogFooter>
           </VerticalStack>

@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Collapsible, Notice, FieldReadOnly, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Collapsible, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import type { ApprovalProgress } from '../lib/approvalTimeline.js';
 import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type Approvable, type ApproveContext, type ApproveResult, type ApproveRow } from '../lib/approveFlow.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
+import { DetailRows } from './DetailRows.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -183,7 +184,7 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
         {codes === 'match' && <CommandNotice variant="success" label={`Comparison recorded on this page. The decisive confirmation is still to be made on ${row.name}: \`machine join\` there asks you to confirm its code.`} />}
         {codes === 'differ' && <CommandNotice variant="danger" label={`Codes differ: do NOT use "${row.name}". Run \`machine admin revoke ${row.name}\` now, then reject the candidate and look for who sits between the machines.`} />}
         {keepProblem !== null && <Notice variant="warning" label={keepProblem} />}
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={documentsMissing} {...(documentsMissing ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} {...(documentsMissing ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
       </ConfirmSignModal>
     );
   }
@@ -211,16 +212,16 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
       ))}
       <Collapsible title="Details">
         <VerticalStack gap="gap-2">
-          {[
-            ['Name', row.name],
-            ['Hostname', row.hostname === '' ? 'unknown' : row.hostname],
-            ['Uuid', row.uuid ?? ''],
-            ['Seen from', row.observedIp === '' ? 'unknown' : row.observedIp],
-            ['Valid for', VALID_FOR],
-            ['Others told', checked.selfApproval ? 'nobody: the first machine of the network' : inform.length === 0 ? 'nobody' : inform.join(', ')],
-          ].map(([label, value]) => (
-            <FieldReadOnly key={label} label={label as string} value={value as string} mono />
-          ))}
+          <DetailRows
+            rows={[
+              { label: 'Name', value: row.name },
+              { label: 'Hostname', value: row.hostname === '' ? 'unknown' : row.hostname },
+              { label: 'Uuid', value: row.uuid ?? '' },
+              { label: 'Seen from', value: row.observedIp === '' ? 'unknown' : row.observedIp },
+              { label: 'Valid for', value: VALID_FOR },
+              { label: 'Others told', value: checked.selfApproval ? 'nobody: the first machine of the network' : inform.length === 0 ? 'nobody' : inform.join(', ') },
+            ]}
+          />
           <Notice variant="default" label="Candidacy code recomputed in this page from the key and random the relay listed, and it matches: the relay did not swap the key." />
         </VerticalStack>
       </Collapsible>

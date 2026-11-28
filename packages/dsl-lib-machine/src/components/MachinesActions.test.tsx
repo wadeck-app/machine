@@ -139,7 +139,7 @@ describe('Rename', () => {
     expect(dialog).toHaveTextContent(/already used by machine "server".*pick another name/);
     await userEvent.clear(field);
     await userEvent.type(field, 'My Box');
-    expect(dialog).toHaveTextContent('It will be named "my-box" (typed: "My Box").');
+    expect(dialog).toHaveTextContent('Will be renamed: laptop -> my-box (typed "My Box", made valid).');
     expect(screen.queryByLabelText('Keep unlocked for')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -154,7 +154,7 @@ describe('Rename', () => {
     const dialog = await screen.findByRole('dialog');
     await userEvent.type(await screen.findByLabelText('New name'), 'server');
     await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
-    await userEvent.click(screen.getByRole('button', { name: 'Rename and sign' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and rename' }));
     expect(await within(dialog).findByText(/Nothing was signed\./)).toBeInTheDocument();
     expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
@@ -168,7 +168,7 @@ describe('Rename', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Rename laptop' }));
     await userEvent.type(await screen.findByLabelText('New name'), 'box');
     await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
-    await userEvent.click(screen.getByRole('button', { name: 'Rename and sign' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and rename' }));
     const dialog = await screen.findByRole('dialog', { name: 'laptop renamed to box' }, { timeout: 20_000 });
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/rename');
     expect(Object.keys(post?.body as object).sort()).toEqual(['documents', 'noticeRecipients', 'signed', 'uuid']);
@@ -186,8 +186,11 @@ describe('Rename', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Rename laptop' }));
     await userEvent.type(await screen.findByLabelText('New name'), 'box');
     await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
-    await userEvent.click(screen.getByRole('button', { name: 'Rename and sign' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and rename' }));
     const dialog = await screen.findByRole('dialog', { name: 'laptop renamed to box' }, { timeout: 20_000 });
+    // The raw report is folded (UX review 5): the machine line and the buttons come first.
+    expect(within(dialog).queryByText(/relay down/)).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
     expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Retry delivery' }));
     await waitFor(() => expect(within(dialog).getByText(/Documents delivered to 1 machine\./)).toBeInTheDocument());
@@ -222,7 +225,7 @@ describe('Aliases', () => {
     expect(within(list).getByText('server')).toBeInTheDocument();
     expect(dialog).toHaveTextContent(/"srv" is a network alias of server.*local alias of laptop.*the local alias wins on this machine/);
     expect(within(dialog).getByLabelText('Points to')).toHaveValue(LAPTOP.uuid);
-    expect(dialog).toHaveTextContent('1 of 64');
+    expect(dialog).toHaveTextContent('1 of the 64 aliases the network can hold');
   });
 
   it('an alias the CLI would refuse is said under the field before the passphrase; nothing is posted', async () => {
@@ -245,7 +248,7 @@ describe('Aliases', () => {
     expect(screen.queryByLabelText('Keep unlocked for')).toBeNull();
     await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
     state.aliasesContext = aliasesContext({ current: listOf([{ alias: 'box', uuid: LAPTOP.uuid }, { alias: 'srv', uuid: SERVER.uuid }]) });
-    await userEvent.click(screen.getByRole('button', { name: 'Sign and send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and add' }));
     const result = await screen.findByRole('dialog', { name: 'Network alias box set' }, { timeout: 20_000 });
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/aliases');
     expect(Object.keys(post?.body as object).sort()).toEqual(['documents', 'signed']);
@@ -255,6 +258,8 @@ describe('Aliases', () => {
     const back = await screen.findByRole('dialog', { name: 'Network aliases' });
     const list = await within(back).findByRole('list', { name: 'Network aliases' });
     expect(within(list).getByText('box')).toBeInTheDocument();
+    // The alias that was added is not typed again by mistake: the field is empty.
+    expect(within(back).getByLabelText('Alias')).toHaveValue('');
   }, 60_000);
 
   it('removes an alias: its own confirmation and its own passphrase', async () => {
@@ -263,7 +268,7 @@ describe('Aliases', () => {
     await userEvent.click(await within(dialog).findByRole('button', { name: 'Remove alias srv' }));
     const confirm = await screen.findByRole('dialog', { name: 'Remove alias srv?' });
     await userEvent.type(within(confirm).getByLabelText('Admin passphrase'), PASSPHRASE);
-    await userEvent.click(within(confirm).getByRole('button', { name: 'Sign and send' }));
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Sign and remove' }));
     await screen.findByRole('dialog', { name: 'Network alias srv removed' }, { timeout: 20_000 });
     const post = calls.find((c) => c.url === 'POST /api/modules/machine/aliases');
     expect((post?.body as { signed: { body: { entries: unknown[] } } }).signed.body.entries).toEqual([]);
@@ -285,5 +290,227 @@ describe('Aliases', () => {
     expect(await within(dialog).findByText(/no admin key/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Aliases laptop' })).toHaveFocus());
+  });
+});
+
+// UX review 5 ------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+const openRename = async (name = 'laptop') => {
+  await userEvent.click(screen.getByRole('button', { name: `Rename ${name}` }));
+  return screen.findByRole('dialog');
+};
+const noShowMore = (dialog: HTMLElement): void => {
+  // The Notice of dsl-ui offers "Show more" above 140 characters whether or not three lines hide anything: a text of the dialogs stays under it.
+  expect(within(dialog).queryByRole('button', { name: /Show more/ })).toBeNull();
+};
+
+describe('Rename (UX review 5)', () => {
+  it('the focus is in the New name field when the dialog opens (not on Cancel, not on the page)', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    await openRename();
+    await waitFor(() => expect(screen.getByLabelText('New name')).toHaveFocus());
+  });
+
+  it('shows the normalized new name before the signature, with the old one: "laptop -> box"; a typed name made valid says what it was', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    const field = await screen.findByLabelText('New name');
+    await userEvent.type(field, 'box');
+    expect(dialog).toHaveTextContent('Will be renamed: laptop -> box');
+    expect(dialog).not.toHaveTextContent('made valid).');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'My Box');
+    expect(dialog).toHaveTextContent('Will be renamed: laptop -> my-box (typed "My Box", made valid).');
+  });
+
+  it('says the 32 characters cap instead of cutting silently', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await userEvent.type(await screen.findByLabelText('New name'), 'a-machine-name-that-is-far-longer-than-thirty-two-characters');
+    expect(dialog).toHaveTextContent('Will be renamed: laptop -> a-machine-name-that-is-far-longe');
+    expect(dialog).toHaveTextContent('A name has at most 32 characters: the end of what you typed was cut.');
+  });
+
+  it('an empty name and an empty passphrase are both said at once, nothing is posted, and the focus goes to the name', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await screen.findByLabelText('New name');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Sign and rename' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Type the new name first.');
+    expect(alert).toHaveTextContent('Enter the admin passphrase to sign.');
+    expect(alert).toHaveTextContent('Nothing was signed.');
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
+    await waitFor(() => expect(screen.getByLabelText('New name')).toHaveFocus());
+  });
+
+  it('a valid name and an empty passphrase: the passphrase is the only problem and has the focus (as before)', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await userEvent.type(await screen.findByLabelText('New name'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Sign and rename' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Enter the admin passphrase to sign. Nothing was signed.');
+    expect(alert).not.toHaveTextContent(/Type the new name/);
+    await waitFor(() => expect(screen.getByLabelText('Admin passphrase')).toHaveFocus());
+  });
+
+  it('a conflict names the machine and never ends with a truncated uuid', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await userEvent.type(await screen.findByLabelText('New name'), 'server');
+    expect(dialog.textContent).toMatch(/already used by machine "server": pick another name/);
+    expect(dialog.textContent).not.toMatch(/\([0-9a-f]{8}\)/);
+  });
+
+  it('the Details are folded, wrap at spaces (never "f/ollow"), and say what keeps and stops working', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await screen.findByLabelText('New name');
+    const toggle = within(dialog).getByRole('button', { name: 'Details' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(dialog).toHaveTextContent(/Keeps working/);
+    expect(dialog.innerHTML).not.toMatch(/break-all/);
+    noShowMore(dialog);
+  });
+
+  it('the page says why the same name twice is the terminal command: the documents are sent again, nothing is renamed; Retry delivery comes first and Details are folded', async () => {
+    state.renameAnswer = { ok: true, subject: { uuid: LAPTOP.uuid, name: 'box' }, retry: RENAME_RETRY, ...delivery({ failed: true, text: { out: '', err: '[error] server (x): peer document not stored: relay down\n' }, machines: [FAILED] }) };
+    render(<MachinesTable rows={ROWS} onRefresh={vi.fn(async () => undefined)} />);
+    await openRename();
+    await userEvent.type(await screen.findByLabelText('New name'), 'box');
+    await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and rename' }));
+    const dialog = await screen.findByRole('dialog', { name: 'laptop renamed to box' }, { timeout: 20_000 });
+    expect(within(dialog).getByRole('button', { name: 'Details' })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(dialog).getByRole('button', { name: 'Retry delivery' })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Run it in a terminal instead' }));
+    expect(within(dialog).getByText(RENAME_RETRY)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/the same name twice is how .*machine admin rename.* sends the documents again; nothing is renamed/);
+    expect(dialog).toHaveTextContent(/Only when Retry delivery says/);
+  }, 60_000);
+
+
+  const renamed = (name: string) => [ROWS[0]!, { ...ROWS[1]!, name }, ROWS[2]!];
+  const renameLaptopToBox = async () => {
+    await openRename();
+    await userEvent.type(await screen.findByLabelText('New name'), 'box');
+    await userEvent.type(screen.getByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Sign and rename' }));
+    return screen.findByRole('dialog', { name: 'laptop renamed to box' }, { timeout: 20_000 });
+  };
+
+  it('after a successful rename the list has already reloaded when Close is pressed: the focus goes to the button of the renamed row, not to the page', async () => {
+    let rerenderTable: (name: string) => void = () => undefined;
+    // The page reloads its list as soon as the daemon answered, behind the dialog.
+    const onRefresh = vi.fn(async () => rerenderTable('box'));
+    const { rerender } = render(<MachinesTable rows={ROWS} onRefresh={onRefresh} />);
+    rerenderTable = (name) => rerender(<MachinesTable rows={renamed(name)} onRefresh={onRefresh} />);
+    const dialog = await renameLaptopToBox();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename box' })).toHaveFocus());
+  }, 60_000);
+
+  it('after a successful rename the list reloads only after Close: the focus rests on the row button and follows the new name, never falls to the page', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    const { rerender } = render(<MachinesTable rows={ROWS} onRefresh={onRefresh} />);
+    const dialog = await renameLaptopToBox();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename laptop' })).toHaveFocus());
+    rerender(<MachinesTable rows={renamed('box')} onRefresh={onRefresh} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename box' })).toHaveFocus());
+  }, 60_000);
+
+  it('the Rename dialog texts fit a Notice without "Show more"', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openRename();
+    await screen.findByLabelText('New name');
+    noShowMore(dialog);
+  });
+});
+
+describe('Aliases (UX review 5)', () => {
+  const openAliases = async (row = 'laptop') => {
+    await userEvent.click(screen.getByRole('button', { name: `Aliases ${row}` }));
+    return screen.findByRole('dialog', { name: 'Network aliases' });
+  };
+
+  it('explains the count: "of the 64 aliases the network can hold"', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await within(dialog).findByRole('list', { name: 'Network aliases' });
+    expect(dialog).toHaveTextContent('1 of the 64 aliases the network can hold');
+  });
+
+  it('the list texts never offer a "Show more" that shows nothing (the intro is plain text, a conflict is one sentence and the command under it)', async () => {
+    state.aliasesContext = aliasesContext({ localAliases: { srv: LAPTOP.uuid } });
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await within(dialog).findByRole('list', { name: 'Network aliases' });
+    noShowMore(dialog);
+    // The command is monospace, without backticks.
+    expect(dialog.textContent).not.toContain('`');
+    expect(within(dialog).getByText('machine alias rm srv')).toBeInTheDocument();
+  });
+
+  it('the confirmation of "box" tells no conflict about another alias (tc): only the conflicts of the alias being set', async () => {
+    state.aliasesContext = aliasesContext({ current: listOf([{ alias: 'tc', uuid: SERVER.uuid }]), localAliases: { tc: LAPTOP.uuid } });
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await userEvent.type(await within(dialog).findByLabelText('Alias'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add alias' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Set alias box?' });
+    expect(confirm.textContent).not.toMatch(/"tc"/);
+    expect(confirm.textContent).not.toMatch(/local alias wins/);
+    noShowMore(confirm);
+  });
+
+  it('the confirmation of an alias that a local alias shadows tells that conflict, with the command in monospace', async () => {
+    state.aliasesContext = aliasesContext({ localAliases: { box: SERVER.uuid } });
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await userEvent.type(await within(dialog).findByLabelText('Alias'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add alias' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Set alias box?' });
+    expect(confirm).toHaveTextContent('"box" is also a local alias of server: the local alias wins on this machine.');
+    expect(within(confirm).getByText('machine alias rm box')).toBeInTheDocument();
+    expect(confirm.textContent).not.toContain('`');
+  });
+
+  it('Add and Remove follow one pattern: "Sign and add" and "Sign and remove", like "Sign and rename"', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await userEvent.type(await within(dialog).findByLabelText('Alias'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add alias' }));
+    const add = await screen.findByRole('dialog', { name: 'Set alias box?' });
+    expect(within(add).getByRole('button', { name: 'Sign and add' })).toBeInTheDocument();
+    await userEvent.click(within(add).getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove alias srv' }));
+    const remove = await screen.findByRole('dialog', { name: 'Remove alias srv?' });
+    expect(within(remove).getByRole('button', { name: 'Sign and remove' })).toBeInTheDocument();
+  });
+
+  it('the Details of the confirmation are folded and never break a word', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await userEvent.type(await within(dialog).findByLabelText('Alias'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add alias' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Set alias box?' });
+    const toggle = within(confirm).getByRole('button', { name: 'Details' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(confirm.innerHTML).not.toMatch(/break-all/);
+  });
+
+  it('a refusal names the machine (no truncated uuid), under the field', async () => {
+    state.aliasesContext = aliasesContext({ current: listOf([{ alias: 'box', uuid: SERVER.uuid }]) });
+    render(<MachinesTable rows={ROWS} />);
+    const dialog = await openAliases();
+    await userEvent.type(await within(dialog).findByLabelText('Alias'), 'box');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add alias' }));
+    const refusal = within(dialog).getByText(/already points to machine/).textContent ?? '';
+    expect(refusal).toContain('already points to machine "server"');
+    expect(refusal).not.toMatch(/\([0-9a-f]{8}\)/);
   });
 });

@@ -29,7 +29,7 @@ const approveBody = (c: RelayCandidacy): ApproveRequest => ({
 const first = (name: string): RelayCandidacy => seed(name).candidacies[0] as RelayCandidacy;
 
 describe('the routes of the Candidacies page', () => {
-  it('answers exactly the eleven routes the page calls, under the module prefix', () => {
+  it('answers exactly the eleven routes the page calls plus the count of the Requests tab, under the module prefix', () => {
     expect(Object.keys(make('one-pending')).sort()).toEqual(
       [
         'GET /candidacies',
@@ -43,6 +43,7 @@ describe('the routes of the Candidacies page', () => {
         'GET /admin-login',
         'POST /admin-login',
         'POST /admin-login/cancel',
+        'GET /requests',
       ]
         .map(full)
         .sort(),

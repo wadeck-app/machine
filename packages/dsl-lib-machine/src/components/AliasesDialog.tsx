@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ButtonAction, Collapsible, FieldReadOnly, FieldSelect, FieldText, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Collapsible, FieldSelect, FieldText, Notice, Text, VerticalStack } from '@wadeck-app/dsl-ui';
 import { MAX_ALIASES } from '@wadeck-app/machine-webcrypto';
 import { loadAliasesContext, previewAliasChange, signAndChangeAlias, type AliasChange, type AliasesContext, type AliasesResult, type AliasPreview } from '../lib/aliasesFlow.js';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
@@ -7,6 +7,7 @@ import { WrapText } from './CellText.js';
 import { CommandNotice } from './CommandNotice.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
 import { DeliveryList } from './DeliveryList.js';
+import { DetailRows } from './DetailRows.js';
 
 // The network aliases (decision 116; admin-ui.md, "Rename and aliases from the page"): the admin-signed labels that mean the same machine on every machine of the network.
 // One dialog: the list (what is in force), an add form, a Remove per alias. EACH change is its own signature: a confirmation names it, the admin passphrase is asked now
@@ -92,7 +93,7 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
     return (
       <ConfirmSignModal title={`Network alias ${result.alias} ${result.action === 'set' ? 'set' : 'removed'}`} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
         <CommandNotice label={distribution.headline} variant={distribution.tone} />
-        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial'} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
+        <DeliveryList machines={distribution.machines} text={distribution.text} {...(distribution.status === 'partial' ? { retryCommand: distribution.retryCommand } : {})} {...(onRetry === undefined ? {} : { onRetry })} />
         <div>
           <ButtonAction label="Back to the aliases" variant="secondary" size="sm" onClick={() => void load()} />
         </div>
@@ -119,6 +120,10 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
           // The daemon kept the list: the page list catches up now, behind the dialog.
           onChanged();
           if (mounted.current) {
+            // The alias that was just added must not stay typed: the next Add would send the same one again.
+            if (change.action === 'set') {
+              setAlias('');
+            }
             setPhase({ kind: 'done', context, hint, result });
           }
         },
@@ -136,7 +141,7 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
         title={`${change.action === 'set' ? 'Set' : 'Remove'} alias ${preview.alias}?`}
         details={[]}
         warning=""
-        confirmLabel="Sign and send"
+        confirmLabel={change.action === 'set' ? 'Sign and add' : 'Sign and remove'}
         busy={phase.busy}
         busyLabel="Signing and telling the other machines..."
         error={error}
@@ -148,28 +153,22 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
           setPhase({ kind: 'list', context, hint });
         }}
       >
-        <Notice
-          variant="default"
-          label={
-            change.action === 'set'
-              ? `On every machine of the network, "${preview.alias}" will mean ${pointsTo}. ${told.length === 0 ? 'There is no other machine to tell.' : `${told.join(', ')} will be told.`}`
-              : `"${preview.alias}" (${pointsTo}) will no longer be a network alias. ${told.length === 0 ? 'There is no other machine to tell.' : `${told.join(', ')} will be told.`}`
-          }
-        />
+        {/* Each message stays under 140 characters (the Notice of dsl-ui offers "Show more" above that, even when it hides nothing): who is told is a line of its own. */}
+        <Notice variant="default" label={change.action === 'set' ? `On every machine of the network, "${preview.alias}" will mean ${pointsTo}.` : `"${preview.alias}" (${pointsTo}) will no longer be a network alias.`} />
+        <Text size="sm" tone="muted" text={told.length === 0 ? 'There is no other machine to tell.' : `${told.join(', ')} will be told.`} />
+        {/* Only the conflicts of THIS alias (previewAliasChange): the command is monospace under its sentence. */}
         {preview.conflicts.map((c) => (
-          <Notice key={c.alias} variant="warning" label={`"${c.alias}" is also a local alias of ${nameOf(context, c.local)}: the local alias wins on this machine. Remove it with \`machine alias rm ${c.alias}\` to follow the network alias.`} />
+          <CommandNotice key={c.alias} variant="warning" label={`"${c.alias}" is also a local alias of ${nameOf(context, c.local)}: the local alias wins on this machine. Remove it with \`machine alias rm ${c.alias}\` to follow the network alias.`} />
         ))}
         <Collapsible title="Details">
-          <VerticalStack gap="gap-2">
-            {[
-              ['Alias', preview.alias],
-              ['Points to', pointsTo],
-              ['After', `${preview.entries.length} network alias(es), signed as one list and sent to every other trusted machine as a sealed document`],
-              ['Told', told.length === 0 ? 'nobody' : told.join(', ')],
-            ].map(([label, value]) => (
-              <FieldReadOnly key={label} label={label as string} value={value as string} mono />
-            ))}
-          </VerticalStack>
+          <DetailRows
+            rows={[
+              { label: 'Alias', value: preview.alias },
+              { label: 'Points to', value: pointsTo },
+              { label: 'After', value: `${preview.entries.length} network ${preview.entries.length === 1 ? 'alias' : 'aliases'}, signed as one list and sent to every other trusted machine as a sealed document` },
+              { label: 'Told', value: told.length === 0 ? 'nobody' : told.join(', ') },
+            ]}
+          />
         </Collapsible>
       </ConfirmSignModal>
     );
@@ -216,12 +215,13 @@ export function AliasesDialog({ row, api, onClose, onChanged }: AliasesDialogPro
 
   return (
     <ConfirmSignModal title={title} details={[]} warning="" needsPassphrase={false} confirmLabel="" onConfirm={() => undefined} onCancel={onClose}>
-      <Notice variant="default" label="A network alias is a label every machine reads the same way (box means the same machine everywhere). It is never a right: it only decides which machine a name means. Each change is its own signature." />
+      {/* Plain text, not a Notice: it is a help line, and a Notice of this length offers a "Show more" that hides nothing. */}
+      <Text size="sm" tone="muted" text="A network alias is a label every machine reads the same way (box means the same machine everywhere). It is never a right: it only decides which machine a name means. Each change is its own signature." />
       {standing.map(([a, u]) => (
-        <Notice key={a} variant="warning" label={`"${a}" is a network alias of ${nameOf(context, network[a] as string)} and a local alias of ${nameOf(context, u)}: the local alias wins on this machine. Remove it with \`machine alias rm ${a}\` to follow the network alias.`} />
+        <CommandNotice key={a} variant="warning" label={`"${a}" is a network alias of ${nameOf(context, network[a] as string)} and a local alias of ${nameOf(context, u)}: the local alias wins on this machine. Remove it with \`machine alias rm ${a}\` to follow the network alias.`} />
       ))}
       <VerticalStack gap="gap-2">
-        <Text size="sm" tone="muted" text={`${entries.length} of ${MAX_ALIASES}`} />
+        <Text size="sm" tone="muted" text={`${entries.length} of the ${MAX_ALIASES} aliases the network can hold`} />
         {entries.length === 0 ? (
           <Text text="No network alias yet: add one below." />
         ) : (
