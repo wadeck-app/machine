@@ -327,15 +327,15 @@ describe('Allow', () => {
     keyFileText = hintedKeyFile;
     const { unmount } = render(<HeldRequests rows={ROWS} allow={ALLOW} />);
     await userEvent.click(allowBtn('ls'));
-    const hint = await screen.findByTestId('passphrase-hint');
-    expect(hint).toHaveTextContent('Hint: the street of my first school');
+    const hint = await screen.findByText('Hint: the street of my first school');
+    expect(hint).toBeInTheDocument();
     expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
     unmount();
     keyFileText = keyFile;
     render(<HeldRequests rows={ROWS} allow={ALLOW} />);
     await userEvent.click(allowBtn('ls'));
     await screen.findByLabelText('Admin passphrase');
-    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+    expect(screen.queryByText(/Hint:/)).toBeNull();
   });
 
   it('a malformed hint stops the dialog before any passphrase is asked, with the message of the key file reader', async () => {

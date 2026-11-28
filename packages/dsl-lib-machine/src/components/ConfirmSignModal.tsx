@@ -2,10 +2,9 @@ import React, { useEffect, useId, useRef } from 'react';
 import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
-import { PassphraseHint } from './PassphraseHint.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
-import { MODAL_BACKDROP, MODAL_PANEL, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
+import { MODAL_BACKDROP, MODAL_PANEL, MODAL_PANEL_WITH_ASIDE, MONO_STYLE, NOTICE_WARNING, TEXT_ERROR, TEXT_MUTED, TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 // A confirmation dialog that asks for the admin passphrase (decision 76). Used by the buttons that widen rights (the Allow button of the Requests page;
 // approve and revoke later). It is NOT a registry component on purpose (no @registryCategory): it can never be wired from a view, so the passphrase
@@ -29,6 +28,10 @@ export interface ConfirmSignModalProps {
   confirmLabel: string;
   /** True while the signature is made: the buttons are disabled. */
   busy?: boolean;
+  /** What the disabled confirm button says while `busy` (default "Signing..."). */
+  busyLabel?: string;
+  /** A side column INSIDE the dialog (the timeline of an approval), so the progress stays visible while the dialog hides the page. Absent: no column. */
+  aside?: React.ReactNode;
   /** The last failure, shown in the dialog with the way to proceed. */
   error?: string | null;
   /** Extra controls under the notes (the lifetime choice of the Allow dialog). They are not part of the passphrase form. */
@@ -49,7 +52,7 @@ export interface ConfirmSignModalProps {
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
-export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
+export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
   const titleId = useId();
   const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<FieldSecretHandle>(null);
@@ -111,9 +114,8 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
   };
 
   const shown = localError ?? error;
-  return (
-    <div className={MODAL_BACKDROP} onKeyDown={onKeyDown}>
-      <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} className={MODAL_PANEL}>
+  const content = (
+    <>
         <h2 id={titleId} className="text-lg font-semibold text-content">{title}</h2>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
           {details.map(d => (
@@ -127,7 +129,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
           <p key={i} className={TEXT_MUTED_SM}>{n}</p>
         ))}
         {children}
-        {needsPassphrase && <p className={NOTICE_WARNING}>{warning}</p>}
+        {needsPassphrase && warning !== '' && <p className={NOTICE_WARNING}>{warning}</p>}
         <form className="flex flex-col gap-3" onSubmit={submit}>
           {needsPassphrase && unlocked && <UnlockedKeyBar />}
           {needsPassphrase && !unlocked && (
@@ -135,11 +137,10 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
               {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
               {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
               <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
-              <PassphraseHint hint={hint} />
               <div className="flex flex-wrap items-end gap-3">
                 <div className="min-w-48 flex-1">
                   {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
-                  <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+                  <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...(hint !== null && hint !== '' ? { description: `Hint: ${hint}` } : {})} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
                 </div>
               {!askEveryTime && <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>}
               </div>
@@ -148,9 +149,22 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
           {shown !== null && <div role="alert" className={TEXT_ERROR}>{shown}</div>}
           <div data-footer="" className="flex justify-end gap-2">
             <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} />
-            {needsPassphrase && <ButtonAction type="submit" label={busy ? 'Signing...' : confirmLabel} variant="primary" disabled={busy} />}
+            {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
           </div>
         </form>
+    </>
+  );
+  return (
+    <div className={MODAL_BACKDROP} onKeyDown={onKeyDown}>
+      <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} className={aside === undefined ? MODAL_PANEL : MODAL_PANEL_WITH_ASIDE}>
+        {aside === undefined ? (
+          content
+        ) : (
+          <div className="flex flex-col gap-4 sm:flex-row">
+            <div data-part="aside" className="shrink-0 sm:w-60">{aside}</div>
+            <div className="flex min-w-0 flex-1 flex-col gap-3">{content}</div>
+          </div>
+        )}
       </div>
     </div>
   );

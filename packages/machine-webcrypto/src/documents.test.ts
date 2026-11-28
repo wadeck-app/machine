@@ -271,6 +271,13 @@ describe('buildDocument (kinds peer, policy, revocation)', () => {
     await expect(buildDocument(input, s.key)).rejects.toThrow(/recipientIdentityPublicKey is required/);
   });
 
+  it('a self-registration document (the rename of a machine) is named and refused: the page does not build it yet, and never checks it as a revocation', async () => {
+    const s = await setup();
+    const to = uuid();
+    const input = { kind: 'self-registration', to, id: coreDocumentId('r'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { body: {}, signature: 'x' }, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
+    await expect(buildDocument(input, s.key)).rejects.toThrow(/self-registration.*machine admin rename/);
+  });
+
   describe('sealedPolicyDocument (the inbox document of a policy the page signed)', () => {
     it('is a version 2 document with the id rule of machine-cli distributePolicy, opened by machine-core with the key of the target', async () => {
       const s = await setup();

@@ -98,13 +98,13 @@ describe('the passphrase hint of the load dialog', () => {
     keyFileText = hintedKeyFile;
     const { unmount } = render(<RequestsOverview {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
-    expect(await screen.findByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
+    expect(await screen.findByText('Hint: the street of my first school')).toBeInTheDocument();
     unmount();
     keyFileText = keyFile;
     render(<RequestsOverview {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Load the other machines' }));
     await screen.findByLabelText('Admin passphrase');
-    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+    expect(screen.queryByText(/Hint:/)).toBeNull();
   });
 
   it('a malformed hint is reported next to the button, no passphrase is asked', async () => {

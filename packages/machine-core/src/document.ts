@@ -22,7 +22,7 @@ export const DOCUMENT_DOMAIN = 'machine/document/v1';
 /** Signature domain of the version 2 envelope (sealed payload). */
 export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
 export const DOCUMENT_VERSION = 2;
-export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients'] as const;
+export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients', 'self-registration'] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 /** What the relay accepts for one document. */
 export const MAX_DOCUMENT_BYTES = 16 * 1024;
@@ -206,7 +206,23 @@ function assertPayloadShape(kind: DocumentKind, payload: unknown): void {
     assertPolicyBody(parseSignedPayload(payload, 'policy').body);
   } else if (kind === 'notice-recipients') {
     assertNoticeRecipientsBody(parseSignedPayload(payload, 'notice-recipients').body);
+  } else if (kind === 'self-registration') {
+    parseSelfRegistrationPayload(payload);
   } else parseSignedPayload(payload, 'revocation');
+}
+
+/** Payload of a `self-registration` document: the signed registration of the addressee itself (decision 114). */
+export interface SelfRegistrationPayload {
+  registration: SignedRegistration;
+}
+
+function parseSelfRegistrationPayload(payload: unknown): SelfRegistrationPayload {
+  if (!isObject(payload)) throw new Error('document: the payload of a self-registration document must be an object');
+  assertKeys(payload, ['registration'], 'document self-registration payload');
+  if (!isObject(payload.registration) || !isObject(payload.registration.body) || typeof payload.registration.signature !== 'string') {
+    throw new Error('document self-registration payload: registration must be a signed registration');
+  }
+  return payload as unknown as SelfRegistrationPayload;
 }
 
 function sizeOf(value: unknown): number {
@@ -286,7 +302,8 @@ export type VerifiedDocument =
   | { ok: true; kind: 'peer'; body: DocumentBody; registration: RegistrationBody; signedRegistration: SignedRegistration; sealedPairSecret: string; adminUuid: string | null }
   | { ok: true; kind: 'policy'; body: DocumentBody; policy: SignedPolicy }
   | { ok: true; kind: 'revocation'; body: DocumentBody; revocation: SignedRevocation }
-  | { ok: true; kind: 'notice-recipients'; body: DocumentBody; noticeRecipients: SignedNoticeRecipients };
+  | { ok: true; kind: 'notice-recipients'; body: DocumentBody; noticeRecipients: SignedNoticeRecipients }
+  | { ok: true; kind: 'self-registration'; body: DocumentBody; registration: RegistrationBody; signedRegistration: SignedRegistration };
 
 /** `signed` is true when the admin signature was verified before the failure: only then does the failure say something about a document of the admin (and not about junk or a forgery). */
 export type DocumentResult = VerifiedDocument | { ok: false; reason: DocumentFailure; message: string; signed: boolean };
@@ -394,6 +411,24 @@ export function verifyDocument(signed: unknown, ctx: VerifyDocumentContext): Doc
     }
     if (registration.body.uuid === ctx.selfUuid) return fail('self-peer', `document ${body.id} is about this machine itself: a machine is never its own peer`);
     return { ok: true, kind: 'peer', body, registration: registration.body, signedRegistration: payload.registration, sealedPairSecret: payload.sealedPairSecret, adminUuid: payload.adminUuid };
+  }
+  if (body.kind === 'self-registration') {
+    const payload = plain as unknown as SelfRegistrationPayload;
+    const registration = verifyRegistration(payload.registration, {
+      adminPublicKey: ctx.adminPublicKey,
+      now: ctx.now,
+      skewSeconds: skew,
+      notBeforeLeewaySeconds: NOT_YET_VALID_LEEWAY_SECONDS,
+      ...(ctx.isRevoked ? { isRevoked: ctx.isRevoked } : {}),
+    });
+    if (!registration.ok) {
+      const reason: DocumentFailure = registration.reason === 'not-yet-valid' || registration.reason === 'expired' || registration.reason === 'revoked' ? registration.reason : 'invalid-payload';
+      return fail(reason, `document ${body.id} carries a registration that is not valid here (${registration.reason}): ${registration.message}`);
+    }
+    if (registration.body.uuid !== body.to) {
+      return fail('invalid-payload', `document ${body.id} carries the registration of machine ${registration.body.uuid}, not of the addressee ${body.to}: a self-registration is only about the machine that receives it`);
+    }
+    return { ok: true, kind: 'self-registration', body, registration: registration.body, signedRegistration: payload.registration };
   }
   if (body.kind === 'policy') {
     const policy = plain as unknown as SignedPolicy;

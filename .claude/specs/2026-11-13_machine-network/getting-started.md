@@ -10,6 +10,7 @@ The user-facing guide (install, quick start, allow, run, Wake-on-LAN, troublesho
 |---|---|---|
 | First machine (also the admin) | `machine setup <relay>` | choose the admin passphrase (typed twice, asked again after a typo, 3 attempts) and an optional hint; confirm the relay login code in the relay console, once (MACHINE ADMIN: can approve machines, cannot manage tokens) |
 | Another machine | `machine join <relay>` there, `machine admin approve` on the admin machine | compare the relay login code with the one in the relay console and approve (nothing is typed); on the admin machine: y/N and the passphrase; on both machines: compare the security code |
+| Rename a machine (no new enrollment) | `machine admin rename <machine> <new-name>` on the admin machine; to send again after a failed sending: `machine admin rename <new-name> <new-name>` | y/N and the passphrase; the machine takes its new name when its daemon reads the document |
 | Allow a command | `machine admin allow <machine> -- <command>` on the admin machine (a typed template and `--times` / `--for` / `--until`: see "Rules a user meets") | y/N and the passphrase |
 | Start the daemon now and at each login (each machine) | `machine startup enable` (`--no-start` registers only; `machine status` shows `daemon: running` or `NOT running` with the fix) | none; never automatic unless `--auto-startup` |
 | Stop starting at login | `machine startup disable` | none; also ends the running daemon of the job |
@@ -265,6 +266,7 @@ It then prints the line for the admin machine (`machine admin allow <machine> --
 
 ## Rules a user meets
 
+- Rename (decision 115): `machine admin rename macbook-pro-de-wadeck mac-m2` shows `old -> new`, the uuid and the serial, asks y/N and the passphrase, then sends the re-issued registration to the other machines and to the machine itself (a document of its own kind, `self-registration`). The expiry is unchanged. Policies, aliases and connection settings follow through the uuid; `machine run <old-name>` stops working; run-log lines already written keep the old name. A name used by another machine, a lookalike (hyphens only) or an alias of another machine is refused. Not supported: the admin machine itself. Pending: a Rename action in the Machines page, alias management (#149), the `machine-webcrypto` copy of the document kinds.
 - Command groups (decision 66): `machine <group>` alone shows the current state, read-only: `admin` the candidacies waiting for approval (never asks, never approves; `machine admin approve [<id>]` does), `peer` the peers, `startup` the job status, `cli` the versions, `alias` the aliases, `policy` its help. `machine <group> --help` (or `machine <group> help`, `machine help <group>`) is the help of the group, `machine <group> <subcommand> --help` of one subcommand. An unknown subcommand is a usage error (exit 2) with the list.
 
 - Name: the computer name, lowercase (`Midgard2.local` becomes `midgard2`); `--name` overrides it at creation. It is the signed reference. A friendlier label: `machine alias set <label> <name>`, accepted wherever a machine is named.

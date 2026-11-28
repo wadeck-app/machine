@@ -15,12 +15,12 @@ function view(overrides: Partial<CandidacyListView> = {}): CandidacyListView {
 }
 
 const statuses = (steps: { id: string; status: string }[]): Record<string, string> => Object.fromEntries(steps.map((s) => [s.id, s.status]));
-const TODO = { received: 'todo', checked: 'todo', signed: 'todo', 'final-code': 'todo', distributed: 'todo' };
+const TODO = { received: 'todo', checked: 'todo', signed: 'todo', distributed: 'todo', 'final-code': 'todo' };
 
 describe('candidacyTimeline', () => {
-  it('always lists the five steps with their threat text', () => {
+  it('always lists the five steps in the real chronology (the documents are delivered BEFORE the codes are compared) with their threat text', () => {
     const { steps } = candidacyTimeline([], NOW);
-    expect(steps.map((s) => s.id)).toEqual(['received', 'checked', 'signed', 'final-code', 'distributed']);
+    expect(steps.map((s) => s.id)).toEqual(['received', 'checked', 'signed', 'distributed', 'final-code']);
     for (const step of steps) expect(step.info).toMatch(/^Threat: /);
   });
 
@@ -90,6 +90,27 @@ describe('candidacyTimeline', () => {
     expect(info).toMatch(/never sent/);
     expect(info).toContain('machine admin approve');
     expect(info).not.toMatch(/never in this page|Today/);
+  });
+
+  it('an approved candidacy whose security code was kept: the step "Security code compared" shows it (still to do: only the person can compare it)', () => {
+    const kept = [{ uuid: 'u-1', name: 'laptop', code: '12345 67890 12345 67890 12345' }];
+    const out = candidacyTimeline([view({ relayStatus: 'approved', uuid: 'u-1' })], NOW, kept);
+    const step = out.steps.find((s) => s.id === 'final-code');
+    expect(step?.status).toBe('todo');
+    expect(step?.description).toBe('Security code of "laptop": 12345 67890 12345 67890 12345. It must read exactly the same on laptop.');
+    // Another candidacy, or one still pending: nothing is shown.
+    expect(candidacyTimeline([view({ relayStatus: 'approved', uuid: 'u-2' })], NOW, kept).steps.find((s) => s.id === 'final-code')?.description).toBeUndefined();
+    expect(candidacyTimeline([view({ uuid: 'u-1' })], NOW, kept).steps.find((s) => s.id === 'final-code')?.description).toBeUndefined();
+  });
+
+  it('INVARIANT: for every relay status, no later step is done while an earlier one is not', () => {
+    for (const relayStatus of [undefined, 'pending', 'approved', 'rejected', 'frozen']) {
+      for (const expiresAt of [NOW + 800, NOW - 1]) {
+        const steps = candidacyTimeline([view({ relayStatus, expiresAt })], NOW).steps;
+        const firstNotDone = steps.findIndex((s) => s.status !== 'done');
+        expect(steps.slice(firstNotDone === -1 ? steps.length : firstNotDone).filter((s) => s.status === 'done').map((s) => s.id), `${String(relayStatus)} ${expiresAt}`).toEqual([]);
+      }
+    }
   });
 
   it('never marks the security code or the distribution as done from the relay data: only the page that approves can prove them (it overlays them itself)', () => {

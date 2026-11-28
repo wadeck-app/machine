@@ -59,6 +59,19 @@ const GROUPS: GroupHelp[] = [
         examples: ['machine admin revoke laptop'],
       },
       {
+        name: 'rename',
+        usage: 'rename <machine> <new-name>',
+        text: 'rename a trusted machine without enrolling it again: re-issues its signed registration (same uuid and key, new name, serial + 1, same expiry), tells every machine',
+        options: [
+          '<machine>   name, alias, uuid or unique uuid prefix (not the admin machine itself: not supported yet)',
+          '<new-name>   lowercase letters, digits and hyphens, at most 32 (a typed name is normalised, and said); refused when another machine has it, when it only differs from one by hyphens, or when it is a local alias of another machine',
+          'asks y/N, then the admin passphrase (typed once, never kept); needs the admin relay token to tell the others',
+          'when the machine already has that name, the documents of the last rename are sent again (the retry of a failed sending, nothing is signed again)',
+          'policies, aliases and connection settings follow the machine through its uuid; references by the OLD name stop working',
+        ],
+        examples: ['machine admin rename macbook-pro-de-wadeck mac-m2', 'machine admin rename mac-m2 mac-m2'],
+      },
+      {
         name: 'allow',
         usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] [--list | --remove [--index <n>]] -- <command...>',
         text: 'allow ONE command on a machine (signed policy): exact, or a typed template with <label:type> placeholders; list or withdraw what is allowed',

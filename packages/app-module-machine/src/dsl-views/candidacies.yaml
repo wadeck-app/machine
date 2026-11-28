@@ -31,4 +31,6 @@ sections:
   - $type: machine:CandidaciesTable
     rows: $sources.candidacies.candidacies
     timeline: $sources.candidacies.timeline
+    approvals: $sources.candidacies.approvals
+    approvalsProblem: $sources.candidacies.approvalsProblem
     emptyMessage: No pending candidacy

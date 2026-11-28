@@ -30,6 +30,16 @@ describe('VerticalTimeline', () => {
     expect(within(items[2]!).getByText('To do')).toBeInTheDocument();
   });
 
+  it('a step that does not apply is "Not needed": written as such, neither Done nor Current, not marked as the current step', () => {
+    render(<VerticalTimeline steps={[...STEPS, { id: 'code', title: 'Security code compared', status: 'skipped', description: 'No code to compare' }]} />);
+    const item = screen.getAllByRole('listitem')[3]!;
+    expect(item.getAttribute('data-status')).toBe('skipped');
+    expect(item.getAttribute('aria-current')).toBeNull();
+    expect(within(item).getByText('Not needed')).toBeInTheDocument();
+    expect(within(item).queryByText('Done')).toBeNull();
+    expect(within(item).queryByText('Current')).toBeNull();
+  });
+
   it('shows the description of a step', () => {
     render(<VerticalTimeline steps={STEPS} />);
     expect(screen.getByText('Name and address match')).toBeInTheDocument();

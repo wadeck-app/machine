@@ -19,6 +19,7 @@ import { runForgetPeerRecord } from './peerForget.js';
 import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistribution } from './distribute.js';
 import { directDeliveryFor } from './directDelivery.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
+import { runRename } from './adminRename.js';
 import { EXIT, parseIndex, type CommandContext } from './cliTypes.js';
 import { runRemoteRequests } from './cliRequestsRemote.js';
 import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
@@ -456,6 +457,25 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
         if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
         if (e instanceof NotInitializedError) return fail(e.message);
         throw e;
+      }
+    }
+    if (sub === 'rename') {
+      // Decision 114: the admin re-issues the registration of a machine under a new name.
+      if (first === undefined || second === undefined || rest[3] !== undefined) return fail('usage: machine admin rename <machine> <new-name>', EXIT.usage);
+      // A rename keeps the expiry of the registration: refused rather than silently ignored.
+      if (args.days !== undefined) return fail('--days does not apply to `machine admin rename`: a rename keeps the expiry of the registration (`machine admin approve` renews it)', EXIT.usage);
+      try {
+        const r = await runRename(configDir, { reference: first, newName: second, prompt, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        emit({ renamed: r.uuid, oldName: r.oldName, name: r.newName, serial: r.serial, resent: r.resent, distribution: r.distribution?.report ?? null }, '');
+        if (r.distribution === undefined) return EXIT.failure;
+        if (r.distribution.formatted.err) io.stderr(r.distribution.formatted.err);
+        // The rename stands; a distribution failure is loud and exits 1.
+        return r.distribution.formatted.failed ? EXIT.failure : EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof NotInitializedError) return fail(e.message);
+        if (e instanceof PromptTimeoutError) throw e;
+        return fail((e as Error).message);
       }
     }
     return fail(unknownSubcommandMessage('admin', sub), EXIT.usage);

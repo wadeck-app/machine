@@ -14,6 +14,10 @@ export interface ApprovalProgress {
   selfApproval: boolean;
   /** The delivery report: absent while it runs (or before it starts). */
   delivery?: 'delivered' | 'partial' | 'failed' | 'none';
+  /** How many machines hold their documents in the relay inbox (offline, say): delivered counts them, the step says how many wait. */
+  waiting?: number;
+  /** The candidate was enrolled before (revoked here earlier): its admin key is already pinned, it prints no security code and there is nothing to compare. */
+  noCode?: boolean;
   /** What the person answered about the two security codes. Absent: not answered yet. */
   codes?: 'match' | 'differ';
 }
@@ -36,21 +40,40 @@ export function overlayApproval(steps: TimelineStep[], progress: ApprovalProgres
     if (!progress.approved) {
       return step;
     }
+    // The codes are compared AFTER the documents are delivered (the real chronology): no answer of the person can make this step done before the one above it.
     if (step.id === 'final-code') {
-      if (progress.selfApproval) {
-        return { ...step, status: 'current', description: 'No other machine to compare with: this machine enrolls itself, run `machine join --resume` here.' };
+      if (progress.noCode === true) {
+        return { ...step, status: 'skipped', description: 'No code to compare: this machine already trusts your admin key.' };
       }
-      if (progress.codes === 'match') {
-        return { ...step, status: 'done' };
+      const delivered = progress.delivery === 'delivered' || progress.delivery === 'none';
+      if (progress.selfApproval) {
+        return delivered
+          ? { ...step, status: 'current', description: 'No other machine to compare with: this machine enrolls itself, run `machine join --resume` here.' }
+          : { ...step, status: 'todo' };
       }
       if (progress.codes === 'differ') {
         return { ...step, status: 'current', description: `The codes differ: run \`machine admin revoke ${progress.candidate.name}\`.` };
+      }
+      if (progress.delivery === undefined) {
+        return { ...step, status: 'todo' };
+      }
+      if (!delivered) {
+        return progress.codes === 'match'
+          ? { ...step, status: 'current', description: 'The codes match. Done once every machine has its documents.' }
+          : { ...step, status: 'todo' };
+      }
+      if (progress.codes === 'match') {
+        return { ...step, status: 'done' };
       }
       return { ...step, status: 'current', description: 'Compare the code with the candidate screen.' };
     }
     if (step.id === 'distributed') {
       if (progress.delivery === 'delivered' || progress.delivery === 'none') {
-        return { ...step, status: 'done' };
+        const waiting = progress.waiting ?? 0;
+        if (waiting === 0) {
+          return { ...step, status: 'done' };
+        }
+        return { ...step, status: 'done', description: `${waiting} waiting in the relay inbox: ${waiting === 1 ? 'it installs them when it is back' : 'they install them when they are back'}.` };
       }
       if (progress.delivery === 'partial' || progress.delivery === 'failed') {
         return { ...step, status: 'current', description: `Not delivered to every machine: run \`${retry}\`.` };

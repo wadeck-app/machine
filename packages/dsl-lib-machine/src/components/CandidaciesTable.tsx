@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { ButtonAction, DataTable, Markdown, type TableColumn } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Collapsible, DataTable, Markdown, Notice, type TableColumn } from '@wadeck-app/dsl-ui';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { overlayApproval, type ApprovalProgress } from '../lib/approvalTimeline.js';
 import type { ApproveRow } from '../lib/approveFlow.js';
 import { TEXT_ERROR } from '../lib/styleTokens.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
+import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
 /** One row of the Candidacies list, as the module backend answers it. */
@@ -26,6 +27,13 @@ export interface CandidaciesTableProps {
   timeline?: TimelineStep[];
   emptyMessage?: string;
   /**
+   * The security codes the module kept after the approvals made from this page (`$sources.candidacies.approvals`): the relay purges the candidacy random once approved,
+   * so the code cannot be recomputed later. Public values, shown again until the candidate had time to confirm on its own machine.
+   */
+  approvals?: Array<{ uuid: string; name: string; code: string; ageText: string }>;
+  /** Why the module could not read the kept codes (`$sources.candidacies.approvalsProblem`, the fix included). Empty: no problem. */
+  approvalsProblem?: string;
+  /**
    * Runs a named action of the view (here `reject`, with its confirmation and its reload) for a row.
    * @ctxDefault
    */
@@ -37,10 +45,9 @@ export interface CandidaciesTableProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
+// Four columns that fit at 1000 px without cutting a word; the hostname and the address are in the row expansion.
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
-  { key: 'name', label: 'Name', render: (r) => r.name },
-  { key: 'hostname', label: 'Hostname', render: (r) => r.hostname },
-  { key: 'observedIp', label: 'Seen from', nowrap: true, render: (r) => r.observedIp },
+  { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
   { key: 'statusText', label: 'Status', render: (r) => r.statusText },
 ];
@@ -55,7 +62,7 @@ const EXPANSION = { $type: 'CandidacyDetails' };
  * @registryCategory composite
  * @registryTags candidacies approve reject admin enrollment
  */
-export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pending candidacy', onAction, onRefresh }: CandidaciesTableProps) {
+export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pending candidacy', approvals = [], approvalsProblem = '', onAction, onRefresh }: CandidaciesTableProps) {
   const [selected, setSelected] = useState<CandidacyTableRow | null>(null);
   const [progress, setProgress] = useState<ApprovalProgress | undefined>(undefined);
   const [problem, setProblem] = useState<string | null>(null);
@@ -102,7 +109,7 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
   return (
     <div className="flex items-start gap-6">
       {steps !== undefined && steps.length > 0 && (
-        <div className="shrink-0">
+        <div className="w-60 shrink-0">
           <VerticalTimeline steps={steps} />
         </div>
       )}
@@ -115,8 +122,19 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
           expansion={EXPANSION}
           renderNode={(_node, ctx) => <Markdown text={(ctx['row'] as CandidacyTableRow).bindingText} />}
         />
+        {approvalsProblem !== '' && <Notice variant="warning" label={approvalsProblem} />}
+        {approvals.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <h3 className="text-sm font-medium text-content">Security codes of recent approvals</h3>
+            {approvals.map((a) => (
+              <Collapsible key={a.uuid} title={`Show security code: ${a.name} (approved ${a.ageText} ago)`}>
+                <SecurityCodeCompare code={a.code} name={a.name} />
+              </Collapsible>
+            ))}
+          </div>
+        )}
       </div>
-      {selected !== null && <ApproveCandidacyDialog row={selected} api={api.current} onClose={close} onProgress={track} />}
+      {selected !== null && <ApproveCandidacyDialog row={selected} api={api.current} onClose={close} onProgress={track} {...(steps === undefined ? {} : { steps })} />}
     </div>
   );
 }

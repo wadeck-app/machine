@@ -140,6 +140,11 @@ describe('approveDistribute: verify what the page signed, deliver it like machin
     expect(answer.failed).toBe(false);
     expect(answer.report.failures).toEqual([]);
     expect(answer.text.out).toMatch(/2 document\(s\) stored by the relay for 1 machine\(s\)/);
+    // The structured view the page shows (one entry per machine told, the new one included): no peer channel here, so both wait in the relay inbox.
+    expect(answer.machines.map((m) => [m.name, m.state, m.code, m.next])).toEqual([
+      ['laptop', 'inbox', 'inbox', 'installs by itself at its next check, nothing to do'],
+      ['server', 'inbox', 'inbox', 'installs by itself at its next check, nothing to do'],
+    ]);
 
     const toLaptop = inboxOf('laptop').slice(before);
     const toServer = inboxOf('server');
@@ -224,6 +229,10 @@ describe('approveDistribute: verify what the page signed, deliver it like machin
     expect(answer.report.failures.map((f) => f.toUuid)).toEqual([uuidOf('laptop')]);
     expect(answer.text.err).toContain(`machine admin distribute ${uuidOf('server')}`);
     expect(answer.text.err).toMatch(/laptop/);
+    const laptop = answer.machines.find((m) => m.uuid === uuidOf('laptop'));
+    expect(laptop).toMatchObject({ state: 'failed', code: 'not-stored' });
+    expect(laptop?.next).toContain(`machine admin distribute ${uuidOf('server')}`);
+    expect(answer.machines.find((m) => m.uuid === uuidOf('server'))?.state).toBe('inbox');
   });
 
   it('a relay that refuses is a failure with the retry command, the approval stands', async () => {

@@ -1,5 +1,6 @@
 // violations-suppress: ts/no-barrel-index app-core requires the backend entry of an app-module to be src/backend/index.ts (app-core-cli check)
 import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfiguredError, RelayRequestError, type CandidacyListView } from './candidacies.js';
+import { listApprovalCodes, type RecordedApproval } from './approvalCodes.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
 import { registerApproveRoutes } from './candidacyApprove.js';
 import { resolveModuleConfigDir } from './configDir.js';
@@ -568,8 +569,18 @@ export default function register(ctx: ModuleContextLike): void {
       const views = await listCandidacies(configDir(), now);
       const candidacies = views.map((v) => candidacyRow(v, now));
       // `count` is the field the tab indicator of the manifest reads.
-      const { steps: timeline, note: timelineNote } = candidacyTimeline(views, now);
-      return reply.code(200).send({ candidacies, count: candidacies.length, timeline, timelineNote });
+      // The security codes of the approvals made from the page: the relay purges the random once approved, so they cannot be recomputed. A damaged file must not hide
+      // the list: it is reported next to it, with the fix.
+      let kept: RecordedApproval[] = [];
+      let approvalsProblem = '';
+      try {
+        kept = listApprovalCodes(configDir(), now);
+      } catch (e) {
+        approvalsProblem = (e as Error).message;
+      }
+      const approvals = kept.map((k) => ({ uuid: k.uuid, name: k.name, code: k.code, ageText: ageText(now - k.at) }));
+      const { steps: timeline, note: timelineNote } = candidacyTimeline(views, now, kept);
+      return reply.code(200).send({ candidacies, count: candidacies.length, timeline, timelineNote, approvals, approvalsProblem });
     } catch (err) {
       const failure = failureOf(err);
       return reply.code(failure.status).send(failure);

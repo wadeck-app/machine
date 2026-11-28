@@ -1,3 +1,4 @@
+import { parseApprovalCode, recordApprovalCode } from './approvalCodes.js';
 import { approveCandidacy, findApprovable, isCandidacyId, RelayRequestError, type SealedApprovalBody } from './candidacies.js';
 import { callDaemon } from './daemonClient.js';
 import { errorBody, type ErrorBody } from './errorBody.js';
@@ -130,6 +131,22 @@ export function registerApproveRoutes(ctx: RouteContext, deps: ApproveDeps): voi
       return reply.code(failure.status).send(failure);
     }
   }, SENSITIVE);
+
+  // The page hands over the security code of the approval it just made, so that it can be read again once the dialog is closed (the relay purges the random of an
+  // approved candidacy: the code cannot be recomputed later). A public value kept as a reminder, no signature and no secret: a plain write route.
+  ctx.registerRoute('POST', '/approval-codes', async (req, reply) => {
+    const refusal = checkModuleHeader(req);
+    if (refusal !== undefined) return reply.code(refusal.status).send(errorBody(refusal.status, 'module_header', refusal.error));
+    const parsed = parseApprovalCode(isObject(req) ? req['body'] : undefined);
+    if (typeof parsed === 'string') return reply.code(400).send(errorBody(400, 'bad_request', parsed));
+    try {
+      recordApprovalCode(deps.configDir(), parsed, Math.floor(Date.now() / 1000));
+      return reply.code(200).send({ ok: true });
+    } catch (err) {
+      const failure = deps.failureOf(err);
+      return reply.code(failure.status).send(failure);
+    }
+  }, { effect: 'write' });
 
   ctx.registerRoute('POST', '/candidacies/:id/approve', async (req, reply) => {
     const refusal = checkModuleHeader(req);

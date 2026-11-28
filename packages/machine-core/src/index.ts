@@ -80,6 +80,7 @@ export { candidacyCode, finalCode, formatFinalCode, newCandidacyRandom } from '.
 export { approvalSealContext, importCandidateSealContext, pairSecretContext, type SealContextParts } from './approvalContext.js';
 export { HINT_MAX_LENGTH, MIN_ITERATIONS, PASSPHRASE_MIN_LENGTH, PASSPHRASE_RECOMMENDED_LENGTH, adminKeyHint, checkHint, checkPassphrase, decryptAdminKey, encryptAdminKey, generatePassphrase, passphraseAdvice, type AdminKeyEnvelope, type PassphraseCheck } from './adminKey.js';
 export { isUuid, machineNameProblem, normalizeMachineName, resolveMachineRef, type MachineEntry, type NormalizedName, type Resolution } from './reference.js';
+export { buildRenamedRegistration, registrationReplaces, type RenameFailure, type RenameRegistrationInput, type RenameResult, type ReplaceVerdict } from './renameRegistration.js';
 export { MAX_PING_COUNT, parsePingCount, summarizeSamples, type PingCount, type SampleSummary } from './ping.js';
 export {
   DEFAULT_REQUEST_LIFETIME_SECONDS,
@@ -224,6 +225,7 @@ export {
   type DocumentKind,
   type DocumentResult,
   type PeerPayload,
+  type SelfRegistrationPayload,
   type SignedDocument,
   type VerifiedDocument,
   type VerifyDocumentContext,

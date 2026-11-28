@@ -1,6 +1,7 @@
 import { buildApproval, buildDistribution, unlockAdminKey } from '@wadeck-app/machine-webcrypto';
 import type { SignedNoticeRecipients, SignedRegistration } from '@wadeck-app/machine-core';
 import { assertPinnedKey, readKeyFile, trackSigning, type AllowApi } from './allowFlow.js';
+import { dedupeReport, describeDelivery, type DeliveryMachine, type DeliverySummary } from './approvalResult.js';
 import { proveCandidacy } from './candidacyProof.js';
 
 // Approve from the page without React (admin-ui.md, "Approve from the page"; threat-model.md). What `machine admin approve <id>` does, with the admin
@@ -85,6 +86,8 @@ export interface Approvable {
   peersToInform: Array<{ uuid: string; name: string }>;
   /** The candidate is the admin machine itself (the first machine of a network). */
   selfApproval: boolean;
+  /** The machine was revoked here earlier, so it was enrolled before: its admin key is already pinned, it prints no security code and there is nothing to compare. */
+  noCode: boolean;
 }
 
 /** Everything that needs no passphrase and can stop the approval. Throws a sentence naming the problem and the way out. */
@@ -116,14 +119,16 @@ export async function checkApprovable(row: ApproveRow, context: ApproveContext):
     const which = row.boundTokenLabel !== undefined ? `the token labelled "${row.boundTokenLabel}"` : 'another token (the relay did not say which)';
     warnings.push(`The relay says this uuid is already bound to ${which}: approving replaces that binding.${row.bindingNote !== undefined ? ` Note: ${row.bindingNote}.` : ''}`);
   }
-  return { finalCode: proof.finalCode, warnings, peersToInform: context.others.map((r) => ({ uuid: r.body.uuid, name: r.body.name })), selfApproval };
+  return { finalCode: proof.finalCode, warnings, peersToInform: context.others.map((r) => ({ uuid: r.body.uuid, name: r.body.name })), selfApproval, noCode: context.candidate.revokedSerial !== undefined };
 }
 
-export interface ApproveDistribution {
-  /** `delivered`: every machine took its document (or already had it). `partial`: the daemon delivered what it could and names the rest. `failed`: nothing was delivered. `none`: nobody to inform. */
+export interface ApproveDistribution extends DeliverySummary {
+  /** `delivered`: every machine took its document or the relay inbox holds it for it. `partial`: the daemon delivered what it could and names the rest. `failed`: the daemon could not be asked. `none`: nobody to inform. */
   status: 'delivered' | 'partial' | 'failed' | 'none';
-  /** What to tell the person, in the words of the CLI; for `partial` and `failed` it names the exact retry command. */
+  /** The raw report in the words of the CLI (the "Details"), without the lines it repeats; for `partial` and `failed` it names the exact retry command. */
   text: string;
+  /** One entry per machine told: state, cause code, one short reason, one next action (empty when `none` or `failed`). */
+  machines: DeliveryMachine[];
 }
 
 export interface ApproveResult {
@@ -136,8 +141,8 @@ export interface ApproveResult {
 export interface ApproveHooks {
   /** The signatures are made and the key is locked: the one event that happens before the network. */
   onSigned?: () => void;
-  /** The relay holds the approval (the decision went through). */
-  onApproved?: () => void;
+  /** The relay holds the approval (the decision went through). Receives the security code: the one moment to keep it (the relay purges the random of an approved candidacy). */
+  onApproved?: (finalCode: string) => void;
 }
 
 const VALID_FOR_DAYS = 365;
@@ -199,23 +204,28 @@ async function signAndApproveNow(api: AllowApi, context: ApproveContext, row: Ap
 
   const approved = await api.post(`${MODULE_API}/${encodeURIComponent(row.id)}/approve`, { approval: built.approval, adminImport: built.adminImport });
   const message = isObject(approved) && typeof approved['message'] === 'string' ? approved['message'] : 'Candidacy approved';
-  hooks.onApproved?.();
+  hooks.onApproved?.(built.finalCode);
 
   if (documents === undefined) {
-    return { finalCode: built.finalCode, message, distribution: { status: 'none', text: 'No other machine to inform: this is the first machine of the network.' } };
+    return { finalCode: built.finalCode, message, distribution: { status: 'none', text: 'No other machine to inform: this is the first machine of the network.', machines: [], ...describeDelivery('none', [], retryCommand(uuid)) } };
   }
   const buildNotes = documents.failures.map((f) => `[error] ${f.toName} (${f.toUuid}): ${f.kind} document not built: ${f.message}`);
   const retry = retryCommand(uuid);
   try {
     const answer = await api.post('/approve-distribute', { candidateUuid: uuid, documents: documents.documents, noticeRecipients: documents.noticeRecipients });
-    if (!isObject(answer) || !isObject(answer['text']) || typeof answer['text']['out'] !== 'string' || typeof answer['text']['err'] !== 'string' || typeof answer['failed'] !== 'boolean') {
+    if (!isObject(answer) || !isObject(answer['text']) || typeof answer['text']['out'] !== 'string' || typeof answer['text']['err'] !== 'string' || typeof answer['failed'] !== 'boolean' || typeof answer['retry'] !== 'string') {
       throw unexpected('the delivery of the documents');
+    }
+    const machines = answer['machines'];
+    if (!Array.isArray(machines) || !machines.every(isDeliveryMachine)) {
+      throw unexpected('the delivery of the documents (the list of machines is missing: an older module or daemon)');
     }
     const out = answer['text']['out'];
     const err = answer['text']['err'];
     const failed = answer['failed'] || buildNotes.length > 0;
     const lines = [out.trimEnd(), ...buildNotes, err.trimEnd(), ...(buildNotes.length > 0 && !answer['failed'] ? [`[warn] the approval stands: nothing was undone. Run \`${retry}\` to send what is missing; it is safe to run again`] : [])].filter((l) => l !== '');
-    return { finalCode: built.finalCode, message, distribution: { status: failed ? 'partial' : 'delivered', text: lines.join('\n') } };
+    const status = failed ? 'partial' : 'delivered';
+    return { finalCode: built.finalCode, message, distribution: { status, text: dedupeReport(lines.join('\n')), machines, ...describeDelivery(status, machines, answer['retry']) } };
   } catch (e) {
     return {
       finalCode: built.finalCode,
@@ -223,7 +233,33 @@ async function signAndApproveNow(api: AllowApi, context: ApproveContext, row: Ap
       distribution: {
         status: 'failed',
         text: `[error] the other machines were NOT told about "${row.name}": ${(e as Error).message}\n[warn] the approval stands: nothing was undone. Run \`${retry}\` on this machine to tell them; it is safe to run again`,
+        machines: [],
+        ...describeDelivery('failed', [], retry),
       },
     };
+  }
+}
+
+function isDeliveryMachine(value: unknown): value is DeliveryMachine {
+  return (
+    isObject(value) &&
+    typeof value['uuid'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    (value['state'] === 'delivered' || value['state'] === 'inbox' || value['state'] === 'failed') &&
+    typeof value['code'] === 'string' &&
+    typeof value['reason'] === 'string' &&
+    typeof value['next'] === 'string'
+  );
+}
+
+/**
+ * Keeps the security code of the approval it just made with the module, so it can be read again after the dialog is closed (the relay purges the candidacy random once
+ * approved: the code cannot be recomputed later). Public values only. A refusal says the code is still on screen and why it was not kept.
+ */
+export async function recordApprovalCode(api: AllowApi, candidate: { uuid: string; name: string }, code: string): Promise<void> {
+  try {
+    await api.post('/approval-codes', { uuid: candidate.uuid, name: candidate.name, code });
+  } catch (e) {
+    throw new Error(`the security code could not be kept for later (${(e as Error).message}): note it now, it is on this screen`);
   }
 }

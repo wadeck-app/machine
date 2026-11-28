@@ -81,7 +81,7 @@ async function withRelay(candidacies: unknown[]): Promise<string> {
 
 describe('route registration', () => {
   it('registers the seven read-only GET routes (the Activity page, run-log; the Allowed page, decision 104), the Deny post and the sensitive ones (remote requests list, decision 74; admin key file, allow context and allow post, decision 76)', () => {
-    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /approve-distribute', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote']);
+    expect([...routes().keys()].sort()).toEqual(['GET /activity', 'GET /admin-key', 'GET /allow/:machine', 'GET /allowed', 'GET /approve-context/:uuid', 'GET /candidacies', 'GET /health', 'GET /hold-progress/:machine/:id', 'GET /machines', 'GET /requests', 'GET /status', 'POST /allow', 'POST /approval-codes', 'POST /approve-distribute', 'POST /candidacies/:id/approve', 'POST /candidacies/:id/reject', 'POST /deny', 'POST /dismiss-notice', 'POST /requests/remote']);
   });
 });
 
@@ -279,6 +279,37 @@ describe('GET /candidacies', () => {
     const byId = Object.fromEntries(out.body.timeline.map((s: { id: string; status: string }) => [s.id, s.status]));
     expect(byId).toEqual({ received: 'done', checked: 'current', signed: 'todo', 'final-code': 'todo', distributed: 'todo' });
     expect(out.body.timelineNote).toContain('older');
+  });
+
+  it('answers the security codes kept after an approval (the relay no longer lets the page recompute them), newest first, with their age', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await withRelay([]);
+    writeFileSync(join(configDir, 'approval-codes.json'), JSON.stringify({ v: 1, approvals: [{ uuid: UUID, name: 'laptop', code: '12345 67890 12345 67890 12345', at: now - 600 }] }));
+    const out = await call(routes(), 'GET /candidacies');
+    expect(out.status).toBe(200);
+    expect(out.body.approvals).toEqual([{ uuid: UUID, name: 'laptop', code: '12345 67890 12345 67890 12345', ageText: '10 min' }]);
+  });
+
+  it('no code kept: an empty list and no problem; a damaged file does not hide the candidacies, it is reported with the file and the fix', async () => {
+    await withRelay([pending()]);
+    const empty = (await call(routes(), 'GET /candidacies')).body;
+    expect(empty.approvals).toEqual([]);
+    expect(empty.approvalsProblem).toBe('');
+    writeFileSync(join(configDir, 'approval-codes.json'), '{broken');
+    const out = await call(routes(), 'GET /candidacies');
+    expect(out.status).toBe(200);
+    expect(out.body.candidacies).toHaveLength(1);
+    expect(out.body.approvals).toEqual([]);
+    expect(out.body.approvalsProblem).toMatch(/approval-codes\.json is damaged.*delete it/);
+  });
+
+  it('the step "Security code compared" of an approved candidacy shows the code that was kept, so it can be read again from the timeline', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await withRelay([{ ...pending(), status: 'approved' }]);
+    writeFileSync(join(configDir, 'approval-codes.json'), JSON.stringify({ v: 1, approvals: [{ uuid: UUID, name: 'laptop', code: '12345 67890 12345 67890 12345', at: now - 60 }] }));
+    const step = (await call(routes(), 'GET /candidacies')).body.timeline.find((s: { id: string }) => s.id === 'final-code');
+    expect(step.description).toContain('12345 67890 12345 67890 12345');
+    expect(step.description).toContain('laptop');
   });
 
   it('answers a timeline with every step to do, and no note, when there is no candidacy', async () => {

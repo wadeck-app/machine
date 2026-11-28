@@ -3,6 +3,7 @@ import { readAdminPin } from './admin.js';
 import type { MachineIdentity } from './identity.js';
 import { importPeer, installPolicy, installRevocation, loadNetwork } from './network.js';
 import { installNoticeRecipients } from './noticeRecipientsStore.js';
+import { installSelfRegistration } from './selfRegistration.js';
 
 // The ONE place where a document of the admin is verified and applied on the machine it is addressed to (distribution.md). The relay inbox
 // (inboxLoop.ts) and the direct `deliver-document` frame (peerService.ts, decision 86) both call it: the same checks in the same order (pinned admin
@@ -14,7 +15,7 @@ import { installNoticeRecipients } from './noticeRecipientsStore.js';
 export const safe = (text: string, max = 300): string => text.replace(/[^\x20-\x7e]/g, '?').slice(0, max);
 
 /** Failures of the installation validators that are verdicts on the document (permanent), as opposed to trouble of this machine. */
-const REFUSAL = /^(this machine does not trust that registration|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|revocation refused \()/;
+const REFUSAL = /^(this machine does not trust that registration|registration refused \(|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|revocation refused \()/;
 
 export type ApplyResult =
   /** The document is applied now, or it changed nothing because that very content was already in force. */
@@ -83,6 +84,12 @@ export function createDocumentApplier(o: DocumentApplierOptions): DocumentApplie
     if (verified.kind === 'notice-recipients') {
       // Information only (request-notices.md): the list decides who receives notices, never a right. The replace-newer rule keeps an older list out.
       const installed = installNoticeRecipients(o.configDir, verified.noticeRecipients, readAdminPin(o.configDir).adminPublicKey);
+      return installed.changed ? {} : { reason: 'already-installed' };
+    }
+    if (verified.kind === 'self-registration') {
+      // The admin renamed THIS machine (decision 114): only its name changes, never its key or uuid.
+      const installed = installSelfRegistration(o.configDir, o.self, verified.signedRegistration, { now });
+      if (installed.changed) o.onInstalled?.();
       return installed.changed ? {} : { reason: 'already-installed' };
     }
     if (verified.revocation.body.entries.some((entry) => entry.uuid === selfUuid)) {

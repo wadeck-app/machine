@@ -236,6 +236,45 @@ export async function distributeMachine(configDir: string, subjectUuid: string, 
   return report;
 }
 
+function selfRegistrationDocument(sender: Sender, registration: SignedRegistration): SignedDocument {
+  // From the registration only: a retry builds the same id and the same dates.
+  const issuedAt = registration.body.validFrom;
+  const expiresAt = Math.min(issuedAt + DOCUMENT_RETENTION_SECONDS, registration.body.validTo);
+  if (expiresAt <= sender.now()) {
+    throw new Error(`the registration of "${registration.body.name}" is older than the 30 days the relay keeps a document, or has expired: the machine can no longer be told its new name this way. Run \`machine admin approve\` for it (it renews the registration and carries the name)`);
+  }
+  return buildDocument(
+    {
+      kind: 'self-registration',
+      to: registration.body.uuid,
+      id: documentId(`v2:self-registration:${registration.body.uuid}:${registration.body.serial}`),
+      issuedAt,
+      expiresAt,
+      payload: { registration } as unknown as Json,
+      recipientIdentityPublicKey: registration.body.identityPublicKey,
+    },
+    sender.adminPrivateKeyPkcs8,
+  );
+}
+
+/**
+ * After a rename (decision 114): the other peers learn the re-issued registration of the subject and the subject learns theirs, exactly as after an
+ * approval (`distributeMachine`: pair secrets derived from the new serial), and the subject also receives its OWN registration so that it takes its new name.
+ * Safe to run again: ids and dates come from the registrations.
+ */
+export async function distributeRename(configDir: string, subjectUuid: string, sender: Sender): Promise<DistributionReport> {
+  const report = await distributeMachine(configDir, subjectUuid, sender);
+  // The renamed machine is one more machine reached: without it a rename of a network of two would say "no other peer to inform".
+  report.machines += 1;
+  if (report.aborted) return report;
+  const subject = trustedRegistrations(configDir, sender.now()).find((r) => r.body.uuid === subjectUuid);
+  if (subject === undefined) {
+    throw new Error(`machine ${subjectUuid} is not a trusted peer of this machine: only a machine this one trusts can be told its new name (see \`machine status\`)`);
+  }
+  await put(sender, report, { uuid: subject.body.uuid, name: subject.body.name }, 'self-registration', () => selfRegistrationDocument(sender, subject));
+  return report;
+}
+
 /**
  * The admin machine renewed its own registration: tell every trusted peer about the new one (a higher serial replaces the old one there).
  * The pair secret each peer already shares with this machine is sealed again, unchanged: a new one would leave this machine and that peer

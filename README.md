@@ -222,6 +222,7 @@ The shell is part of the exact entry. `run` uses `--shell`, else the default set
 - Help: `machine --help`, `machine <group> --help`, `machine <group> <subcommand> --help`.
 - A friendlier label: `machine alias set <label> <name>`.
 - Revoke a machine: `machine admin revoke <name>` (asks y/N and the passphrase, tells the other machines through the relay).
+- Rename a machine without enrolling it again: `machine admin rename <machine> <new-name>` (y/N, then the admin passphrase; the other machines and the renamed one are told through the relay). Policies and aliases follow the machine; `machine run <old-name>` stops working. A failed sending exits 1 with the retry, `machine admin rename <new-name> <new-name>`. The admin machine itself cannot be renamed yet. Not verified on a real network (see the end of this file).
 
 ## 5. Wake a sleeping machine (Wake-on-LAN)
 
@@ -456,4 +457,5 @@ Specs: [decision log](.claude/specs/2026-11-13_machine-network/_index.md), [thre
 - The update chain (`cli update`, `cli rollback`) has not been run for real against the published registry as of the packaging spec.
 - The startup job against the real `orch` was verified for a throwaway job only (startup.md).
 - The GitHub Packages npm setup shown in section 1.
+- `machine admin rename` (tested with a fake relay and two machines in one process; not run on a real network, the daemons were not started).
 - The commands in this file were checked against the CLI help and sources, not run end to end for this document.

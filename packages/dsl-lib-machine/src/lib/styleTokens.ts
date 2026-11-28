@@ -20,6 +20,8 @@ export const POPOVER_SURFACE = 'rounded-lg border border-border bg-surface text-
 /** Modal backdrop and panel: the same as dsl-ui's Dialog. */
 export const MODAL_BACKDROP = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4';
 export const MODAL_PANEL = `flex w-full max-w-xl flex-col gap-3 p-5 ${POPOVER_SURFACE} shadow-xl`;
+/** The same panel with a side column (the timeline of an approval): wider, and it scrolls inside the viewport instead of running off it. */
+export const MODAL_PANEL_WITH_ASIDE = `flex max-h-full w-full max-w-4xl flex-col gap-3 overflow-y-auto p-5 ${POPOVER_SURFACE} shadow-xl`;
 
 /** Boxed messages: success, caution, neutral. Same pairs as dsl-ui's Badge. */
 export const NOTICE_SUCCESS = 'rounded border border-success bg-success-bg p-2 text-sm text-success-text';

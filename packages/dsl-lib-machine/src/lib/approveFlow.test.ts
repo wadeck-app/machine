@@ -17,7 +17,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { adminKeyHolder } from './adminKeyHolder.js';
 import type { AllowApi } from './allowFlow.js';
-import { checkApprovable, loadApproveContext, signAndApprove, type ApproveContext, type ApproveRow } from './approveFlow.js';
+import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type ApproveContext, type ApproveRow } from './approveFlow.js';
 
 // The approval from the page without React: context (after the PIN), the checks that need no passphrase, then ONE unlock that signs the approval and the
 // documents for the other peers, the key locked before anything is posted. Real crypto (each unlock derives 600 000 PBKDF2 rounds: a few in this file).
@@ -66,6 +66,11 @@ const context = (over: Partial<ApproveContext> = {}): ApproveContext => ({
   ...over,
 });
 
+// What the daemon answers per machine (machine-cli `deliveryMachines`): the structure the page shows, so it never parses the text of the CLI.
+const DELIVERED_SERVER = { uuid: PEER.uuid, name: 'server', state: 'delivered', code: 'direct', reason: 'took the documents directly', next: 'nothing to do' };
+const INBOX_LAPTOP = { uuid: CANDIDATE.uuid, name: 'laptop', state: 'inbox', code: 'unreachable', reason: 'offline', next: 'installs by itself when it is back, nothing to do' };
+const FAILED_SERVER = { uuid: PEER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`machine admin distribute ${CANDIDATE.uuid}\`` };
+
 interface Sent { method: string; path: string; body?: unknown }
 function stubApi(answers: { post?: Record<string, unknown | Error>; get?: Record<string, unknown | Error> } = {}): AllowApi & { sent: Sent[]; elevated: number } {
   const sent: Sent[] = [];
@@ -82,7 +87,7 @@ function stubApi(answers: { post?: Record<string, unknown | Error>; get?: Record
     },
     async post(path: string, body: unknown) {
       sent.push({ method: 'POST', path, body });
-      const answer = answers.post?.[path] ?? (path.endsWith('/approve') ? { ok: true, id: 'cand-1', message: 'approved' } : { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '[ok] 2 document(s) stored by the relay for 1 machine(s)\n', err: '' }, retry: `machine admin distribute ${CANDIDATE.uuid}` });
+      const answer = answers.post?.[path] ?? (path.endsWith('/approve') ? { ok: true, id: 'cand-1', message: 'approved' } : { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '[ok] 2 document(s) stored by the relay for 1 machine(s)\n', err: '' }, machines: [DELIVERED_SERVER, INBOX_LAPTOP], retry: `machine admin distribute ${CANDIDATE.uuid}` });
       if (answer instanceof Error) throw answer;
       return answer;
     },
@@ -117,6 +122,12 @@ describe('checkApprovable: everything that needs no passphrase', () => {
     expect(out.finalCode).toBe(coreFinalCode(CANDIDATE.identity.publicKey, admin.publicKey, RANDOM));
     expect(out.warnings).toEqual([]);
     expect(out.peersToInform.map((p) => p.name)).toEqual(['server']);
+  });
+
+  it('a machine revoked here earlier was enrolled before: its admin key is already pinned there, so there is no security code to compare (noCode); a first enrollment has one', async () => {
+    const before = await checkApprovable(row(), context({ candidate: { trusted: false, revokedSerial: 3 } }));
+    expect(before.noCode).toBe(true);
+    expect((await checkApprovable(row(), context())).noCode).toBe(false);
   });
 
   it('REFUSES when the code of the list does not match the key and random (a relay that swapped the key): nothing is asked', async () => {
@@ -217,13 +228,44 @@ describe('signAndApprove: one passphrase, one unlock, the key locked before the 
     expect(result.distribution.text).toMatch(/the daemon is not running/);
     expect(result.distribution.text).toContain(`machine admin distribute ${CANDIDATE.uuid}`);
     expect(result.distribution.text).toMatch(/approval stands/);
+    expect(result.distribution).toMatchObject({ tone: 'danger', machines: [], waiting: 0, headline: `The other machines were NOT told. Run \`machine admin distribute ${CANDIDATE.uuid}\` on this machine; it is safe to run again.` });
   });
 
   it('a delivery that partly failed keeps the report of the daemon and says so', async () => {
-    const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: true, report: {}, text: { out: '', err: '[error] server (x): peer document not stored: relay down\n[warn] the approval stands: nothing was undone. Run `machine admin distribute y`\n' }, retry: `machine admin distribute ${CANDIDATE.uuid}` };
+    const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: true, report: {}, text: { out: '', err: '[error] server (x): peer document not stored: relay down\n[warn] the approval stands: nothing was undone. Run `machine admin distribute y`\n' }, machines: [FAILED_SERVER, INBOX_LAPTOP], retry: `machine admin distribute ${CANDIDATE.uuid}` };
     const result = await signAndApprove(stubApi({ post: { '/approve-distribute': answer } }), context(), row(), PASSPHRASE, NOW, {});
     expect(result.distribution.status).toBe('partial');
     expect(result.distribution.text).toContain('relay down');
+    expect(result.distribution.machines).toEqual([FAILED_SERVER, INBOX_LAPTOP]);
+    expect(result.distribution).toMatchObject({ tone: 'warning', waiting: 1, headline: `Documents wait in the relay inbox of 1 machine, 1 NOT told. Run \`machine admin distribute ${CANDIDATE.uuid}\`.` });
+  });
+
+  it('the structure of the daemon answer is what the page shows: a headline, a tone, the machines, how many wait in the inbox; the raw text is kept for the Details, without repeated lines', async () => {
+    const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '[ok] a\n[info] sealed\n', err: '[info] sealed\n' }, machines: [DELIVERED_SERVER, INBOX_LAPTOP], retry: `machine admin distribute ${CANDIDATE.uuid}` };
+    const result = await signAndApprove(stubApi({ post: { '/approve-distribute': answer } }), context(), row(), PASSPHRASE, NOW, {});
+    expect(result.distribution).toMatchObject({ status: 'delivered', tone: 'success', waiting: 1, headline: 'Documents delivered to 1 machine, 1 waits in the relay inbox.', machines: [DELIVERED_SERVER, INBOX_LAPTOP] });
+    expect(result.distribution.text).toBe('[ok] a\n[info] sealed');
+  });
+
+  it('an answer without the list of machines (an older daemon or module) is loud: the page and the module are not the same version, the documents are reported as NOT confirmed with the retry command', async () => {
+    const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '[ok] x\n', err: '' }, retry: 'machine admin distribute z' };
+    const result = await signAndApprove(stubApi({ post: { '/approve-distribute': answer } }), context(), row(), PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('failed');
+    expect(result.distribution.text).toMatch(/unexpected answer.*update the machine module/s);
+    expect(result.distribution.headline).toContain(`machine admin distribute ${CANDIDATE.uuid}`);
+  });
+
+  it('a machine entry of another shape is refused the same way', async () => {
+    const answer = { ok: true, subject: { uuid: CANDIDATE.uuid, name: 'laptop' }, failed: false, report: {}, text: { out: '', err: '' }, machines: [{ name: 'server', state: 'weird' }], retry: 'x' };
+    const result = await signAndApprove(stubApi({ post: { '/approve-distribute': answer } }), context(), row(), PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('failed');
+  });
+
+  it('the approval hook receives the security code (the only moment the page can hand it over: the relay purges the random once approved)', async () => {
+    const codes: string[] = [];
+    const result = await signAndApprove(stubApi(), context(), row(), PASSPHRASE, NOW, { onApproved: (code) => codes.push(code) });
+    expect(codes).toEqual([result.finalCode]);
+    expect(codes[0]).toMatch(/^\d{5}( \d{5}){4}$/);
   });
 
   it('the first machine approving itself: no import, no documents, and it says there is nobody to inform', async () => {
@@ -232,6 +274,19 @@ describe('signAndApprove: one passphrase, one unlock, the key locked before the 
     const result = await signAndApprove(api, context({ others: [] }), self, PASSPHRASE, NOW, {});
     expect(api.sent.map((s) => `${s.method} ${s.path}`)).toEqual(['GET /admin-key', 'POST /candidacies/cand-1/approve']);
     expect((api.sent[1]?.body as { adminImport: unknown }).adminImport).toBeNull();
-    expect(result.distribution).toMatchObject({ status: 'none' });
+    expect(result.distribution).toMatchObject({ status: 'none', tone: 'success', machines: [], waiting: 0, headline: 'No other machine to tell: this is the first machine of the network.' });
+  });
+});
+
+describe('recordApprovalCode: the code is kept by the module so it can be read again after the dialog is closed', () => {
+  it('posts exactly the uuid, the name and the code (public values), nothing else', async () => {
+    const api = stubApi({ post: { '/approval-codes': { ok: true } } });
+    await recordApprovalCode(api, { uuid: CANDIDATE.uuid, name: 'laptop' }, '12345 67890 12345 67890 12345');
+    expect(api.sent).toEqual([{ method: 'POST', path: '/approval-codes', body: { uuid: CANDIDATE.uuid, name: 'laptop', code: '12345 67890 12345 67890 12345' } }]);
+  });
+
+  it('a refusal is loud: it says the code was not kept, that it is still on screen, and why', async () => {
+    const api = stubApi({ post: { '/approval-codes': new Error('approval-codes.json is damaged: delete it') } });
+    await expect(recordApprovalCode(api, { uuid: CANDIDATE.uuid, name: 'laptop' }, '12345 67890 12345 67890 12345')).rejects.toThrow(/could not be kept.*damaged.*note it now/s);
   });
 });

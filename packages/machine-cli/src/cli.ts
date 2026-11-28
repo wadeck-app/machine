@@ -238,6 +238,12 @@ Administration (enrollment through the relay, or by files):
                                      token) sends it to every other machine through the relay and removes the revoked
                                      machine from the relay. Without the token only THIS machine is updated, and a
                                      line says how to inform the others
+  admin rename <machine> <new-name> rename a trusted machine WITHOUT enrolling it again: shows old -> new name and the uuid,
+                                     asks y/N, admin passphrase, signs its registration again (same uuid and key, new name,
+                                     serial + 1, same expiry), trusts it here, then (with the admin relay token) sends it to
+                                     every other machine and to the machine itself, which takes its new name. Policies, aliases
+                                     and connection settings follow through the uuid; references by the OLD name stop working.
+                                     A failed sending exits 1 and prints the retry: the same command with the new name twice
   admin distribute <machine|uuid>    send again what an approval or a revocation sends: the peer documents of a trusted
                                      machine (to it and to each other peer), or the revocation of a machine revoked
                                      here (by uuid). Safe to run again: same ids, nothing duplicated. Admin passphrase
@@ -726,7 +732,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
     const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'notify-to', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin rename, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
   }
 
   // `machine policy` alone: no read-only view of the policy exists, so the help of the group (decision 66). Needs no configuration directory.

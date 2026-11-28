@@ -4,6 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSyn
 import { join } from 'node:path';
 import { decodeBase64urlStrict, generateSigningKeyPair, machineNameProblem, normalizeMachineName, signBytes, verifyBytes, type SigningKeyPair } from '@wadeck-app/machine-core';
 import { MachineNameError, NotInitializedError } from './errors.js';
+import { writeFileAtomic } from './fsutil.js';
 import { SECRETS_DIRNAME } from './paths.js';
 
 export interface MachineIdentity {
@@ -148,4 +149,24 @@ export function readMachine(configDir: string): MachineIdentity {
   const probe = new TextEncoder().encode('machine identity self-check');
   if (!verifyBytes(raw.publicKey, probe, signBytes(privateKeyPkcs8, probe))) throw corrupt('the public key does not match the private key');
   return { uuid: raw.uuid, name: raw.name, createdAt: raw.createdAt, identity: { publicKey: raw.publicKey, privateKeyPkcs8 } };
+}
+
+/** The serial of the registration this machine's name last came from (0 until a rename document was applied): an older rename document is never applied after a newer one. */
+export function readNameSerial(configDir: string): number {
+  readMachine(configDir);
+  const raw = JSON.parse(readFileSync(identityFile(configDir), 'utf8')) as { nameSerial?: unknown };
+  return typeof raw.nameSerial === 'number' && Number.isSafeInteger(raw.nameSerial) && raw.nameSerial >= 0 ? raw.nameSerial : 0;
+}
+
+/**
+ * Change the name of this machine (decision 114: the admin renamed it; `selfRegistration.ts` decides whether a document may). Only `name` and `nameSerial`
+ * change: the uuid, the keys and the creation date are rewritten as they were, atomically, mode 0600. The caller has validated the name.
+ */
+export function setMachineName(configDir: string, name: string, serial: number): void {
+  const problem = machineNameProblem(name);
+  if (problem) throw new Error(`invalid machine name ${JSON.stringify(name)}: ${problem}`);
+  readMachine(configDir);
+  const file = identityFile(configDir);
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  writeFileAtomic(file, `${JSON.stringify({ ...raw, name, nameSerial: serial }, null, 2)}\n`, 0o600);
 }

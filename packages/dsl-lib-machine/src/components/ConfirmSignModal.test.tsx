@@ -9,31 +9,39 @@ import { ConfirmSignModal } from './ConfirmSignModal.js';
 const base = { title: 'Allow?', details: [{ label: 'Machine', value: 'desktop' }], warning: 'careful', confirmLabel: 'Allow and sign', onConfirm: vi.fn(), onCancel: vi.fn() };
 
 describe('the passphrase hint of the signing dialog', () => {
-  it('shows the hint on its own line, labelled, before anything is typed', () => {
+  it('is the description of the passphrase field (the standard field text), shown before anything is typed, no custom box', () => {
     render(<ConfirmSignModal {...base} hint="the street of my first school" />);
-    const hint = screen.getByTestId('passphrase-hint');
-    expect(hint).toHaveTextContent('Hint: the street of my first school');
-    // Above the passphrase field: the person reads it, then types.
     const field = screen.getByLabelText('Admin passphrase');
-    expect(hint.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The description text of the field, under its label (FieldSecret), before anything is typed.
+    expect(screen.getByText('Hint: the street of my first school')).toBeInTheDocument();
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
     expect(field).toHaveValue('');
   });
 
-  it('shows no element at all when the key has no hint', () => {
+  it('shows no description at all when the key has no hint', () => {
     render(<ConfirmSignModal {...base} />);
-    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
     expect(screen.queryByText(/Hint:/)).toBeNull();
+
   });
 
   it('is not shown when no passphrase is asked (informational dialog)', () => {
     render(<ConfirmSignModal {...base} needsPassphrase={false} hint="should not appear" />);
-    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+    expect(screen.queryByText(/Hint:/)).toBeNull();
   });
 
   it('is text only: markup in a hint is shown as text, never interpreted', () => {
     render(<ConfirmSignModal {...base} hint="<b>bold</b>" />);
-    expect(screen.getByTestId('passphrase-hint')).toHaveTextContent('Hint: <b>bold</b>');
-    expect(screen.getByTestId('passphrase-hint').querySelector('b')).toBeNull();
+    expect(screen.getByText('Hint: <b>bold</b>')).toBeInTheDocument();
+    expect(screen.getByText('Hint: <b>bold</b>').querySelector('b')).toBeNull();
+  });
+});
+
+describe('the warning box of the signing dialog', () => {
+  it('is shown when there is a warning, and no empty box when the dialog has none (the caller already said it)', () => {
+    const { rerender } = render(<ConfirmSignModal {...base} />);
+    expect(screen.getByText('careful')).toBeInTheDocument();
+    rerender(<ConfirmSignModal {...base} warning="" />);
+    expect(screen.getByRole('dialog').querySelector('p.border-warning')).toBeNull();
   });
 });
 
@@ -125,5 +133,27 @@ describe('askEveryTime: no unlock window (approve from the page)', () => {
     expect(field.value).toBe('secret words');
     expect(take()).toBe('secret words');
     expect(field.value).toBe('');
+  });
+});
+
+describe('the aside and the busy label of the signing dialog', () => {
+  it('an aside (the timeline of the approval) is shown INSIDE the dialog, before the content, so it stays visible while the dialog is open', () => {
+    render(<ConfirmSignModal {...base} aside={<ol aria-label="Progress"><li>step</li></ol>} />);
+    const dialog = screen.getByRole('dialog');
+    const aside = screen.getByLabelText('Progress');
+    expect(dialog).toContainElement(aside);
+    expect(aside.compareDocumentPosition(screen.getByText('desktop')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('no aside: the dialog has no side column', () => {
+    render(<ConfirmSignModal {...base} />);
+    expect(screen.getByRole('dialog').querySelector('[data-part="aside"]')).toBeNull();
+  });
+
+  it('the busy button says what is happening (default "Signing...")', () => {
+    const { rerender } = render(<ConfirmSignModal {...base} busy />);
+    expect(screen.getByRole('button', { name: 'Signing...' })).toBeDisabled();
+    rerender(<ConfirmSignModal {...base} busy busyLabel="Telling the other machines..." />);
+    expect(screen.getByRole('button', { name: 'Telling the other machines...' })).toBeDisabled();
   });
 });

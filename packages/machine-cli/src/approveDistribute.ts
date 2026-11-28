@@ -14,6 +14,7 @@ import {
 import { adminKeyFile, readAdminPin } from './admin.js';
 import { missingAdminTokenMessage } from './adminApprove.js';
 import type { DirectDelivery } from './directDelivery.js';
+import { deliveryMachines, type DeliveryMachine } from './deliveryMachines.js';
 import { adminRelayAccess, emptyReport, formatDistribution, put, putNoticeDocument, type DeliveryContext, type DistributionReport } from './distribute.js';
 import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
@@ -43,6 +44,8 @@ export type ApproveDistributeAnswer =
       report: DistributionReport;
       /** The report in the words of the CLI (`formatDistribution`): `out` is the success text, `err` the failures and the retry command. */
       text: { out: string; err: string };
+      /** One entry per machine told (the new machine included), from the same report: state, cause code, one short reason, one next action. The page shows these and keeps `text` in a collapsed "Details". */
+      machines: DeliveryMachine[];
       retry: string;
     }
   | Failure;
@@ -194,5 +197,8 @@ export async function approveDistribute(
     });
   }
   const text = formatDistribution(report, 'the approval', retry);
-  return { ok: true, subject: { uuid: subject.body.uuid, name: subject.body.name }, failed: text.failed, report, text: { out: text.out, err: text.err }, retry };
+  // The machines told, once each, in the order of the documents.
+  const told = new Map<string, { uuid: string; name: string }>();
+  for (const want of expected.values()) told.set(want.to.uuid, want.to);
+  return { ok: true, subject: { uuid: subject.body.uuid, name: subject.body.name }, failed: text.failed, report, text: { out: text.out, err: text.err }, machines: deliveryMachines(report, [...told.values()], retry), retry };
 }
