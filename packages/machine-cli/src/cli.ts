@@ -18,7 +18,8 @@ import { runRequests } from './cliRequests.js';
 import { logOnlyFlagProblem, runActivityLog } from './cliActivity.js'; // run-log
 import { runActivityFollow } from './cliFollow.js'; // run-log
 import { EXIT, UsageError, type CliIo, type CommandContext, type Parsed } from './cliTypes.js';
-import { makeCommands, type AliasAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
+import { aliasListText, conflictWarning } from './aliasView.js';
+import { makeCommands, type AliasAnswer, type AliasOverviewAnswer, type ListAnswer, type NotInitialized, type ResolveAnswer, type StatusAnswer } from './commands.js';
 import { DEFAULT_PEER_HOST, startMachineDaemon } from './daemonEntry.js';
 import { peerBindNotice } from './peerBindNotice.js';
 import { checkHint } from '@wadeck-app/machine-core';
@@ -244,6 +245,11 @@ Administration (enrollment through the relay, or by files):
                                      every other machine and to the machine itself, which takes its new name. Policies, aliases
                                      and connection settings follow through the uuid; references by the OLD name stop working.
                                      A failed sending exits 1 and prints the retry: the same command with the new name twice
+  admin alias set <alias> <machine>  NETWORK alias, signed by the admin and sent to every machine (box = thinkcentre resolves
+                                     everywhere): asks y/N, admin passphrase. \`rm <alias>\` removes one, \`list\` shows them (no
+                                     passphrase), \`send\` sends the stored list again (the retry of a failed sending). An alias
+                                     is a label, never a right: it must not equal or look like a machine name or another alias;
+                                     a local alias (\`machine alias set\`) wins on the machine that has both, with a warning
   admin distribute <machine|uuid>    send again what an approval or a revocation sends: the peer documents of a trusted
                                      machine (to it and to each other peer), or the revocation of a machine revoked
                                      here (by uuid). Safe to run again: same ids, nothing duplicated. Admin passphrase
@@ -731,8 +737,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
       return fail(`--prompt-timeout must be a whole number of seconds from 1 to ${MAX_PROMPT_TIMEOUT_SECONDS}, got "${args.promptTimeout}"`, EXIT.usage);
     }
     // Refused rather than silently ignored: a command that never prompts has nothing to limit.
-    const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'sign-policy', 'distribute', 'notify-to', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
-    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin rename, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
+    const prompts = command === 'join' || command === 'setup' || (command === 'requests' && (rest.length > 0 || args.all === true)) || (command === 'admin' && ['init', 'allow', 'approve', 'revoke', 'alias', 'sign-policy', 'distribute', 'notify-to', 'register', 'login', 'forget-relay-record'].includes(rest[0] ?? '') || (command === 'peer' && rest[0] === 'forget-record') || (command === 'policy' && (rest[0] === 'allow' || rest[0] === 'delegate' || (rest[0] === 'local' && rest[1] === 'enable'))));
+    if (!prompts) return fail('--prompt-timeout only applies to the commands that ask a question: join, setup, admin init, admin approve, admin allow, admin revoke, admin rename, admin alias, admin sign-policy, admin distribute, admin register, admin login, admin forget-relay-record, policy allow, policy delegate, policy local enable, requests <machine>', EXIT.usage);
   }
 
   // `machine policy` alone: no read-only view of the policy exists, so the help of the group (decision 66). Needs no configuration directory.
@@ -900,7 +906,9 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
             io.stderr(`[warn] reachability is not shown: ${(e as Error).message}${/Unknown command/.test((e as Error).message) ? ': the running daemon is older than this CLI, run `machine cli update` and restart it' : ''}\n`);
           }
         }
-        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${r.self.aliases.length ? ` aliases: ${r.self.aliases.join(', ')}` : ''} policy: ${r.policyMode}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${p.aliases.length ? ` aliases: ${p.aliases.join(', ')}` : ''} policy: unknown`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds), ...(reach.has(p.uuid) ? [`  reachable: ${reach.get(p.uuid)?.text}`] : [])])];
+        // A network alias (signed by the admin) is marked; a daemon older than this CLI sends no `networkAliases`.
+        const aliasText = (m: { aliases: string[]; networkAliases?: string[] }) => (m.aliases.length ? ` aliases: ${m.aliases.map((a) => ((m.networkAliases ?? []).includes(a) ? `${a} (network)` : a)).join(', ')}` : '');
+        const lines = [`${r.self.name} (${r.self.uuid}) [this machine]${aliasText(r.self)} policy: ${r.policyMode}`,...view.peers.flatMap((p) => [`${p.name} (${p.uuid})${aliasText(p)} policy: unknown`, ...(p.revocationVersionSeen === undefined ? [] : [`  revocations: version ${p.revocationVersionSeen} at the last handshake`]), ...relayLines(p.relay, nowSeconds), ...(reach.has(p.uuid) ? [`  reachable: ${reach.get(p.uuid)?.text}`] : [])])];
         if (r.revocationWarning !== undefined) io.stderr(`[warn] ${r.revocationWarning}
 `);
         if (view.relayWarning !== undefined) io.stderr(`[warn] ${view.relayWarning}\n`);
@@ -913,6 +921,7 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         const r = (await client.send('resolve', { ref })) as ResolveAnswer;
         if ('initialized' in r) return fail(r.message);
         if (!r.ok) return fail(r.message, EXIT.reference);
+        if (r.warning !== undefined) io.stderr(`${r.warning}\n`);
         emit(r, `${r.uuid}${r.name ? ` (${r.name})` : ''} via ${r.via}\n`);
         return EXIT.ok;
       }
@@ -924,8 +933,18 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
         const expected = sub === undefined ? undefined : arity[sub];
         if (expected !== undefined && rest.length - 1 > expected) return fail(`unexpected argument "${rest[expected + 1]}" for \`machine alias ${sub}\``, EXIT.usage);
         if (sub === 'list') {
-          const aliases = (await client.send('aliasList')) as Record<string, string>;
-          emit(aliases, `${Object.keys(aliases).length ? `${Object.entries(aliases).map(([k, v]) => `${k} -> ${v}`).join('\n')}\n` : 'no alias\n'}${bareAlias ? 'more: machine alias --help (set, rm)\n' : ''}`);
+          let overview: AliasOverviewAnswer;
+          try {
+            overview = (await client.send('aliasOverview')) as AliasOverviewAnswer;
+          } catch (e) {
+            if (/Unknown command/.test((e as Error).message)) return fail(`${(e as Error).message}: the running daemon is older than this CLI, run \`machine cli update\` and restart it`);
+            throw e;
+          }
+          if (!('local' in overview)) return fail((overview as NotInitialized).message);
+          const nameOf = (uuid: string): string => [...overview.local, ...overview.network].find((r) => r.uuid === uuid)?.name ?? uuid;
+          for (const conflict of overview.conflicts) io.stderr(`${conflictWarning(conflict, nameOf)}\n`);
+          const { initialized: _initialized, ...data } = overview;
+          emit({ local: Object.fromEntries(data.local.map((r) => [r.alias, r.uuid])), network: data.network, ...(data.networkSerial === undefined ? {} : { networkSerial: data.networkSerial }), conflicts: data.conflicts }, `${aliasListText(data)}${bareAlias ? 'more: machine alias --help (set, rm); network aliases: machine admin alias --help\n' : ''}`);
           return EXIT.ok;
         }
         if (sub === 'set') {
@@ -935,7 +954,8 @@ async function runCommandLine(argv: string[], io: CliIo, env: Record<string, str
           const r = (await client.send('aliasSet', { alias: a.toLowerCase(), ref: b, replace: args.replace })) as AliasAnswer;
           if ('initialized' in r) return fail(r.message);
           if (!r.ok) return fail(r.message, r.reason === 'conflict' ? EXIT.failure : EXIT.reference);
-          emit(r, `[ok] ${r.alias} -> ${r.uuid}${r.previous ? ` (was ${r.previous})` : ''}\n`);
+          if (r.warning !== undefined) io.stderr(`${r.warning}\n`);
+          emit(r,`[ok] ${r.alias} -> ${r.uuid}${r.previous ? ` (was ${r.previous})` : ''}\n`);
           return EXIT.ok;
         }
         if (sub === 'rm') {

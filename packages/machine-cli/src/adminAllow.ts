@@ -16,6 +16,7 @@ import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
 import { UnresolvedReferenceError } from './adminRevoke.js';
 import { readRelayConfig } from './relayStore.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin allow` (decision 54): the next policy of ONE machine, built from the current one, shown as a difference, confirmed,
@@ -120,7 +121,7 @@ export async function runAllow(configDir: string, o: AllowOptions): Promise<Allo
   const self = exportMachineInfo(configDir);
   const network = loadNetwork(configDir, o.now());
   const everyone = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-  const resolved = resolveMachineRef(o.reference, everyone, readAliases(configDir));
+  const resolved = resolveMachineRef(o.reference, everyone, readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) throw new UnresolvedReferenceError(resolved.message);
   const target = everyone.find((m) => m.uuid === resolved.uuid) as { uuid: string; name: string };
   const toSelf = target.uuid === self.uuid;

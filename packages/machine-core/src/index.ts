@@ -186,6 +186,27 @@ export {
   type VerifyRequestsListContext,
 } from './requestsList.js';
 export {
+  ALIASES_DOMAIN,
+  MAX_ALIASES,
+  aliasConflicts,
+  assertAliasesBody,
+  canonicalSignedAliases,
+  compareAliases,
+  planAliasChange,
+  signAliases,
+  verifyAliases,
+  type AliasChange,
+  type AliasChangeFailure,
+  type AliasChangeInput,
+  type AliasChangeResult,
+  type AliasConflict,
+  type AliasEntry,
+  type AliasesBody,
+  type AliasesFailure,
+  type AliasesResult,
+  type SignedAliases,
+} from './aliases.js';
+export {
   MAX_NOTICE_RECIPIENTS,
   NOTICE_RECIPIENTS_DOMAIN,
   assertNoticeRecipientsBody,

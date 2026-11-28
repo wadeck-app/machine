@@ -20,6 +20,7 @@ import { adminMachineUuid, adminRelayAccess, distributePolicy, formatDistributio
 import { directDeliveryFor } from './directDelivery.js';
 import { runRevoke, UnresolvedReferenceError } from './adminRevoke.js';
 import { runRename } from './adminRename.js';
+import { runAliasAdmin } from './adminAlias.js';
 import { EXIT, parseIndex, type CommandContext } from './cliTypes.js';
 import { runRemoteRequests } from './cliRequestsRemote.js';
 import { connectionOf, makeWakeEnv, pinnedOf, resolveTrustedPeer, runPeerConnect, stderrSinks, targetFor, wakeSettingsFor } from './cliWake.js';
@@ -474,6 +475,34 @@ async function runNetworkCommandBody(command: string, ctx: CommandContext): Prom
       } catch (e) {
         if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
         if (e instanceof NotInitializedError) return fail(e.message);
+        if (e instanceof PromptTimeoutError) throw e;
+        return fail((e as Error).message);
+      }
+    }
+    if (sub === 'alias') {
+      // Decision 116: the network aliases, signed by the admin and sent to every machine.
+      const usage = 'usage: machine admin alias set <alias> <machine> | rm <alias> | list | send';
+      const extra = rest[3];
+      let options: { action: 'set'; alias: string; reference: string } | { action: 'rm'; alias: string } | { action: 'list' } | { action: 'send' };
+      if (first === 'set' && second !== undefined && extra !== undefined && rest[4] === undefined) options = { action: 'set', alias: second, reference: extra };
+      else if (first === 'rm' && second !== undefined && extra === undefined) options = { action: 'rm', alias: second };
+      else if (first === 'list' && second === undefined) options = { action: 'list' };
+      else if (first === 'send' && second === undefined) options = { action: 'send' };
+      else return fail(usage, EXIT.usage);
+      if (args.days !== undefined) return fail('--days does not apply to `machine admin alias`: an alias does not expire', EXIT.usage);
+      try {
+        const r = await runAliasAdmin(configDir, { ...options, prompt, ask: askLine, say: args.json ? io.stderr : io.stdout, now: epochSeconds });
+        if (args.json) io.stdout(`${JSON.stringify({ serial: r.serial ?? null, aliases: r.entries, signed: r.signed, distribution: r.distribution?.report ?? null }, null, 2)}\n`);
+        else io.stdout(r.out);
+        if (r.notDistributed) return EXIT.failure;
+        if (r.distribution?.formatted.failed) {
+          io.stderr(r.distribution.formatted.err);
+          return EXIT.failure;
+        }
+        return EXIT.ok;
+      } catch (e) {
+        if (e instanceof UnresolvedReferenceError) return fail(e.message, EXIT.reference);
+        if (e instanceof RelayError || e instanceof NotInitializedError) return fail(e.message);
         if (e instanceof PromptTimeoutError) throw e;
         return fail((e as Error).message);
       }

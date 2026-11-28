@@ -28,6 +28,7 @@ import { loadNetwork } from './network.js';
 import { describeAddress, PeerAddressError, readPeerRecords } from './peerAddresses.js';
 import { wakeInfoText } from './wakeInfo.js';
 import { connectToTarget, resolvePeerTarget, type PeerTarget, type PeerToReach } from './peerConnect.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 import { NotInitializedError } from './errors.js';
 import { WakeStateError } from './wakeState.js';
@@ -60,7 +61,7 @@ export function resolveTrustedPeer(ctx: CommandContext, ref: string, codes: { re
   const self = readMachine(configDir);
   const network = loadNetwork(configDir, epochSecondsOf(ctx));
   const machines = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-  const resolved = resolveMachineRef(ref, machines, readAliases(configDir));
+  const resolved = resolveMachineRef(ref, machines, readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) return { exit: fail(resolved.message, codes.reference) };
   if (resolved.uuid === self.uuid) return { exit: fail('that is this machine: its connection settings describe how to reach a PEER', codes.failure) };
   const peer = network.directory.find(resolved.uuid);

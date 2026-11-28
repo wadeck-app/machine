@@ -37,6 +37,7 @@ import { clockText, relativeText } from './humanTime.js';
 import { exportMachineInfo, installPolicy, loadNetwork, activePolicyState } from './network.js';
 import { localPolicyKeyFile, modeFileContent, policyFiles, policyModeFile, readPolicyMode } from './policyMode.js';
 import { PromptTimeoutError } from './prompt.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // Policy mode `local` (hard rule 4 as amended): this machine manages its own allow list with its OWN policy key, independent of the
@@ -331,7 +332,7 @@ export async function runLocalAllow(configDir: string, o: LocalAllowOptions): Pr
   let peerUuid: string | undefined;
   if (o.peer !== undefined) {
     const peers = network.directory.machines();
-    const resolved = resolveMachineRef(o.peer, peers, readAliases(configDir));
+    const resolved = resolveMachineRef(o.peer, peers, readAliases(configDir), networkAliasMap(configDir));
     if (!resolved.ok) throw new UnresolvedReferenceError(`${resolved.message} (only a registered peer of this machine can have its own list: \`machine list\`)`);
     peerUuid = resolved.uuid;
   }

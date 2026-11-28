@@ -5,6 +5,7 @@ import { ConnectionsError, readConnections } from './connectionsStore.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // The sender side of `request-deny` (decision 85): this machine is named in the notice-recipients list of a target and refuses a request that target
@@ -64,7 +65,7 @@ export async function denyRemoteCommand(configDir: string, payload: unknown, now
   }
   const self = readMachine(configDir);
   const network = loadNetwork(configDir, now);
-  const resolved = resolveMachineRef(p.peer, [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()], readAliases(configDir));
+  const resolved = resolveMachineRef(p.peer, [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()], readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) {
     return fail('unknown-peer', resolved.message);
   }

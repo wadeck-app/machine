@@ -118,6 +118,14 @@ describe('buildRenamedRegistration', () => {
     expect((r as { message: string }).message).toMatch(/machine alias/);
   });
 
+  it('refuses a name that is a NETWORK alias of another machine, and says who to ask (decision 116)', () => {
+    const { input } = setup();
+    const r = buildRenamedRegistration(input({ networkAliases: { 'mac-m2': LAPTOP } }));
+    expect(r).toMatchObject({ ok: false, reason: 'alias-conflict' });
+    expect((r as { message: string }).message).toMatch(/network alias.*machine admin alias rm mac-m2/);
+    expect(buildRenamedRegistration(input({ networkAliases: { 'mac-m2': MAC } }))).toMatchObject({ ok: true });
+  });
+
   it('accepts a name that is already a local alias of the SAME machine', () => {
     const { input } = setup();
     expect(buildRenamedRegistration(input({ aliases: { 'mac-m2': MAC } }))).toMatchObject({ ok: true });

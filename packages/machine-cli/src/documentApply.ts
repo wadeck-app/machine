@@ -2,6 +2,7 @@ import { canonicalize, isRevoked, openPairSecret, verifyInboxDocument, type Json
 import { readAdminPin } from './admin.js';
 import type { MachineIdentity } from './identity.js';
 import { importPeer, installPolicy, installRevocation, loadNetwork } from './network.js';
+import { installAliases } from './aliasesStore.js';
 import { installNoticeRecipients } from './noticeRecipientsStore.js';
 import { installSelfRegistration } from './selfRegistration.js';
 
@@ -15,7 +16,7 @@ import { installSelfRegistration } from './selfRegistration.js';
 export const safe = (text: string, max = 300): string => text.replace(/[^\x20-\x7e]/g, '?').slice(0, max);
 
 /** Failures of the installation validators that are verdicts on the document (permanent), as opposed to trouble of this machine. */
-const REFUSAL = /^(this machine does not trust that registration|registration refused \(|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|revocation refused \()/;
+const REFUSAL = /^(this machine does not trust that registration|registration refused \(|the bundle's pair secret is invalid|policy refused \(|notice-recipients list refused \(|aliases list refused \(|revocation refused \()/;
 
 export type ApplyResult =
   /** The document is applied now, or it changed nothing because that very content was already in force. */
@@ -84,6 +85,11 @@ export function createDocumentApplier(o: DocumentApplierOptions): DocumentApplie
     if (verified.kind === 'notice-recipients') {
       // Information only (request-notices.md): the list decides who receives notices, never a right. The replace-newer rule keeps an older list out.
       const installed = installNoticeRecipients(o.configDir, verified.noticeRecipients, readAdminPin(o.configDir).adminPublicKey);
+      return installed.changed ? {} : { reason: 'already-installed' };
+    }
+    if (verified.kind === 'aliases') {
+      // Labels only (decision 116): they change what a reference means here, never a right. The replace-newer rule keeps an older list out.
+      const installed = installAliases(o.configDir, verified.aliases, readAdminPin(o.configDir).adminPublicKey);
       return installed.changed ? {} : { reason: 'already-installed' };
     }
     if (verified.kind === 'self-registration') {

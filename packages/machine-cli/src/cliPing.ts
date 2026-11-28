@@ -12,6 +12,7 @@ import { checkLine, pingPeer, pingRelay } from './ping.js';
 import { createRelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 import { catchUpRevocations } from './revocationSync.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine ping [<machine>] [--count <n>] [--address <host:port>] [--json]` (decision 61). Reads and connects only: no command is sent, no
@@ -65,7 +66,7 @@ export async function runPingCommand(ctx: CommandContext): Promise<number> {
   const self = readMachine(configDir);
   const network = loadNetwork(configDir, epochSeconds());
   const machines = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-  const resolved = resolveMachineRef(ref, machines, readAliases(configDir));
+  const resolved = resolveMachineRef(ref, machines, readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) return fail(resolved.message, EXIT.reference);
   if (resolved.uuid === self.uuid) return fail('that is this machine: ping a peer, or run `machine ping` alone to check this machine\'s path to the relay', EXIT.failure);
   const peer = network.directory.find(resolved.uuid);

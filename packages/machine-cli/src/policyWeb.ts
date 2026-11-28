@@ -29,6 +29,7 @@ import { installNoticeRecipients, readNoticeRecipients } from './noticeRecipient
 import { readPolicyMode, policyFiles } from './policyMode.js';
 import { RelayError, type RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // The daemon side of the Allow button of the Requests page (decision 76, requests.md). The admin key and its passphrase live ONLY in the browser:
@@ -120,7 +121,7 @@ function everyone(configDir: string, now: number): Addressee[] {
 
 function resolveTarget(configDir: string, reference: string, now: number): { ok: true; target: Addressee; toSelf: boolean } | Failure {
   const machines = everyone(configDir, now);
-  const resolved = resolveMachineRef(reference, machines, readAliases(configDir));
+  const resolved = resolveMachineRef(reference, machines, readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) return fail('unknown-machine', `${resolved.message} (see \`machine list\`)`);
   const target = machines.find((m) => m.uuid === resolved.uuid) as Addressee;
   return { ok: true, target, toSelf: target.uuid === exportMachineInfo(configDir).uuid };

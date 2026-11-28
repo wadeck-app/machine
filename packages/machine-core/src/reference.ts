@@ -7,7 +7,7 @@ export interface MachineEntry {
 }
 
 export type Resolution =
-  | { ok: true; uuid: string; via: 'uuid' | 'alias' | 'name' | 'prefix' }
+  | { ok: true; uuid: string; via: 'uuid' | 'alias' | 'network-alias' | 'name' | 'prefix' }
   | { ok: false; reason: 'invalid' | 'unknown' | 'ambiguous'; message: string; candidates: MachineEntry[] };
 
 const REFERENCE = /^[A-Za-z0-9-]{1,64}$/;
@@ -21,8 +21,16 @@ function fail(reason: 'invalid' | 'unknown' | 'ambiguous', message: string, cand
   return { ok: false, reason, message, candidates };
 }
 
-/** `aliases` maps a lowercase local alias to a machine UUID. */
-export function resolveMachineRef(reference: string, machines: readonly MachineEntry[], aliases: Readonly<Record<string, string>>): Resolution {
+/**
+ * `aliases` maps a lowercase local alias to a machine UUID, `networkAliases` the admin-signed ones. Order: full UUID, local alias (it wins over a network
+ * alias of the same label), then name and network alias (different machines: ambiguous), then a unique UUID prefix.
+ */
+export function resolveMachineRef(
+  reference: string,
+  machines: readonly MachineEntry[],
+  aliases: Readonly<Record<string, string>>,
+  networkAliases: Readonly<Record<string, string>> = {},
+): Resolution {
   if (!REFERENCE.test(reference)) {
     return fail('invalid', `invalid machine reference ${JSON.stringify(reference)}: use a name, an alias or a UUID (letters, digits and hyphens, 1 to 64 characters), never a path`);
   }
@@ -43,6 +51,25 @@ export function resolveMachineRef(reference: string, machines: readonly MachineE
   }
 
   const byName = machines.filter((m) => m.name.toLowerCase() === ref);
+
+  // A network alias (admin-signed, decision 116) never beats a name silently: when both exist and mean different machines, every candidate is named.
+  const networked = Object.prototype.hasOwnProperty.call(networkAliases, ref) ? networkAliases[ref] : undefined;
+  if (networked !== undefined) {
+    const target = find(networked);
+    if (target === undefined) {
+      return fail('unknown', `network alias "${ref}" points to a machine that is not trusted here (${networked}): the admin can remove it (\`machine admin alias rm ${ref}\`), or this machine has not learned about that machine yet`, [...machines]);
+    }
+    const others = byName.filter((m) => m.uuid.toLowerCase() !== target.uuid.toLowerCase());
+    if (others.length > 0) {
+      return fail(
+        'ambiguous',
+        `"${ref}" is both a network alias of ${describe(target)} and the name of ${others.map((m) => `the machine named "${m.name}" (${shortId(m.uuid)})`).join(', ')}; use the UUID or a UUID prefix, and ask the admin to remove the alias (\`machine admin alias rm ${ref}\`)`,
+        [target, ...others],
+      );
+    }
+    if (byName.length === 0) return { ok: true, uuid: target.uuid, via: 'network-alias' };
+  }
+
   if (byName.length === 1) return { ok: true, uuid: (byName[0] as MachineEntry).uuid, via: 'name' };
   if (byName.length > 1) {
     return fail('ambiguous', `several machines are named "${ref}": ${byName.map(describe).join(', ')}; use a UUID prefix or set a local alias`, byName);

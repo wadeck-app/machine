@@ -18,6 +18,7 @@ import { loadNetwork, trustedRegistrations } from './network.js';
 import { holdingOf, readNoticeSent, type Holding, type NoticeSentRecord } from './noticeRecipientsSent.js';
 import { noticeRecipientsFile, readNoticeRecipients, signNoticeRecipientsFor } from './noticeRecipientsStore.js';
 import type { RelayClient } from './relayClient.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin notify-to <machine>...` and `--list` (request-notices.md, decision 84). The list only decides who receives information about the
@@ -143,7 +144,7 @@ export async function runNotifyTo(configDir: string, o: NotifyToOptions): Promis
       chosen.set(self.uuid, self.name);
       continue;
     }
-    const resolved = resolveMachineRef(reference, network.directory.machines(), aliases);
+    const resolved = resolveMachineRef(reference, network.directory.machines(), aliases, networkAliasMap(configDir));
     if (!resolved.ok) {
       throw new UnresolvedReferenceError(`${resolved.message} (notify-to takes machines this one trusts, or this machine; \`machine status\` lists them)`);
     }

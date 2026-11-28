@@ -105,7 +105,8 @@ describe('machine list / resolve / alias', () => {
     await run('init', '--name', 'desktop');
     const uuid = readMachine(dir).uuid;
     expect((await run('alias', 'set', 'home', 'desktop')).code).toBe(0);
-    expect(JSON.parse((await run('alias', 'list', '--json')).out)).toEqual({ home: uuid });
+    // Decision 116: `--json` carries the local map and the network aliases (it was the flat local map).
+    expect(JSON.parse((await run('alias', 'list', '--json')).out)).toEqual({ local: { home: uuid }, network: [], conflicts: [] });
     expect((await run('resolve', 'home')).out).toContain(uuid);
     expect((await run('alias', 'rm', 'home')).code).toBe(0);
     expect((await run('resolve', 'home')).code).toBe(3);

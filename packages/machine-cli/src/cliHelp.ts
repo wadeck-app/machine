@@ -72,6 +72,21 @@ const GROUPS: GroupHelp[] = [
         examples: ['machine admin rename macbook-pro-de-wadeck mac-m2', 'machine admin rename mac-m2 mac-m2'],
       },
       {
+        name: 'alias',
+        usage: 'alias set <alias> <machine> | rm <alias> | list | send',
+        text: 'NETWORK aliases: labels signed by the admin and sent to every machine, so that `box` means the same machine everywhere (it points to the uuid and survives a rename)',
+        options: [
+          'set <alias> <machine>   asks y/N, then the admin passphrase (typed once, never kept); needs the admin relay token to tell the others',
+          'rm <alias>   removes one and sends the new list',
+          'list   the signed aliases (no passphrase, no relay)',
+          'send   sends the stored list again to every trusted machine (the retry of a failed sending, or for a machine enrolled since); signs nothing',
+          '<alias>   lowercase letters, digits and hyphens (a typed alias is normalised, and said); refused when it equals or only differs by hyphens or case from a machine name or another alias, and for an unknown or revoked machine; repoint with rm, then set',
+          '<machine>   name, uuid or unique uuid prefix of a machine this one trusts (or this machine), never another alias',
+          'on a machine that also has a LOCAL alias of the same label (`machine alias set`), the local alias wins there and a warning names both',
+        ],
+        examples: ['machine admin alias set box thinkcentre', 'machine admin alias rm box', 'machine admin alias list', 'machine admin alias send'],
+      },
+      {
         name: 'allow',
         usage: 'allow <machine> [--shell cmd|ps|bash|sh] [--times <n> | --for <duration> | --until <date>] [--renew] [--out <file>] [--list | --remove [--index <n>]] -- <command...>',
         text: 'allow ONE command on a machine (signed policy): exact, or a typed template with <label:type> placeholders; list or withdraw what is allowed',
@@ -208,10 +223,10 @@ const GROUPS: GroupHelp[] = [
   },
   {
     name: 'alias',
-    summary: 'local labels for machines (a reference is a name, an alias, a uuid or a unique uuid prefix)',
+    summary: 'labels for machines: local ones (this machine) and network ones (signed by the admin, see `machine admin alias`)',
     bare: 'lists the aliases (the same as `machine alias list`)',
     subs: [
-      { name: 'list', usage: 'list', text: 'the aliases of this machine', examples: ['machine alias list', 'machine alias list --json'] },
+      { name: 'list', usage: 'list', text: 'the local aliases and the network aliases of this machine, each with its origin; a local alias wins over a network alias of the same label', examples: ['machine alias list', 'machine alias list --json'] },
       { name: 'set', usage: 'set <alias> <reference> [--replace]', text: 'point an alias at a machine', options: ['--replace   replace an alias that already points elsewhere'], examples: ['machine alias set home desktop'] },
       { name: 'rm', usage: 'rm <alias>', text: 'remove an alias', examples: ['machine alias rm home'] },
     ],

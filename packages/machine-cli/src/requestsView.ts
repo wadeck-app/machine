@@ -8,6 +8,7 @@ import { NotInitializedError } from './errors.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { readNotices } from './noticesStore.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine requests` and the Requests page of the module: the audit log of THIS machine, read and summarized (the reader is
@@ -75,7 +76,7 @@ export function requestsAnswer(configDir: string, query: RequestsQuery, now: num
 
   let peer: string | undefined;
   if (query.peer !== undefined) {
-    const resolved = resolveMachineRef(query.peer, [{ uuid: self.uuid, name: self.name }, ...machines], readAliases(configDir));
+    const resolved = resolveMachineRef(query.peer, [{ uuid: self.uuid, name: self.name }, ...machines], readAliases(configDir), networkAliasMap(configDir));
     if (resolved.ok) peer = resolved.uuid;
     // A machine that is not trusted any more (revoked, removed) still has entries in the log: its full uuid is accepted.
     else if (isUuid(query.peer.toLowerCase())) peer = query.peer.toLowerCase();

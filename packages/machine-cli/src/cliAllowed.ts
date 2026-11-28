@@ -8,6 +8,7 @@ import { NotInitializedError } from './errors.js';
 import { clockText, relativeText } from './humanTime.js';
 import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine allowed <machine>` (decision 71): what a machine allows, read-only (no passphrase, no question, nothing sent, nothing written).
@@ -35,7 +36,7 @@ export function runAllowed(ctx: CommandContext): number {
     const self = readMachine(configDir);
     const network = loadNetwork(configDir, now);
     const everyone = [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()];
-    const resolved = resolveMachineRef(ref, everyone, readAliases(configDir));
+    const resolved = resolveMachineRef(ref, everyone, readAliases(configDir), networkAliasMap(configDir));
     if (!resolved.ok) return fail(resolved.message, EXIT.reference);
     const target = everyone.find((m) => m.uuid === resolved.uuid) as { uuid: string; name: string };
     const nameOf = (uuid: string): string => everyone.find((m) => m.uuid === uuid)?.name ?? uuid;

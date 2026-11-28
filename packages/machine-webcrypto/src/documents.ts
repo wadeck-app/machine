@@ -18,7 +18,7 @@ export const REVOCATION_DOMAIN = 'machine/revocation/v1';
 // Envelope version 2: the payload of every document is sealed to the identity key of the addressee (decision 78). The version 1 domain
 // (clear payload) is not built any more: machine-core only recognises it to refuse it.
 export const DOCUMENT_DOMAIN_V2 = 'machine/document/v2';
-export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients', 'self-registration'] as const;
+export const DOCUMENT_KINDS = ['peer', 'policy', 'revocation', 'notice-recipients', 'self-registration', 'aliases'] as const;
 export const SHELLS = ['cmd', 'ps', 'bash', 'sh'] as const;
 /** What the relay accepts for one document. */
 export const MAX_DOCUMENT_BYTES = 16 * 1024;
@@ -336,6 +336,7 @@ function assertPayloadShape(kind: string, payload: unknown): void {
   if (kind === 'peer') assertPeerPayload(payload);
   else if (kind === 'policy') assertPolicyBody(assertSignedPayload(payload, 'policy'));
   else if (kind === 'self-registration') throw new Error('document: the page does not build a self-registration document (the rename of a machine) yet: run `machine admin rename <machine> <new-name>` in a terminal');
+  else if (kind === 'aliases') throw new Error('document: the page does not build an aliases document (the network aliases) yet: run `machine admin alias set <alias> <machine>` in a terminal');
   else assertSignedPayload(payload, kind === 'notice-recipients' ? 'notice-recipients' : 'revocation');
 }
 

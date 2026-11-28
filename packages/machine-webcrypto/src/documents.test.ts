@@ -5,6 +5,7 @@ import {
   assertRegistrationBody,
   assertRevocationBody,
   DOCUMENT_DOMAIN_V2 as CORE_DOMAIN_V2,
+  DOCUMENT_KINDS as CORE_DOCUMENT_KINDS,
   buildDocument as coreBuildDocument,
   documentId as coreDocumentId,
   documentSealContext as coreSealContext,
@@ -29,6 +30,7 @@ import {
   assertRegistrationBody as webAssertRegistration,
   assertRevocationBody as webAssertRevocation,
   DOCUMENT_DOMAIN_V2,
+  DOCUMENT_KINDS,
   buildDocument,
   documentId,
   documentSealContext,
@@ -276,6 +278,17 @@ describe('buildDocument (kinds peer, policy, revocation)', () => {
     const to = uuid();
     const input = { kind: 'self-registration', to, id: coreDocumentId('r'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { body: {}, signature: 'x' }, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
     await expect(buildDocument(input, s.key)).rejects.toThrow(/self-registration.*machine admin rename/);
+  });
+
+  it('knows exactly the document kinds of machine-core (decision 116: aliases)', () => {
+    expect([...DOCUMENT_KINDS]).toEqual([...CORE_DOCUMENT_KINDS]);
+  });
+
+  it('an aliases document (network aliases) is named and refused: the page does not build it yet, and never checks it as a revocation', async () => {
+    const s = await setup();
+    const to = uuid();
+    const input = { kind: 'aliases', to, id: coreDocumentId('a'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { body: {}, signature: 'x' }, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
+    await expect(buildDocument(input, s.key)).rejects.toThrow(/aliases.*machine admin alias set/);
   });
 
   describe('sealedPolicyDocument (the inbox document of a policy the page signed)', () => {

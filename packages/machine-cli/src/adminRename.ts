@@ -7,6 +7,7 @@ import { expiryText } from './humanTime.js';
 import { importPeer, installedRevocations, loadNetwork, resolveRevokedMachine, trustedRegistrations } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin rename <machine> <new-name>` (decision 114): the admin re-issues the registration of a machine with the SAME uuid and identity key, the new
@@ -54,7 +55,7 @@ export async function runRename(configDir: string, o: RenameOptions): Promise<Re
       `"${self.name}" is the admin machine itself: renaming it is not supported by this command yet (its peers would need a renewed registration of the admin machine, which \`machine admin rename\` does not issue). Rename the other machines, or enroll this one again under another name`,
     );
   }
-  const resolved = resolveMachineRef(o.reference, network.directory.machines(), aliases);
+  const resolved = resolveMachineRef(o.reference, network.directory.machines(), aliases, networkAliasMap(configDir));
   if (!resolved.ok) {
     const gone = resolveRevokedMachine(configDir, o.reference, aliases);
     if (gone.ok) {
@@ -95,7 +96,7 @@ export async function runRename(configDir: string, o: RenameOptions): Promise<Re
     o.say('Enter the admin passphrase to sign the documents, Ctrl-C to cancel.\n');
     key = await unlockAdminKey(configDir, o.prompt);
   } else {
-    const planned = buildRenamedRegistration({ uuid: current.body.uuid, current: current.body, newName, machines, aliases, revokedUpTo, now: o.now() });
+    const planned = buildRenamedRegistration({ uuid: current.body.uuid, current: current.body, newName, machines, aliases, networkAliases: networkAliasMap(configDir), revokedUpTo, now: o.now() });
     if (!planned.ok) throw new Error(`${planned.message}. Nothing was signed`);
     o.say(
       [
@@ -120,7 +121,7 @@ export async function runRename(configDir: string, o: RenameOptions): Promise<Re
     o.say('Enter the admin passphrase to sign the new registration, Ctrl-C to cancel.\n');
     key = await unlockAdminKey(configDir, o.prompt);
     // Dated AFTER the passphrase was typed: a slow prompt must not backdate the registration.
-    const body = buildRenamedRegistration({ uuid: current.body.uuid, current: current.body, newName, machines, aliases, revokedUpTo, now: o.now() });
+    const body = buildRenamedRegistration({ uuid: current.body.uuid, current: current.body, newName, machines, aliases, networkAliases: networkAliasMap(configDir), revokedUpTo, now: o.now() });
     if (!body.ok) throw new Error(`${body.message}. Nothing was signed`);
     const replaces: RegistrationBody = body.body;
     const verdict = registrationReplaces(current.body, replaces);

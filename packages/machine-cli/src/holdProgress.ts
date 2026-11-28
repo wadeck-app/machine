@@ -3,6 +3,7 @@ import { readMachine } from './identity.js';
 import { loadNetwork } from './network.js';
 import { findNoticeEnd } from './noticeEnds.js';
 import { readNotices } from './noticesStore.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // After an Allow, the Requests page asks every 2 s: is the request still held, or how did the hold end? (decision 86). For a request held on THIS machine the
@@ -36,7 +37,7 @@ export function holdProgressCommand(configDir: string, payload: unknown, now: nu
       // What is kept per machine is keyed by the uuid the connection authenticated: a uuid this machine does not list simply has nothing.
       machine = { uuid: p.machine, name: p.machine.slice(0, 8) };
     } else {
-      const resolved = resolveMachineRef(p.machine, network.directory.machines(), readAliases(configDir));
+      const resolved = resolveMachineRef(p.machine, network.directory.machines(), readAliases(configDir), networkAliasMap(configDir));
       if (!resolved.ok) {
         return { ok: false, reason: 'unknown-peer', message: `${resolved.message} (see \`machine list\`)` };
       }

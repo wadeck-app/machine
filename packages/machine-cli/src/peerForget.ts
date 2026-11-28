@@ -4,6 +4,7 @@ import { whenText } from './humanTime.js';
 import { loadNetwork } from './network.js';
 import { forgetPeerRecord, readPeerRecords } from './peerAddresses.js';
 import { PromptTimeoutError } from './prompt.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine peer forget-record <peer>`: forgets the highest address record seq seen for ONE peer (peer-records.json). It is the only way
@@ -25,7 +26,7 @@ export interface ForgetRecordResult {
 
 export async function runForgetPeerRecord(configDir: string, o: ForgetRecordOptions): Promise<ForgetRecordResult> {
   const network = loadNetwork(configDir, o.now());
-  const resolved = resolveMachineRef(o.reference, network.directory.machines(), readAliases(configDir));
+  const resolved = resolveMachineRef(o.reference, network.directory.machines(), readAliases(configDir), networkAliasMap(configDir));
   let uuid: string;
   let name: string | undefined;
   if (resolved.ok) {

@@ -9,7 +9,7 @@ import type { CliMetaDeps } from './cliMeta.js';
 // (no configuration directory needed), refuses an unknown subcommand with the list, and shows a read-only view when invoked bare.
 
 const GROUPS: Record<string, string[]> = {
-  admin: ['init', 'login', 'approve', 'revoke', 'rename', 'allow', 'distribute', 'forget-relay-record', 'pin', 'register', 'sign-policy'],
+  admin: ['init', 'login', 'approve', 'revoke', 'rename', 'alias', 'allow', 'distribute', 'forget-relay-record', 'pin', 'register', 'sign-policy'],
   peer: ['info', 'import', 'connect', 'forget-record'],
   startup: ['status', 'enable', 'disable'],
   cli: ['version', 'update', 'rollback', 'self-check', 'logs', 'post-update', 'register'],

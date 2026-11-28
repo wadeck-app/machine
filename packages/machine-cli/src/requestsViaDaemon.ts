@@ -6,6 +6,7 @@ import { connectToTarget, resolvePeerTarget } from './peerConnect.js';
 import { pinnedOf } from './cliWake.js';
 import { confirmFromAnswer } from './noticeRecipientsSent.js';
 import { sendSignedRequestsList, type ListRequestsResult } from './requestsRemote.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // What the daemon does for the module backend (decision 74): it forwards a `requests-list` request that the BROWSER signed with the admin key
@@ -24,7 +25,7 @@ export async function remoteRequestsCommand(configDir: string, payload: unknown,
   }
   const self = readMachine(configDir);
   const network = loadNetwork(configDir, now);
-  const resolved = resolveMachineRef(p.peer, [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()], readAliases(configDir));
+  const resolved = resolveMachineRef(p.peer, [{ uuid: self.uuid, name: self.name }, ...network.directory.machines()], readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) return fail('unknown-peer', resolved.message);
   const peer = network.directory.find(resolved.uuid);
   if (resolved.uuid === self.uuid || peer === undefined) return fail('unknown-peer', `"${p.peer}" is not a trusted peer of this machine: see \`machine list\``);

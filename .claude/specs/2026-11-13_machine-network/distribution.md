@@ -11,7 +11,7 @@ After `machine admin approve`, only the admin and the new machine know each othe
 Every document is a JSON object signed by the admin key (domain-separated like registrations), addressed to one machine:
 
 ```json
-{ "body": { "v": 2, "kind": "peer" | "policy" | "revocation" | "notice-recipients" | "self-registration", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { "sealed": "<base64url>" } },
+{ "body": { "v": 2, "kind": "peer" | "policy" | "revocation" | "notice-recipients" | "self-registration" | "aliases", "to": "<uuid>", "id": "<22 chars base64url>", "issuedAt": 1800000000, "expiresAt": 1802600000, "payload": { "sealed": "<base64url>" } },
   "signature": "<base64url Ed25519 over the canonical body, admin key, domain machine/document/v2>" }
 ```
 
@@ -21,6 +21,7 @@ Every document is a JSON object signed by the admin key (domain-separated like r
 | `policy` | the signed policy for `to` (existing format, body opaque here) |
 | `revocation` | the signed revocation list (existing format) |
 | `self-registration` | `{ registration }`: the signed registration of the addressee itself, re-issued by `machine admin rename` (decision 115); the addressee takes its new name from it (`identity.json`), refused when the uuid or the identity key is not its own |
+| `aliases` | the signed list of network aliases `{ body: { v, adminKeyId, serial, issuedAt, entries: [{ alias, uuid }] }, signature }` (decision 116, domain `machine/aliases/v1`), sent by `machine admin alias set / rm / send` to every trusted machine; id `v2:aliases:<to>:<serial>:<signature>`; installed in `aliases.json` with the replace-newer rule on `serial` (an equal or older serial is acknowledged, not installed); a label only, never a right |
 
 The recipient verifies the admin signature against its pinned admin key, `to` equals its own uuid, `expiresAt` not passed, opens `sealed` with its identity key, then installs through the existing validators (`importPeer`, `installPolicy`, `installRevocation`). A document that fails is dropped and reported in the audit log, never partly applied and never silent.
 

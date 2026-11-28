@@ -5,6 +5,7 @@ import { adminRelayAccess, noAdminRelayTokenMessage } from './distribute.js';
 import { loadNetwork, resolveRevokedMachine } from './network.js';
 import { PromptTimeoutError } from './prompt.js';
 import type { RelayClient } from './relayClient.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin forget-relay-record <machine>`: DELETE /api/machines/{uuid} with the admin relay token. It removes the address record, the
@@ -36,7 +37,7 @@ export async function runForgetRelayRecord(configDir: string, o: ForgetOptions):
   // so the name survives the revoke); or any full uuid (a machine removed some other way, whose record is still on the relay).
   const network = loadNetwork(configDir, o.now());
   const aliases = readAliases(configDir);
-  const resolved = resolveMachineRef(o.reference, network.directory.machines(), aliases);
+  const resolved = resolveMachineRef(o.reference, network.directory.machines(), aliases, networkAliasMap(configDir));
   let uuid: string;
   let name: string | undefined;
   let revoked = false;

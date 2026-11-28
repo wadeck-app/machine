@@ -18,6 +18,8 @@ export interface RenameRegistrationInput {
   machines: readonly MachineEntry[];
   /** Local aliases: alias (lowercase) to uuid. */
   aliases: Readonly<Record<string, string>>;
+  /** Network aliases (admin-signed, decision 116): alias (lowercase) to uuid. */
+  networkAliases?: Readonly<Record<string, string>>;
   /** The highest serial of `uuid` covered by an installed revocation, or undefined. */
   revokedUpTo: number | undefined;
   /** Epoch seconds. */
@@ -66,6 +68,10 @@ export function buildRenamedRegistration(input: RenameRegistrationInput): Rename
   const aliased = Object.prototype.hasOwnProperty.call(input.aliases, newName) ? input.aliases[newName] : undefined;
   if (aliased !== undefined && aliased.toLowerCase() !== uuid.toLowerCase()) {
     return fail('alias-conflict', `"${newName}" is a local alias of another machine (${short(aliased)}), and an alias wins over a name: after the rename, "${newName}" would still mean that other machine here. Remove the alias first (\`machine alias remove ${newName}\`) or pick another name`);
+  }
+  const networked = input.networkAliases !== undefined && Object.prototype.hasOwnProperty.call(input.networkAliases, newName) ? input.networkAliases[newName] : undefined;
+  if (networked !== undefined && networked.toLowerCase() !== uuid.toLowerCase()) {
+    return fail('alias-conflict', `"${newName}" is a network alias of another machine (${short(networked)}): after the rename, "${newName}" would be ambiguous on every machine. Remove the alias first (\`machine admin alias rm ${newName}\`) or pick another name`);
   }
   return { ok: true, body: { ...current, name: newName, serial: current.serial + 1, validFrom: input.now } };
 }

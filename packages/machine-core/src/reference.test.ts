@@ -77,6 +77,43 @@ describe('resolveMachineRef', () => {
   });
 });
 
+describe('resolveMachineRef with network aliases (decision 116)', () => {
+  it('resolves a network alias, case-insensitively, and says it came from the network', () => {
+    expect(resolveMachineRef('Nas', machines, {}, { nas: LAPTOP })).toEqual({ ok: true, uuid: LAPTOP, via: 'network-alias' });
+  });
+
+  it('a local alias wins over a network alias of the same label', () => {
+    expect(resolveMachineRef('nas', machines, { nas: DESKTOP }, { nas: LAPTOP })).toEqual({ ok: true, uuid: DESKTOP, via: 'alias' });
+  });
+
+  it('a network alias that equals the name of ANOTHER machine is ambiguous and names both candidates', () => {
+    const r = resolveMachineRef('box', machines, {}, { box: LAPTOP });
+    expect(r).toMatchObject({ ok: false, reason: 'ambiguous' });
+    if (!r.ok) {
+      expect(r.candidates.map((c) => c.name).sort()).toEqual(['box', 'work-laptop']);
+      expect(r.message).toMatch(/network alias of work-laptop.*machine named "box"/s);
+      expect(r.message).toMatch(/UUID|prefix/);
+    }
+  });
+
+  it('a network alias that equals the name of the SAME machine resolves by name', () => {
+    expect(resolveMachineRef('box', machines, {}, { box: BOX })).toEqual({ ok: true, uuid: BOX, via: 'name' });
+  });
+
+  it('names a dangling network alias instead of calling it unknown', () => {
+    const r = resolveMachineRef('old', machines, {}, { old: '00000000-0000-4000-8000-000000000000' });
+    expect(r).toMatchObject({ ok: false, reason: 'unknown' });
+    if (!r.ok) expect(r.message).toMatch(/network alias "old".*not trusted here/);
+  });
+
+  it('still resolves names, prefixes and uuids when network aliases exist', () => {
+    const network = { nas: LAPTOP };
+    expect(resolveMachineRef('desktop', machines, {}, network)).toMatchObject({ ok: true, uuid: DESKTOP, via: 'name' });
+    expect(resolveMachineRef('9c5d', machines, {}, network)).toMatchObject({ ok: true, uuid: LAPTOP, via: 'prefix' });
+    expect(resolveMachineRef(DESKTOP, machines, {}, network)).toMatchObject({ ok: true, via: 'uuid' });
+  });
+});
+
 describe('machineNameProblem', () => {
   it.each(['desktop', 'work-laptop', 'pc2', 'a'])('accepts %j', (name) => {
     expect(machineNameProblem(name)).toBeUndefined();

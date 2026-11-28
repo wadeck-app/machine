@@ -1,9 +1,11 @@
 import { dismissStoredNotices } from './noticesStore.js';
-import { isUuid, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
+import { aliasConflicts, isUuid, resolveMachineRef, type HoldTable, type MachineEntry, type PolicyMode, type Resolution } from '@wadeck-app/machine-core';
 import { AliasConflictError, NoSuchAliasError, NotInitializedError } from './errors.js';
 import { readMachine, type MachineIdentity } from './identity.js';
 import { loadNetwork, readRevocationSeen, revocationState, revokedMachines, type RevokedMachine } from './network.js';
 import { readAliases, removeAlias, setAlias } from './state.js';
+import { networkAliasMap } from './aliasesStore.js';
+import { aliasOverview, conflictWarning, type AliasOverview } from './aliasView.js';
 import { noticeHolders, type NoticeHoldersAnswer } from './adminNotifyTo.js';
 import { requestsAnswer, type RequestsAnswer } from './requestsView.js';
 import { directDeliveryFor } from './directDelivery.js';
@@ -54,9 +56,10 @@ export interface StatusAnswer {
 
 export interface ListAnswer {
   initialized: true;
-  self: MachineEntry & { aliases: string[] };
+  /** `aliases`: every alias, local or network; `networkAliases`: those that come from the admin-signed list (not shadowed by a local one). */
+  self: MachineEntry & { aliases: string[]; networkAliases: string[] };
   /** revocationVersionSeen: the revocation version the peer announced at its last handshake (absent: never seen), revocationSeenAt: when (epoch seconds). */
-  peers: Array<MachineEntry & { aliases: string[]; revocationVersionSeen?: number; revocationSeenAt?: number }>;
+  peers: Array<MachineEntry & { aliases: string[]; networkAliases: string[]; revocationVersionSeen?: number; revocationSeenAt?: number }>;
   /** Why the revocation versions are missing (unreadable state file). */
   revocationWarning?: string;
   enrolled: boolean;
@@ -68,8 +71,9 @@ export interface ListAnswer {
 /** The answer of the daemon command `dismissNotice` (decision 100). */
 export type DismissAnswer = { ok: true; removed: number } | { ok: false; reason: 'unknown' | 'live' | 'none'; message: string };
 export type DenyAnswer ={ ok: true; id: string; peer: string; shell: string; command: string } | { ok: false; reason: 'unknown' | 'ambiguous' | 'too-short' | 'bad-reason' | 'no-daemon'; message: string };
-export type ResolveAnswer = (Resolution & { name?: string }) | NotInitialized;
-export type AliasAnswer = { ok: true; alias: string; uuid: string; previous?: string } | Exclude<Resolution, { ok: true }> | { ok: false; reason: 'conflict' | 'missing'; message: string } | NotInitialized;
+export type ResolveAnswer = (Resolution & { name?: string; /** A local alias and a network alias of this label point at different machines: the local one won. */ warning?: string }) | NotInitialized;
+export type AliasOverviewAnswer = ({ initialized: true } & AliasOverview) | NotInitialized;
+export type AliasAnswer = { ok: true; alias: string; uuid: string; previous?: string; warning?: string } | Exclude<Resolution, { ok: true }> | { ok: false; reason: 'conflict' | 'missing'; message: string } | NotInitialized;
 
 const NOT_ENROLLED_NOTE = 'not enrolled: no admin key is pinned on this machine; pin the admin key (`machine admin pin <admin.json>`) and import peers (`machine peer import <bundle.json>`)';
 
@@ -148,15 +152,20 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
       const network = loadNetwork(configDir, now());
-      const aliases = readAliases(configDir);
+      const local = readAliases(configDir);
+      const networkAliases = networkAliasMap(configDir);
+      // Effective aliases: the local one wins over a network alias of the same label.
+      const aliases = { ...networkAliases, ...local };
+      const networkNames = (uuid: string): string[] => Object.entries(aliases).filter(([alias, to]) => to === uuid && !Object.prototype.hasOwnProperty.call(local, alias)).map(([alias]) => alias);
       let revocationWarning: string | undefined;
       const seen = readRevocationSeen(configDir, (warning) => (revocationWarning = `the revocation versions are not shown: ${warning}`));
       return {
         initialized: true,
-        self: { uuid: self.uuid, name: self.name, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === self.uuid).map(([alias]) => alias) },
+        self: { uuid: self.uuid, name: self.name, aliases: Object.entries(aliases).filter(([, uuid]) => uuid === self.uuid).map(([alias]) => alias), networkAliases: networkNames(self.uuid) },
         peers: network.directory.machines().map((p) => ({
           ...p,
           aliases: Object.entries(aliases).filter(([, uuid]) => uuid === p.uuid).map(([alias]) => alias),
+          networkAliases: networkNames(p.uuid),
           ...(seen[p.uuid] ? { revocationVersionSeen: seen[p.uuid]?.version as number, revocationSeenAt: seen[p.uuid]?.at as number } : {}),
         })),
         ...(revocationWarning ? { revocationWarning } : {}),
@@ -328,10 +337,23 @@ export function makeCommands(configDir: string, version: string | (() => string)
       const self = selfOf(configDir);
       if ('initialized' in self) return self;
       const machines = everyone(self);
-      const result = resolveMachineRef(stringField(payload, 'ref'), machines, readAliases(configDir));
+      const ref = stringField(payload, 'ref');
+      const local = readAliases(configDir);
+      const network = networkAliasMap(configDir);
+      const result = resolveMachineRef(ref, machines, local, network);
       if (!result.ok) return result;
       const machine = machines.find((m) => m.uuid === result.uuid);
-      return { ...result, ...(machine ? { name: machine.name } : {}) };
+      // The local alias won: the label means something else on the network, and the person must know.
+      const conflict = aliasConflicts(local, network).find((c) => c.alias === ref.toLowerCase());
+      const nameOf = (uuid: string): string => machines.find((m) => m.uuid === uuid)?.name ?? uuid;
+      return { ...result, ...(machine ? { name: machine.name } : {}), ...(conflict ? { warning: conflictWarning(conflict, nameOf) } : {}) };
+    },
+
+    /** `machine alias list`: the local aliases and the network aliases (signed by the admin), each with its origin. Read-only. */
+    aliasOverview(): AliasOverviewAnswer {
+      const self = selfOf(configDir);
+      if ('initialized' in self) return self;
+      return { initialized: true, ...aliasOverview(configDir, everyone(self)) };
     },
 
     aliasList(): Record<string, string> {
@@ -356,7 +378,10 @@ export function makeCommands(configDir: string, version: string | (() => string)
       }
       try {
         const { previous } = setAlias(configDir, alias, target.uuid, { replace: payloadOf(payload).replace === true });
-        return { ok: true, alias, uuid: target.uuid, ...(previous ? { previous } : {}) };
+        // The same label is a network alias of another machine: this local alias wins here, and saying so now is better than a surprise later.
+        const conflict = aliasConflicts({ [alias]: target.uuid }, networkAliasMap(configDir))[0];
+        const nameOf = (uuid: string): string => machines.find((m) => m.uuid === uuid)?.name ?? uuid;
+        return { ok: true, alias, uuid: target.uuid, ...(previous ? { previous } : {}), ...(conflict ? { warning: conflictWarning(conflict, nameOf) } : {}) };
       } catch (e) {
         if (e instanceof AliasConflictError) return { ok: false, reason: 'conflict', message: e.message };
         throw e;

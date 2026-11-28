@@ -6,6 +6,7 @@ import { directDeliveryFor } from './directDelivery.js';
 import { PromptTimeoutError } from './prompt.js';
 import { loadNetwork, registeredSerial, signAndInstallRevocation } from './network.js';
 import type { RelayClient } from './relayClient.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin revoke` (decision 50): the way out when the final code differs on the new machine. It signs a
@@ -44,7 +45,7 @@ export async function runRevoke(configDir: string, o: RevokeOptions): Promise<Re
   }
   const pin = readAdminPin(configDir);
   const network = loadNetwork(configDir, o.now());
-  const resolved = resolveMachineRef(o.reference, network.directory.machines(), readAliases(configDir));
+  const resolved = resolveMachineRef(o.reference, network.directory.machines(), readAliases(configDir), networkAliasMap(configDir));
   if (!resolved.ok) throw new UnresolvedReferenceError(`${resolved.message} (only machines this machine currently trusts can be revoked)`);
   const peer = network.directory.find(resolved.uuid);
   const serial = registeredSerial(configDir, resolved.uuid);

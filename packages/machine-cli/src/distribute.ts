@@ -15,6 +15,7 @@ import {
   type DeliverOutcome,
   type DocumentKind,
   type Json,
+  type SignedAliases,
   type SignedDocument,
   type SignedNoticeRecipients,
   type SignedPolicy,
@@ -404,6 +405,39 @@ async function sendNoticeRecipients(sender: Sender, report: DistributionReport, 
     return;
   }
   await putNoticeRecipients(sender, report, signed, targets);
+}
+
+/** The command that sends the network aliases again (after a failed sending, or to a machine enrolled since). */
+export const RETRY_ALIASES = 'machine admin alias send';
+
+/**
+ * The network aliases (decision 116): the signed list sealed to every trusted machine except this admin machine (it holds the file). The id comes from the
+ * list (addressee, serial, signature), so sending the same list again is idempotent: the relay answers `id_conflict`, counted as already there.
+ */
+export async function distributeAliases(configDir: string, signed: SignedAliases, sender: Sender): Promise<DistributionReport> {
+  const report = emptyReport();
+  const targets = trustedRegistrations(configDir, sender.now()).filter((r) => r.body.uuid !== sender.adminUuid);
+  report.machines = targets.length;
+  for (const target of targets) {
+    const to = { uuid: target.body.uuid, name: target.body.name };
+    const next = await put(sender, report, to, 'aliases', () => {
+      const now = sender.now();
+      return buildDocument(
+        {
+          kind: 'aliases',
+          to: to.uuid,
+          id: documentId(`v2:aliases:${to.uuid}:${signed.body.serial}:${signed.signature}`),
+          issuedAt: now,
+          expiresAt: now + DOCUMENT_RETENTION_SECONDS,
+          payload: signed as unknown as Json,
+          recipientIdentityPublicKey: target.body.identityPublicKey,
+        },
+        sender.adminPrivateKeyPkcs8,
+      );
+    });
+    if (!next) break;
+  }
+  return report;
 }
 
 /** Seal and PUT one signed list to each target (the admin machine itself has no use for it). */

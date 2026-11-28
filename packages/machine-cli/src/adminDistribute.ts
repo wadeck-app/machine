@@ -19,6 +19,7 @@ import {
 } from './distribute.js';
 import { loadNetwork, resolveRevokedMachine } from './network.js';
 import type { RelayClient } from './relayClient.js';
+import { networkAliasMap } from './aliasesStore.js';
 import { readAliases } from './state.js';
 
 // `machine admin distribute <machine>` and `machine admin distribute --policy <signed-policy.json>` (distribution.md): send again what an
@@ -85,7 +86,7 @@ export async function runDistribute(configDir: string, o: DistributeOptions): Pr
   const reference = o.reference as string;
   const network = loadNetwork(configDir, o.now());
   const aliases = readAliases(configDir);
-  const resolved = resolveMachineRef(reference, network.directory.machines(), aliases);
+  const resolved = resolveMachineRef(reference, network.directory.machines(), aliases, networkAliasMap(configDir));
   // A machine revoked here is no longer in the directory: it is found by the name its registration had, or by its uuid.
   const gone = resolved.ok ? undefined : resolveRevokedMachine(configDir, reference, aliases);
   if (gone !== undefined && !gone.ok && gone.reason === 'ambiguous') throw new UnresolvedReferenceError(gone.message);

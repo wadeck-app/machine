@@ -220,7 +220,8 @@ The shell is part of the exact entry. `run` uses `--shell`, else the default set
 - `ping` needs no allowlist entry. `ping <machine>` also does the revocation catch-up with that peer. Exit codes: 0 ok, 1 failure, 2 usage, 3 unknown or ambiguous machine.
 - A bare group shows its state, read-only: `machine admin` lists the candidacies waiting for approval (it never approves), `machine peer` the peers, `machine startup` the job status, `machine cli` the versions, `machine alias` the aliases.
 - Help: `machine --help`, `machine <group> --help`, `machine <group> <subcommand> --help`.
-- A friendlier label: `machine alias set <label> <name>`.
+- A friendlier label on THIS machine: `machine alias set <label> <name>`.
+- A label on EVERY machine (decision 116): `machine admin alias set <alias> <machine>` on the admin machine (y/N, then the admin passphrase; signed and sent to every machine through the relay). `rm <alias>` removes one, `list` shows them, `send` sends the list again (the retry of a failed sending, or for a machine enrolled since). An alias points to the machine's uuid, so a rename keeps it; it must not equal or look like a machine name or another alias. A local alias wins over a network alias of the same label, with a warning naming both. `machine alias list` shows both with their origin. Not in the admin page yet; not verified on a real network.
 - Revoke a machine: `machine admin revoke <name>` (asks y/N and the passphrase, tells the other machines through the relay).
 - Rename a machine without enrolling it again: `machine admin rename <machine> <new-name>` (y/N, then the admin passphrase; the other machines and the renamed one are told through the relay). Policies and aliases follow the machine; `machine run <old-name>` stops working. A failed sending exits 1 with the retry, `machine admin rename <new-name> <new-name>`. The admin machine itself cannot be renamed yet. Not verified on a real network (see the end of this file).
 
