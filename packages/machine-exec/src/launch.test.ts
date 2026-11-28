@@ -76,6 +76,12 @@ describe('scrubEnv', () => {
     expect(scrubEnv({ NoDefaultCurrentDirectoryInExePath: '1' }, 'linux')).toEqual({});
   });
 
+  it('keeps PSModuleAnalysisCachePath on Windows (a path, no secret): without it powershell.exe hung for more than 25 s on the windows-latest runner (measured by an env bisect, CI run 46129290430, #125), with it 0.3 s', () => {
+    const out = scrubEnv({ PSMODULEANALYSISCACHEPATH: 'D:\\cache\\ModuleAnalysisCache', PSModulePath: 'x', Path: 'p' }, 'win32');
+    expect(out).toEqual({ PSMODULEANALYSISCACHEPATH: 'D:\\cache\\ModuleAnalysisCache', Path: 'p', NoDefaultCurrentDirectoryInExePath: '1' });
+    expect(scrubEnv({ PSModuleAnalysisCachePath: 'c' }, 'linux')).toEqual({});
+  });
+
   it('is case-sensitive on Unix', () => {
     const out = scrubEnv({ PATH: 'p', path: 'q', HOME: 'h', AWS_SECRET_ACCESS_KEY: 'secret', LC_ALL: 'C' }, 'linux');
     expect(out).toEqual({ PATH: 'p', HOME: 'h', LC_ALL: 'C' });

@@ -56,6 +56,8 @@ const WINDOWS_ENV = [
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
   'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'COMMONPROGRAMFILES',
   'COMPUTERNAME', 'USERNAME', 'USERDOMAIN', 'OS', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS',
+  // A path (no secret). Measured on the windows-latest runner (CI run 46129290430, env bisect): powershell.exe hung for more than 25 s without this one and ran in 0.3 s with it. The reason is not established.
+  'PSMODULEANALYSISCACHEPATH',
 ];
 const UNIX_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'TMPDIR', 'TZ'];
 
