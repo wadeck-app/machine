@@ -5,6 +5,8 @@ import type { SourceError } from '../lib/loadFailure.js';
 import { splitHeadline } from '../lib/statusHeadline.js';
 import { CellText, WrapText } from './CellText.js';
 import { SourceFailureNotice } from './SourceFailureNotice.js';
+import { AliasesDialog } from './AliasesDialog.js';
+import { RenameMachineDialog } from './RenameMachineDialog.js';
 import { RevokeMachineDialog } from './RevokeMachineDialog.js';
 import { useFocusReturn } from './useFocusReturn.js';
 
@@ -70,14 +72,16 @@ function detailsText(row: MachineTableRow): string {
 }
 
 /**
- * The Machines page: this machine and the peers it trusts, with Revoke on each trusted peer. Revoke signs IN THE BROWSER with the admin passphrase asked at every
- * revocation (admin-ui.md, "Revoke from the page"); the machine that holds the admin key does the rest.
+ * The Machines page: this machine and the peers it trusts, with Rename and Revoke on each trusted peer and Aliases (the network aliases) on every row. Each signs IN THE
+ * BROWSER with the admin passphrase asked at every action (admin-ui.md, "Revoke from the page", "Rename and aliases from the page"); the machine that holds the admin key
+ * does the rest.
  *
  * @registryCategory composite
- * @registryTags machines revoke admin
+ * @registryTags machines revoke rename aliases admin
  */
 export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceErrors, onRefresh }: MachinesTableProps) {
-  const [selected, setSelected] = useState<MachineTableRow | null>(null);
+  // The action open and the row it started from: one dialog at a time.
+  const [selected, setSelected] = useState<{ action: 'revoke' | 'rename' | 'aliases'; row: MachineTableRow } | null>(null);
   const api = useRef<AllowApi | null>(null);
   const root = useRef<HTMLDivElement>(null);
   // The dialog gives the focus back to the Revoke button that opened it (to the list when the row is gone), never to the page body.
@@ -92,7 +96,9 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
       nowrap: true,
       render: (r) => (
         <span className="flex items-center justify-end gap-2">
-          {!r.self && <ButtonAction label="Revoke" ariaLabel={`Revoke ${r.name}`} variant="danger-outline" size="xs" onClick={() => setSelected(r)} />}
+          {!r.self && <ButtonAction label="Rename" ariaLabel={`Rename ${r.name}`} variant="neutral" size="xs" onClick={() => setSelected({ action: 'rename', row: r })} />}
+          <ButtonAction label="Aliases" ariaLabel={`Aliases ${r.name}`} variant="neutral" size="xs" onClick={() => setSelected({ action: 'aliases', row: r })} />
+          {!r.self && <ButtonAction label="Revoke" ariaLabel={`Revoke ${r.name}`} variant="danger-outline" size="xs" onClick={() => setSelected({ action: 'revoke', row: r })} />}
         </span>
       ),
     },
@@ -112,15 +118,41 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceEr
           renderNode={(_node, ctx) => <Markdown text={detailsText(ctx['row'] as MachineTableRow)} />}
         />
       )}
-      {selected !== null && (
+      {selected?.action === 'revoke' && (
         <RevokeMachineDialog
-          row={selected}
+          row={selected.row}
           api={api.current}
           onClose={() => {
-            focus.leave(`Revoke ${selected.name}`);
+            focus.leave(`Revoke ${selected.row.name}`);
             setSelected(null);
           }}
           onRevoked={() => {
+            void onRefresh?.('machines');
+          }}
+        />
+      )}
+      {selected?.action === 'rename' && (
+        <RenameMachineDialog
+          row={selected.row}
+          api={api.current}
+          onClose={() => {
+            focus.leave(`Rename ${selected.row.name}`);
+            setSelected(null);
+          }}
+          onRenamed={() => {
+            void onRefresh?.('machines');
+          }}
+        />
+      )}
+      {selected?.action === 'aliases' && (
+        <AliasesDialog
+          row={selected.row}
+          api={api.current}
+          onClose={() => {
+            focus.leave(`Aliases ${selected.row.name}`);
+            setSelected(null);
+          }}
+          onChanged={() => {
             void onRefresh?.('machines');
           }}
         />

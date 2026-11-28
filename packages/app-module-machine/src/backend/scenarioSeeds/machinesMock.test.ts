@@ -29,14 +29,31 @@ const names = (routes: MockRoutes): string[] => list(routes).machines.map((m: Ma
 const apply = (uuid: string) => ({ uuid, signed: { body: {}, signature: 'x' }, documents: [], noticeRecipients: null });
 
 describe('the seeds of the Machines page', () => {
-  it('are exactly the seven scenarios of the page', () => {
-    expect([...MACHINES_SEED_NAMES]).toEqual(['only-this-machine', 'two-trusted-peers', 'peer-revoked-earlier', 'revoke-delivered', 'revoke-partial', 'revoke-failed', 'relay-unreachable']);
+  it('are exactly the fourteen scenarios of the page', () => {
+    expect([...MACHINES_SEED_NAMES]).toEqual([
+      'only-this-machine',
+      'two-trusted-peers',
+      'peer-revoked-earlier',
+      'revoke-delivered',
+      'revoke-partial',
+      'revoke-failed',
+      'relay-unreachable',
+      'rename-delivered',
+      'rename-partial',
+      'rename-failed',
+      'alias-set',
+      'alias-remove',
+      'alias-conflict',
+      'alias-partial',
+    ]);
   });
 });
 
 describe('the routes of the Machines page', () => {
-  it('answers exactly the five routes the page calls, under the module prefix', () => {
-    expect(Object.keys(make('two-trusted-peers')).sort()).toEqual(['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke', 'POST /delivery-retry'].map(full).sort());
+  it('answers exactly the nine routes the page calls, under the module prefix', () => {
+    expect(Object.keys(make('two-trusted-peers')).sort()).toEqual(
+      ['GET /machines', 'GET /admin-key', 'GET /revoke-context/:uuid', 'POST /revoke', 'GET /rename-context/:uuid', 'POST /rename', 'GET /aliases-context', 'POST /aliases', 'POST /delivery-retry'].map(full).sort(),
+    );
   });
 
   it('POST /delivery-retry: after a failed revocation the first retry delivers to the peer that stays and drops the revoked machine from the list, then nothing is retained (409)', () => {

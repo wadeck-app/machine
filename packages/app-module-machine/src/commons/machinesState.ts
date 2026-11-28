@@ -22,6 +22,15 @@ export interface PeerEntry {
 /** What the scenario plans for the delivery of a revocation to the peers that stay. */
 export type RevokePlan = 'delivered' | 'partial' | 'failed' | 'relay-unreachable';
 
+/** What the scenario plans for the delivery of a rename or of the network aliases; `mixed`: the first machine takes the documents directly, the others fail (so a retry shows). */
+export type DeliveryPlan = RevokePlan | 'mixed';
+
+/** The network aliases the daemon holds, signed (decision 116). */
+export interface SignedAliasesWire {
+  body: { v: 1; adminKeyId: string; serial: number; issuedAt: number; entries: Array<{ alias: string; uuid: string }> };
+  signature: string;
+}
+
 export interface MachinesState {
   admin: { uuid: string; name: string; identityPublicKey: string; publicKey: string; keyId: string };
   /** The text of the encrypted admin key file served by `GET /admin-key`. */
@@ -32,7 +41,11 @@ export interface MachinesState {
   revoked: Array<{ uuid: string; serial: number }>;
   /** Version (issuedAt) of the revocation list held here. */
   heldVersion: number;
-  plan: RevokePlan;
+  plan: DeliveryPlan;
+  /** The network aliases held here (signed by the scenario key), or absent/null when none was ever signed. */
+  networkAliases?: SignedAliasesWire | null;
+  /** MOCK memory of the daemon for a rename or an aliases delivery that failed (by subject uuid): what a retry delivers. */
+  retainedDeliveries?: Record<string, { subject: { uuid: string; name: string }; machines: DeliveryRow[]; retry: string }>;
   /** MOCK memory of the daemon: the answer of a revocation whose delivery failed (by uuid of the revoked machine), so its documents are still to send again. Absent in a seed; set by `POST /revoke`. */
   retained?: Record<string, RevokeApplyAnswer>;
 }
@@ -241,7 +254,7 @@ export function revokeApply(state: MachinesState, body: RevokeRequest): Machines
     revoked: [...state.revoked, { uuid: body.uuid, serial: peer.registration.body.serial }],
     heldVersion: state.heldVersion + 1,
   };
-  const answer: RevokeApplyAnswer = { ok: true, revoked: { uuid: body.uuid, name: peer.registration.body.name }, retry: retryOf(body.uuid), ...planned(state.plan, peer, stay) };
+  const answer: RevokeApplyAnswer = { ok: true, revoked: { uuid: body.uuid, name: peer.registration.body.name }, retry: retryOf(body.uuid), ...planned(state.plan === 'mixed' ? 'failed' : state.plan, peer, stay) };
   // The daemon keeps the documents of a delivery that failed (in memory) for the retry; a delivery that did not fail leaves nothing.
   const { [body.uuid]: _forgotten, ...others } = state.retained ?? {};
   return { state: { ...next, retained: answer.failed ? { ...others, [body.uuid]: answer } : others }, answer: ok(answer) };
@@ -251,6 +264,11 @@ export function revokeApply(state: MachinesState, body: RevokeRequest): Machines
 export function retryDelivery(state: MachinesState, body: unknown): MachinesStep<DistributeAnswer> {
   const parsed = retryUuid(body);
   if (!('uuid' in parsed)) return { state, answer: parsed };
+  const other = state.retainedDeliveries?.[parsed.uuid];
+  if (other !== undefined) {
+    const { [parsed.uuid]: _done, ...left } = state.retainedDeliveries ?? {};
+    return { state: { ...state, retainedDeliveries: left }, answer: ok(retriedAnswer(other)) };
+  }
   const first = state.retained?.[parsed.uuid];
   if (first === undefined) return { state, answer: nothingRetained(parsed.uuid) };
   const { [parsed.uuid]: _delivered, ...rest } = state.retained ?? {};

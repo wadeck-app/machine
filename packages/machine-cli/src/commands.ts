@@ -16,6 +16,8 @@ import { approveContext, importCandidate, type ImportCandidateAnswer } from './c
 import { approveDistribute, type ApproveDistributeAnswer } from './approveDistribute.js';
 import { retryDelivery, type RetryDeliveryAnswer } from './deliveryRetry.js';
 import { revokeApply, revokeContext, type RevokeApplyAnswer } from './revokeFromPage.js';
+import { renameApply, renameContext, type RenameApplyAnswer } from './renameFromPage.js';
+import { aliasesApply, aliasesContext, type AliasesApplyAnswer } from './aliasesFromPage.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -304,6 +306,33 @@ export function makeCommands(configDir: string, version: string | (() => string)
 
     revokeApply(payload?: unknown): Promise<RevokeApplyAnswer> {
       return revokeApply(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * Rename from the page (admin-ui.md). `renameContext` serves what the page needs before the passphrase; `renameApply` verifies the re-issued registration and the
+     * documents the page signed IN THE BROWSER against the pinned admin key and against the rename it plans itself from what it holds, installs the registration here
+     * (the pair secret is kept), then tells the machines like `machine admin rename` (direct first, relay inbox as fallback). No passphrase or unlocked key reaches it, and
+     * it signs nothing; a failed delivery never undoes the rename.
+     */
+    renameContext(payload?: unknown): ReturnType<typeof renameContext> {
+      return renameContext(configDir, payload, now());
+    },
+
+    renameApply(payload?: unknown): Promise<RenameApplyAnswer> {
+      return renameApply(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * Network aliases from the page (decision 116, admin-ui.md). `aliasesContext` serves what the page needs before the passphrase; `aliasesApply` verifies the list the
+     * page signed IN THE BROWSER (one alias added or removed, re-planned here) and its documents against the pinned admin key, installs the list here, then sends it like
+     * `machine admin alias send`. No passphrase or unlocked key reaches it, and it signs nothing; a failed delivery never undoes the change.
+     */
+    aliasesContext(payload?: unknown): ReturnType<typeof aliasesContext> {
+      return aliasesContext(configDir, payload, now());
+    },
+
+    aliasesApply(payload?: unknown): Promise<AliasesApplyAnswer> {
+      return aliasesApply(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
     },
 
     /**

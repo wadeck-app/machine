@@ -11,7 +11,7 @@ import { readMachine } from './identity.js';
 import type { RelayClient } from './relayClient.js';
 import { readRelayConfig } from './relayStore.js';
 
-// Retry delivery (admin-ui.md, "Result and progress UX"): after an approval or a revocation made from the page, some documents may not have reached the relay. The page
+// Retry delivery (admin-ui.md, "Result and progress UX"): after an approval, a revocation, a rename or a change of the network aliases made from the page, some documents may not have reached the relay. The page
 // signed them in the browser and the daemon already verified them, so the daemon can send them again WITHOUT a passphrase: nothing is signed here.
 //
 // The documents are kept in the MEMORY of this daemon process only, never on disk: they are sealed (the relay holds the same bytes in an inbox), but a file would outlive
@@ -19,11 +19,11 @@ import { readRelayConfig } from './relayStore.js';
 
 /** One document still to deliver. A list of notice recipients also carries the list itself (what `putNoticeDocument` records). */
 export type RetainedItem =
-  | { to: Recipient; kind: 'peer' | 'revocation'; document: SignedDocument }
+  | { to: Recipient; kind: 'peer' | 'revocation' | 'self-registration' | 'aliases'; document: SignedDocument }
   | { to: Recipient; kind: 'notice-recipients'; document: SignedDocument; noticeList: SignedNoticeRecipients };
 
 export interface RetainedDelivery {
-  kind: 'approval' | 'revocation';
+  kind: 'approval' | 'revocation' | 'rename' | 'aliases';
   subject: Recipient;
   /** Every machine the first run told, in the order of its answer. */
   told: Recipient[];
@@ -44,6 +44,9 @@ const store = new Map<string, RetainedDelivery>();
 const keyOf = (configDir: string, uuid: string): string => `${configDir}\n${uuid}`;
 
 export const retainedDelivery = (configDir: string, uuid: string): RetainedDelivery | undefined => store.get(keyOf(configDir, uuid));
+
+/** What a retained delivery is called in the report ("the rename stands: nothing was undone"). */
+const WHAT: Record<RetainedDelivery['kind'], string> = { approval: 'the approval', revocation: 'the revocation', rename: 'the rename', aliases: 'the network aliases' };
 
 /** Forgets everything kept (tests). */
 export const clearRetainedDeliveries = (): void => store.clear();
@@ -78,10 +81,10 @@ export async function deliverItem(sender: DeliveryContext, report: DistributionR
 export type RetryDeliveryAnswer = ApproveDistributeAnswer;
 const fail = (reason: string, message: string): RetryDeliveryAnswer => ({ ok: false, reason, message });
 
-const BAD_PAYLOAD = 'expected exactly {"uuid": "<uuid of the machine the approval or the revocation was about>"}, nothing else: reload the page and try again';
+const BAD_PAYLOAD = 'expected exactly {"uuid": "<uuid of the machine the approval, the revocation or the rename was about, or of the network aliases>"}, nothing else: reload the page and try again';
 
 /**
- * Delivers again the documents kept after a run of `approveDistribute` or `revokeApply` that did not store them all. Payload: exactly `{ uuid }`. Every kept document is
+ * Delivers again the documents kept after a run of `approveDistribute`, `revokeApply`, `renameApply` or `aliasesApply` that did not store them all. Payload: exactly `{ uuid }`. Every kept document is
  * verified again (pinned admin key, addressee, expiry at `now`) before it is sent; nothing is signed and no passphrase is involved, so no right is widened (hard rule 4).
  */
 export async function retryDelivery(
@@ -154,7 +157,7 @@ export async function retryDelivery(
   // What no retry can fix stays in the report, so a success of the rest is never read as "all told".
   report.failures.push(...entry.persistent);
 
-  const text = formatDistribution(report, entry.kind === 'approval' ? 'the approval' : 'the revocation', entry.retry);
+  const text = formatDistribution(report, WHAT[entry.kind], entry.retry);
   // Merge with the first run: a machine this retry touched (something left to send, or a failure that stays) takes the entry of THIS report; every other machine keeps
   // the entry it had when it was not failed (it was delivered or in the inbox then, and nothing was sent to it since).
   const touched = new Set([...entry.items.map((i) => i.to.uuid), ...entry.persistent.map((f) => f.toUuid)]);

@@ -1,5 +1,6 @@
 import type { DocumentBody, DocumentInput, PolicyBody, PolicyEntry, RegistrationBody, RevocationBody, SignedDocument, SignedPolicy, SignedRegistration, SignedRevocation } from '@wadeck-app/machine-core';
 import { decodeBase64urlAny, decodeBase64urlStrict, encodeBase64url } from './base64url.js';
+import { assertAliasesBody } from './aliases.js';
 import { canonicalize, type Json } from './canonical.js';
 import { sha256 } from './keys.js';
 import { sealTo } from './seal.js';
@@ -7,7 +8,7 @@ import { signBody } from './signed.js';
 import { canonicalEntry, looksLikePlaceholder, parseTemplate, type Template } from './template.js';
 import { TemplateError } from './typedParams.js';
 
-// Signing of what the admin page produces: registrations, policies, revocation lists and the documents that carry them.
+// Signing of what the admin page produces: registrations, policies, revocation lists, network aliases and the documents that carry them.
 // The shape validators are copies of the pure validators of machine-core (registration.ts, policy.ts, revocation.ts,
 // document.ts), kept message for message; documents.test.ts proves they accept and refuse the same bodies with the same messages.
 // A body that no machine would accept is refused here, before it is signed.
@@ -325,18 +326,26 @@ function assertPeerPayload(payload: unknown): void {
   }
 }
 
-function assertSignedPayload(payload: unknown, kind: 'policy' | 'revocation' | 'notice-recipients'): Record<string, unknown> {
+function assertSignedPayload(payload: unknown, kind: 'policy' | 'revocation' | 'notice-recipients' | 'aliases'): Record<string, unknown> {
   if (!isObject(payload)) throw new Error(`document: the payload of a ${kind} document must be an object`);
   assertKeys(payload, ['body', 'signature'], `document ${kind} payload`);
   if (!isObject(payload.body) || typeof payload.signature !== 'string') throw new Error(`document ${kind} payload: expected a signed ${kind} ({ body, signature })`);
   return payload.body;
 }
 
+function assertSelfRegistrationPayload(payload: unknown): void {
+  if (!isObject(payload)) throw new Error('document: the payload of a self-registration document must be an object');
+  assertKeys(payload, ['registration'], 'document self-registration payload');
+  if (!isObject(payload.registration) || !isObject(payload.registration.body) || typeof payload.registration.signature !== 'string') {
+    throw new Error('document self-registration payload: registration must be a signed registration');
+  }
+}
+
 function assertPayloadShape(kind: string, payload: unknown): void {
   if (kind === 'peer') assertPeerPayload(payload);
   else if (kind === 'policy') assertPolicyBody(assertSignedPayload(payload, 'policy'));
-  else if (kind === 'self-registration') throw new Error('document: the page does not build a self-registration document (the rename of a machine) yet: run `machine admin rename <machine> <new-name>` in a terminal');
-  else if (kind === 'aliases') throw new Error('document: the page does not build an aliases document (the network aliases) yet: run `machine admin alias set <alias> <machine>` in a terminal');
+  else if (kind === 'self-registration') assertSelfRegistrationPayload(payload);
+  else if (kind === 'aliases') assertAliasesBody(assertSignedPayload(payload, 'aliases'));
   else assertSignedPayload(payload, kind === 'notice-recipients' ? 'notice-recipients' : 'revocation');
 }
 

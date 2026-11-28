@@ -54,7 +54,7 @@ Routes: `GET /candidacies`, `GET /approve-context/:uuid`, `GET /admin-key`, `POS
 
 ## Machines scenarios (`/`)
 
-Routes: `GET /machines`, `GET /revoke-context/:uuid`, `GET /admin-key`, `POST /revoke`.
+Routes: `GET /machines`, `GET /revoke-context/:uuid`, `GET /rename-context/:uuid`, `GET /aliases-context`, `GET /admin-key`, `POST /revoke`, `POST /rename`, `POST /aliases`, `POST /delivery-retry`.
 
 | Id | Shows |
 |---|---|
@@ -63,8 +63,17 @@ Routes: `GET /machines`, `GET /revoke-context/:uuid`, `GET /admin-key`, `POST /r
 | `peer-revoked-earlier` | mac-m2 revoked (serial 3) and absent; revoking thinkcentre has nobody to tell |
 | `revoke-delivered` / `-partial` / `-failed` | planned delivery after revoking mac-m2: direct / relay inbox (offline) / relay refuses, retry command |
 | `relay-unreachable` | relay down: thinkcentre not told AND mac-m2 not removed from the relay |
+| `rename-delivered` | Rename mac-m2: thinkcentre and the renamed machine take the documents directly; refused names to try: `thinkcentre` (taken), `think-centre` (lookalike), `tc` (local alias) |
+| `rename-partial` | thinkcentre delivered, the renamed machine failed: headline, one line per machine, Retry delivery (then the relay inbox) |
+| `rename-failed` | the relay refuses everything: both failed, command folded, Retry delivery |
+| `alias-set` | network list `tc` -> mac-m2 and `work` -> thinkcentre, while the local alias `tc` -> thinkcentre wins here (warning); add an alias |
+| `alias-remove` | list `box`, `work`: Remove each (own passphrase, own result) |
+| `alias-conflict` | no network alias, local `tc`: `thinkcentre` and `think-centre` refused before the passphrase, `tc` for mac-m2 accepted with the local-wins warning |
+| `alias-partial` | thinkcentre delivered, mac-m2 failed; Retry delivery goes through the reserved uuid of the aliases |
 
 Revoke removes the peer from the next `GET /machines` and adds it to the held list; revoking it again is a 409.
+
+Rename replaces the registration of the peer (name, serial + 1) in the next `GET /machines`; a stale serial or a taken name is a 422. Aliases keep the list the page signed (exactly one alias added or removed, a higher serial, else 422 / 409). The seeded lists are `scenarioSeeds/machines-aliases.json`, signed by the scenario key (`WRITE_SEEDS=1 npm test --workspace=packages/app-module-machine -- machinesActionsMock`): the page verifies the held list before it signs the next. The retry of the aliases is kept under the reserved uuid `00000000-0000-4000-8000-0000000a11a5` (machine-core `NETWORK_ALIASES_SUBJECT_UUID`, allowed by the privacy scan).
 
 ## Limits
 

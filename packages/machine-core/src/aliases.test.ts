@@ -167,3 +167,10 @@ describe('aliasConflicts', () => {
     expect(aliasConflicts({}, { box: THINK })).toEqual([]);
   });
 });
+
+describe('NETWORK_ALIASES_SUBJECT_UUID (the key under which the daemon keeps the documents of the network aliases for a delivery retry)', () => {
+  it('is a lowercase version 4 uuid, so the delivery-retry route accepts it, and is exported by the package', async () => {
+    const { NETWORK_ALIASES_SUBJECT_UUID } = await import('./index.js');
+    expect(NETWORK_ALIASES_SUBJECT_UUID).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});

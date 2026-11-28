@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { adminKeyHint } from '@wadeck-app/machine-webcrypto';
 import { readAdminKeyHint } from '../../../../dsl-lib-machine/src/lib/allowFlow.js';
 import { checkApprovable, loadApproveContext, signAndApprove, type ApproveRow } from '../../../../dsl-lib-machine/src/lib/approveFlow.js';
+import { loadAliasesContext, previewAliasChange, signAndChangeAlias } from '../../../../dsl-lib-machine/src/lib/aliasesFlow.js';
+import { loadRenameContext, signAndRename } from '../../../../dsl-lib-machine/src/lib/renameFlow.js';
 import { loadRevokeContext, signAndRevoke } from '../../../../dsl-lib-machine/src/lib/revokeFlow.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +66,7 @@ describe('the throwaway admin key of the scenarios', () => {
 
   it('every scenario where something can be signed publishes the passphrase in its hint, and none still says placeholder', () => {
     const signable = SCENARIOS.filter((s) => !['empty', 'relay-error-503', 'relay-unreachable-502', 'internal-error-500', 'pending-with-problems', 'candidate-expired', 'approval-codes-recallable', 'only-this-machine'].includes(s.id));
-    expect(signable.length).toBe(12);
+    expect(signable.length).toBe(19);
     for (const s of signable) expect(s.hint, s.id).toContain(`passphrase ${PASSPHRASE}`);
     for (const s of SCENARIOS) expect(s.hint, s.id).not.toMatch(/placeholder/i);
   });
@@ -156,6 +158,106 @@ describe('Revoke, by the real code of the page, with the published passphrase', 
   it('a wrong passphrase is the normal refusal of the page, and nothing is posted', async () => {
     const { rig, context } = await open('two-trusted-peers');
     await expect(signAndRevoke(rig.api as never, context, 'another passphrase of twelve', NOW, {})).rejects.toThrow('admin key file: wrong passphrase or damaged key file');
+    expect(rig.sent.filter((s) => s.method === 'POST')).toEqual([]);
+  });
+});
+
+describe('Rename, by the real code of the page, with the published passphrase', () => {
+  const open = async (name: MachinesSeedName) => {
+    const routes = machinesRoutes(machinesSeed(name));
+    const rig = apiOver(routes);
+    const list = (await rig.api.get('/machines')) as MachinesAnswer;
+    const row = list.machines.find((m) => m.name === 'mac-m2');
+    if (row === undefined) throw new Error(`${name}: no mac-m2 to rename`);
+    const context = await loadRenameContext(rig.api as never, row as never);
+    return { routes, rig, row, context };
+  };
+
+  it.each([
+    ['rename-delivered', 'delivered', ['delivered', 'delivered']],
+    ['rename-partial', 'partial', ['delivered', 'failed']],
+    ['rename-failed', 'partial', ['failed', 'failed']],
+  ] as const)('%s: signs the new registration and reaches the result with the per-machine lines', async (name, status, states) => {
+    const { rig, context } = await open(name);
+    const result = await signAndRename(rig.api as never, context, 'box', PASSPHRASE, NOW, {});
+    expect(rig.sent.map((s) => `${s.method} ${s.path}`).slice(-2)).toEqual(['GET /admin-key', 'POST /rename']);
+    expect([result.oldName, result.newName]).toEqual(['mac-m2', 'box']);
+    expect(result.distribution.machines.map((m) => m.state)).toEqual(states);
+    expect(result.distribution.status).toBe(status);
+  });
+
+  it('the rename changes the next list, and a partial delivery is delivered by the retry without a passphrase', async () => {
+    const { rig, context, routes } = await open('rename-partial');
+    const result = await signAndRename(rig.api as never, context, 'My Box', PASSPHRASE, NOW, {});
+    const after = (await apiOver(routes).api.get('/machines')) as MachinesAnswer;
+    expect(after.machines.map((m) => m.name)).toEqual(['midgard2', 'thinkcentre', 'my-box']);
+    const again = await (result.retryDelivery as () => Promise<{ status: string; machines: Array<{ state: string }> }>)();
+    expect([again.status, again.machines.map((m) => m.state)]).toEqual(['delivered', ['delivered', 'inbox']]);
+  });
+
+  it('a refused name never reaches the key: nothing is read or posted', async () => {
+    const { rig, context } = await open('rename-delivered');
+    const before = rig.sent.length;
+    await expect(signAndRename(rig.api as never, context, 'think-centre', PASSPHRASE, NOW, {})).rejects.toThrow(/only by hyphens.*Nothing was signed/);
+    await expect(signAndRename(rig.api as never, context, 'tc', PASSPHRASE, NOW, {})).rejects.toThrow(/local alias.*Nothing was signed/);
+    expect(rig.sent.length).toBe(before);
+  });
+
+  it('a wrong passphrase is the normal refusal of the page, and nothing is posted', async () => {
+    const { rig, context } = await open('rename-delivered');
+    await expect(signAndRename(rig.api as never, context, 'box', 'another passphrase of twelve', NOW, {})).rejects.toThrow('admin key file: wrong passphrase or damaged key file');
+    expect(rig.sent.filter((s) => s.method === 'POST')).toEqual([]);
+  });
+});
+
+describe('Network aliases, by the real code of the page, with the published passphrase', () => {
+  const MAC = '00000000-0000-4000-8000-000000000003';
+  const open = async (name: MachinesSeedName) => {
+    const routes = machinesRoutes(machinesSeed(name));
+    const rig = apiOver(routes);
+    const context = await loadAliasesContext(rig.api as never);
+    return { routes, rig, context };
+  };
+
+  it('alias-set: the held list verifies against the pinned key (the page accepts it), and adding an alias reaches the delivered result', async () => {
+    const { rig, context, routes } = await open('alias-set');
+    expect(context.current?.body.entries.map((e) => e.alias)).toEqual(['tc', 'work']);
+    const result = await signAndChangeAlias(rig.api as never, context, { action: 'set', alias: 'box', uuid: MAC }, PASSPHRASE, NOW, {});
+    expect(rig.sent.map((s) => `${s.method} ${s.path}`).slice(-2)).toEqual(['GET /admin-key', 'POST /aliases']);
+    expect(result.distribution.status).toBe('delivered');
+    expect(result.entries.map((e) => e.alias)).toEqual(['box', 'tc', 'work']);
+    const next = await loadAliasesContext(apiOver(routes).api as never);
+    expect(next.current?.body.entries.map((e) => e.alias)).toEqual(['box', 'tc', 'work']);
+  });
+
+  it('alias-conflict: a machine name and a lookalike are refused before the passphrase; tc for mac-m2 is accepted with the conflict with the local alias', async () => {
+    const { rig, context } = await open('alias-conflict');
+    expect(previewAliasChange(context, { action: 'set', alias: 'thinkcentre', uuid: MAC })).toMatchObject({ ok: false });
+    expect(previewAliasChange(context, { action: 'set', alias: 'think-centre', uuid: MAC })).toMatchObject({ ok: false });
+    const preview = previewAliasChange(context, { action: 'set', alias: 'tc', uuid: MAC });
+    expect(preview).toMatchObject({ ok: true, conflicts: [{ alias: 'tc', network: MAC }] });
+    const result = await signAndChangeAlias(rig.api as never, context, { action: 'set', alias: 'tc', uuid: MAC }, PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('delivered');
+  });
+
+  it('alias-remove: removing an alias signs the list without it', async () => {
+    const { rig, context } = await open('alias-remove');
+    const result = await signAndChangeAlias(rig.api as never, context, { action: 'rm', alias: 'work' }, PASSPHRASE, NOW, {});
+    expect(result.entries.map((e) => e.alias)).toEqual(['box']);
+    expect(result.distribution.status).toBe('delivered');
+  });
+
+  it('alias-partial: the retry (reserved uuid, no passphrase) delivers what failed', async () => {
+    const { rig, context } = await open('alias-partial');
+    const result = await signAndChangeAlias(rig.api as never, context, { action: 'set', alias: 'box', uuid: MAC }, PASSPHRASE, NOW, {});
+    expect(result.distribution.status).toBe('partial');
+    const again = await (result.retryDelivery as () => Promise<{ status: string }>)();
+    expect(again.status).toBe('delivered');
+  });
+
+  it('a wrong passphrase is the normal refusal of the page, and nothing is posted', async () => {
+    const { rig, context } = await open('alias-set');
+    await expect(signAndChangeAlias(rig.api as never, context, { action: 'set', alias: 'box', uuid: MAC }, 'another passphrase of twelve', NOW, {})).rejects.toThrow('admin key file: wrong passphrase or damaged key file');
     expect(rig.sent.filter((s) => s.method === 'POST')).toEqual([]);
   });
 });

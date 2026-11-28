@@ -140,6 +140,20 @@ Flow (`RevokeMachineDialog`, `lib/revokeFlow.ts`): PIN, `GET /revoke-context/:uu
 - Result: one headline (`Notice`), one line per peer (`DeliveryList`, shared with Approve), raw CLI report in a collapsed `Details` (open on failure); the revoked machine gets a line only when it could not be removed from the relay. The list refreshes as soon as the daemon answers.
 - Not verifiable without a real browser: dialog layout and the 8-column table at 1000 px (fallback: move UUID to a row expansion, as Candidacies did).
 
+## Rename and network aliases from the page (status: built, unverified in a real browser)
+
+Row actions of the Machines page: **Rename** (trusted peers, not this machine: `machine admin rename` refuses the admin machine) and **Aliases** (every row; opens the whole network alias list, the row's machine pre-selected as target). Same pattern as Revoke: PIN, context GET, passphrase typed at every action (`askEveryTime`), ONE non-extractable unlock, key locked, then one sensitive POST (module header). Terminal twins stay: `machine admin rename <machine> <new-name>`, `machine admin alias set|rm|send` (decisions 115, 116).
+
+| Action | Context (daemon) | Built in the browser (`machine-webcrypto`) | Apply (daemon) |
+|---|---|---|---|
+| Rename | `GET /rename-context/:uuid` (`renameContext`: trusted registration, machines, local and network aliases, revoked serial, other registrations, notice list) | `buildRename`: plan (`buildRenamedRegistration` port: same name, taken, lookalike, alias conflict, revoked, expired), signed registration (same uuid and key, serial + 1, same expiry), peer documents both ways, notice lists, `self-registration` for the machine | `POST /rename` `{ uuid, signed, documents, noticeRecipients }` (`renameApply`) |
+| Aliases | `GET /aliases-context` (`aliasesContext`: stored list, machines, revoked uuids, local aliases, registrations to tell) | `buildAliases`: `planAliasChange` port (valid, no machine-name or lookalike, no unknown or revoked target, 64 max, repoint = rm then set), list serial `max(now, held + 1)`, one sealed `aliases` document per machine except this one | `POST /aliases` `{ signed, documents }` (`aliasesApply`) |
+
+- The daemon trusts nothing the page says: it verifies against the PINNED key, re-runs the plan on what it holds and requires the same result (rename: identical body, serial + 1, expiry unchanged; aliases: exactly one alias added or removed, same entries), re-derives every document id, and installs nothing when a check fails. Install first (`importPeer` keeps the pair secret / `installAliases`), then deliver with `put` (direct, then inbox); a failed delivery never undoes it.
+- Result and retry: headline, one line per machine, folded raw report, **Retry delivery** through `POST /delivery-retry` (no passphrase). The subject is the machine uuid for a rename and `NETWORK_ALIASES_SUBJECT_UUID` (machine-core) for the aliases. After a daemon restart the terminal command is the way out (`machine admin rename <new> <new>`, `machine admin alias send`).
+- Dialogs: Rename shows the plan before the passphrase (normalized name, errors with the fix, what keeps working and what stops); Aliases lists the network aliases with their machine, Add and Remove are separate signatures, a local alias of this machine pointing elsewhere is a warning (the local one wins, as in the CLI).
+- Not verifiable without a real browser: dialog layout, focus return, actions column at 1024 px with long names, real timing of a signature.
+
 ## Custom styles audit (2026-11-28)
 
 Rule: the module UI uses standard dsl-ui components only (dsl-ui 2026.11.28-410). `lib/styleTokens.ts` keeps only what has no standard equivalent; `lib/standardOnly.test.ts` fails if a replaced token comes back. Lines are those before the change.

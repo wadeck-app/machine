@@ -2,7 +2,7 @@ import { callDaemon } from './daemonClient.js';
 import { errorBody, type ErrorBody } from './errorBody.js';
 import { checkModuleHeader } from './guard.js';
 
-// Retry delivery (admin-ui.md, "Result and progress UX"). After an approval or a revocation from the page some documents may not be stored. The daemon of the admin machine
+// Retry delivery (admin-ui.md, "Result and progress UX"). After an approval, a revocation, a rename or a change of the network aliases from the page some documents may not be stored. The daemon of the admin machine
 // keeps the ones it verified, in memory only, and sends them again: this route carries only the uuid of the subject. No document, no passphrase, nothing signed.
 // `sensitive` (app-core PIN: it spends the relay admin token) and the module header (the page component sends it; a DSL action could not).
 
@@ -23,7 +23,7 @@ export interface DeliveryRetryDeps {
 
 // Delivery tries each machine directly first (a few seconds each when it is asleep) then the relay inbox.
 const RETRY_TIMEOUT_MS = 90_000;
-const RETRY_RULE = 'expected exactly {"uuid": "<uuid of the machine the approval or the revocation was about>"}, nothing else: reload the page and try again';
+const RETRY_RULE = 'expected exactly {"uuid": "<uuid of the machine the approval, the revocation or the rename was about, or of the network aliases>"}, nothing else: reload the page and try again';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /** The HTTP status of a refusal of the daemon command `retryDelivery` (anything not listed is 502). */

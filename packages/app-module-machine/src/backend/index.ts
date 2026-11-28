@@ -5,6 +5,8 @@ import { candidacyTimeline } from './candidacyTimeline.js';
 import { registerApproveRoutes } from './candidacyApprove.js';
 import { registerDeliveryRetryRoutes } from './deliveryRetry.js';
 import { registerRevokeRoutes } from './machineRevoke.js';
+import { registerRenameRoutes } from './machineRename.js';
+import { registerAliasesRoutes } from './machineAliases.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
@@ -602,6 +604,10 @@ export default function register(ctx: ModuleContextLike): void {
 
   // Revoke from the page (admin-ui.md): same pattern, the page signs in the browser; these routes carry the result (machineRevoke.ts).
   registerRevokeRoutes(ctx, { configDir, failureOf });
+
+  // Rename and network aliases from the page (admin-ui.md): same pattern, the page signs in the browser; these routes carry the result (machineRename.ts, machineAliases.ts).
+  registerRenameRoutes(ctx, { configDir, failureOf });
+  registerAliasesRoutes(ctx, { configDir, failureOf });
 
   // Retry delivery (admin-ui.md): the daemon sends again the documents it kept in memory after an approval or a revocation, no passphrase (deliveryRetry.ts).
   registerDeliveryRetryRoutes(ctx, { configDir, failureOf });

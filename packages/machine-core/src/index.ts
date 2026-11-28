@@ -188,6 +188,7 @@ export {
 export {
   ALIASES_DOMAIN,
   MAX_ALIASES,
+  NETWORK_ALIASES_SUBJECT_UUID,
   aliasConflicts,
   assertAliasesBody,
   canonicalSignedAliases,

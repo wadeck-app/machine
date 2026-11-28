@@ -2092,7 +2092,7 @@ export const HeldRequestsEntry: ComponentRegistryEntry = {
 }
 
 export const MachinesTableEntry: ComponentRegistryEntry = {
-	name: 'MachinesTable', category: 'composite', tags: ["machines","revoke","admin"],
+	name: 'MachinesTable', category: 'composite', tags: ["machines","revoke","rename","aliases","admin"],
 	nodeSchema: null as never,
 	render: ({ node, ctx }: RegistryRenderProps) => {
 		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'MachinesTable.rows', 'array', false) as import('../components/MachinesTable.js').MachinesTableProps['rows']

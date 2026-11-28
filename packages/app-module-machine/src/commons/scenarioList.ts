@@ -143,6 +143,41 @@ const machines: MachinesScenario[] = [
     label: 'Revoke: relay unreachable',
     hint: `Planned delivery after a Revoke of mac-m2: the relay is down, nobody is told and mac-m2 is not removed from the relay (both listed as failed). ${SIGN}`,
   },
+  {
+    id: 'rename-delivered',
+    label: 'Rename: documents delivered',
+    hint: `Rename mac-m2 (row action): thinkcentre and the renamed machine take the documents directly. Try a refused name first: thinkcentre (taken), think-centre (lookalike), tc (local alias of thinkcentre). ${SIGN}`,
+  },
+  {
+    id: 'rename-partial',
+    label: 'Rename: delivery partial',
+    hint: `Rename mac-m2: thinkcentre takes the documents, the renamed machine does not (failed): the headline, the line per machine and Retry delivery, which delivers it to the relay inbox. ${SIGN}`,
+  },
+  {
+    id: 'rename-failed',
+    label: 'Rename: delivery failed',
+    hint: `Rename mac-m2: the relay refuses every document; the rename stands, both machines are listed as failed with the terminal command folded; Retry delivery sends them. ${SIGN}`,
+  },
+  {
+    id: 'alias-set',
+    label: 'Aliases: set (a local alias wins)',
+    hint: `Aliases (row action): the network list holds tc for mac-m2 and work for thinkcentre, while this machine has the local alias tc for thinkcentre (warning: the local one wins here). Add an alias, delivered directly. ${SIGN}`,
+  },
+  {
+    id: 'alias-remove',
+    label: 'Aliases: remove',
+    hint: `Aliases: Remove box or work; each removal is its own passphrase and its own result. ${SIGN}`,
+  },
+  {
+    id: 'alias-conflict',
+    label: 'Aliases: refusals and a conflict',
+    hint: `Aliases: no network alias yet and the local alias tc (thinkcentre). Add thinkcentre (refused: a machine name), think-centre (refused: a lookalike), then tc for mac-m2 (accepted, with the warning that the local alias wins). ${SIGN}`,
+  },
+  {
+    id: 'alias-partial',
+    label: 'Aliases: delivery partial',
+    hint: `Aliases: add an alias; thinkcentre takes the list, mac-m2 does not (failed): Retry delivery delivers it to the relay inbox. ${SIGN}`,
+  },
 ];
 
 export const SCENARIOS: readonly ScenarioDef[] = [

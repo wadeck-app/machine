@@ -2,7 +2,7 @@ import { createPrivateKey, createPublicKey } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
-import { candidacyCode, finalCode, keyId, signRegistration, type RegistrationBody } from '@wadeck-app/machine-core';
+import { candidacyCode, finalCode, keyId, signAliases, signRegistration, type RegistrationBody, type SignedAliases } from '@wadeck-app/machine-core';
 import { vi } from 'vitest';
 import register from '../index.js';
 import { makeTempDir, removeTempDir } from '../tempDir.testUtil.js';
@@ -333,3 +333,17 @@ export async function buildSeeds(): Promise<Record<string, CandidaciesState>> {
   return seeds;
 }
 
+
+/**
+ * The network aliases the Machines scenarios start from, signed by the throwaway scenario key (`KEYS.admin`): the page verifies the held list against the pinned key before
+ * it signs the next one, so a seed cannot hold an unsigned list. Ed25519 is deterministic: rewriting them (WRITE_SEEDS=1) gives the same bytes.
+ */
+export function buildMachinesAliases(): Record<string, SignedAliases> {
+  const sign = (entries: Array<{ alias: string; uuid: string }>): SignedAliases =>
+    signAliases({ v: 1, adminKeyId: keyId(KEYS.admin.publicKey), serial: NOW - 86_400, issuedAt: NOW - 86_400, entries }, KEYS.admin.privateKeyPkcs8);
+  return {
+    // `tc` is also a LOCAL alias of this machine for thinkcentre: the conflict the page warns about.
+    'alias-set': sign([{ alias: 'tc', uuid: UUID.macM2 }, { alias: 'work', uuid: UUID.thinkcentre }]),
+    'alias-remove': sign([{ alias: 'box', uuid: UUID.macM2 }, { alias: 'work', uuid: UUID.thinkcentre }]),
+  };
+}

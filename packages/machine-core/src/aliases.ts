@@ -9,6 +9,12 @@ import { signDocument, verifyDocument } from './signed.js';
 export const ALIASES_DOMAIN = 'machine/aliases/v1';
 /** Bounded so that the sealed document stays far below the 16 KiB the relay accepts. */
 export const MAX_ALIASES = 64;
+/**
+ * The network aliases have no subject machine, but a delivery retry is keyed by one uuid (the daemon keeps what was not delivered in memory under it): this reserved,
+ * valid version 4 uuid is that key. It is no machine.
+ */
+export const NETWORK_ALIASES_SUBJECT_UUID = '00000000-0000-4000-8000-0000000a11a5';
+
 
 export interface AliasEntry {
   /** A valid machine name (lowercase letters, digits, hyphens). */

@@ -1,6 +1,11 @@
 import type { SignedRegistration } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
+import type { AliasesContext } from '../../../../dsl-lib-machine/src/lib/aliasesFlow.js';
 import type { ApproveContext } from '../../../../dsl-lib-machine/src/lib/approveFlow.js';
+import type { RenameContext } from '../../../../dsl-lib-machine/src/lib/renameFlow.js';
+import type { AliasesApplyAnswer as RealAliasesApplyAnswer, AliasesContextOk } from '../../../../machine-cli/src/aliasesFromPage.js';
+import type { RenameApplyAnswer as RealRenameApplyAnswer, RenameContextOk } from '../../../../machine-cli/src/renameFromPage.js';
+import type { AliasesApplyAnswer, AliasesContextAnswer, RenameApplyAnswer, RenameContextAnswer } from '../../commons/machinesActionsState.js';
 import type { DeliveryMachine as PageDeliveryMachine } from '../../../../dsl-lib-machine/src/lib/approvalResult.js';
 import type { AdminLoginState } from '../../../../dsl-lib-machine/src/lib/adminLoginFlow.js';
 import type { AdminLoginAnswer } from '../../../../machine-cli/src/adminLoginFromPage.js';
@@ -57,6 +62,14 @@ export type Checks = [
   Is<Same<RetryDeliveryRequest, { uuid: string }>>,
   // The relay login started from the page: what the page reads is exactly what the daemon answers when it does not refuse (a refusal is an HTTP error).
   Is<Same<AdminLoginState, Extract<AdminLoginAnswer, { ok: true }>>>,
+  // Rename and network aliases: what the mock serves is what the page consumes, and the wire is what the daemon answers (the opaque list of notice recipients aside).
+  Is<Into<Omit<RenameContextAnswer, 'noticeRecipients'>, Omit<RenameContext, 'noticeRecipients'>>>,
+  Is<Into<Omit<RenameContextOk, 'noticeRecipients'>, Omit<RenameContextAnswer, 'noticeRecipients'>>>,
+  Is<Into<AliasesContextAnswer, AliasesContext>>,
+  Is<Into<AliasesContextOk, AliasesContextAnswer>>,
+  Is<Into<RenameApplyAnswer, DistributeAnswer>>,
+  Is<Into<Omit<Extract<RealRenameApplyAnswer, { ok: true }>, 'report'>, Omit<RenameApplyAnswer, 'report'>>>,
+  Is<Into<Omit<Extract<RealAliasesApplyAnswer, { ok: true }>, 'report'>, Omit<AliasesApplyAnswer, 'report'>>>,
 ];
 
 describe('route contracts', () => {

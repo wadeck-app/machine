@@ -81,6 +81,15 @@ describe('POST /delivery-retry: send again what an approval or a revocation coul
     expect(routes().get(RETRY)?.options).toEqual({ effect: 'sensitive' });
   });
 
+  it('accepts the reserved subject of the network aliases and names the rename and the aliases in its rule', async () => {
+    const bodies = await startDaemon({ retryDelivery: DONE });
+    const out = await call(RETRY, { headers: HEADER, body: { uuid: '00000000-0000-4000-8000-0000000a11a5' } });
+    expect(out.status).toBe(200);
+    expect(bodies).toEqual([{ command: 'retryDelivery', body: { uuid: '00000000-0000-4000-8000-0000000a11a5' } }]);
+    const bad = await call(RETRY, { headers: HEADER, body: {} });
+    expect(bad.body.error).toMatch(/rename.*network aliases/);
+  });
+
   it('without the module header: 403, no daemon call', async () => {
     await startDaemon({ retryDelivery: DONE });
     const out = await call(RETRY, { body: { uuid: SUBJECT } });

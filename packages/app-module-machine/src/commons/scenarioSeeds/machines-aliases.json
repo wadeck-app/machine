@@ -1,0 +1,40 @@
+{
+  "alias-set": {
+    "body": {
+      "v": 1,
+      "adminKeyId": "730a5edc28c2f8daf2d9dce3a01d5f20",
+      "serial": 1795773600,
+      "issuedAt": 1795773600,
+      "entries": [
+        {
+          "alias": "tc",
+          "uuid": "00000000-0000-4000-8000-000000000003"
+        },
+        {
+          "alias": "work",
+          "uuid": "00000000-0000-4000-8000-000000000002"
+        }
+      ]
+    },
+    "signature": "SiShtXBwS5PUCOQ0NtnQQR1HRawx5Jp7hzBQfKUd2ZvzCkY34_TuYNwccBffRVBBYZMH-MzWIU1DuAjGp3dcDQ"
+  },
+  "alias-remove": {
+    "body": {
+      "v": 1,
+      "adminKeyId": "730a5edc28c2f8daf2d9dce3a01d5f20",
+      "serial": 1795773600,
+      "issuedAt": 1795773600,
+      "entries": [
+        {
+          "alias": "box",
+          "uuid": "00000000-0000-4000-8000-000000000003"
+        },
+        {
+          "alias": "work",
+          "uuid": "00000000-0000-4000-8000-000000000002"
+        }
+      ]
+    },
+    "signature": "ShuuyMl4JSbl5lVmv8JdGw79npONom-bg4IuFrUGkrozf_9ojlqAEwtRJeUxrg0Ge3j10ESq-pKiHuQF1YlcBA"
+  }
+}

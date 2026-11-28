@@ -11,6 +11,7 @@ import {
   documentSealContext as coreSealContext,
   keyId as coreKeyId,
   pairSecretDocumentContext as corePairContext,
+  signAliases as coreSignAliases,
   signPolicy as coreSignPolicy,
   signRegistration as coreSignRegistration,
   signNoticeRecipients as coreSignNoticeRecipients,
@@ -273,22 +274,61 @@ describe('buildDocument (kinds peer, policy, revocation)', () => {
     await expect(buildDocument(input, s.key)).rejects.toThrow(/recipientIdentityPublicKey is required/);
   });
 
-  it('a self-registration document (the rename of a machine) is named and refused: the page does not build it yet, and never checks it as a revocation', async () => {
-    const s = await setup();
-    const to = uuid();
-    const input = { kind: 'self-registration', to, id: coreDocumentId('r'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { body: {}, signature: 'x' }, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
-    await expect(buildDocument(input, s.key)).rejects.toThrow(/self-registration.*machine admin rename/);
+  describe('self-registration document (the rename of a machine, decision 114)', () => {
+    it('is built, sealed to the machine and opened by machine-core, which reads the registration of the addressee', async () => {
+      const s = await setup();
+      const machine = newPair();
+      const body: RegistrationBody = { ...registrationBody(s.adminKeyId, prng(21)), identityPublicKey: machine.publicKey };
+      const registration = coreSignRegistration(body, s.admin.privateKeyPkcs8);
+      const input = { kind: 'self-registration', to: body.uuid, id: coreDocumentId('r'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { registration }, recipientIdentityPublicKey: machine.publicKey } as unknown as DocumentInput;
+      const web = await buildDocument(input, s.key);
+      const opened = coreVerifyDocument(web, { adminPublicKey: s.admin.publicKey, selfUuid: body.uuid, now: NOW, identityPrivateKeyPkcs8: machine.privateKeyPkcs8 });
+      expect(opened).toMatchObject({ ok: true, kind: 'self-registration', registration: body });
+    });
+
+    it.each([
+      ['a payload that is not an object', 'x', /the payload of a self-registration document must be an object/],
+      ['a payload with a missing field', {}, /document self-registration payload: missing field "registration"/],
+      ['a payload with an extra field', { registration: { body: {}, signature: 'x' }, more: 1 }, /document self-registration payload: unknown field "more"/],
+      ['a registration that is not signed', { registration: { body: {} } }, /registration must be a signed registration/],
+      ['a revocation-shaped payload', { body: {}, signature: 'x' }, /document self-registration payload: unknown field "body"/],
+    ])('refuses %s, with the message of machine-core', async (_name, payload, message) => {
+      const s = await setup();
+      const to = uuid();
+      const input = { kind: 'self-registration', to, id: coreDocumentId('r'), issuedAt: NOW, expiresAt: NOW + 1000, payload, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
+      await expect(buildDocument(input, s.key)).rejects.toThrow(message);
+      expect(messageOf(() => coreBuildDocument(input, s.admin.privateKeyPkcs8))).toMatch(message);
+    });
   });
 
   it('knows exactly the document kinds of machine-core (decision 116: aliases)', () => {
     expect([...DOCUMENT_KINDS]).toEqual([...CORE_DOCUMENT_KINDS]);
   });
 
-  it('an aliases document (network aliases) is named and refused: the page does not build it yet, and never checks it as a revocation', async () => {
-    const s = await setup();
-    const to = uuid();
-    const input = { kind: 'aliases', to, id: coreDocumentId('a'), issuedAt: NOW, expiresAt: NOW + 1000, payload: { body: {}, signature: 'x' }, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
-    await expect(buildDocument(input, s.key)).rejects.toThrow(/aliases.*machine admin alias set/);
+  describe('aliases document (network aliases, decision 116)', () => {
+    it('is built, sealed to the addressee and opened by machine-core, which verifies the list against the admin key', async () => {
+      const s = await setup();
+      const to = uuid();
+      const recipient = newPair();
+      const list = coreSignAliases({ v: 1, adminKeyId: s.adminKeyId, serial: NOW, issuedAt: NOW, entries: [{ alias: 'box', uuid: uuid() }] }, s.admin.privateKeyPkcs8);
+      const input = { kind: 'aliases', to, id: coreDocumentId('a'), issuedAt: NOW, expiresAt: NOW + 1000, payload: list, recipientIdentityPublicKey: recipient.publicKey } as unknown as DocumentInput;
+      const web = await buildDocument(input, s.key);
+      const opened = coreVerifyDocument(web, { adminPublicKey: s.admin.publicKey, selfUuid: to, now: NOW, identityPrivateKeyPkcs8: recipient.privateKeyPkcs8 });
+      expect(opened).toMatchObject({ ok: true, kind: 'aliases', aliases: list });
+    });
+
+    it.each([
+      ['a payload that is not an object', 'x', /the payload of a aliases document must be an object/],
+      ['a payload without signature', { body: {} }, /document aliases payload: missing field "signature"/],
+      ['a payload that is not signed', { body: 'x', signature: 'x' }, /document aliases payload: expected a signed aliases/],
+      ['a body no machine would read', { body: { v: 1 }, signature: 'x' }, /aliases: unknown field|aliases: adminKeyId must be/],
+    ])('refuses %s, with the message of machine-core', async (_name, payload, message) => {
+      const s = await setup();
+      const to = uuid();
+      const input = { kind: 'aliases', to, id: coreDocumentId('a'), issuedAt: NOW, expiresAt: NOW + 1000, payload, recipientIdentityPublicKey: s.admin.publicKey } as unknown as DocumentInput;
+      await expect(buildDocument(input, s.key)).rejects.toThrow(message);
+      expect(messageOf(() => coreBuildDocument(input, s.admin.privateKeyPkcs8))).toMatch(message);
+    });
   });
 
   describe('sealedPolicyDocument (the inbox document of a policy the page signed)', () => {

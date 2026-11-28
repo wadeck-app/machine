@@ -57,3 +57,23 @@ export { MAX_LIFETIME_SECONDS, MAX_TIMES, describeLimits, limitsEqual, parseLife
 export { MAX_READ_ONLY_TEXT, READ_ONLY_COMMANDS, SECRET_NAME_MARKERS, classifyReadOnly, type ReadOnlyRule, type ReadOnlyVerdict } from './readOnly.js';
 export { buildDistribution, type BuildDistributionInput, type BuiltDistribution, type DistributionBuildFailure } from './distributionBuilder.js';
 export { buildRevocation, type BuildRevocationInput, type BuiltRevocation, type RevocationBuildFailure } from './revocationBuilder.js';
+export { machineNameProblem, normalizeMachineName, type MachineEntry, type NormalizedName } from './reference.js';
+export { buildRenamedRegistration, type RenameFailure, type RenameRegistrationInput, type RenameResult } from './renameRegistration.js';
+export {
+  ALIASES_DOMAIN,
+  MAX_ALIASES,
+  aliasConflicts,
+  assertAliasesBody,
+  planAliasChange,
+  signAliases,
+  type AliasChange,
+  type AliasChangeFailure,
+  type AliasChangeInput,
+  type AliasChangeResult,
+  type AliasConflict,
+  type AliasEntry,
+  type AliasesBody,
+  type SignedAliases,
+} from './aliases.js';
+export { buildRename, type BuildRenameInput, type BuiltRename, type RenameBuildFailure } from './renameBuilder.js';
+export { buildAliases, type AliasesBuildFailure, type BuildAliasesInput, type BuiltAliases } from './aliasesBuilder.js';
