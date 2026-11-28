@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // The view of the Machines page. What the daemon list cannot show (presence, addresses) is a discreet help line under the title, not a notice with the weight of
 // the facts of the page (UX review).
-const yaml = readFileSync(fileURLToPath(new URL('../dsl-views/machines.yaml', import.meta.url)), 'utf8');
+// Windows checks the file out with CRLF line endings (CI run 46144128934 failed there): the patterns below match LF.
+const yaml = readFileSync(fileURLToPath(new URL('../dsl-views/machines.yaml', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
 describe('machines view', () => {
   it('the presence note is a muted small Text, not a Card', () => {
