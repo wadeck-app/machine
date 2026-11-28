@@ -19,7 +19,7 @@ import type {
 // The pure state machine of the Candidacies page: what the relay and the daemon of the admin machine hold, and what every route of the page answers from it. No
 // React, no Node API, no import of another package (the mock of the page runs it in the browser). Every function takes the state and returns a NEW state with the
 // answer: nothing is mutated. The derived texts (age, binding, status, timeline) are re-implemented from the backend (`index.ts` candidacyRow,
-// `candidacyTimeline.ts`, `candidacies.ts`); src/scenarios-draft/seeds.test.ts compares them with the REAL routes, so a change of the backend that is not followed here
+// `candidacyTimeline.ts`, `candidacies.ts`); src/backend/scenarioSeeds/seeds.test.ts compares them with the REAL routes, so a change of the backend that is not followed here
 // fails there. What the backend never produces and this machine invents is marked `MOCK` below.
 
 /** What the relay lists of one candidacy, plus the code the backend recomputes from its key and random (no crypto here: the seed holds it, a test recomputes it). */

@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { decryptAdminKey, verifyRegistration, type AdminKeyEnvelope } from '@wadeck-app/machine-core';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { checkApprovable, loadApproveContext } from '../../../dsl-lib-machine/src/lib/approveFlow.js';
-import { describeDelivery } from '../../../dsl-lib-machine/src/lib/approvalResult.js';
+import { checkApprovable, loadApproveContext } from '../../../../dsl-lib-machine/src/lib/approveFlow.js';
+import { describeDelivery } from '../../../../dsl-lib-machine/src/lib/approvalResult.js';
 import {
   adminKey,
   approveCandidacy,
@@ -13,15 +13,15 @@ import {
   rejectCandidacy,
   type CandidaciesState,
   type RelayCandidacy,
-} from '../commons/candidaciesState.js';
-import type { ApproveContextAnswer, ApproveRequest, CandidaciesAnswer, DistributeAnswer } from '../commons/routeContracts.js';
+} from '../../commons/candidaciesState.js';
+import type { ApproveContextAnswer, ApproveRequest, CandidaciesAnswer, DistributeAnswer } from '../../commons/routeContracts.js';
 import { ALLOWED_PUBLIC_KEYS, ALLOWED_RANDOMS, buildSeeds, FAKE_DAEMON_IMPORT, NOW, rawOf, startReal, type Real, type RealOptions } from './seedBuilders.testUtil.js';
 
-// The seeds of the Candidacies mock (src/scenarios-draft/seeds/<name>.json): plain JSON, the initial state of the mock. They are built by seedBuilders.testUtil.ts
+// The seeds of the Candidacies mock (src/commons/scenarioSeeds/<name>.json): plain JSON, the initial state of the mock. They are built by seedBuilders.testUtil.ts
 // from fake material and the REAL functions of the CLI, and every answer the pure state machine (src/commons) derives from them is compared here with what the REAL
 // backend routes answer, so a seed or the state machine cannot drift from reality. `WRITE_SEEDS=1 npm test ...` rewrites the files from the builders.
 
-const SEEDS_DIR = fileURLToPath(new URL('./seeds/', import.meta.url));
+const SEEDS_DIR = fileURLToPath(new URL('../../commons/scenarioSeeds/', import.meta.url));
 const WRITE = process.env['WRITE_SEEDS'] === '1';
 const NAMES = [
   'empty',

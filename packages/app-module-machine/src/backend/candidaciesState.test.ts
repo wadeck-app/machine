@@ -13,11 +13,11 @@ import {
   rejectCandidacy,
   type CandidaciesState,
   type RelayCandidacy,
-} from './candidaciesState.js';
-import type { ApproveRequest, CandidaciesAnswer, ErrorBody } from './routeContracts.js';
+} from '../commons/candidaciesState.js';
+import type { ApproveRequest, CandidaciesAnswer, ErrorBody } from '../commons/routeContracts.js';
 
 // The pure state machine of the Candidacies page (no React, no Node API in the module: the browser mock wraps it). The equivalence with the REAL backend routes is
-// proved in src/scenarios-draft/seeds.test.ts; here the transitions are proved on a small hand-made state.
+// proved in src/backend/scenarioSeeds/seeds.test.ts; here the transitions are proved on a small hand-made state.
 
 const NOW = 1_795_860_000;
 const ADMIN = '00000000-0000-4000-8000-000000000001';
@@ -287,8 +287,8 @@ describe('admin key and context', () => {
 });
 
 describe('browser safety of the commons', () => {
-  const dir = fileURLToPath(new URL('.', import.meta.url));
-  const sources = readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+  const dir = fileURLToPath(new URL('../commons/', import.meta.url));
+  const sources = readdirSync(dir).filter((f) => f.endsWith('.ts'));
 
   it('has sources to check', () => {
     expect(sources).toContain('candidaciesState.ts');

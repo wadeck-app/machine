@@ -4,14 +4,14 @@ import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { candidacyCode, finalCode, keyId, signRegistration, type RegistrationBody } from '@wadeck-app/machine-core';
 import { vi } from 'vitest';
-import register from '../backend/index.js';
-import { makeTempDir, removeTempDir } from '../backend/tempDir.testUtil.js';
-import { candidacyTimeline } from '../backend/candidacyTimeline.js';
+import register from '../index.js';
+import { makeTempDir, removeTempDir } from '../tempDir.testUtil.js';
+import { candidacyTimeline } from '../candidacyTimeline.js';
 // Test-only reach into machine-cli (the module never imports it): the delivery text and per-machine states of the seeds come from the REAL functions of the CLI.
-import { deliveryMachines } from '../../../machine-cli/src/deliveryMachines.js';
-import { emptyReport, formatDistribution, type DistributionReport, type Recipient } from '../../../machine-cli/src/distribute.js';
-import type { CandidaciesState, RelayCandidacy } from '../commons/candidaciesState.js';
-import type { DistributeAnswer, ErrorBody, SignedRegistrationWire } from '../commons/routeContracts.js';
+import { deliveryMachines } from '../../../../machine-cli/src/deliveryMachines.js';
+import { emptyReport, formatDistribution, type DistributionReport, type Recipient } from '../../../../machine-cli/src/distribute.js';
+import type { CandidaciesState, RelayCandidacy } from '../../commons/candidaciesState.js';
+import type { DistributeAnswer, ErrorBody, SignedRegistrationWire } from '../../commons/routeContracts.js';
 
 // Builds the SEEDS (the initial states of the Candidacies mock) from deterministic FAKE material, and runs the REAL backend routes against a fake relay and a fake
 // daemon so the seeds can be compared with what the backend really answers. Nothing here is a real key, uuid, address or token of any network:

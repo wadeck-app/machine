@@ -1,6 +1,6 @@
 // The wire contracts of the Candidacies routes (request and answer of every route the page calls), BROWSER-SAFE: no import at all, so the mock of the page
 // (dsl-scenarios) and the page can use them without pulling a Node module. The real types live in Node-only modules of the backend, so they are re-declared here;
-// `src/scenarios-draft/routeContracts.test.ts` proves at compile time (typecheck) that each one is assignable to / from the real type, so they cannot drift.
+// `src/backend/scenarioSeeds/routeContracts.test.ts` proves at compile time (typecheck) that each one is assignable to / from the real type, so they cannot drift.
 //
 // Not a route: `GET /approval-codes` does not exist in the backend. The kept security codes ride `GET /candidacies` (`approvals`); only `POST /approval-codes` exists.
 

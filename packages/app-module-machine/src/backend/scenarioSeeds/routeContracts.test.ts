@@ -1,13 +1,13 @@
 import type { SignedRegistration } from '@wadeck-app/machine-core';
 import { describe, expect, it } from 'vitest';
-import type { ApproveContext } from '../../../dsl-lib-machine/src/lib/approveFlow.js';
-import type { DeliveryMachine as PageDeliveryMachine } from '../../../dsl-lib-machine/src/lib/approvalResult.js';
-import type { ApproveDistributeAnswer } from '../../../machine-cli/src/approveDistribute.js';
-import type { DeliveryMachine } from '../../../machine-cli/src/deliveryMachines.js';
-import type { RecordedApproval } from '../backend/approvalCodes.js';
-import type { CandidacyListView, SealedApprovalBody } from '../backend/candidacies.js';
-import type { TimelineStepRow as RealTimelineStepRow } from '../backend/candidacyTimeline.js';
-import type { ErrorBody as RealErrorBody } from '../backend/errorBody.js';
+import type { ApproveContext } from '../../../../dsl-lib-machine/src/lib/approveFlow.js';
+import type { DeliveryMachine as PageDeliveryMachine } from '../../../../dsl-lib-machine/src/lib/approvalResult.js';
+import type { ApproveDistributeAnswer } from '../../../../machine-cli/src/approveDistribute.js';
+import type { DeliveryMachine } from '../../../../machine-cli/src/deliveryMachines.js';
+import type { RecordedApproval } from '../approvalCodes.js';
+import type { CandidacyListView, SealedApprovalBody } from '../candidacies.js';
+import type { TimelineStepRow as RealTimelineStepRow } from '../candidacyTimeline.js';
+import type { ErrorBody as RealErrorBody } from '../errorBody.js';
 import type {
   ApprovalCodeRequest,
   ApprovalReminder,
@@ -20,7 +20,7 @@ import type {
   ErrorBody,
   SignedRegistrationWire,
   TimelineStepRow,
-} from '../commons/routeContracts.js';
+} from '../../commons/routeContracts.js';
 
 // The wire contracts of src/commons/routeContracts.ts are re-declared (they must not import a Node module). This file is the guard against drift: it is checked by
 // `npm run typecheck`, not by the test runner. `Same<A, B>` is true when each type is assignable to the other; `Into<A, B>` when A is assignable to B (used where the

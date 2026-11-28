@@ -4,13 +4,17 @@ Drafts for the dev-only mock of the Candidacies page. The contract with app-core
 
 | Piece | Role |
 |---|---|
-| `seeds/<name>.json` | Initial state of the mock (a `CandidaciesState`), fake data only |
-| `../commons/candidaciesState.ts` | Pure state machine: state + action -> new state + route answer. Browser-safe |
-| `../commons/routeContracts.ts` | Wire types of the 7 routes. Browser-safe, re-declared from the Node-only backend types |
-| `seeds.test.ts` | Builds the seeds, compares every answer with the REAL routes, scans for real data |
-| `routeContracts.test.ts` | Compile-time drift guard against the real types (`npm run typecheck`) |
+| `packages/app-module-machine/src/commons/scenarioSeeds/<name>.json` | Initial state of the mock (a `CandidaciesState`), fake data only |
+| `src/commons/candidaciesState.ts` | Pure state machine: state + action -> new state + route answer. Browser-safe |
+| `src/commons/routeContracts.ts` | Wire types of the 7 routes. Browser-safe, re-declared from the Node-only backend types |
+| `src/backend/scenarioSeeds/seeds.test.ts` | Builds the seeds, compares every answer with the REAL routes, scans for real data |
+| `src/backend/scenarioSeeds/routeContracts.test.ts` | Compile-time drift guard against the real types (`npm run typecheck`) |
 
-Rewrite the seeds: `WRITE_SEEDS=1 npm test --workspace=packages/app-module-machine -- scenarios-draft/seeds`. Load one with `rebase(seed, Date.now() / 1000)` so ages stay as written.
+Rewrite the seeds: `WRITE_SEEDS=1 npm test --workspace=packages/app-module-machine -- scenarioSeeds/seeds`. Load one with `rebase(seed, Date.now() / 1000)` so ages stay as written.
+
+## Module-check constraint
+
+`app-core-cli package` accepts only `src/backend`, `src/dsl-views`, `src/dsl-components`, `src/commons` (no `src/dsl-scenarios` until app-core ships it). `src/commons` is browser-shared: no `node:*` import, so JSON seeds live there and every test or helper using Node lives in `src/backend`. `src/backend/candidaciesState.test.ts` scans `src/commons` for Node imports. Local bundle: `BUNDLE_VERSION=0.0.0-local npm run bundle --workspace=packages/app-module-machine`.
 
 ## Seeds
 
