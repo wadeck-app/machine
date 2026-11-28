@@ -1,8 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { runCommand, type RunOptions, type RunResult } from '@wadeck-app/machine-exec';
+import { runCommand, scrubEnv, type RunOptions, type RunResult } from '@wadeck-app/machine-exec';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startMachineDaemon } from './daemonEntry.js';
 import { connectionsFile } from './connectionsStore.js';
@@ -29,7 +29,69 @@ beforeAll(() => {
   }
   // Said on purpose in the CI log: the slowest cold start seen is then known.
   console.info(`PowerShell warm-up: ${seconds} s`);
-}, 120_000);
+  // Log-only bisection of what differs between this warm-up (passes) and the daemon run (hangs): never throws, a hang is a data point.
+  return bisectPowerShell();
+}, 240_000);
+
+/** One variant of `echo hi`: started, ended or killed after 25 s; resolves with one log line, never rejects. */
+function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'ignore' | 'pipe'): Promise<string> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const took = (): string => `${((Date.now() - started) / 1000).toFixed(1)} s`;
+    const head = (s: string): string => JSON.stringify(s.slice(0, 200));
+    let out = '';
+    let err = '';
+    let timedOut = false;
+    let settled = false;
+    const finish = (text: string): void => {
+      if (settled) return;
+      settled = true;
+      resolve(`PowerShell variant ${name}: ${text}`);
+    };
+    try {
+      // Same file and spawn options as machine-exec (launch.ts, run.ts): cwd is the home folder, windowsHide, stdout and stderr piped.
+      const root = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
+      const child = spawn(`${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, args, { env, cwd: homedir(), stdio: [stdin, 'pipe', 'pipe'], windowsHide: true });
+      const timer = setTimeout(() => {
+        timedOut = true;
+        let killNote = 'taskkill not run (no pid)';
+        if (child.pid !== undefined) {
+          const k = spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, timeout: 10_000, encoding: 'utf8' });
+          killNote = `taskkill /T /F /PID ${child.pid} -> ${k.error?.message ?? `exit ${String(k.status)}`}`;
+        }
+        // The pipes may stay open if a grandchild survives: do not wait for 'close'.
+        finish(`TIMEOUT after ${took()} (killed: ${killNote}) stdout=${head(out)} stderr=${head(err)}`);
+      }, 25_000);
+      child.stdout?.on('data', (c: Buffer) => (out += c.toString('utf8')));
+      child.stderr?.on('data', (c: Buffer) => (err += c.toString('utf8')));
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        finish(`could not start after ${took()}: ${e.message}`);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (!timedOut) finish(`${took()} exit=${String(code)} signal=${String(signal)} stdout=${head(out)} stderr=${head(err)}`);
+      });
+    } catch (e) {
+      finish(`threw ${(e as Error).message}`);
+    }
+  });
+}
+
+async function bisectPowerShell(): Promise<void> {
+  try {
+    const scrubbed = scrubEnv(process.env, 'win32');
+    const encoded = Buffer.from('echo hi', 'utf16le').toString('base64');
+    const encodedArgs = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded];
+    // A: scrubbed env, -Command. B: default env, -EncodedCommand. C: scrubbed env, -EncodedCommand, stdin ignored (as launch.ts). D: as C, stdin piped.
+    console.info(await variant('A scrubbed-env -Command', scrubbed, ['-NoProfile', '-NonInteractive', '-Command', 'echo hi'], 'ignore'));
+    console.info(await variant('B default-env -EncodedCommand', process.env, encodedArgs, 'ignore'));
+    console.info(await variant('C scrubbed-env -EncodedCommand stdin=ignore', scrubbed, encodedArgs, 'ignore'));
+    console.info(await variant('D scrubbed-env -EncodedCommand stdin=pipe', scrubbed, encodedArgs, 'pipe'));
+  } catch (e) {
+    console.info(`PowerShell bisection failed to run: ${(e as Error).message}`);
+  }
+}
 
 let root: string;
 let a: string;
