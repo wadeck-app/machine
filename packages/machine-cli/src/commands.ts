@@ -12,6 +12,7 @@ import { answerOf, reachabilityOnce, type ReachabilityAnswer } from './reachabil
 import type { ReachabilityProbe } from './reachabilityProbe.js';
 import { approveContext, importCandidate, type ImportCandidateAnswer } from './candidateImport.js';
 import { approveDistribute, type ApproveDistributeAnswer } from './approveDistribute.js';
+import { revokeApply, revokeContext, type RevokeApplyAnswer } from './revokeFromPage.js';
 import { adminKeyText, allowContext, submitPolicy, type SubmitAnswer } from './policyWeb.js';
 import { denyRemoteCommand, type DenyOnPeerResult } from './denyRemote.js';
 import { remoteRequestsCommand, type RemoteRequestsAnswer } from './requestsViaDaemon.js';
@@ -259,6 +260,19 @@ export function makeCommands(configDir: string, version: string | (() => string)
      */
     approveDistribute(payload?: unknown): Promise<ApproveDistributeAnswer> {
       return approveDistribute(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
+    },
+
+    /**
+     * Revoke from the page (admin-ui.md). `revokeContext` serves what the page needs before the passphrase; `revokeApply` verifies the revocation list and the documents the
+     * page signed IN THE BROWSER against the pinned admin key, installs the list here, then tells the peers like `machine admin revoke` (direct first, relay inbox as
+     * fallback) and removes the revoked machine from the relay. No passphrase or unlocked key reaches it, and it signs nothing; a failed delivery never undoes the revocation.
+     */
+    revokeContext(payload?: unknown): ReturnType<typeof revokeContext> {
+      return revokeContext(configDir, payload, now());
+    },
+
+    revokeApply(payload?: unknown): Promise<RevokeApplyAnswer> {
+      return revokeApply(configDir, payload, now(), { direct: directDeliveryFor(configDir, { now }) });
     },
 
     /**

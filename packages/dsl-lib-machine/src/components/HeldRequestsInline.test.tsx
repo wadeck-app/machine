@@ -113,7 +113,7 @@ describe('inline Allow of one request', () => {
     expect(within(item).getByLabelText('Lifetime')).toHaveValue('once');
     expect(within(item).queryByLabelText('How long is it allowed?')).toBeNull();
     expect(within(item).getByLabelText('Keep unlocked for')).toBeInTheDocument();
-    expect(within(item).getByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
+    expect(document.getElementById(passphrase.getAttribute('aria-describedby') ?? 'none')).toHaveTextContent('Hint: the street of my first school');
     // The widening sentence is not in the way: it is in Details.
     expect(within(item).queryByText(/Widens rights/)).toBeNull();
     expect(within(item).getByRole('button', { name: 'Allow and sign' })).toBeEnabled();
@@ -250,7 +250,7 @@ describe('selecting several requests (inline)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Allow 3 selected' }));
     const bar = screen.getByRole('region', { name: 'Allow selected requests' });
     const field = await within(bar).findByLabelText('Admin passphrase');
-    expect(within(bar).getByTestId('passphrase-hint')).toHaveTextContent('the street of my first school');
+    expect(document.getElementById(field.getAttribute('aria-describedby') ?? 'none')).toHaveTextContent('the street of my first school');
     expect(within(bar).getByLabelText('How long is it allowed?')).toHaveValue('once');
     expect(elevate).toHaveBeenCalledTimes(1);
     expect(keyReads()).toBe(1);

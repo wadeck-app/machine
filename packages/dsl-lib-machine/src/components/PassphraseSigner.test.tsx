@@ -183,8 +183,10 @@ describe('PassphraseSigner passphrase hint (decision 57)', () => {
   it('shows the hint of the key file before anything is typed', async () => {
     stubFetch(new Response(hinted, { status: 200 }));
     render(<PassphraseSigner keyFileUrl={KEY_FILE_URL} registration={body()} />);
-    expect(await screen.findByTestId('passphrase-hint')).toHaveTextContent('Hint: the street of my first school');
-    expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
+    const field = await screen.findByLabelText('Admin passphrase');
+    await waitFor(() => expect(document.getElementById(field.getAttribute('aria-describedby') ?? 'none')).toHaveTextContent('Hint: the street of my first school'));
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
+    expect(field).toHaveValue('');
   });
 
   it('shows nothing when the key has no hint', async () => {

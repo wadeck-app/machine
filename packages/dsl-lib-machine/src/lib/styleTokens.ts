@@ -54,8 +54,6 @@ export const HELD_COUNTDOWN_URGENT = 'whitespace-nowrap text-sm font-semibold ta
 
 
 /** The passphrase hint above the passphrase field: larger than the surrounding text, on its own line (it is what the person needs to read first). */
-export const PASSPHRASE_HINT = 'rounded border border-border bg-surface p-2 text-base text-content';
-export const PASSPHRASE_HINT_LABEL = 'font-semibold text-muted';
 
 /** Activity page (run-log): the outcome of a command, one pair of tokens per tone (same pairs as dsl-ui's Badge). */
 export const OUTCOME_SUCCESS = 'inline-block whitespace-nowrap rounded border border-success bg-success-bg px-2 py-0.5 text-xs text-success-text';

@@ -56,3 +56,4 @@ export {
 export { MAX_LIFETIME_SECONDS, MAX_TIMES, describeLimits, limitsEqual, parseLifetime, type LifetimeInput, type LifetimeLimits } from './lifetime.js';
 export { MAX_READ_ONLY_TEXT, READ_ONLY_COMMANDS, SECRET_NAME_MARKERS, classifyReadOnly, type ReadOnlyRule, type ReadOnlyVerdict } from './readOnly.js';
 export { buildDistribution, type BuildDistributionInput, type BuiltDistribution, type DistributionBuildFailure } from './distributionBuilder.js';
+export { buildRevocation, type BuildRevocationInput, type BuiltRevocation, type RevocationBuildFailure } from './revocationBuilder.js';

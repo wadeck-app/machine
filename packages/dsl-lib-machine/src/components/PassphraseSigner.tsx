@@ -4,7 +4,7 @@ import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/d
 import { TEXT_ERROR } from '../lib/styleTokens.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
-import { PassphraseHint } from './PassphraseHint.js';
+import { hintHelpText } from '../lib/passphraseHint.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
 
@@ -147,9 +147,8 @@ export function PassphraseSigner({ keyFileUrl, registration, unlockSeconds, onSi
           {/* The browser saves a password under site + username: a fixed username makes this a login of its own, apart from the app-core PIN. */}
           {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
-          <PassphraseHint hint={hint} />
           {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read at submit and cleared at once. */}
-          <FieldSecret ref={passphraseInput} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" />
+          <FieldSecret ref={passphraseInput} id="machine-admin-passphrase" label="Admin passphrase" {...hintHelpText(hint)} name="machine-admin-passphrase" autoComplete="current-password" />
           <KeepUnlockedSelect busy={busy} />
           <div>
             <ButtonAction type="submit" label={busy ? 'Unlocking...' : 'Unlock'} variant="primary" disabled={busy} />

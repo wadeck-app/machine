@@ -3,6 +3,7 @@ import { ageText, isCandidacyId, listCandidacies, rejectCandidacy, RelayNotConfi
 import { listApprovalCodes, type RecordedApproval } from './approvalCodes.js';
 import { candidacyTimeline } from './candidacyTimeline.js';
 import { registerApproveRoutes } from './candidacyApprove.js';
+import { registerRevokeRoutes } from './machineRevoke.js';
 import { resolveModuleConfigDir } from './configDir.js';
 import { callDaemon, DaemonAuthError, DaemonCommandError, DaemonUnreachableError } from './daemonClient.js';
 import { runHealth } from './health.js';
@@ -562,6 +563,9 @@ export default function register(ctx: ModuleContextLike): void {
 
   // Approve from the page (admin-ui.md): the page signs and seals in the browser; these routes carry the result (candidacyApprove.ts).
   registerApproveRoutes(ctx, { configDir, failureOf });
+
+  // Revoke from the page (admin-ui.md): same pattern, the page signs in the browser; these routes carry the result (machineRevoke.ts).
+  registerRevokeRoutes(ctx, { configDir, failureOf });
 
   ctx.registerRoute('GET', '/candidacies', async (_req, reply) => {
     try {

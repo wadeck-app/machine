@@ -338,14 +338,22 @@ export async function distributeRevocation(configDir: string, revokedUuid: strin
     if (!next) return report;
   }
   await sendNoticeRecipients(sender, report, recipients.map((r) => ({ uuid: r.body.uuid, name: r.body.name })));
+  await removeRevokedFromRelay(sender.client, report, revokedUuid, revokedName);
+  return report;
+}
+
+/**
+ * Remove the revoked machine from the relay (address record, owner binding, inbox). A failure is a line of the report (the revocation stands), and a refused token
+ * or an unreachable relay aborts the rest. Shared by `machine admin revoke` and the revocation made from the page.
+ */
+export async function removeRevokedFromRelay(client: RelayClient, report: DistributionReport, revokedUuid: string, revokedName: string): Promise<void> {
   try {
-    await sender.client.deleteMachine(revokedUuid);
+    await client.deleteMachine(revokedUuid);
   } catch (raw) {
     const e = adminRelayError(raw) as Error;
     report.failures.push({ toUuid: revokedUuid, toName: revokedName, kind: 'machine', id: undefined, message: `could not remove "${revokedName}" from the relay: ${e.message}` });
     if (raw instanceof RelayError && (raw.status === 401 || raw.status === 0)) report.aborted = true;
   }
-  return report;
 }
 
 /** PUT a policy signed by this admin to its target. */

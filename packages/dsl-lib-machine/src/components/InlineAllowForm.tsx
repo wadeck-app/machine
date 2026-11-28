@@ -5,7 +5,7 @@ import { NOTICE_WARNING, TEXT_ERROR } from '../lib/styleTokens.js';
 import { LifetimePicker } from './LifetimePicker.js';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
-import { PassphraseHint } from './PassphraseHint.js';
+import { hintHelpText } from '../lib/passphraseHint.js';
 import { useAdminKey } from './useAdminKey.js';
 
 // The form of an Allow made in place (no modal): the lifetime, the key hint, the admin passphrase, one warning line, Allow and sign / Cancel. It is NOT a
@@ -101,11 +101,10 @@ export function InlineAllowForm({ label, warning, hint, defaultKind = 'once', de
           {/* Same fixed username as the unlock form: the browser offers ONE saved login for the admin passphrase, never the app-core PIN. */}
           {/* violations-suppress: react/no-raw-input a fixed, read-only username for the browser's password manager, not a user input */}
           <input type="text" name="machine-admin-username" autoComplete="username" value="machine-admin" readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
-          <PassphraseHint hint={hint} />
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-48 flex-1">
               {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
-              <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+              <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...hintHelpText(hint)} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
             </div>
             <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>
           </div>

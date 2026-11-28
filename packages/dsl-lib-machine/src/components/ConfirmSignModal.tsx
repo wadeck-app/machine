@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { ButtonAction, FieldSecret, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
+import { hintHelpText } from '../lib/passphraseHint.js';
 import { KeepUnlockedSelect } from './KeepUnlockedSelect.js';
 import { UnlockedKeyBar } from './UnlockedKeyBar.js';
 import { useAdminKey } from './useAdminKey.js';
@@ -140,7 +141,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
               <div className="flex flex-wrap items-end gap-3">
                 <div className="min-w-48 flex-1">
                   {/* FieldSecret is uncontrolled: the passphrase lives in its input only, read by take() and cleared at once. */}
-                  <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...(hint !== null && hint !== '' ? { description: `Hint: ${hint}` } : {})} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
+                  <FieldSecret ref={passphrase} id="machine-admin-passphrase" label="Admin passphrase" {...hintHelpText(hint)} name="machine-admin-passphrase" autoComplete="current-password" disabled={busy} />
                 </div>
               {!askEveryTime && <div className="w-40"><KeepUnlockedSelect busy={busy} /></div>}
               </div>

@@ -97,6 +97,7 @@ import { TreeView } from '@wadeck-app/dsl-ui/dist/components/navigation/TreeView
 import { ConfirmDialog } from '@wadeck-app/dsl-ui/dist/components/overlay/ConfirmDialog.js'
 import { ContextMenu } from '@wadeck-app/dsl-ui/dist/components/overlay/ContextMenu.js'
 import { Dialog } from '@wadeck-app/dsl-ui/dist/components/overlay/Dialog.js'
+import { DialogButton } from '@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js'
 import { DialogForm } from '@wadeck-app/dsl-ui/dist/components/overlay/DialogForm.js'
 import { Drawer } from '@wadeck-app/dsl-ui/dist/components/overlay/Drawer.js'
 import { Popover } from '@wadeck-app/dsl-ui/dist/components/overlay/Popover.js'
@@ -115,6 +116,7 @@ import { AllowedList } from '../components/AllowedList.js'
 import { CandidaciesTable } from '../components/CandidaciesTable.js'
 import { FinalCodeDisplay } from '../components/FinalCodeDisplay.js'
 import { HeldRequests } from '../components/HeldRequests.js'
+import { MachinesTable } from '../components/MachinesTable.js'
 import { PassphraseSigner } from '../components/PassphraseSigner.js'
 import { RequestsOverview } from '../components/RequestsOverview.js'
 import { VerticalTimeline } from '../components/VerticalTimeline.js'
@@ -298,6 +300,7 @@ function FieldAsyncSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const name = coerceProp(resolveExpressionValue(node['name'], ctx), 'FieldAsyncSelect.name', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['name']
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldAsyncSelect.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldAsyncSelect.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldAsyncSelect.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['helpText']
 		const required = coerceProp(resolveExpressionValue(node['required'], ctx), 'FieldAsyncSelect.required', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['required']
 		const error = coerceProp(resolveExpressionValue(node['error'], ctx), 'FieldAsyncSelect.error', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['error']
 		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'FieldAsyncSelect.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAsyncSelect.js').FieldAsyncSelectProps['disabled']
@@ -314,7 +317,7 @@ function FieldAsyncSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldAsyncSelect name={name} label={label} description={description} required={required} error={error} disabled={disabled} loadOptions={loadOptions} loadSelected={loadSelected} placeholder={placeholder} debounceMs={debounceMs} noOptionsMessage={noOptionsMessage} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldAsyncSelect name={name} label={label} description={description} helpText={helpText} required={required} error={error} disabled={disabled} loadOptions={loadOptions} loadSelected={loadSelected} placeholder={placeholder} debounceMs={debounceMs} noOptionsMessage={noOptionsMessage} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -322,6 +325,7 @@ function FieldAutocompleteWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldAutocomplete.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldAutocomplete.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldAutocomplete.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['helpText']
 		const options = coerceProp(resolveExpressionValue(node['options'], ctx), 'FieldAutocomplete.options', 'array', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['options']
 		const placeholder = coerceProp(resolveExpressionValue(node['placeholder'], ctx), 'FieldAutocomplete.placeholder', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['placeholder']
 		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'FieldAutocomplete.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldAutocomplete.js').FieldAutocompleteProps['disabled']
@@ -333,7 +337,7 @@ function FieldAutocompleteWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldAutocomplete label={label} description={description} options={options} placeholder={placeholder} disabled={disabled} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldAutocomplete label={label} description={description} helpText={helpText} options={options} placeholder={placeholder} disabled={disabled} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -341,6 +345,7 @@ function FieldDateWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldDate.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldDate.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldDate.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['helpText']
 		const isDateDisabled = coerceProp(resolveExpressionValue(node['isDateDisabled'], ctx), 'FieldDate.isDateDisabled', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['isDateDisabled']
 		const minDate = (resolveExpressionValue(node['minDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['minDate']
 		const maxDate = (resolveExpressionValue(node['maxDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDate.js').FieldDateProps['maxDate']
@@ -357,7 +362,7 @@ function FieldDateWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldDate label={label} description={description} isDateDisabled={isDateDisabled} minDate={minDate} maxDate={maxDate} placeholder={placeholder} disabled={disabled} dateFormat={dateFormat} required={required} error={error} value={coerceDate(formData?.[bind], 'FieldDate.value')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldDate label={label} description={description} helpText={helpText} isDateDisabled={isDateDisabled} minDate={minDate} maxDate={maxDate} placeholder={placeholder} disabled={disabled} dateFormat={dateFormat} required={required} error={error} value={coerceDate(formData?.[bind], 'FieldDate.value')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -365,6 +370,7 @@ function FieldDateRangeWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldDateRange.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldDateRange.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldDateRange.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['helpText']
 		const isDisabled = coerceProp(resolveExpressionValue(node['isDisabled'], ctx), 'FieldDateRange.isDisabled', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['isDisabled']
 		const minDate = (resolveExpressionValue(node['minDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['minDate']
 		const maxDate = (resolveExpressionValue(node['maxDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateRange.js').FieldDateRangeProps['maxDate']
@@ -381,7 +387,7 @@ function FieldDateRangeWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldDateRange label={label} description={description} isDisabled={isDisabled} minDate={minDate} maxDate={maxDate} placeholder={placeholder} disabled={disabled} dateFormat={dateFormat} required={required} error={error} value={(formData?.[bind] as { from: Date | null; to: Date | null } | undefined) ?? { from: new Date(), to: null }} onChange={(v) => onChange?.(bind, v)} />
+			<FieldDateRange label={label} description={description} helpText={helpText} isDisabled={isDisabled} minDate={minDate} maxDate={maxDate} placeholder={placeholder} disabled={disabled} dateFormat={dateFormat} required={required} error={error} value={(formData?.[bind] as { from: Date | null; to: Date | null } | undefined) ?? { from: new Date(), to: null }} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -389,6 +395,7 @@ function FieldDateTimeWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldDateTime.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldDateTime.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldDateTime.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['helpText']
 		const isDateDisabled = coerceProp(resolveExpressionValue(node['isDateDisabled'], ctx), 'FieldDateTime.isDateDisabled', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['isDateDisabled']
 		const minDate = (resolveExpressionValue(node['minDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['minDate']
 		const maxDate = (resolveExpressionValue(node['maxDate'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/form/FieldDateTime.js').FieldDateTimeProps['maxDate']
@@ -410,7 +417,7 @@ function FieldDateTimeWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldDateTime label={label} description={description} isDateDisabled={isDateDisabled} minDate={minDate} maxDate={maxDate} datePlaceholder={datePlaceholder} timePlaceholder={timePlaceholder} disabled={disabled} dateFormat={dateFormat} is12Hour={is12Hour} minuteStep={minuteStep} required={required} error={error} open={open} onOpenChange={onOpenChange} value={coerceDate(formData?.[bind], 'FieldDateTime.value')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldDateTime label={label} description={description} helpText={helpText} isDateDisabled={isDateDisabled} minDate={minDate} maxDate={maxDate} datePlaceholder={datePlaceholder} timePlaceholder={timePlaceholder} disabled={disabled} dateFormat={dateFormat} is12Hour={is12Hour} minuteStep={minuteStep} required={required} error={error} open={open} onOpenChange={onOpenChange} value={coerceDate(formData?.[bind], 'FieldDateTime.value')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -419,6 +426,7 @@ function FieldMultiSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const name = coerceProp(resolveExpressionValue(node['name'], ctx), 'FieldMultiSelect.name', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['name']
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldMultiSelect.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldMultiSelect.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldMultiSelect.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['helpText']
 		const required = coerceProp(resolveExpressionValue(node['required'], ctx), 'FieldMultiSelect.required', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['required']
 		const error = coerceProp(resolveExpressionValue(node['error'], ctx), 'FieldMultiSelect.error', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['error']
 		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'FieldMultiSelect.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldMultiSelect.js').FieldMultiSelectProps['disabled']
@@ -433,7 +441,7 @@ function FieldMultiSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldMultiSelect name={name} label={label} description={description} required={required} error={error} disabled={disabled} options={options} placeholder={placeholder} maxSelected={maxSelected} value={coerceStringList(formData?.[bind], 'FieldMultiSelect.value')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldMultiSelect name={name} label={label} description={description} helpText={helpText} required={required} error={error} disabled={disabled} options={options} placeholder={placeholder} maxSelected={maxSelected} value={coerceStringList(formData?.[bind], 'FieldMultiSelect.value')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -441,6 +449,7 @@ function FieldNumberWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldNumber.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldNumber.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldNumber.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['helpText']
 		const min = coerceProp(resolveExpressionValue(node['min'], ctx), 'FieldNumber.min', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['min']
 		const max = coerceProp(resolveExpressionValue(node['max'], ctx), 'FieldNumber.max', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['max']
 		const suffix = coerceProp(resolveExpressionValue(node['suffix'], ctx), 'FieldNumber.suffix', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldNumber.js').FieldNumberProps['suffix']
@@ -458,7 +467,7 @@ function FieldNumberWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldNumber label={label} description={description} min={min} max={max} suffix={suffix} disabled={disabled} required={required} error={error} unlimited={unlimited} unlimitedValue={unlimitedValue} onUnlimitedChange={onUnlimitedChange} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldNumber label={label} description={description} helpText={helpText} min={min} max={max} suffix={suffix} disabled={disabled} required={required} error={error} unlimited={unlimited} unlimitedValue={unlimitedValue} onUnlimitedChange={onUnlimitedChange} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -466,6 +475,7 @@ function FieldSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldSelect.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldSelect.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldSelect.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['helpText']
 		const options = coerceProp(resolveExpressionValue(node['options'], ctx), 'FieldSelect.options', 'array', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['options']
 		const placeholder = coerceProp(resolveExpressionValue(node['placeholder'], ctx), 'FieldSelect.placeholder', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['placeholder']
 		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'FieldSelect.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldSelect.js').FieldSelectProps['disabled']
@@ -481,7 +491,7 @@ function FieldSelectWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldSelect label={label} description={description} options={options} placeholder={placeholder} disabled={disabled} required={required} error={error} hideLabel={hideLabel} size={size} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldSelect label={label} description={description} helpText={helpText} options={options} placeholder={placeholder} disabled={disabled} required={required} error={error} hideLabel={hideLabel} size={size} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -490,6 +500,7 @@ function FieldTagsWithContext({ node, ctx }: RegistryRenderProps) {
 		const name = coerceProp(resolveExpressionValue(node['name'], ctx), 'FieldTags.name', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['name']
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldTags.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldTags.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldTags.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['helpText']
 		const required = coerceProp(resolveExpressionValue(node['required'], ctx), 'FieldTags.required', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['required']
 		const error = coerceProp(resolveExpressionValue(node['error'], ctx), 'FieldTags.error', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['error']
 		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'FieldTags.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTags.js').FieldTagsProps['disabled']
@@ -504,19 +515,21 @@ function FieldTagsWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldTags name={name} label={label} description={description} required={required} error={error} disabled={disabled} placeholder={placeholder} maxTags={maxTags} allowDuplicates={allowDuplicates} value={coerceStringList(formData?.[bind], 'FieldTags.value')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldTags name={name} label={label} description={description} helpText={helpText} required={required} error={error} disabled={disabled} placeholder={placeholder} maxTags={maxTags} allowDuplicates={allowDuplicates} value={coerceStringList(formData?.[bind], 'FieldTags.value')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
-function FieldTextWithContext({ node, ctx }: RegistryRenderProps) {
+function FieldTextWithContext({ node, registry, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldText.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['label']
 		const hideLabel = coerceProp(resolveExpressionValue(node['hideLabel'], ctx), 'FieldText.hideLabel', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['hideLabel']
 		const size = coerceProp(resolveExpressionValue(node['size'], ctx), 'FieldText.size', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['size']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldText.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldText.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['helpText']
 		const readOnly = coerceProp(resolveExpressionValue(node['readOnly'], ctx), 'FieldText.readOnly', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['readOnly']
 		const required = coerceProp(resolveExpressionValue(node['required'], ctx), 'FieldText.required', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['required']
 		const error = coerceProp(resolveExpressionValue(node['error'], ctx), 'FieldText.error', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldText.js').FieldTextProps['error']
+		const icon = node['icon'] as unknown[] | undefined
 		const formCtx = useFormContext()
 		const scopedData = formCtx?.formData ?? (ctx['formData'] ?? ctx['row']) as Record<string, unknown> | undefined
 		const scopedChange = formCtx?.onChange ?? ctx['onChange'] as ((key: string, v: unknown) => void) | undefined
@@ -525,7 +538,7 @@ function FieldTextWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldText label={label} hideLabel={hideLabel} size={size} description={description} readOnly={readOnly} required={required} error={error} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldText label={label} hideLabel={hideLabel} size={size} description={description} helpText={helpText} readOnly={readOnly} required={required} error={error} icon={icon ? renderChildren(icon, registry, ctx) : null} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -533,6 +546,7 @@ function FieldTextareaWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldTextarea.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldTextarea.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldTextarea.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['helpText']
 		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'FieldTextarea.rows', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['rows']
 		const mono = coerceProp(resolveExpressionValue(node['mono'], ctx), 'FieldTextarea.mono', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['mono']
 		const placeholder = coerceProp(resolveExpressionValue(node['placeholder'], ctx), 'FieldTextarea.placeholder', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTextarea.js').FieldTextareaProps['placeholder']
@@ -548,7 +562,7 @@ function FieldTextareaWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldTextarea label={label} description={description} rows={rows} mono={mono} placeholder={placeholder} readOnly={readOnly} disabled={disabled} required={required} error={error} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldTextarea label={label} description={description} helpText={helpText} rows={rows} mono={mono} placeholder={placeholder} readOnly={readOnly} disabled={disabled} required={required} error={error} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -556,6 +570,7 @@ function FieldTimeWithContext({ node, ctx }: RegistryRenderProps) {
 		const bind = node['bind'] as string
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldTime.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldTime.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldTime.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['helpText']
 		const is12Hour = coerceProp(resolveExpressionValue(node['is12Hour'], ctx), 'FieldTime.is12Hour', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['is12Hour']
 		const minuteStep = coerceProp(resolveExpressionValue(node['minuteStep'], ctx), 'FieldTime.minuteStep', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['minuteStep']
 		const placeholder = coerceProp(resolveExpressionValue(node['placeholder'], ctx), 'FieldTime.placeholder', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldTime.js').FieldTimeProps['placeholder']
@@ -570,7 +585,7 @@ function FieldTimeWithContext({ node, ctx }: RegistryRenderProps) {
 		const formData = pageVars ? ctx['$vars'] as Record<string, unknown> | undefined : scopedData
 		const onChange = pageVars ? ctx['$setVar'] as ((key: string, v: unknown) => void) | undefined : scopedChange
 		return (
-			<FieldTime label={label} description={description} is12Hour={is12Hour} minuteStep={minuteStep} placeholder={placeholder} disabled={disabled} required={required} error={error} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
+			<FieldTime label={label} description={description} helpText={helpText} is12Hour={is12Hour} minuteStep={minuteStep} placeholder={placeholder} disabled={disabled} required={required} error={error} value={String(formData?.[bind] ?? '')} onChange={(v) => onChange?.(bind, v)} />
 		)
 }
 
@@ -612,7 +627,8 @@ export const ActionButtonEntry: ComponentRegistryEntry = {
 		const disabledReason = coerceProp(resolveExpressionValue(node['disabledReason'], ctx), 'ActionButton.disabledReason', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ActionButton.js').ActionButtonProps['disabledReason']
 		const onAction = coerceProp(resolveExpressionValue(node['onAction'], ctx) ?? ctx['onAction'], 'ActionButton.onAction', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ActionButton.js').ActionButtonProps['onAction']
 		const actionPending = coerceProp(resolveExpressionValue(node['actionPending'], ctx) ?? ctx['$actionPending'], 'ActionButton.actionPending', 'object', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ActionButton.js').ActionButtonProps['actionPending']
-		return <ActionButton action={action} label={label} params={params} body={body} icon={icon} iconOnly={iconOnly} variant={variant} size={size} ariaLabel={ariaLabel} disabled={disabled} disabledReason={disabledReason} onAction={onAction} actionPending={actionPending} />
+		const loadingStyle = coerceProp(resolveExpressionValue(node['loadingStyle'], ctx), 'ActionButton.loadingStyle', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ActionButton.js').ActionButtonProps['loadingStyle']
+		return <ActionButton action={action} label={label} params={params} body={body} icon={icon} iconOnly={iconOnly} variant={variant} size={size} ariaLabel={ariaLabel} disabled={disabled} disabledReason={disabledReason} onAction={onAction} actionPending={actionPending} loadingStyle={loadingStyle} />
 	},
 }
 
@@ -632,7 +648,10 @@ export const ButtonActionEntry: ComponentRegistryEntry = {
 		const loading = coerceProp(resolveExpressionValue(node['loading'], ctx), 'ButtonAction.loading', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['loading']
 		const type = coerceProp(resolveExpressionValue(node['type'], ctx), 'ButtonAction.type', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['type']
 		const form = coerceProp(resolveExpressionValue(node['form'], ctx), 'ButtonAction.form', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['form']
-		return <ButtonAction label={label} variant={variant} icon={icon ? renderChildren(icon, registry, ctx) : null} size={size} ariaLabel={ariaLabel} onClick={onClick} disabled={disabled} disabledReason={disabledReason} loading={loading} type={type} form={form} />
+		const ariaExpanded = coerceProp(resolveExpressionValue(node['ariaExpanded'], ctx), 'ButtonAction.ariaExpanded', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['ariaExpanded']
+		const ariaControls = coerceProp(resolveExpressionValue(node['ariaControls'], ctx), 'ButtonAction.ariaControls', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['ariaControls']
+		const underline = coerceProp(resolveExpressionValue(node['underline'], ctx), 'ButtonAction.underline', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['underline']
+		return <ButtonAction label={label} variant={variant} icon={icon ? renderChildren(icon, registry, ctx) : null} size={size} ariaLabel={ariaLabel} onClick={onClick} disabled={disabled} disabledReason={disabledReason} loading={loading} type={type} form={form} ariaExpanded={ariaExpanded} ariaControls={ariaControls} underline={underline} />
 	},
 }
 
@@ -649,7 +668,7 @@ export const ChipButtonEntry: ComponentRegistryEntry = {
 	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['ChipButtonNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
 	render: ({ node, registry, ctx }: RegistryRenderProps) => {
 		const items = node['items'] as unknown[] | undefined
-		const active = coerceProp(resolveExpressionValue(node['active'], ctx), 'ChipButton.active', 'primitive', true) as import('@wadeck-app/dsl-ui/dist/components/controls/ChipButton.js').ChipButtonProps['active']
+		const active = coerceProp(resolveExpressionValue(node['active'], ctx), 'ChipButton.active', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ChipButton.js').ChipButtonProps['active']
 		const color = (resolveExpressionValue(node['color'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/controls/ChipButton.js').ChipButtonProps['color']
 		const onClick = coerceProp(resolveExpressionValue(node['onClick'], ctx), 'ChipButton.onClick', 'function', true) as import('@wadeck-app/dsl-ui/dist/components/controls/ChipButton.js').ChipButtonProps['onClick']
 		const shape = coerceProp(resolveExpressionValue(node['shape'], ctx), 'ChipButton.shape', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ChipButton.js').ChipButtonProps['shape']
@@ -698,7 +717,7 @@ export const IconButtonEntry: ComponentRegistryEntry = {
 		const icon = node['icon'] as unknown[] | undefined
 		const ariaLabel = coerceProp(resolveExpressionValue(node['aria-label'], ctx), 'IconButton.aria-label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/controls/IconButton.js').IconButtonProps['aria-label']
 		const size = coerceProp(resolveExpressionValue(node['size'], ctx), 'IconButton.size', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/IconButton.js').IconButtonProps['size']
-		const tooltip = coerceProp(resolveExpressionValue(node['tooltip'], ctx), 'IconButton.tooltip', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/controls/IconButton.js').IconButtonProps['tooltip']
+		const tooltip = coerceProp(resolveExpressionValue(node['tooltip'], ctx), 'IconButton.tooltip', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/IconButton.js').IconButtonProps['tooltip']
 		return <IconButton icon={icon ? renderChildren(icon, registry, ctx) : null} aria-label={ariaLabel} size={size} tooltip={tooltip} />
 	},
 }
@@ -1089,7 +1108,8 @@ export const ButtonSaveEntry: ComponentRegistryEntry = {
 		const isPending = coerceProp(resolveExpressionValue(node['isPending'], ctx), 'ButtonSave.isPending', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSave.js').ButtonSaveProps['isPending']
 		const hasChanges = coerceProp(resolveExpressionValue(node['hasChanges'], ctx), 'ButtonSave.hasChanges', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSave.js').ButtonSaveProps['hasChanges']
 		const disabledReason = coerceProp(resolveExpressionValue(node['disabledReason'], ctx), 'ButtonSave.disabledReason', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSave.js').ButtonSaveProps['disabledReason']
-		return <ButtonSave label={label} onClick={onClick} isPending={isPending} hasChanges={hasChanges} disabledReason={disabledReason} />
+		const loadingStyle = coerceProp(resolveExpressionValue(node['loadingStyle'], ctx), 'ButtonSave.loadingStyle', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSave.js').ButtonSaveProps['loadingStyle']
+		return <ButtonSave label={label} onClick={onClick} isPending={isPending} hasChanges={hasChanges} disabledReason={disabledReason} loadingStyle={loadingStyle} />
 	},
 }
 
@@ -1102,7 +1122,8 @@ export const ButtonSubmitEntry: ComponentRegistryEntry = {
 		const variant = coerceProp(resolveExpressionValue(node['variant'], ctx), 'ButtonSubmit.variant', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSubmit.js').ButtonSubmitProps['variant']
 		const pendingLabel = coerceProp(resolveExpressionValue(node['pendingLabel'], ctx), 'ButtonSubmit.pendingLabel', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSubmit.js').ButtonSubmitProps['pendingLabel']
 		const requireChanges = coerceProp(resolveExpressionValue(node['requireChanges'], ctx), 'ButtonSubmit.requireChanges', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSubmit.js').ButtonSubmitProps['requireChanges']
-		return <ButtonSubmit label={label} variant={variant} pendingLabel={pendingLabel} requireChanges={requireChanges} />
+		const loadingStyle = coerceProp(resolveExpressionValue(node['loadingStyle'], ctx), 'ButtonSubmit.loadingStyle', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/ButtonSubmit.js').ButtonSubmitProps['loadingStyle']
+		return <ButtonSubmit label={label} variant={variant} pendingLabel={pendingLabel} requireChanges={requireChanges} loadingStyle={loadingStyle} />
 	},
 }
 
@@ -1188,10 +1209,11 @@ export const FieldReadOnlyEntry: ComponentRegistryEntry = {
 	render: ({ node, ctx }: RegistryRenderProps) => {
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldReadOnly.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldReadOnly.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldReadOnly.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['helpText']
 		const value = coerceProp(resolveExpressionValue(node['value'], ctx), 'FieldReadOnly.value', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['value']
 		const mono = coerceProp(resolveExpressionValue(node['mono'], ctx), 'FieldReadOnly.mono', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['mono']
 		const copyable = coerceProp(resolveExpressionValue(node['copyable'], ctx), 'FieldReadOnly.copyable', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldReadOnly.js').FieldReadOnlyProps['copyable']
-		return <FieldReadOnly label={label} description={description} value={value} mono={mono} copyable={copyable} />
+		return <FieldReadOnly label={label} description={description} helpText={helpText} value={value} mono={mono} copyable={copyable} />
 	},
 }
 
@@ -1238,12 +1260,13 @@ export const FieldWrapperEntry: ComponentRegistryEntry = {
 		const items = node['items'] as unknown[] | undefined
 		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'FieldWrapper.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['label']
 		const description = coerceProp(resolveExpressionValue(node['description'], ctx), 'FieldWrapper.description', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['description']
+		const helpText = coerceProp(resolveExpressionValue(node['helpText'], ctx), 'FieldWrapper.helpText', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['helpText']
 		const required = coerceProp(resolveExpressionValue(node['required'], ctx), 'FieldWrapper.required', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['required']
 		const error = coerceProp(resolveExpressionValue(node['error'], ctx), 'FieldWrapper.error', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['error']
 		const id = coerceProp(resolveExpressionValue(node['id'], ctx), 'FieldWrapper.id', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['id']
 		const hideLabel = coerceProp(resolveExpressionValue(node['hideLabel'], ctx), 'FieldWrapper.hideLabel', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/form/FieldWrapper.js').FieldWrapperProps['hideLabel']
 		return (
-			<FieldWrapper label={label} description={description} required={required} error={error} id={id} hideLabel={hideLabel}>
+			<FieldWrapper label={label} description={description} helpText={helpText} required={required} error={error} id={id} hideLabel={hideLabel}>
 				{items ? renderChildren(items, registry, ctx) : null}
 			</FieldWrapper>
 		)
@@ -1344,10 +1367,13 @@ export const CollapsibleEntry: ComponentRegistryEntry = {
 	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['CollapsibleNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
 	render: ({ node, registry, ctx }: RegistryRenderProps) => {
 		const items = node['items'] as unknown[] | undefined
-		const title = coerceProp(resolveExpressionValue(node['title'], ctx), 'Collapsible.title', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/layout/Collapsible.js').CollapsibleProps['title']
+		const title = coerceProp(resolveExpressionValue(node['title'], ctx), 'Collapsible.title', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/layout/Collapsible.js').CollapsibleProps['title']
+		const header = node['header'] as unknown[] | undefined
 		const defaultOpen = coerceProp(resolveExpressionValue(node['defaultOpen'], ctx), 'Collapsible.defaultOpen', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/Collapsible.js').CollapsibleProps['defaultOpen']
+		const open = coerceProp(resolveExpressionValue(node['open'], ctx), 'Collapsible.open', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/layout/Collapsible.js').CollapsibleProps['open']
+		const onOpenChange = coerceProp(resolveExpressionValue(node['onOpenChange'], ctx), 'Collapsible.onOpenChange', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/layout/Collapsible.js').CollapsibleProps['onOpenChange']
 		return (
-			<Collapsible title={title} defaultOpen={defaultOpen}>
+			<Collapsible title={title} header={header ? renderChildren(header, registry, ctx) : null} defaultOpen={defaultOpen} open={open} onOpenChange={onOpenChange}>
 				{items ? renderChildren(items, registry, ctx) : null}
 			</Collapsible>
 		)
@@ -1726,6 +1752,25 @@ export const DialogEntry: ComponentRegistryEntry = {
 	},
 }
 
+export const DialogButtonEntry: ComponentRegistryEntry = {
+	name: 'DialogButton', category: 'atomic', tags: ["button","dialog-action"],
+	nodeSchema: null as never,
+	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['DialogButtonNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const label = coerceProp(resolveExpressionValue(node['label'], ctx), 'DialogButton.label', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['label']
+		const variant = coerceProp(resolveExpressionValue(node['variant'], ctx), 'DialogButton.variant', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['variant']
+		const action = coerceProp(resolveExpressionValue(node['action'], ctx), 'DialogButton.action', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['action']
+		const params = coerceProp(resolveExpressionsDeep(node['params'], ctx), 'DialogButton.params', 'object', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['params']
+		const body = coerceProp(resolveExpressionsDeep(node['body'], ctx), 'DialogButton.body', 'object', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['body']
+		const closesDialog = coerceProp(resolveExpressionValue(node['closesDialog'], ctx), 'DialogButton.closesDialog', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['closesDialog']
+		const disabled = coerceProp(resolveExpressionValue(node['disabled'], ctx), 'DialogButton.disabled', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['disabled']
+		const disabledReason = coerceProp(resolveExpressionValue(node['disabledReason'], ctx), 'DialogButton.disabledReason', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['disabledReason']
+		const onAction = coerceProp(resolveExpressionValue(node['onAction'], ctx) ?? ctx['onAction'], 'DialogButton.onAction', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['onAction']
+		const actionPending = coerceProp(resolveExpressionValue(node['actionPending'], ctx) ?? ctx['$actionPending'], 'DialogButton.actionPending', 'object', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/DialogButton.js').DialogButtonProps['actionPending']
+		return <DialogButton label={label} variant={variant} action={action} params={params} body={body} closesDialog={closesDialog} disabled={disabled} disabledReason={disabledReason} onAction={onAction} actionPending={actionPending} />
+	},
+}
+
 export const DialogFormEntry: ComponentRegistryEntry = {
 	name: 'DialogForm', category: 'composite', tags: ["dialog","form"],
 	nodeSchema: null as never,
@@ -1933,7 +1978,10 @@ export const SearchBarEntry: ComponentRegistryEntry = {
 		const inputRef = (resolveExpressionValue(node['inputRef'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['inputRef']
 		const onKeyDown = (resolveExpressionValue(node['onKeyDown'], ctx)) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['onKeyDown']
 		const ariaControls = coerceProp(resolveExpressionValue(node['ariaControls'], ctx), 'SearchBar.ariaControls', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['ariaControls']
-		return <SearchBar urlParam={urlParam} resetUrlParams={resetUrlParams} value={value} onChange={onChange} placeholder={placeholder} debounceMs={debounceMs} focusExpand={focusExpand} size={size} inputRef={inputRef} onKeyDown={onKeyDown} ariaControls={ariaControls} />
+		const width = coerceProp(resolveExpressionValue(node['width'], ctx), 'SearchBar.width', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['width']
+		const ariaLabel = coerceProp(resolveExpressionValue(node['ariaLabel'], ctx), 'SearchBar.ariaLabel', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['ariaLabel']
+		const ariaDescribedBy = coerceProp(resolveExpressionValue(node['ariaDescribedBy'], ctx), 'SearchBar.ariaDescribedBy', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/table/SearchBar.js').SearchBarProps['ariaDescribedBy']
+		return <SearchBar urlParam={urlParam} resetUrlParams={resetUrlParams} value={value} onChange={onChange} placeholder={placeholder} debounceMs={debounceMs} focusExpand={focusExpand} size={size} inputRef={inputRef} onKeyDown={onKeyDown} ariaControls={ariaControls} width={width} ariaLabel={ariaLabel} ariaDescribedBy={ariaDescribedBy} />
 	},
 }
 
@@ -2022,6 +2070,17 @@ export const HeldRequestsEntry: ComponentRegistryEntry = {
 		const allowStyle = coerceProp(resolveExpressionValue(node['allowStyle'], ctx), 'HeldRequests.allowStyle', 'primitive', false) as import('../components/HeldRequests.js').HeldRequestsProps['allowStyle']
 		const saferMode = coerceProp(resolveExpressionValue(node['saferMode'], ctx), 'HeldRequests.saferMode', 'primitive', false) as import('../components/HeldRequests.js').HeldRequestsProps['saferMode']
 		return <HeldRequests rows={rows} allow={allow} reachability={reachability} onRefresh={onRefresh} allowStyle={allowStyle} saferMode={saferMode} />
+	},
+}
+
+export const MachinesTableEntry: ComponentRegistryEntry = {
+	name: 'MachinesTable', category: 'composite', tags: ["machines","revoke","admin"],
+	nodeSchema: null as never,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'MachinesTable.rows', 'array', false) as import('../components/MachinesTable.js').MachinesTableProps['rows']
+		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'MachinesTable.emptyMessage', 'string', false) as import('../components/MachinesTable.js').MachinesTableProps['emptyMessage']
+		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'MachinesTable.onRefresh', 'function', false) as import('../components/MachinesTable.js').MachinesTableProps['onRefresh']
+		return <MachinesTable rows={rows} emptyMessage={emptyMessage} onRefresh={onRefresh} />
 	},
 }
 
@@ -2156,6 +2215,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	ConfirmDialogEntry,
 	ContextMenuEntry,
 	DialogEntry,
+	DialogButtonEntry,
 	DialogFormEntry,
 	DrawerEntry,
 	PopoverEntry,
@@ -2174,6 +2234,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	CandidaciesTableEntry,
 	FinalCodeDisplayEntry,
 	HeldRequestsEntry,
+	MachinesTableEntry,
 	PassphraseSignerEntry,
 	RequestsOverviewEntry,
 	VerticalTimelineEntry,
@@ -2181,8 +2242,8 @@ export const allEntries: ComponentRegistryEntry[] = [
 
 // ─── Auto-detected metadata (allowedChildren, providesContext, requiresContext) ─
 // Generated from @slot JSDoc tags and createContext/useContext calls in component sources.
-ActionButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["action","actionPending","ariaLabel","body","disabled","disabledReason","icon","iconOnly","label","onAction","params","size","variant"] : [];
-ButtonActionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaLabel","disabled","disabledReason","form","icon","label","loading","onClick","size","type","variant"] : [];
+ActionButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["action","actionPending","ariaLabel","body","disabled","disabledReason","icon","iconOnly","label","loadingStyle","onAction","params","size","variant"] : [];
+ButtonActionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControls","ariaExpanded","ariaLabel","disabled","disabledReason","form","icon","label","loading","onClick","size","type","underline","variant"] : [];
 CheckboxGroupEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","label","options","orientation"] : [];
 ChipButtonEntry.allowedChildren = {"items":["atomic"]};
 ChipButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["active","aria-label","aria-pressed","color","disabled","disabledReason","emphasis","items","onClick","shape","title"] : [];
@@ -2224,29 +2285,29 @@ TimeBrushEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","doma
 TimeSeriesChartEntry.itemKeys = {"series":{"keys":["key","name","color","width","dots","pointColorKey","detailKey","gapDash","legend","kind","fromKey","decimals","showValue","axis"]},"bands":{"keys":["from","to","color","opacity","label"]},"rangeAreas":{"keys":["lowKey","highKey","name","color","opacity","legend"]},"legendItems":{"keys":["label","color"]}};
 TimeSeriesChartEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bands","data","domain","emptyMessage","gapDashAfterDays","height","initialWindow","legendItems","marginRight","rangeAreas","series","syncGroup","title","xFormat","xKey","yAxisWidth","yDecimals","yFormat","yIncludeZero","yRightAxisWidth","yRightDecimals","yRightFormat","yRightIncludeZero","yRightUnit","yUnit"] : [];
 ButtonCancelEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["disabled","disabledReason","label","onCancel"] : [];
-ButtonSaveEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["disabledReason","hasChanges","isPending","label","onClick"] : [];
+ButtonSaveEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["disabledReason","hasChanges","isPending","label","loadingStyle","onClick"] : [];
 ButtonSaveEntry.requiresContext = ["FormContext"];
-ButtonSubmitEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","pendingLabel","requireChanges","variant"] : [];
+ButtonSubmitEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","loadingStyle","pendingLabel","requireChanges","variant"] : [];
 ButtonSubmitEntry.requiresContext = ["FormContext"];
 CronBuilderEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["onChange","onClose","value"] : [];
 DatePickerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","disabled","isDateDisabled","maxDate","minDate","onSelect","placeholder"] : [];
 DateRangePickerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","disabled","isDisabled","maxDate","minDate","onOpenChange","open","placeholder"] : [];
-FieldAsyncSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","debounceMs","description","disabled","error","label","loadOptions","loadSelected","name","noOptionsMessage","placeholder","required"] : [];
-FieldAutocompleteEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","label","options","placeholder"] : [];
-FieldDateEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","description","disabled","error","isDateDisabled","label","maxDate","minDate","placeholder","required"] : [];
-FieldDateRangeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","description","disabled","error","isDisabled","label","maxDate","minDate","placeholder","required"] : [];
-FieldDateTimeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","datePlaceholder","description","disabled","error","is12Hour","isDateDisabled","label","maxDate","minDate","minuteStep","onOpenChange","open","required","timePlaceholder"] : [];
-FieldMultiSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","label","maxSelected","name","options","placeholder","required"] : [];
-FieldNumberEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","label","max","min","onUnlimitedChange","required","suffix","unlimited","unlimitedValue"] : [];
-FieldReadOnlyEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["copyable","description","label","mono","value"] : [];
+FieldAsyncSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","debounceMs","description","disabled","error","helpText","label","loadOptions","loadSelected","name","noOptionsMessage","placeholder","required"] : [];
+FieldAutocompleteEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","helpText","label","options","placeholder"] : [];
+FieldDateEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","description","disabled","error","helpText","isDateDisabled","label","maxDate","minDate","placeholder","required"] : [];
+FieldDateRangeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","description","disabled","error","helpText","isDisabled","label","maxDate","minDate","placeholder","required"] : [];
+FieldDateTimeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","dateFormat","datePlaceholder","description","disabled","error","helpText","is12Hour","isDateDisabled","label","maxDate","minDate","minuteStep","onOpenChange","open","required","timePlaceholder"] : [];
+FieldMultiSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","label","maxSelected","name","options","placeholder","required"] : [];
+FieldNumberEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","label","max","min","onUnlimitedChange","required","suffix","unlimited","unlimitedValue"] : [];
+FieldReadOnlyEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["copyable","description","helpText","label","mono","value"] : [];
 FieldReadOnlyEntry.requiresContext = ["ToastContext"];
-FieldSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","hideLabel","label","options","placeholder","required","size"] : [];
-FieldTagsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allowDuplicates","bind","description","disabled","error","label","maxTags","name","placeholder","required"] : [];
-FieldTextEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","error","hideLabel","label","readOnly","required","size"] : [];
-FieldTextareaEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","label","mono","placeholder","readOnly","required","rows"] : [];
-FieldTimeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","is12Hour","label","minuteStep","placeholder","required"] : [];
+FieldSelectEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","hideLabel","label","options","placeholder","required","size"] : [];
+FieldTagsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allowDuplicates","bind","description","disabled","error","helpText","label","maxTags","name","placeholder","required"] : [];
+FieldTextEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","error","helpText","hideLabel","icon","label","readOnly","required","size"] : [];
+FieldTextareaEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","label","mono","placeholder","readOnly","required","rows"] : [];
+FieldTimeEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","description","disabled","error","helpText","is12Hour","label","minuteStep","placeholder","required"] : [];
 FieldWrapperEntry.allowedChildren = {"items":["atomic"]};
-FieldWrapperEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["description","error","hideLabel","id","items","label","required"] : [];
+FieldWrapperEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["description","error","helpText","hideLabel","id","items","label","required"] : [];
 FieldWrapperEntry.requiresContext = ["FormContext"];
 FormEntry.allowedChildren = {"fields":["field"],"actions":["action-bar","form-specific","button"]};
 FormEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actions","fields","initialData","messages","onSubmit","validate"] : [];
@@ -2263,8 +2324,8 @@ CardEntry.allowedChildren = {"items":["atomic","composite","disposition"]};
 CardEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["border","fill","footer","header","items","onClick","padding","shadow"] : [];
 CardActionsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items"] : [];
 CardActionsEntry.providesContext = ["ButtonContext"];
-CollapsibleEntry.allowedChildren = {"items":["atomic","composite","disposition"]};
-CollapsibleEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["defaultOpen","items","title"] : [];
+CollapsibleEntry.allowedChildren = {"header":["atomic","composite"],"items":["atomic","composite","disposition"]};
+CollapsibleEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["defaultOpen","header","items","onOpenChange","open","title"] : [];
 DialogFooterEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items"] : [];
 DialogFooterEntry.providesContext = ["ButtonContext"];
 DividerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","orientation"] : [];
@@ -2301,6 +2362,8 @@ ContextMenuEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["align","i
 DialogEntry.allowedChildren = {"trigger":["button"],"items":["atomic","composite","disposition"],"actions":["button"]};
 DialogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actions","items","onOpenChange","open","size","title","trigger"] : [];
 DialogEntry.providesContext = ["DialogCloseContext"];
+DialogButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["action","actionPending","body","closesDialog","disabled","disabledReason","label","onAction","params","variant"] : [];
+DialogButtonEntry.requiresContext = ["DialogCloseContext"];
 DialogFormEntry.allowedChildren = {"fields":["field"]};
 DialogFormEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["fields","initialData","onClose","onSubmit","onSubmitEdit","size","title","visible"] : [];
 DrawerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["footer","hideCloseButton","items","onClose","open","side","size","title"] : [];
@@ -2313,14 +2376,14 @@ TooltipEntry.allowedChildren = {"items":["atomic","composite"]};
 TooltipEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["align","content","delay","describe","items","maxWidth","rows","side"] : [];
 BulkActionsToolbarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["items","onClearSelection","selectedCount"] : [];
 DataTableEntry.allowedChildren = {"filtersTop":["filter"],"filters":["filter"]};
-DataTableEntry.itemKeys = {"columns":{"keys":["field","key","label","width","truncate","nowrap","mono","muted","sortable","format","dateStyle","badge","href","external","title"],"byType":{"actions":{"keys":["type","items","width"],"arrays":{"items":{"keys":["label","action","variant","condition","icon"]}}},"link":{"keys":["type","to","label","icon","position","external","width"]}}}};
+DataTableEntry.itemKeys = {"columns":{"keys":["field","key","label","width","truncate","nowrap","mono","muted","sortable","format","dateStyle","badge","href","external","title"],"byType":{"actions":{"keys":["type","items","width"],"arrays":{"items":{"keys":["label","action","variant","condition","enabledWhen","disabledReason","icon"]}}},"link":{"keys":["type","to","label","icon","position","external","width"]}}}};
 DataTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actionPending","actionPendingRows","batchActions","batchActionsPosition","collapseLabel","columns","defaultFilters","emptyMessage","expandLabel","expansion","expansionCondition","fill","filters","filtersTop","fontMono","id","loading","navigateTo","onAction","onBatchAction","onRowClick","onSortColChange","onSortDirChange","refreshing","rowKey","rows","selectable","sortCol","sortDir"] : [];
 DataTableEntry.providesContext = ["DataTableSelectionCtx","DataTableFilterCtx"];
 DataTableEntry.requiresContext = ["RouterContext"];
 FilterBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["filters","onClearAll","onFilterChange","onSearchChange","placeholder","search"] : [];
 FilterChipsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","mode","onChange","options","value"] : [];
 PaginationEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["onPageChange","page","size","total","urlParam"] : [];
-SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControls","debounceMs","focusExpand","inputRef","onChange","onKeyDown","placeholder","resetUrlParams","size","urlParam","value"] : [];
+SearchBarEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControls","ariaDescribedBy","ariaLabel","debounceMs","focusExpand","inputRef","onChange","onKeyDown","placeholder","resetUrlParams","size","urlParam","value","width"] : [];
 SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["currentSort","label","onSort","sortKey"] : [];
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
@@ -2328,6 +2391,7 @@ AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","lo
 CandidaciesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["approvals","approvalsProblem","emptyMessage","onAction","onRefresh","rows","timeline"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
+MachinesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["emptyMessage","onRefresh","rows"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
 RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","expired","held","machines","notices","noticesError","onRefresh","pending","remote","self"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

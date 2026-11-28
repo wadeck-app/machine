@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Badge, Collapsible, Notice } from '@wadeck-app/dsl-ui';
+import { Collapsible, Notice } from '@wadeck-app/dsl-ui';
 import { readAdminKeyHint, type AllowApi } from '../lib/allowFlow.js';
 import type { ApprovalProgress } from '../lib/approvalTimeline.js';
-import type { DeliveryState } from '../lib/approvalResult.js';
 import { checkApprovable, loadApproveContext, recordApprovalCode, signAndApprove, type Approvable, type ApproveContext, type ApproveResult, type ApproveRow } from '../lib/approveFlow.js';
 import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
 import { ConfirmSignModal } from './ConfirmSignModal.js';
+import { DeliveryList } from './DeliveryList.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -38,14 +38,6 @@ export interface ApproveCandidacyDialogProps {
 
 /** The days an approval is valid for: the default of `machine admin approve`. */
 const VALID_FOR = '365 days';
-
-const STATE_LABEL: Record<DeliveryState, string> = { delivered: 'Delivered', inbox: 'Waiting in the relay inbox', failed: 'Failed' };
-const STATE_VARIANT = { delivered: 'success', inbox: 'info', failed: 'danger' } as const;
-
-/** Commands are in backticks in the texts of the daemon: shown in the monospace font. */
-function withCode(text: string): React.ReactNode[] {
-  return text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i} style={MONO_STYLE} className="break-all">{part}</code> : <React.Fragment key={i}>{part}</React.Fragment>));
-}
 
 export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }: ApproveCandidacyDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
@@ -173,24 +165,7 @@ export function ApproveCandidacyDialog({ row, api, onClose, onProgress, steps }:
         {codes === 'match' && <Notice variant="success" label={`Comparison recorded on this page. The decisive confirmation is still to be made on ${row.name}: \`machine join\` there asks you to confirm its code.`} />}
         {codes === 'differ' && <Notice variant="danger" label={`Codes differ: do NOT use "${row.name}". Run \`machine admin revoke ${row.name}\` now, then reject the candidate and look for who sits between the machines.`} />}
         {keepProblem !== null && <Notice variant="warning" label={keepProblem} />}
-        {distribution.machines.length > 0 && (
-          <ul aria-label="Machines told" className="flex list-none flex-col gap-2 p-0 text-sm">
-            {distribution.machines.map((m) => (
-              <li key={m.uuid} className="flex flex-col gap-0.5">
-                <span className="flex flex-wrap items-center gap-2">
-                  <Badge label={STATE_LABEL[m.state]} variant={STATE_VARIANT[m.state]} tone="subtle" size="sm" />
-                  <span style={MONO_STYLE}>{m.name}</span>
-                  <span className={TEXT_MUTED}>{m.reason}</span>
-                </span>
-                <span>{withCode(m.next)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {/* A failure opens the report: the cause is what the person needs to act. */}
-        <Collapsible title="Details" defaultOpen={distribution.status === 'partial' || distribution.status === 'failed'}>
-          <pre style={MONO_STYLE} className="m-0 whitespace-pre-wrap break-words text-xs">{distribution.text}</pre>
-        </Collapsible>
+        <DeliveryList machines={distribution.machines} text={distribution.text} openDetails={distribution.status === 'partial' || distribution.status === 'failed'} />
       </ConfirmSignModal>
     );
   }

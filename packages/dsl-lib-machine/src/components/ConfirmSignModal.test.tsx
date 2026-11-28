@@ -9,11 +9,15 @@ import { ConfirmSignModal } from './ConfirmSignModal.js';
 const base = { title: 'Allow?', details: [{ label: 'Machine', value: 'desktop' }], warning: 'careful', confirmLabel: 'Allow and sign', onConfirm: vi.fn(), onCancel: vi.fn() };
 
 describe('the passphrase hint of the signing dialog', () => {
-  it('is the description of the passphrase field (the standard field text), shown before anything is typed, no custom box', () => {
+  it('is the helpText of the passphrase field (the standard small text UNDER the field, in aria-describedby), shown before anything is typed, no custom box', () => {
     render(<ConfirmSignModal {...base} hint="the street of my first school" />);
     const field = screen.getByLabelText('Admin passphrase');
-    // The description text of the field, under its label (FieldSecret), before anything is typed.
-    expect(screen.getByText('Hint: the street of my first school')).toBeInTheDocument();
+    // The helpText of the field (FieldSecret): described by it, after the input, before anything is typed.
+    const helpId = field.getAttribute('aria-describedby');
+    expect(helpId).not.toBeNull();
+    const help = document.getElementById(helpId as string);
+    expect(help).toHaveTextContent('Hint: the street of my first school');
+    expect(field.compareDocumentPosition(help as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByTestId('passphrase-hint')).toBeNull();
     expect(field).toHaveValue('');
   });

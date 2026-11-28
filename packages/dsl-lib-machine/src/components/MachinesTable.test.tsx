@@ -1,0 +1,228 @@
+import { encryptAdminKey, generateSigningKeyPair, keyId, signRegistration as coreSignRegistration, type RegistrationBody } from '@wadeck-app/machine-core';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MachinesTable, type MachineTableRow } from './MachinesTable.js';
+
+// The Machines page as a user drives it: the table with Revoke on each trusted peer, the dialog of the revocation (PIN, passphrase typed now, signed in the page), the
+// result. The app-core shell is a stub on globalThis (the contract of @wadeck-app/app-core-sdk/shell); the module backend is a recording fake.
+
+const PASSPHRASE = 'correct horse battery staple 7391';
+const NOW = Math.floor(Date.now() / 1000);
+const admin = generateSigningKeyPair();
+const keyFile = JSON.stringify(encryptAdminKey(admin, PASSPHRASE, { hint: 'the street of my first school' }));
+const uuid = (n: number): string => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
+const SELF = { uuid: uuid(1), name: 'desktop' };
+const LAPTOP = { uuid: uuid(2), name: 'laptop', identity: generateSigningKeyPair() };
+const SERVER = { uuid: uuid(3), name: 'server', identity: generateSigningKeyPair() };
+
+const ROWS: MachineTableRow[] = [
+  { uuid: SELF.uuid, name: SELF.name, self: true, role: 'this machine', aliasesText: '', reachable: 'this machine', receivesNotices: 'yes', listHeldText: '' },
+  { uuid: LAPTOP.uuid, name: LAPTOP.name, self: false, role: 'peer', aliasesText: 'lap', reachable: 'direct', receivesNotices: 'no', listHeldText: '' },
+  { uuid: SERVER.uuid, name: SERVER.name, self: false, role: 'peer', aliasesText: '', reachable: 'unknown', receivesNotices: 'no', listHeldText: '' },
+];
+
+const registration = (m: { uuid: string; name: string; identity: { publicKey: string } }) => {
+  const body: RegistrationBody = { v: 1, uuid: m.uuid, name: m.name, identityPublicKey: m.identity.publicKey, serial: NOW - 100, validFrom: NOW - 100, validTo: NOW + 90 * 86_400, adminKeyId: keyId(admin.publicKey) };
+  return coreSignRegistration(body, admin.privateKeyPkcs8);
+};
+
+const RETRY = `machine admin distribute ${LAPTOP.uuid}`;
+const answers: { context: unknown; revoke: unknown } = { context: undefined, revoke: undefined };
+const contextOk = () => ({
+  ok: true,
+  adminMachine: SELF,
+  adminPublicKey: admin.publicKey,
+  adminKeyId: keyId(admin.publicKey),
+  revoked: { uuid: LAPTOP.uuid, name: 'laptop', serial: NOW - 100, keyId: keyId(LAPTOP.identity.publicKey) },
+  held: { entries: [], version: 0 },
+  recipients: [registration(SERVER)],
+  noticeRecipients: null,
+});
+const revokeOk = (over: Record<string, unknown> = {}) => ({
+  ok: true,
+  revoked: { uuid: LAPTOP.uuid, name: 'laptop' },
+  failed: false,
+  report: {},
+  text: { out: '[ok] 2 document(s) stored by the relay for 1 machine(s)\n', err: '' },
+  machines: [{ uuid: SERVER.uuid, name: 'server', state: 'inbox', code: 'unreachable', reason: 'offline', next: 'installs by itself when it is back, nothing to do' }],
+  retry: RETRY,
+  ...over,
+});
+
+interface Call { url: string; body: unknown; headers: Record<string, string> | undefined }
+let calls: Call[];
+let elevate: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  calls = [];
+  answers.context = contextOk();
+  answers.revoke = revokeOk();
+  const fetcher = async (url: string, _params?: Record<string, string>, body?: unknown, headers?: Record<string, string>) => {
+    calls.push({ url, body, headers });
+    if (url === `GET /api/modules/machine/revoke-context/${LAPTOP.uuid}`) {
+      if (answers.context instanceof Error) throw answers.context;
+      return answers.context;
+    }
+    if (url === 'GET /api/modules/machine/admin-key') return { file: keyFile };
+    if (url === 'POST /api/modules/machine/revoke') {
+      if (answers.revoke instanceof Error) throw answers.revoke;
+      return answers.revoke;
+    }
+    throw new Error(`unexpected call ${url}`);
+  };
+  elevate = vi.fn(async () => undefined);
+  Object.defineProperty(globalThis, '__APP_CORE_SHELL__', { value: { elevate, fetcher }, configurable: true, writable: true });
+});
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, '__APP_CORE_SHELL__');
+});
+
+const tableRow = (name: string): HTMLElement => within(screen.getByRole('table')).getByText(name).closest('tr') as HTMLElement;
+
+describe('the table', () => {
+  it('Revoke is offered on each trusted peer, never on this machine', () => {
+    render(<MachinesTable rows={ROWS} />);
+    expect(within(tableRow('laptop')).getByRole('button', { name: 'Revoke laptop' })).toBeInTheDocument();
+    expect(within(tableRow('server')).getByRole('button', { name: 'Revoke server' })).toBeInTheDocument();
+    expect(within(tableRow('desktop')).queryByRole('button', { name: /^Revoke/ })).toBeNull();
+  });
+
+  it('has no 36-character UUID column (it made the table scroll sideways next to the actions): the UUID is in the row details, the other columns stay, the actions cell does not wrap', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    const headers = within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(expect.arrayContaining(['Name', 'Role', 'Aliases', 'Reachable', 'Receives notices', 'Notice list held']));
+    expect(headers).not.toContain('UUID');
+    expect(within(tableRow('laptop')).queryByText(LAPTOP.uuid)).toBeNull();
+    await userEvent.click(within(tableRow('laptop')).getByRole('button', { name: /expand row/i }));
+    expect(screen.getByText(new RegExp(LAPTOP.uuid))).toBeInTheDocument();
+    expect(within(tableRow('laptop')).getByRole('button', { name: 'Revoke laptop' }).closest('td')?.className).toMatch(/whitespace-nowrap/);
+  });
+
+  it('says so when no machine is known', () => {
+    render(<MachinesTable rows={[]} emptyMessage="No machine" />);
+    expect(screen.getByText('No machine')).toBeInTheDocument();
+  });
+});
+
+describe('Revoke', () => {
+  it('opens the confirmation of that row (PIN first, module header on every call): one line of what it does, the facts folded, the passphrase field with the key hint as help text; Cancel signs nothing', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Revoke laptop?');
+    expect(elevate).toHaveBeenCalledTimes(1);
+    const field = await screen.findByLabelText('Admin passphrase');
+    expect(dialog).toHaveTextContent(/Revokes laptop: this machine stops trusting it now, and server will be told/);
+    // Details are folded: the uuid is not on screen until opened.
+    expect(within(dialog).queryByText(LAPTOP.uuid)).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
+    expect(within(dialog).getByText(LAPTOP.uuid)).toBeInTheDocument();
+    expect(within(dialog).getByText(keyId(LAPTOP.identity.publicKey))).toBeInTheDocument();
+    // The hint is the standard help text of the field (under it, described by it), never a custom box.
+    expect(document.getElementById(field.getAttribute('aria-describedby') ?? 'none')).toHaveTextContent('Hint: the street of my first school');
+    // Asked at every revocation: no "Keep unlocked for".
+    expect(screen.queryByLabelText('Keep unlocked for')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
+    expect(calls.every((c) => c.headers?.['x-machine-module'] === '1')).toBe(true);
+  });
+
+  it('signs in the page and posts exactly the list and the documents: no passphrase or key leaves it; the result is one headline, one line per machine, the raw report folded; the list is refreshed', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    render(<MachinesTable rows={ROWS} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    const field = await screen.findByLabelText('Admin passphrase');
+    await userEvent.type(field, PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
+    const post = calls.find((c) => c.url === 'POST /api/modules/machine/revoke');
+    expect(Object.keys(post?.body as object).sort()).toEqual(['documents', 'noticeRecipients', 'signed', 'uuid']);
+    expect(JSON.stringify(calls.map((c) => c.body))).not.toContain(PASSPHRASE);
+    // The headline, then one line per machine with its state and its next action.
+    expect(within(dialog).getByText('Documents wait in the relay inbox of 1 machine.')).toBeInTheDocument();
+    const lines = within(dialog).getByRole('list', { name: 'Machines told' });
+    expect(within(lines).getByText('Waiting in the relay inbox')).toBeInTheDocument();
+    expect(within(lines).getByText('server')).toBeInTheDocument();
+    // The raw report is folded.
+    expect(within(dialog).queryByText(/stored by the relay for 1 machine/)).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
+    expect(within(dialog).getByText(/stored by the relay for 1 machine/)).toBeInTheDocument();
+    // The list catches up with the daemon: the machine leaves the trusted ones.
+    expect(onRefresh).toHaveBeenCalledWith('machines');
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+  }, 60_000);
+
+  it('a partial delivery: the failed machine says what to run (the exact command in code) and the raw report is open', async () => {
+    answers.revoke = revokeOk({
+      failed: true,
+      text: { out: '', err: `[error] server (x): revocation document not stored: relay down\n[warn] the revocation stands: nothing was undone. Run \`${RETRY}\`\n` },
+      machines: [{ uuid: SERVER.uuid, name: 'server', state: 'failed', code: 'not-stored', reason: 'documents not stored', next: `run \`${RETRY}\`` }],
+    });
+    render(<MachinesTable rows={ROWS} onRefresh={vi.fn(async () => undefined)} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
+    expect(within(dialog).getByText('Documents NOT delivered to 1 machine. Run `' + RETRY + '`.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Failed')).toBeInTheDocument();
+    expect(within(dialog).getByText(RETRY, { selector: 'code' })).toBeInTheDocument();
+    expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
+  }, 60_000);
+
+  it('a wrong passphrase is an alert in the dialog, nothing is posted, the dialog stays for another try and the list is not refreshed', async () => {
+    const onRefresh = vi.fn(async () => undefined);
+    render(<MachinesTable rows={ROWS} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), 'not the passphrase');
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    expect(await screen.findByRole('alert', {}, { timeout: 20_000 })).toBeInTheDocument();
+    expect(screen.getByLabelText('Admin passphrase')).toHaveValue('');
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('an empty passphrase is refused in the dialog before anything is signed', async () => {
+    render(<MachinesTable rows={ROWS} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await screen.findByLabelText('Admin passphrase');
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Enter the admin passphrase/);
+    expect(calls.some((c) => c.url.startsWith('POST'))).toBe(false);
+  });
+
+  it('a refusal of the daemon is the alert, as it is worded; the dialog stays, the list is not refreshed', async () => {
+    answers.revoke = new Error('another revocation was installed since the page read it: reload the page and revoke again. Nothing was installed');
+    const onRefresh = vi.fn(async () => undefined);
+    render(<MachinesTable rows={ROWS} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    expect(await screen.findByRole('alert', {}, { timeout: 20_000 })).toHaveTextContent(/reload the page and revoke again/);
+    expect(onRefresh).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('a machine that cannot be revoked here (no admin key on this machine) is said in the dialog with the fix, no passphrase is asked, only Close', async () => {
+    answers.context = new Error('this machine has no admin key: run this page on the machine that holds it');
+    render(<MachinesTable rows={ROWS} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no admin key/);
+    expect(screen.queryByLabelText('Admin passphrase')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('with no other machine to tell the dialog says so and the result is one line', async () => {
+    answers.context = { ...contextOk(), recipients: [] };
+    answers.revoke = revokeOk({ machines: [], text: { out: '[ok] no other peer to inform\n', err: '' } });
+    render(<MachinesTable rows={ROWS} onRefresh={vi.fn(async () => undefined)} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke laptop' }));
+    await userEvent.type(await screen.findByLabelText('Admin passphrase'), PASSPHRASE);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/no other machine to tell/);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke and sign' }));
+    const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
+    expect(within(dialog).getByText('No other machine to tell.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('list', { name: 'Machines told' })).toBeNull();
+  }, 60_000);
+});

@@ -17,7 +17,9 @@ describe('InlineAllowForm', () => {
     const onSubmit = vi.fn();
     render(<InlineAllowForm {...props} hint="a hint" onSubmit={onSubmit} />);
     expect((screen.getByLabelText('Keep unlocked for') as HTMLSelectElement).value).toBe('5');
-    expect(screen.getByTestId('passphrase-hint')).toBeInTheDocument();
+    const helpId = screen.getByLabelText('Admin passphrase').getAttribute('aria-describedby');
+    expect(document.getElementById(helpId ?? 'none')).toHaveTextContent('Hint: a hint');
+    expect(screen.queryByTestId('passphrase-hint')).toBeNull();
     await userEvent.type(screen.getByLabelText('Admin passphrase'), 'abc def');
     await userEvent.click(screen.getByRole('button', { name: 'Allow and sign' }));
     expect((onSubmit.mock.calls[0]?.[1] as () => string | null)()).toBe('abc def');
