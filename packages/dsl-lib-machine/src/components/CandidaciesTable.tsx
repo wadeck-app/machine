@@ -3,7 +3,10 @@ import { ButtonAction, Collapsible, DataTable, Markdown, Notice, type TableColum
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { overlayApproval, type ApprovalProgress } from '../lib/approvalTimeline.js';
 import type { ApproveRow } from '../lib/approveFlow.js';
+import type { SourceError } from '../lib/loadFailure.js';
+import { splitHeadline } from '../lib/statusHeadline.js';
 import { ApproveCandidacyDialog } from './ApproveCandidacyDialog.js';
+import { LoadFailureNotice } from './LoadFailureNotice.js';
 import { SecurityCodeCompare } from './SecurityCodeCompare.js';
 import { VerticalTimeline, type TimelineStep } from './VerticalTimeline.js';
 
@@ -26,6 +29,11 @@ export interface CandidaciesTableProps {
   timeline?: TimelineStep[];
   emptyMessage?: string;
   /**
+   * The failed sources of the page (`$ctx.$sourceErrors`): a failed load of `candidacies` is one alert above the table instead of an empty table that reads as "nothing pending".
+   * @ctxDefault $sourceErrors
+   */
+  sourceErrors?: Record<string, SourceError>;
+  /**
    * The security codes the module kept after the approvals made from this page (`$sources.candidacies.approvals`): the relay purges the candidacy random once approved,
    * so the code cannot be recomputed later. Public values, shown again until the candidate had time to confirm on its own machine.
    */
@@ -44,15 +52,24 @@ export interface CandidaciesTableProps {
   onRefresh?: (source?: string) => Promise<void>;
 }
 
-// Four columns that fit at 1000 px without cutting a word; the hostname and the address are in the row expansion.
+// What the page says when nothing is pending: the next step, not only the absence.
+export const NO_CANDIDACY = 'No pending candidacy. To enroll a machine, run `machine join` on the new machine: its candidacy appears here.';
+
+// Four columns that fit at 1000 px without cutting a word; the hostname and the address are in the row expansion. The status is a short headline that never wraps:
+// the rest of a long status (the problems of the candidacy) is the first line of the row expansion.
 const COLUMNS_BASE: Array<TableColumn<CandidacyTableRow>> = [
   { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
   { key: 'ageText', label: 'Age', nowrap: true, render: (r) => r.ageText },
-  { key: 'statusText', label: 'Status', render: (r) => r.statusText },
+  { key: 'statusText', label: 'Status', nowrap: true, render: (r) => splitHeadline(r.statusText).headline },
 ];
 
 // The same rule as the details of the row expansion: never empty, markdown of the module.
 const EXPANSION = { $type: 'CandidacyDetails' };
+
+// The row expansion: the status sentence when the cell shows only its headline, then the details of the module.
+function expansionText(row: CandidacyTableRow): string {
+  return splitHeadline(row.statusText).detail === '' ? row.bindingText : `- status: ${row.statusText}\n${row.bindingText}`;
+}
 
 /**
  * The Candidacies page: the timeline of the approval and the table of the candidacies, with Approve and Reject on each pending row. Approve signs IN THE BROWSER
@@ -61,7 +78,7 @@ const EXPANSION = { $type: 'CandidacyDetails' };
  * @registryCategory composite
  * @registryTags candidacies approve reject admin enrollment
  */
-export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pending candidacy', approvals = [], approvalsProblem = '', onAction, onRefresh }: CandidaciesTableProps) {
+export function CandidaciesTable({ rows = [], timeline, emptyMessage = NO_CANDIDACY, sourceErrors, approvals = [], approvalsProblem = '', onAction, onRefresh }: CandidaciesTableProps) {
   const [selected, setSelected] = useState<CandidacyTableRow | null>(null);
   const [progress, setProgress] = useState<ApprovalProgress | undefined>(undefined);
   const [problem, setProblem] = useState<string | null>(null);
@@ -104,7 +121,9 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
     },
   ];
 
-  const steps = timeline === undefined ? undefined : overlayApproval(timeline, progress);
+  const failure = sourceErrors?.['candidacies'];
+  // No candidacy: five steps to do that follow nobody say nothing. The timeline appears with the candidacy it follows.
+  const steps = timeline === undefined || rows.length === 0 ? undefined : overlayApproval(timeline, progress);
   return (
     <div className="flex items-start gap-6">
       {steps !== undefined && steps.length > 0 && (
@@ -114,13 +133,17 @@ export function CandidaciesTable({ rows = [], timeline, emptyMessage = 'No pendi
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-2">
         {problem !== null && <Notice variant="danger" label={problem} />}
-        <DataTable<CandidacyTableRow>
-          rows={rows}
-          columns={columns}
-          emptyMessage={emptyMessage}
-          expansion={EXPANSION}
-          renderNode={(_node, ctx) => <Markdown text={(ctx['row'] as CandidacyTableRow).bindingText} />}
-        />
+        {failure !== undefined && <LoadFailureNotice what="Could not load the candidacies" error={failure} />}
+        {/* A failed load with nothing to show is the alert above, never the empty message (it would say "nothing pending"). */}
+        {(failure === undefined || rows.length > 0) && (
+          <DataTable<CandidacyTableRow>
+            rows={rows}
+            columns={columns}
+            emptyMessage={emptyMessage}
+            expansion={EXPANSION}
+            renderNode={(_node, ctx) => <Markdown text={expansionText(ctx['row'] as CandidacyTableRow)} />}
+          />
+        )}
         {approvalsProblem !== '' && <Notice variant="warning" label={approvalsProblem} />}
         {approvals.length > 0 && (
           <div className="flex flex-col gap-1">

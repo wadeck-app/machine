@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice, Text } from '@wadeck-app/dsl-ui';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
 import { dismissFailureMessage, dismissNotice, type DismissTarget } from '../lib/dismissNotice.js';
 import { MachineName } from './MachineName.js';
-import { MONO_STYLE, TEXT_MUTED_SM, HELD_COMMAND } from '../lib/styleTokens.js';
+import { MONO_STYLE, HELD_COMMAND } from '../lib/styleTokens.js';
 
 /** Above this many rows the Clear expired button is offered. */
 export const CLEAR_ABOVE = 2;
@@ -77,8 +77,8 @@ export function ExpiredNotices({ rows, onRefresh }: ExpiredNoticesProps) {
         {visible.map((r) => (
           <li key={keyOf(r)} aria-label={`Expired request ${r.command}`} data-testid="expired-row" className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2">
             <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-              <span className={`text-sm ${TEXT_MUTED_SM}`}>
-                From <MachineName name={r.peerText} /> on <MachineName name={r.machine.name} /> in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
+              <span className="text-sm text-muted">
+                From <MachineName name={r.peerText} /> on <MachineName name={r.machine.name} /> in <Text mono text={r.shell} />
               </span>
               <span className="text-sm font-medium text-muted">expired, no end notice received</span>
             </div>

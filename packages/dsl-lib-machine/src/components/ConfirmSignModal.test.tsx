@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -80,10 +80,11 @@ describe('the held admin key in the signing dialog (decision 92)', () => {
     expect((onConfirm.mock.calls[0]?.[0] as () => string | null)()).toBeNull();
   });
 
-  it('Cancel stays the default focus when unlocked: Enter without thinking never signs', () => {
+  it('Cancel stays the default focus when unlocked: Enter without thinking never signs', async () => {
     adminKeyHolder.hold(key());
     render(<ConfirmSignModal {...base} />);
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    // The Dialog moves the focus to what asks for it (autoFocus of the Cancel button) on the next animation frame.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
   });
 
   it('Lock now in the dialog brings the passphrase field back', async () => {
@@ -186,9 +187,10 @@ describe('the standard dialog of the design system hosts the signing form', () =
     expect(onCancel).toHaveBeenCalledTimes(2);
   });
 
-  it('Cancel is the default focus, also with a passphrase field: Enter without thinking never signs', () => {
+  it('Cancel is the default focus, also with a passphrase field: Enter without thinking never signs', async () => {
     render(<ConfirmSignModal {...base} />);
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    // The Dialog moves the focus to what asks for it (autoFocus of the Cancel button) on the next animation frame.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
   });
 
   it('the footer submit button submits the form: Enter in the passphrase field confirms', async () => {

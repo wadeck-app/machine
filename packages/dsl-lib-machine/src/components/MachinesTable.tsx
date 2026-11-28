@@ -1,6 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { ButtonAction, DataTable, Markdown, type TableColumn } from '@wadeck-app/dsl-ui';
 import { shellAllowApi, type AllowApi } from '../lib/allowFlow.js';
+import type { SourceError } from '../lib/loadFailure.js';
+import { splitHeadline } from '../lib/statusHeadline.js';
+import { LoadFailureNotice } from './LoadFailureNotice.js';
 import { RevokeMachineDialog } from './RevokeMachineDialog.js';
 
 /** One row of the Machines list, as the module backend answers it. */
@@ -21,6 +24,11 @@ export interface MachinesTableProps {
   rows?: MachineTableRow[];
   emptyMessage?: string;
   /**
+   * The failed sources of the page (`$ctx.$sourceErrors`): a failed load of `machines` is one alert above the table instead of an empty table.
+   * @ctxDefault $sourceErrors
+   */
+  sourceErrors?: Record<string, SourceError>;
+  /**
    * Re-runs the page's sources, so the list is the daemon's own after a revocation. Defaults to the page's `$refresh`.
    * @ctxDefault $refresh
    */
@@ -32,11 +40,18 @@ const EXPANSION = { $type: 'MachineDetails' };
 const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
   { key: 'name', label: 'Name', nowrap: true, render: (r) => r.name },
   { key: 'role', label: 'Role', nowrap: true, render: (r) => r.role },
-  { key: 'aliasesText', label: 'Aliases', render: (r) => r.aliasesText ?? '' },
-  { key: 'reachable', label: 'Reachable', render: (r) => r.reachable ?? '' },
+  { key: 'aliasesText', label: 'Aliases', nowrap: true, render: (r) => r.aliasesText ?? '' },
+  // A headline that never wraps; the daemon's whole sentence is in the row details.
+  { key: 'reachable', label: 'Reachable', nowrap: true, render: (r) => splitHeadline(r.reachable ?? '').headline },
   { key: 'receivesNotices', label: 'Receives notices', nowrap: true, render: (r) => r.receivesNotices ?? '' },
-  { key: 'listHeldText', label: 'Notice list held', render: (r) => r.listHeldText ?? '' },
+  { key: 'listHeldText', label: 'Notice list held', nowrap: true, render: (r) => r.listHeldText ?? '' },
 ];
+
+// The row details: the uuid, and the whole reachability sentence when the cell shows only its headline.
+function detailsText(row: MachineTableRow): string {
+  const { detail } = splitHeadline(row.reachable ?? '');
+  return detail === '' ? `- uuid: ${row.uuid}` : `- uuid: ${row.uuid}\n- reachable: ${row.reachable ?? ''}`;
+}
 
 /**
  * The Machines page: this machine and the peers it trusts, with Revoke on each trusted peer. Revoke signs IN THE BROWSER with the admin passphrase asked at every
@@ -45,7 +60,7 @@ const COLUMNS_BASE: Array<TableColumn<MachineTableRow>> = [
  * @registryCategory composite
  * @registryTags machines revoke admin
  */
-export function MachinesTable({ rows = [], emptyMessage = 'No machine', onRefresh }: MachinesTableProps) {
+export function MachinesTable({ rows = [], emptyMessage = 'No machine', sourceErrors, onRefresh }: MachinesTableProps) {
   const [selected, setSelected] = useState<MachineTableRow | null>(null);
   const api = useRef<AllowApi | null>(null);
   api.current ??= shellAllowApi();
@@ -64,15 +79,20 @@ export function MachinesTable({ rows = [], emptyMessage = 'No machine', onRefres
     },
   ];
 
+  const failure = sourceErrors?.['machines'];
   return (
     <>
-      <DataTable<MachineTableRow>
-        rows={rows}
-        columns={columns}
-        emptyMessage={emptyMessage}
-        expansion={EXPANSION}
-        renderNode={(_node, ctx) => <Markdown text={`- uuid: ${(ctx['row'] as MachineTableRow).uuid}`} />}
-      />
+      {failure !== undefined && <LoadFailureNotice what="Could not load the machines" error={failure} />}
+      {/* A failed load with nothing to show is the alert above, never the empty message. */}
+      {(failure === undefined || rows.length > 0) && (
+        <DataTable<MachineTableRow>
+          rows={rows}
+          columns={columns}
+          emptyMessage={emptyMessage}
+          expansion={EXPANSION}
+          renderNode={(_node, ctx) => <Markdown text={detailsText(ctx['row'] as MachineTableRow)} />}
+        />
+      )}
       {selected !== null && (
         <RevokeMachineDialog
           row={selected}

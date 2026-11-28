@@ -15,6 +15,8 @@ const REPLACED = [
   'STEPPER_SEGMENT', 'SEGMENT_DONE', 'SEGMENT_ACTIVE', 'SEGMENT_PENDING', 'SEGMENT_FAILED',
   'TABLE_HEAD_ROW', 'TABLE_BODY_ROW', 'TABLE_ROW_MIDDLE',
   'POPOVER_SURFACE',
+  // Replaced by the Text atom of dsl-ui 413 (tone, size, mono).
+  'TEXT_MUTED', 'TEXT_MUTED_SM', 'COMMAND_TEXT',
 ];
 
 const dir = path.resolve(__dirname, '..');
@@ -29,5 +31,18 @@ describe('the module uses the standard components only', () => {
 
   it.each(REPLACED)('styleTokens.ts no longer defines %s', (token) => {
     expect(fs.readFileSync(path.join(dir, 'lib', 'styleTokens.ts'), 'utf8')).not.toMatch(new RegExp(`export const ${token}\\b`));
+  });
+
+  // MONO_STYLE and HELD_COMMAND remain for what Text cannot do (a size above sm, a weight, letter spacing, a pre block): the set of files is closed.
+  it.each(['MONO_STYLE', 'HELD_COMMAND'])('%s is used only by the few components that need a large or spaced monospace text', (token) => {
+    const allowed = ['FinalCodeDisplay.tsx', 'SecurityCodeCompare.tsx', 'HeldRequests.tsx', 'ExpiredNotices.tsx', 'DeliveryList.tsx'];
+    const re = new RegExp(`\\b${token}\\b`);
+    const offenders = sources('components').filter((f) => re.test(fs.readFileSync(f, 'utf8'))).map((f) => path.basename(f)).filter((f) => !allowed.includes(f));
+    expect(offenders).toEqual([]);
+  });
+
+  it('no component moves the initial focus by an effect: ButtonAction has autoFocus', () => {
+    const offenders = sources('components').filter((f) => /querySelector[^\n]*\.focus\(\)/.test(fs.readFileSync(f, 'utf8'))).map((f) => path.basename(f));
+    expect(offenders).toEqual([]);
   });
 });

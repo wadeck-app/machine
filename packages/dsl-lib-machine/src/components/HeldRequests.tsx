@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ButtonAction, Checkbox, Notice, Badge, Card, VerticalStack } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Checkbox, Notice, Badge, Card, VerticalStack, Text } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
 import { agoText } from '../lib/agoText.js';
@@ -16,7 +16,7 @@ import { HeldStatusRow } from './HeldStatusRow.js';
 import { MachineName } from './MachineName.js';
 import { RequestProgressCard } from './RequestProgressCard.js';
 import { useAllowProgress } from './useAllowProgress.js';
-import { MONO_STYLE, TEXT_MUTED_SM, HELD_COMMAND } from '../lib/styleTokens.js';
+import { MONO_STYLE, HELD_COMMAND } from '../lib/styleTokens.js';
 
 export interface HeldRequestRow {
   /** What the Deny button posts: the id of the held request. */
@@ -244,7 +244,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                   <div data-testid="held-header" className="flex flex-wrap items-baseline justify-between gap-x-2">
                     <span className="flex flex-wrap items-baseline gap-x-2">
                       {inline && rowCanAllow && left > 0 && <Checkbox aria-label={`Select ${r.command}`} checked={ticked.has(r.id)} onChange={(e) => tick(r.id, e.target.checked)} />}
-                      <span className={`text-sm ${TEXT_MUTED_SM}`}>
+                      <span className="text-sm text-muted">
                         From <MachineName name={r.peerText} />
                         {r.machine !== undefined && (
                           <>
@@ -252,7 +252,7 @@ export function HeldRequests({ rows = NO_ROWS, allow, reachability, onRefresh, a
                             on <MachineName name={r.machine.name} />
                           </>
                         )}{' '}
-                        in <span style={MONO_STYLE} className="text-content">{r.shell}</span>
+                        in <Text mono text={r.shell} />
                         {r.note === undefined && <>, asked {r.askedSecondsAgo === undefined ? r.askedText : agoText(r.askedSecondsAgo + elapsedSince(r.fetchedAtMs ?? fetchedAt))}</>}
                       </span>
                       {reach !== undefined && (

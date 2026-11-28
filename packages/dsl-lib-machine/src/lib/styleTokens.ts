@@ -9,21 +9,14 @@ import type { CSSProperties } from 'react';
 // @formatter:off
 
 /**
- * The monospace stack of the module, for machine names, commands and shells in running text. dsl-ui offers a monospace column in DataTable and FieldReadOnly,
- * but no inline monospace text. The theme of the app defines NO monospace family (dsl-ui's preset only defines `sans: Inter`, so Tailwind's `font-mono` is a
+ * The monospace stack of the module for the LARGE or spaced monospace texts (the security code, a held command): the Text atom of dsl-ui draws the
+ * inline monospace of running text (machine names, commands, shells) but has no size above sm, no weight and no letter spacing. The theme of the app defines NO monospace family (dsl-ui's preset only defines `sans: Inter`, so Tailwind's `font-mono` is a
  * generic stack that differs from one shell stylesheet to the other): this is the ONE token, applied with `style={MONO_STYLE}` (never with the class `font-mono`).
  */
 export const MONO_FONT_STACK = "'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, 'Liberation Mono', ui-monospace, monospace";
 export const MONO_STYLE: CSSProperties = { fontFamily: MONO_FONT_STACK };
 
-/** Muted inline text (a label, a secondary line, a count): dsl-ui has no muted text component (Notice is a boxed message). */
-export const TEXT_MUTED = 'text-muted';
-export const TEXT_MUTED_SM = 'text-sm text-muted';
-
 /** The command of a held or expired request, the largest text of its card: no standard text component with a size and a monospace font. */
 export const HELD_COMMAND = 'break-all text-lg font-semibold text-content';
-
-/** Inline command text (a command in a sentence, a "how to remove it" line): no standard inline code component. */
-export const COMMAND_TEXT = 'break-all text-sm text-content';
 
 // @formatter:on

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ButtonAction, Notice } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Notice, Text } from '@wadeck-app/dsl-ui';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { AllowApi, AllowResult } from '../lib/allowFlow.js';
 import type { CallerAsk } from '../lib/callerAsk.js';
@@ -9,7 +9,6 @@ import type { AllowDialogEvent } from './AllowDialog.js';
 import { CompactLifetime } from './CompactLifetime.js';
 import { InlineAllow } from './InlineAllow.js';
 import { useAdminKey } from './useAdminKey.js';
-import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The answer of a held card: ONE row (lifetime select, Allow, Deny). With the admin key unlocked in the page Allow signs at once with the lifetime of the
 // select, flagged lifetime or not (the badges only inform); in Safer mode (off by default) a FLAGGED lifetime (permanent, 50 calls or more, more than 7 days, or a caller ask of that size) needs a second click; with the key locked Allow
@@ -94,12 +93,12 @@ export function HeldAnswer({ row, machine, canAllow, inline, saferMode = false, 
             </span>
           )
         ) : (
-          <span className="break-all text-xs" style={MONO_STYLE}>{row.nextCommand}</span>
+          <span className="break-all"><Text mono size="xs" text={row.nextCommand} /></span>
         )}
         {phase !== 'confirm' && <ButtonAction label="Deny" variant="danger-outline" size="sm" onClick={onDeny} />}
       </div>
       {phase === 'confirm' && (
-        <div data-testid="flagged-line" className={`text-xs ${TEXT_MUTED}`}>
+        <div data-testid="flagged-line" className="text-xs text-muted">
           Flagged: {flags.join('; ')}. A flagged lifetime needs a second click: Confirm allow signs it, Cancel signs nothing.
         </div>
       )}

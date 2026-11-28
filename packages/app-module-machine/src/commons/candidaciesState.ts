@@ -106,6 +106,9 @@ export function ageText(seconds: number | undefined): string {
 const isPending = (c: { relayStatus: string | undefined }): boolean => c.relayStatus === undefined || c.relayStatus === 'pending';
 const isExpired = (c: { expiresAt: number | undefined }, now: number): boolean => c.expiresAt !== undefined && now >= c.expiresAt;
 
+/** "posted 10 min ago" (backend `candidacyTimeline.ts` postedText). */
+const postedText = (age: string): string => (age === 'now' ? 'posted just now' : age === 'unknown' ? 'posted at an unknown time' : `posted ${age} ago`);
+
 /** The row of the list: the review of the relay entry plus the texts and flags of the page (backend `candidacyRow`). */
 function rowOf(c: RelayCandidacy, now: number): CandidacyRow {
   const problems = [...c.problems, ...(now >= c.expiresAt ? ['this candidacy is expired: the candidate must post a new one (`machine join --resume`)'] : [])];
@@ -188,9 +191,12 @@ function timelineOf(rows: CandidacyRow[], now: number, kept: KeptApproval[], ste
   if (followed === undefined) return { steps: steps.map((s) => ({ ...s, status: 'todo' as const })), note: '' };
   let done: string[];
   let current: string | undefined;
+  // The step may well be done but nothing this page holds proves it: not "to do" (backend `candidacyTimeline.ts`).
+  let unrecorded: string[] = [];
   let verdict: string;
   if (followed.relayStatus === 'approved') {
     done = ['received', 'checked', 'signed'];
+    unrecorded = ['distributed', 'final-code'];
     verdict = 'approved by the admin';
   } else if (followed.relayStatus === 'rejected') {
     done = ['received'];
@@ -208,11 +214,11 @@ function timelineOf(rows: CandidacyRow[], now: number, kept: KeptApproval[], ste
   }
   const code = followed.relayStatus === 'approved' && followed.uuid !== undefined ? kept.find((k) => k.uuid === followed.uuid) : undefined;
   const out = steps.map((s): TimelineStepRow => {
-    const status = done.includes(s.id) ? ('done' as const) : s.id === current ? ('current' as const) : ('todo' as const);
+    const status = done.includes(s.id) ? ('done' as const) : s.id === current ? ('current' as const) : unrecorded.includes(s.id) ? ('unrecorded' as const) : ('todo' as const);
     return s.id === 'final-code' && code !== undefined ? { ...s, status, description: `Security code of "${code.name}": ${code.code}. It must read exactly the same on ${code.name}.` } : { ...s, status };
   });
   const many = rows.length > 1 ? `, ${live.length > 0 ? 'the oldest pending of' : 'the oldest of'} ${rows.length} candidacies` : '';
-  return { steps: out, note: `The timeline follows "${followed.name}" (${ageText(followed.ageSeconds)})${many}: ${verdict}.` };
+  return { steps: out, note: `The timeline follows "${followed.name}" (${postedText(ageText(followed.ageSeconds))})${many}: ${verdict}.` };
 }
 
 /** `GET /candidacies`. */

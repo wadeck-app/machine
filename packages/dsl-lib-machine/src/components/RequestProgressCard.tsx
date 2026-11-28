@@ -1,12 +1,11 @@
 import React, { useEffect, useId, useState } from 'react';
-import { Badge, type BadgeVariant, ButtonAction, Card, HorizontalStack, IconButton, Notice, VerticalStack } from '@wadeck-app/dsl-ui';
+import { Badge, type BadgeVariant, ButtonAction, Card, HorizontalStack, IconButton, Notice, VerticalStack, Text } from '@wadeck-app/dsl-ui';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import { elapsedText, summaryOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
 import { AllowProgress } from './AllowProgress.js';
 import { AllowProgressDetails } from './AllowProgressDetails.js';
 import { MachineName } from './MachineName.js';
 import { StepMarker } from './StepMarker.js';
-import { MONO_STYLE } from '../lib/styleTokens.js';
 
 /** A success stays open this long after the end (the person sees the result), then collapses into one slim row. */
 export const COLLAPSE_AFTER_MS = 10_000;
@@ -59,7 +58,7 @@ export function RequestProgressCard({ row, record, now, canRetry, warning, onRet
           <HorizontalStack gap="gap-2" align="items-center" justify="justify-between" wrap>
             <HorizontalStack gap="gap-2" align="items-center" wrap>
               <StepMarker state={ICON_STATE[summary.tone]} />
-              <span style={MONO_STYLE} title={row.command}>{row.command}</span>
+              <span title={row.command}><Text mono text={row.command} /></span>
               <span>
                 on <MachineName name={record.machineName} />
               </span>

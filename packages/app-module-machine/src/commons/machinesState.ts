@@ -104,7 +104,7 @@ const ok = <T>(body: T): RouteAnswer<T> => ({ status: 200, body });
 const refuse = <T>(state: MachinesState, status: number, kind: string, error: string): MachinesStep<T> => ({ state, answer: fail(status, kind, error) });
 
 const retryOf = (uuid: string): string => `machine admin distribute ${uuid}`;
-const PRESENCE_NOTE = 'Presence and addresses are not shown yet: the daemon list does not carry them (see `machine list` for the relay view).';
+const PRESENCE_NOTE = 'Presence and addresses are not shown yet: the daemon list does not carry them (run machine list for the relay view).';
 
 /** `GET /machines`. */
 export function listMachines(state: MachinesState): MachinesStep<MachinesAnswer> {

@@ -54,6 +54,11 @@ describe('candidacyTimeline', () => {
     expect(out.note).toContain('dated');
   });
 
+  it('the note says WHEN the followed candidacy was posted (not a bare age that reads as the age of the approval)', () => {
+    expect(candidacyTimeline([view({ createdAt: NOW - 600, ageSeconds: 600 })], NOW).note).toBe('The timeline follows "laptop" (posted 10 min ago): pending.');
+    expect(candidacyTimeline([view({ createdAt: NOW - 1, ageSeconds: 1 })], NOW).note).toContain('(posted just now)');
+  });
+
   it('prefers a pending candidacy over an older approved one', () => {
     const out = candidacyTimeline([view({ name: 'done-one', createdAt: NOW - 900, relayStatus: 'approved' }), view({ id: 'c2', name: 'waiting' })], NOW);
     expect(out.note).toContain('waiting');
@@ -66,9 +71,9 @@ describe('candidacyTimeline', () => {
     expect(out.note).toContain('expired');
   });
 
-  it('an approved candidacy: received, checked and signed are done (the relay holds the signed approval), the CLI steps stay to do', () => {
+  it('an approved candidacy: received, checked and signed are done (the relay holds the signed approval); the distribution and the code are NOT recorded by this page (not "to do": they may well be done)', () => {
     const out = candidacyTimeline([view({ relayStatus: 'approved' })], NOW);
-    expect(statuses(out.steps)).toEqual({ ...TODO, received: 'done', checked: 'done', signed: 'done' });
+    expect(statuses(out.steps)).toEqual({ received: 'done', checked: 'done', signed: 'done', distributed: 'unrecorded', 'final-code': 'unrecorded' });
     expect(out.note).toContain('approved');
   });
 
@@ -92,11 +97,11 @@ describe('candidacyTimeline', () => {
     expect(info).not.toMatch(/never in this page|Today/);
   });
 
-  it('an approved candidacy whose security code was kept: the step "Security code compared" shows it (still to do: only the person can compare it)', () => {
+  it('an approved candidacy whose security code was kept: the step "Security code compared" shows it (not recorded by this page: only the person can compare it)', () => {
     const kept = [{ uuid: 'u-1', name: 'laptop', code: '12345 67890 12345 67890 12345' }];
     const out = candidacyTimeline([view({ relayStatus: 'approved', uuid: 'u-1' })], NOW, kept);
     const step = out.steps.find((s) => s.id === 'final-code');
-    expect(step?.status).toBe('todo');
+    expect(step?.status).toBe('unrecorded');
     expect(step?.description).toBe('Security code of "laptop": 12345 67890 12345 67890 12345. It must read exactly the same on laptop.');
     // Another candidacy, or one still pending: nothing is shown.
     expect(candidacyTimeline([view({ relayStatus: 'approved', uuid: 'u-2' })], NOW, kept).steps.find((s) => s.id === 'final-code')?.description).toBeUndefined();
@@ -116,8 +121,10 @@ describe('candidacyTimeline', () => {
   it('never marks the security code or the distribution as done from the relay data: only the page that approves can prove them (it overlays them itself)', () => {
     for (const relayStatus of [undefined, 'pending', 'approved', 'rejected', 'frozen']) {
       const s = statuses(candidacyTimeline([view({ relayStatus })], NOW).steps);
-      expect(s['final-code']).toBe('todo');
-      expect(s['distributed']).toBe('todo');
+      expect(s['final-code']).not.toBe('done');
+      expect(s['distributed']).not.toBe('done');
+      // "To do" says the step is still ahead: only for a candidacy that has not been approved.
+      expect(s['distributed']).toBe(relayStatus === 'approved' ? 'unrecorded' : 'todo');
     }
   });
 });

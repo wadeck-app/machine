@@ -45,7 +45,7 @@ export interface CandidacyRow extends CandidacyView {
   canApprove: boolean;
 }
 
-export type TimelineStatus = 'done' | 'current' | 'todo';
+export type TimelineStatus = 'done' | 'current' | 'todo' | 'unrecorded';
 
 export interface TimelineStepRow {
   id: string;

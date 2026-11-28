@@ -1,5 +1,5 @@
 import React from 'react';
-import { ButtonAction } from '@wadeck-app/dsl-ui';
+import { ButtonAction, Text } from '@wadeck-app/dsl-ui';
 import { MONO_STYLE } from '../lib/styleTokens.js';
 
 // The security code of ONE approval (decision 55: 25 digits in five groups), first and large, with what to do with it. It is shown from the code the page computed while
@@ -25,7 +25,7 @@ export function SecurityCodeCompare({ code, name, onMatch, onDiffer, answered = 
         {code}
       </div>
       <p className="text-sm">
-        It must read exactly the same on {name}.{asking ? ' "Codes match" only records your comparison on this page: the' : ' The'} decisive confirmation is made on {name}, where <code style={MONO_STYLE}>machine join</code> shows its own code and asks you to confirm it.
+        It must read exactly the same on {name}.{asking ? ' "Codes match" only records your comparison on this page: the' : ' The'} decisive confirmation is made on {name}, where <Text mono text="machine join" /> shows its own code and asks you to confirm it.
       </p>
       {asking && !answered && (
         <div className="flex flex-wrap gap-2">

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { ButtonAction, Dialog, DialogFooter, FieldReadOnly, FieldSecret, HorizontalStack, Notice, VerticalStack, type FieldSecretHandle } from '@wadeck-app/dsl-ui';
 import { adminKeyHolder } from '../lib/adminKeyHolder.js';
 import { hintHelpText } from '../lib/passphraseHint.js';
@@ -51,16 +51,10 @@ export interface ConfirmSignModalProps {
 }
 
 export function ConfirmSignModal({ title, details, warning, notes = [], confirmLabel, busy = false, busyLabel = 'Signing...', aside, error = null, hint = null, needsPassphrase = true, askEveryTime = false, children, onConfirm, onCancel }: ConfirmSignModalProps) {
-  const root = useRef<HTMLDivElement>(null);
   const passphrase = useRef<FieldSecretHandle>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
   const held = useAdminKey().unlocked;
   const unlocked = held && !askEveryTime;
-
-  // Cancel is the default focus: Enter without thinking must never sign.
-  useEffect(() => {
-    root.current?.querySelector<HTMLElement>('[data-footer] button')?.focus();
-  }, []);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,7 +82,7 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
 
   const shown = localError ?? error;
   const content = (
-    <div ref={root}>
+    <div>
       <VerticalStack gap="gap-3">
         {details.map(d => (
           <FieldReadOnly key={d.label} label={d.label} value={d.value} mono />
@@ -112,12 +106,11 @@ export function ConfirmSignModal({ title, details, warning, notes = [], confirmL
               </>
             )}
             {shown !== null && <Notice variant="danger" label={shown} />}
-            <div data-footer="">
-              <DialogFooter>
-                <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} />
-                {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
-              </DialogFooter>
-            </div>
+            <DialogFooter>
+              {/* Cancel is the default focus (autoFocus): Enter without thinking must never sign. */}
+              <ButtonAction label={needsPassphrase ? 'Cancel' : 'Close'} variant="secondary" onClick={onCancel} disabled={busy} autoFocus />
+              {needsPassphrase && <ButtonAction type="submit" label={busy ? busyLabel : confirmLabel} variant="primary" disabled={busy} />}
+            </DialogFooter>
           </VerticalStack>
         </form>
       </VerticalStack>

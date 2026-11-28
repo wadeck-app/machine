@@ -51,6 +51,6 @@ describe('AllowProgressDetails', () => {
     render(<AllowProgressDetails record={waiting()} />);
     const names = screen.getAllByText('thinkcentre');
     expect(names.length).toBeGreaterThan(0);
-    expect(names.every((el) => el.style.fontFamily.includes('JetBrains Mono'))).toBe(true);
+    expect(names.every((el) => el.classList.contains('font-mono'))).toBe(true);
   });
 });

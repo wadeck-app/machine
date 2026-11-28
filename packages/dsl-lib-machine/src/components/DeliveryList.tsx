@@ -1,7 +1,7 @@
 import React from 'react';
-import { Badge, Collapsible } from '@wadeck-app/dsl-ui';
+import { Badge, Collapsible, Text } from '@wadeck-app/dsl-ui';
 import type { DeliveryMachine, DeliveryState } from '../lib/approvalResult.js';
-import { MONO_STYLE, TEXT_MUTED } from '../lib/styleTokens.js';
+import { MONO_STYLE } from '../lib/styleTokens.js';
 
 // What a dialog shows of a delivery of documents (admin-ui.md, "Result and progress UX"): one short line per machine (state, one reason, one next action) and the raw
 // report of the CLI folded in "Details". Shared by the approval and the revocation, so both read the same.
@@ -11,7 +11,7 @@ const STATE_VARIANT = { delivered: 'success', inbox: 'info', failed: 'danger' } 
 
 /** Commands are in backticks in the texts of the daemon: shown in the monospace font. */
 function withCode(text: string): React.ReactNode[] {
-  return text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i} style={MONO_STYLE} className="break-all">{part}</code> : <React.Fragment key={i}>{part}</React.Fragment>));
+  return text.split('`').map((part, i) => (i % 2 === 1 ? <span key={i} className="break-all"><Text mono text={part} /></span> : <React.Fragment key={i}>{part}</React.Fragment>));
 }
 
 export interface DeliveryListProps {
@@ -31,8 +31,8 @@ export function DeliveryList({ machines, text, openDetails }: DeliveryListProps)
             <li key={m.uuid} className="flex flex-col gap-0.5">
               <span className="flex flex-wrap items-center gap-2">
                 <Badge label={STATE_LABEL[m.state]} variant={STATE_VARIANT[m.state]} tone="subtle" size="sm" />
-                <span style={MONO_STYLE}>{m.name}</span>
-                <span className={TEXT_MUTED}>{m.reason}</span>
+                <Text mono text={m.name} />
+                <Text tone="muted" text={m.reason} />
               </span>
               <span>{withCode(m.next)}</span>
             </li>

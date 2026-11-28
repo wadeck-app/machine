@@ -34,15 +34,15 @@ Routes: `GET /candidacies`, `GET /approve-context/:uuid`, `GET /admin-key`, `POS
 
 | Id | Shows |
 |---|---|
-| `empty` | no candidacy, timeline all to do |
+| `empty` | no candidacy: the empty text names the next step, no timeline |
 | `one-pending` | first enrollment of mac-m2, 4 min old |
 | `several-pending` | mac-m2 (oldest, followed) and thinkcentre (uuid bound to a revoked token) |
 | `pending-revoked-earlier` | mac-m2 revoked at serial 3: "REVOKED earlier", no code to compare |
 | `pending-with-problems` | no uuid: cannot be approved, can be rejected |
-| `relay-error-503` | no admin token: every relay route answers 503 with the fix |
+| `relay-error-503` | no admin token: every relay route answers 503 with the fix; the page shows one alert (cause and `machine admin login`) and no empty text |
 | `relay-unreachable-502` | relay down: 502 |
 | `approve-result-delivered` / `-partial` / `-failed` | planned delivery after an approval: both direct / one in the relay inbox / both failed with the retry command |
-| `approval-codes-recallable` | mac-m2 approved 4 min ago, its code shown again; a 2 days old reminder |
+| `approval-codes-recallable` | mac-m2 approved 4 min ago, its code shown again; a 2 days old reminder; the last two steps read "Not recorded by this page" |
 | `candidate-expired` | posted 20 min ago, expired for 5: cannot be decided |
 
 | Action | Effect on the state |

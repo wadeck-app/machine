@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, type BadgeVariant, ButtonAction, CompactSelect, DataTable, Notice, RefreshButton, SearchBar, type TableColumn } from '@wadeck-app/dsl-ui';
+import { Badge, type BadgeVariant, ButtonAction, CompactSelect, DataTable, Notice, RefreshButton, SearchBar, type TableColumn, Text } from '@wadeck-app/dsl-ui';
 import { appFetcher } from '../lib/shellApi.js';
 import { MachineName } from './MachineName.js';
-import { TEXT_MUTED_SM } from '../lib/styleTokens.js';
 
 export type ActivityRowData = {
   key: string;
@@ -277,7 +276,7 @@ export function ActivityLog({ pageSize = DEFAULT_PAGE_SIZE }: ActivityLogProps) 
       <nav aria-label="Pages of the activity" className="flex flex-wrap items-center gap-2">
         <ButtonAction label="First" ariaLabel="First page" variant="secondary" size="xs" disabled={page <= 1} onClick={() => goTo(1)} />
         <ButtonAction label="Previous" ariaLabel="Previous page" variant="secondary" size="xs" disabled={page <= 1} onClick={() => goTo(page - 1)} />
-        <span className={TEXT_MUTED_SM}>{known ? `Page ${data.page} of ${grouped(pageCount)}${data.totalExact ? '' : '+'}` : `Page ${page}`}</span>
+        <Text tone="muted" size="sm" text={known ? `Page ${data.page} of ${grouped(pageCount)}${data.totalExact ? '' : '+'}` : `Page ${page}`} />
         <ButtonAction label="Next" ariaLabel="Next page" variant="secondary" size="xs" disabled={atLast} onClick={() => goTo(page + 1)} />
         <ButtonAction label="Last" ariaLabel="Last page" variant="secondary" size="xs" disabled={atLast || !data?.totalExact} onClick={() => goTo(pageCount)} />
         <label className="ml-auto flex items-center gap-2 text-xs text-muted">

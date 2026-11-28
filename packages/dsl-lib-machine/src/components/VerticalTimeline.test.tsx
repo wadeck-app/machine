@@ -109,3 +109,14 @@ describe('VerticalTimeline', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('duplicate step id "received"');
   });
 });
+
+describe('VerticalTimeline, a step this page cannot know', () => {
+  it('"unrecorded" is written as "Not recorded by this page": neither To do nor Done, not the current step', () => {
+    render(<VerticalTimeline steps={[{ id: 'a', title: 'Candidacy received', status: 'done' }, { id: 'd', title: 'Documents distributed', status: 'unrecorded' }]} />);
+    const item = screen.getByText('Documents distributed').closest('li') as HTMLElement;
+    expect(item.getAttribute('data-status')).toBe('unrecorded');
+    expect(item.getAttribute('aria-current')).toBeNull();
+    expect(within(item).getByText('Not recorded by this page')).toBeInTheDocument();
+    expect(within(item).queryByText('To do')).toBeNull();
+  });
+});

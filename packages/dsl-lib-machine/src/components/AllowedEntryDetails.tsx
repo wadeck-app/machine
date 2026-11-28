@@ -1,6 +1,5 @@
-import { Notice } from '@wadeck-app/dsl-ui';
+import { Notice, Text } from '@wadeck-app/dsl-ui';
 import type { AllowedEntryData, AllowedMachineData } from './AllowedList.js';
-import { MONO_STYLE, COMMAND_TEXT } from '../lib/styleTokens.js';
 
 // Sticky and bounded: on a narrow screen the table scrolls sideways and the text would otherwise run under the edge.
 const DETAILS = 'sticky left-0 flex max-w-[calc(100vw-9rem)] flex-col gap-1 text-sm';
@@ -18,7 +17,7 @@ export function AllowedEntryDetails({ row, machine }: { row: AllowedEntryData; m
       {machine.deliveryNote !== '' ? <Notice variant="default" label={machine.deliveryNote} /> : null}
       <p>
         <span className="text-muted">Withdraw it from a terminal: </span>
-        {row.removeCommand === '' ? <span className="text-muted">{machine.canEdit ? USE_BUTTON : NO_COMMAND}</span> : <code className={COMMAND_TEXT} style={MONO_STYLE}>{row.removeCommand}</code>}
+        {row.removeCommand === '' ? <span className="text-muted">{machine.canEdit ? USE_BUTTON : NO_COMMAND}</span> : <span className="break-all"><Text mono size="sm" text={row.removeCommand} /></span>}
       </p>
     </div>
   );

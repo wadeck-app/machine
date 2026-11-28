@@ -386,7 +386,7 @@ export default function register(ctx: ModuleContextLike): void {
         enrolled: list.enrolled === true,
         ...(typeof list.note === 'string' ? { note: list.note } : {}),
         // The daemon `list` carries neither presence nor addresses (machine-cli adds them in the CLI from the relay): said here so the page never guesses.
-        presenceNote: 'Presence and addresses are not shown yet: the daemon list does not carry them (see `machine list` for the relay view).',
+        presenceNote: 'Presence and addresses are not shown yet: the daemon list does not carry them (run machine list for the relay view).',
       });
     } catch (err) {
       const failure = failureOf(err);

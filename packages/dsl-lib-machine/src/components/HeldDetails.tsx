@@ -2,7 +2,6 @@ import React from 'react';
 import { CallerAskNote } from './CallerAskNote.js';
 import type { HeldRequestRow } from './HeldRequests.js';
 import { MachineName } from './MachineName.js';
-import { TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The Details panel of a held card: every fact and every long sentence the card leaves out of its one status line.
 
@@ -16,7 +15,7 @@ export interface HeldDetailsProps {
 
 export function HeldDetails({ row, machine, words }: HeldDetailsProps) {
   return (
-    <div data-testid="held-details" className={`flex flex-col gap-1 text-xs ${TEXT_MUTED}`}>
+    <div data-testid="held-details" className="flex flex-col gap-1 text-xs text-muted">
       {row.renewal !== undefined && (
         <div data-testid="renewal-note">
           Renewal: {row.renewal.note}. Allowing it replaces {row.shell} {JSON.stringify(row.renewal.entry)} (its counter starts again), it does not add a command.

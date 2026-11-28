@@ -20,7 +20,8 @@ $type: PageContent
 sections:
   - $type: PageHeader
     title: Candidacies
-    subtitle: Machines that asked to join the network, listed by the relay with the admin token of this machine. Approve signs in your browser with the admin passphrase (asked at every approval, never kept or sent), then tells the other machines; Reject refuses the candidate. The terminal alternative is `machine admin approve`.
+    # One sentence. How Approve signs and the terminal alternative (`machine admin approve`) are said where they are used: the approval dialog and the row expansion.
+    subtitle: Machines that asked to join the network, for you to approve or reject.
   # The candidacy the timeline follows (the oldest pending one) and what the relay says about it.
   - $type: Card
     $if: $sources.candidacies.timelineNote
@@ -33,4 +34,4 @@ sections:
     timeline: $sources.candidacies.timeline
     approvals: $sources.candidacies.approvals
     approvalsProblem: $sources.candidacies.approvalsProblem
-    emptyMessage: No pending candidacy
+    # The empty message (with the next step) and the alert of a failed load (`$sourceErrors`) are the component's.

@@ -97,13 +97,13 @@ describe('list', () => {
     expect(row).toMatchObject({ name: 'mac-m2', ageText: '10 min', statusText: 'Pending', canDecide: true, canApprove: true, rebind: false, ageSeconds: 600 });
     expect(row?.bindingText).toContain('The uuid is not bound yet: approving creates the binding.');
     expect(out.timeline.map((s) => s.status)).toEqual(['done', 'current', 'todo', 'todo', 'todo']);
-    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (10 min): pending.');
+    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (posted 10 min ago): pending.');
   });
 
   it('several pending: the timeline follows the oldest and says so', () => {
     const out = list(base({ candidacies: [candidacy({ id: 'young', name: 'thinkcentre', createdAt: NOW - 60 }), candidacy()] }));
     expect(out.count).toBe(2);
-    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (10 min), the oldest pending of 2 candidacies: pending.');
+    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (posted 10 min ago), the oldest pending of 2 candidacies: pending.');
   });
 
   it('problems: the row cannot be approved but can be rejected, and says why', () => {
@@ -143,7 +143,7 @@ describe('approve', () => {
     expect(step.answer.body).toEqual({ ok: true, id: 'cand-mac-m2', message: 'Candidacy cand-mac-m2 approved: the candidate finishes on its next check, after the security codes are compared', imported: { uuid: CAND, name: 'mac-m2' } });
     const row = list(step.state).candidacies[0];
     expect(row).toMatchObject({ relayStatus: 'approved', statusText: 'Approved by the admin (relay status: approved)', canDecide: false, canApprove: false });
-    expect(list(step.state).timeline.map((s) => s.status)).toEqual(['done', 'done', 'done', 'todo', 'todo']);
+    expect(list(step.state).timeline.map((s) => s.status)).toEqual(['done', 'done', 'done', 'unrecorded', 'unrecorded']);
     const context = approveContext(step.state, CAND).answer.body as { candidate: { trusted: boolean } };
     expect(context.candidate.trusted).toBe(true);
     expect(list(state).candidacies[0]?.relayStatus).toBe('pending');
@@ -214,7 +214,7 @@ describe('the code kept after an approval', () => {
     expect(kept.answer).toEqual({ status: 200, body: { ok: true } });
     const out = list(advanceClock(kept.state, 120).state);
     expect(out.approvals).toEqual([{ uuid: CAND, name: 'mac-m2', code, ageText: '2 min' }]);
-    expect(out.timeline[4]).toMatchObject({ status: 'todo', description: `Security code of "mac-m2": ${code}. It must read exactly the same on mac-m2.` });
+    expect(out.timeline[4]).toMatchObject({ status: 'unrecorded', description: `Security code of "mac-m2": ${code}. It must read exactly the same on mac-m2.` });
   });
 
   it('a second code of the same machine replaces the first; reminders older than 7 days are dropped', () => {
@@ -236,7 +236,7 @@ describe('the clock', () => {
     const out = list(advanceClock(base(), 301).state);
     expect(out.candidacies[0]).toMatchObject({ canDecide: false, canApprove: false, ageText: '15 min' });
     expect(out.candidacies[0]?.problems.at(-1)).toContain('expired');
-    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (15 min): expired: the candidate must post a new one.');
+    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (posted 15 min ago): expired: the candidate must post a new one.');
   });
 
   it('rebase moves every date, so a seed built once stays "10 min old" whenever it is loaded', () => {

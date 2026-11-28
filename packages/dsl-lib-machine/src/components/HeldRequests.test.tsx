@@ -112,8 +112,8 @@ describe('the list', () => {
     expect(command.style.fontFamily).toContain('JetBrains Mono');
     expect(command.className).toMatch(/text-lg/);
     // Machine names are in the machine font, and so is the shell.
-    expect(within(item).getByText('thinkcentre').style.fontFamily).toContain('JetBrains Mono');
-    expect(within(item).getByText('sh').style.fontFamily).toContain('JetBrains Mono');
+    expect(within(item).getByText('thinkcentre')).toHaveClass('font-mono');
+    expect(within(item).getByText('sh')).toHaveClass('font-mono');
     expect(within(item).getByRole('button', { name: 'Allow' })).toBeInTheDocument();
     expect(within(item).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
   });

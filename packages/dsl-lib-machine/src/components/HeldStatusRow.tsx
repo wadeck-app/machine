@@ -5,7 +5,6 @@ import { askRisk, choiceFromAsk } from '../lib/callerAsk.js';
 import { cardStatus, readOnlyVerdict } from '../lib/quickAllow.js';
 import { InfoTip } from './InfoTip.js';
 import type { HeldRequestRow } from './HeldRequests.js';
-import { TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The ONE status line of a held card (what is not the command): badges that flag what must be seen before the click, one short grey line, the Details toggle.
 // Every fact and every long sentence lives in HeldDetails.
@@ -42,7 +41,7 @@ export function HeldStatusRow({ row, choiceFlags, open, panelId, onToggle }: Hel
           <InfoTip label="About: read-only (recognised)" text={`${readOnly.why}${startedHere ? ' Allow starts from Permanent for it; you can pick anything else, and nothing is signed until you click.' : " The caller's own ask or the entry being renewed decides the starting lifetime instead."}`} />
         </span>
       )}
-      {status !== '' && <span data-testid="held-status" className={`min-w-0 truncate ${TEXT_MUTED}`} title={status}>{status}</span>}
+      {status !== '' && <span data-testid="held-status" className="min-w-0 truncate text-muted" title={status}>{status}</span>}
       <span className="ml-auto shrink-0">
         <IconButton icon={open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />} aria-label="Details" aria-expanded={open} aria-controls={panelId} size="icon-xs" onClick={onToggle} />
       </span>

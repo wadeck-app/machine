@@ -40,6 +40,7 @@ import { Skeleton } from '@wadeck-app/dsl-ui/dist/components/display/Skeleton.js
 import { SparklineView } from '@wadeck-app/dsl-ui/dist/components/display/SparklineView.js'
 import { Spinner } from '@wadeck-app/dsl-ui/dist/components/display/Spinner.js'
 import { Tag } from '@wadeck-app/dsl-ui/dist/components/display/Tag.js'
+import { Text } from '@wadeck-app/dsl-ui/dist/components/display/Text.js'
 const TimeBrushLazy = React.lazy(() => import('@wadeck-app/dsl-ui/dist/components/display/TimeBrush.js').then(m => ({ default: m.TimeBrush })))
 const TimeBrush = (props: React.ComponentProps<typeof TimeBrushLazy>) => <LazyBoundary><TimeBrushLazy {...props} /></LazyBoundary>
 const TimeSeriesChartLazy = React.lazy(() => import('@wadeck-app/dsl-ui/dist/components/display/TimeSeriesChart.js').then(m => ({ default: m.TimeSeriesChart })))
@@ -651,7 +652,8 @@ export const ButtonActionEntry: ComponentRegistryEntry = {
 		const ariaExpanded = coerceProp(resolveExpressionValue(node['ariaExpanded'], ctx), 'ButtonAction.ariaExpanded', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['ariaExpanded']
 		const ariaControls = coerceProp(resolveExpressionValue(node['ariaControls'], ctx), 'ButtonAction.ariaControls', 'string', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['ariaControls']
 		const underline = coerceProp(resolveExpressionValue(node['underline'], ctx), 'ButtonAction.underline', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['underline']
-		return <ButtonAction label={label} variant={variant} icon={icon ? renderChildren(icon, registry, ctx) : null} size={size} ariaLabel={ariaLabel} onClick={onClick} disabled={disabled} disabledReason={disabledReason} loading={loading} type={type} form={form} ariaExpanded={ariaExpanded} ariaControls={ariaControls} underline={underline} />
+		const autoFocus = coerceProp(resolveExpressionValue(node['autoFocus'], ctx), 'ButtonAction.autoFocus', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/controls/ButtonAction.js').ButtonActionProps['autoFocus']
+		return <ButtonAction label={label} variant={variant} icon={icon ? renderChildren(icon, registry, ctx) : null} size={size} ariaLabel={ariaLabel} onClick={onClick} disabled={disabled} disabledReason={disabledReason} loading={loading} type={type} form={form} ariaExpanded={ariaExpanded} ariaControls={ariaControls} underline={underline} autoFocus={autoFocus} />
 	},
 }
 
@@ -1029,6 +1031,19 @@ export const TagEntry: ComponentRegistryEntry = {
 		const color = coerceProp(resolveExpressionValue(node['color'], ctx), 'Tag.color', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/display/Tag.js').TagProps['color']
 		const onRemove = coerceProp(resolveExpressionValue(node['onRemove'], ctx), 'Tag.onRemove', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/display/Tag.js').TagProps['onRemove']
 		return <Tag label={label} color={color} onRemove={onRemove} />
+	},
+}
+
+export const TextEntry: ComponentRegistryEntry = {
+	name: 'Text', category: 'atomic', tags: ["text","muted","mono","code","inline"],
+	nodeSchema: null as never,
+	propSchema: process.env.NODE_ENV !== 'production' ? (nodeSchemas0 as Record<string, unknown>)['TextNodeSchema'] as ComponentRegistryEntry['propSchema'] : undefined,
+	render: ({ node, ctx }: RegistryRenderProps) => {
+		const text = coerceProp(resolveExpressionValue(node['text'], ctx), 'Text.text', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/display/Text.js').TextProps['text']
+		const tone = coerceProp(resolveExpressionValue(node['tone'], ctx), 'Text.tone', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/display/Text.js').TextProps['tone']
+		const size = coerceProp(resolveExpressionValue(node['size'], ctx), 'Text.size', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/display/Text.js').TextProps['size']
+		const mono = coerceProp(resolveExpressionValue(node['mono'], ctx), 'Text.mono', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/display/Text.js').TextProps['mono']
+		return <Text text={text} tone={tone} size={size} mono={mono} />
 	},
 }
 
@@ -1739,13 +1754,14 @@ export const DialogEntry: ComponentRegistryEntry = {
 	render: ({ node, registry, ctx }: RegistryRenderProps) => {
 		const items = node['items'] as unknown[] | undefined
 		const title = coerceProp(resolveExpressionValue(node['title'], ctx), 'Dialog.title', 'string', true) as import('@wadeck-app/dsl-ui/dist/components/overlay/Dialog.js').DialogProps['title']
+		const titleContent = node['titleContent'] as unknown[] | undefined
 		const trigger = node['trigger'] as unknown[] | undefined
 		const open = coerceProp(resolveExpressionValue(node['open'], ctx), 'Dialog.open', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/Dialog.js').DialogProps['open']
 		const onOpenChange = coerceProp(resolveExpressionValue(node['onOpenChange'], ctx), 'Dialog.onOpenChange', 'function', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/Dialog.js').DialogProps['onOpenChange']
 		const actions = node['actions'] as unknown[] | undefined
 		const size = coerceProp(resolveExpressionValue(node['size'], ctx), 'Dialog.size', 'primitive', false) as import('@wadeck-app/dsl-ui/dist/components/overlay/Dialog.js').DialogProps['size']
 		return (
-			<Dialog title={title} trigger={trigger ? renderChildren(trigger, registry, ctx) : null} open={open} onOpenChange={onOpenChange} actions={actions ? renderChildren(actions, registry, ctx) : null} size={size}>
+			<Dialog title={title} titleContent={titleContent ? renderChildren(titleContent, registry, ctx) : null} trigger={trigger ? renderChildren(trigger, registry, ctx) : null} open={open} onOpenChange={onOpenChange} actions={actions ? renderChildren(actions, registry, ctx) : null} size={size}>
 				{items ? renderChildren(items, registry, ctx) : null}
 			</Dialog>
 		)
@@ -2039,11 +2055,12 @@ export const CandidaciesTableEntry: ComponentRegistryEntry = {
 		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'CandidaciesTable.rows', 'array', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['rows']
 		const timeline = coerceProp(resolveExpressionValue(node['timeline'], ctx), 'CandidaciesTable.timeline', 'array', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['timeline']
 		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'CandidaciesTable.emptyMessage', 'string', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['emptyMessage']
+		const sourceErrors = coerceProp(resolveExpressionValue(node['sourceErrors'], ctx) ?? ctx['$sourceErrors'], 'CandidaciesTable.sourceErrors', 'object', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['sourceErrors']
 		const approvals = coerceProp(resolveExpressionValue(node['approvals'], ctx), 'CandidaciesTable.approvals', 'array', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['approvals']
 		const approvalsProblem = coerceProp(resolveExpressionValue(node['approvalsProblem'], ctx), 'CandidaciesTable.approvalsProblem', 'string', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['approvalsProblem']
 		const onAction = coerceProp(resolveExpressionValue(node['onAction'], ctx) ?? ctx['onAction'], 'CandidaciesTable.onAction', 'function', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['onAction']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'CandidaciesTable.onRefresh', 'function', false) as import('../components/CandidaciesTable.js').CandidaciesTableProps['onRefresh']
-		return <CandidaciesTable rows={rows} timeline={timeline} emptyMessage={emptyMessage} approvals={approvals} approvalsProblem={approvalsProblem} onAction={onAction} onRefresh={onRefresh} />
+		return <CandidaciesTable rows={rows} timeline={timeline} emptyMessage={emptyMessage} sourceErrors={sourceErrors} approvals={approvals} approvalsProblem={approvalsProblem} onAction={onAction} onRefresh={onRefresh} />
 	},
 }
 
@@ -2079,8 +2096,9 @@ export const MachinesTableEntry: ComponentRegistryEntry = {
 	render: ({ node, ctx }: RegistryRenderProps) => {
 		const rows = coerceProp(resolveExpressionValue(node['rows'], ctx), 'MachinesTable.rows', 'array', false) as import('../components/MachinesTable.js').MachinesTableProps['rows']
 		const emptyMessage = coerceProp(resolveExpressionValue(node['emptyMessage'], ctx), 'MachinesTable.emptyMessage', 'string', false) as import('../components/MachinesTable.js').MachinesTableProps['emptyMessage']
+		const sourceErrors = coerceProp(resolveExpressionValue(node['sourceErrors'], ctx) ?? ctx['$sourceErrors'], 'MachinesTable.sourceErrors', 'object', false) as import('../components/MachinesTable.js').MachinesTableProps['sourceErrors']
 		const onRefresh = coerceProp(resolveExpressionValue(node['onRefresh'], ctx) ?? ctx['$refresh'], 'MachinesTable.onRefresh', 'function', false) as import('../components/MachinesTable.js').MachinesTableProps['onRefresh']
-		return <MachinesTable rows={rows} emptyMessage={emptyMessage} onRefresh={onRefresh} />
+		return <MachinesTable rows={rows} emptyMessage={emptyMessage} sourceErrors={sourceErrors} onRefresh={onRefresh} />
 	},
 }
 
@@ -2160,6 +2178,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 	SparklineViewEntry,
 	SpinnerEntry,
 	TagEntry,
+	TextEntry,
 	TimeBrushEntry,
 	TimeSeriesChartEntry,
 	ButtonCancelEntry,
@@ -2243,7 +2262,7 @@ export const allEntries: ComponentRegistryEntry[] = [
 // ─── Auto-detected metadata (allowedChildren, providesContext, requiresContext) ─
 // Generated from @slot JSDoc tags and createContext/useContext calls in component sources.
 ActionButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["action","actionPending","ariaLabel","body","disabled","disabledReason","icon","iconOnly","label","loadingStyle","onAction","params","size","variant"] : [];
-ButtonActionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControls","ariaExpanded","ariaLabel","disabled","disabledReason","form","icon","label","loading","onClick","size","type","underline","variant"] : [];
+ButtonActionEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaControls","ariaExpanded","ariaLabel","autoFocus","disabled","disabledReason","form","icon","label","loading","onClick","size","type","underline","variant"] : [];
 CheckboxGroupEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bind","label","options","orientation"] : [];
 ChipButtonEntry.allowedChildren = {"items":["atomic"]};
 ChipButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["active","aria-label","aria-pressed","color","disabled","disabledReason","emphasis","items","onClick","shape","title"] : [];
@@ -2281,6 +2300,7 @@ SkeletonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["count","deco
 SparklineViewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["ariaLabel","points"] : [];
 SpinnerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["label","size"] : [];
 TagEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["color","label","onRemove"] : [];
+TextEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["mono","size","text","tone"] : [];
 TimeBrushEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","domain","height","initialWindow","kind","marginRight","syncGroup","valueKey","xKey","yAxisWidth"] : [];
 TimeSeriesChartEntry.itemKeys = {"series":{"keys":["key","name","color","width","dots","pointColorKey","detailKey","gapDash","legend","kind","fromKey","decimals","showValue","axis"]},"bands":{"keys":["from","to","color","opacity","label"]},"rangeAreas":{"keys":["lowKey","highKey","name","color","opacity","legend"]},"legendItems":{"keys":["label","color"]}};
 TimeSeriesChartEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["bands","data","domain","emptyMessage","gapDashAfterDays","height","initialWindow","legendItems","marginRight","rangeAreas","series","syncGroup","title","xFormat","xKey","yAxisWidth","yDecimals","yFormat","yIncludeZero","yRightAxisWidth","yRightDecimals","yRightFormat","yRightIncludeZero","yRightUnit","yUnit"] : [];
@@ -2359,8 +2379,8 @@ TreeViewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["defaultExpan
 ConfirmDialogEntry.allowedChildren = {"message":["content"]};
 ConfirmDialogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["confirmLabel","confirmVariant","message","onConfirm","onOpenChange","open","title"] : [];
 ContextMenuEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["align","items","onOpenChange","open","side","trigger"] : [];
-DialogEntry.allowedChildren = {"trigger":["button"],"items":["atomic","composite","disposition"],"actions":["button"]};
-DialogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actions","items","onOpenChange","open","size","title","trigger"] : [];
+DialogEntry.allowedChildren = {"titleContent":["atomic","composite"],"trigger":["button"],"items":["atomic","composite","disposition"],"actions":["button"]};
+DialogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["actions","items","onOpenChange","open","size","title","titleContent","trigger"] : [];
 DialogEntry.providesContext = ["DialogCloseContext"];
 DialogButtonEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["action","actionPending","body","closesDialog","disabled","disabledReason","label","onAction","params","variant"] : [];
 DialogButtonEntry.requiresContext = ["DialogCloseContext"];
@@ -2388,10 +2408,10 @@ SortableColumnEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["curren
 ActivityLogEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["pageSize"] : [];
 AllowRequestsTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","onRefresh","rows"] : [];
 AllowedListEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["data","loading","onRefresh","refreshing","search"] : [];
-CandidaciesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["approvals","approvalsProblem","emptyMessage","onAction","onRefresh","rows","timeline"] : [];
+CandidaciesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["approvals","approvalsProblem","emptyMessage","onAction","onRefresh","rows","sourceErrors","timeline"] : [];
 FinalCodeDisplayEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["adminPublicKey","candidatePublicKey","onConfirm","random"] : [];
 HeldRequestsEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","allowStyle","onRefresh","reachability","rows","saferMode"] : [];
-MachinesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["emptyMessage","onRefresh","rows"] : [];
+MachinesTableEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["emptyMessage","onRefresh","rows","sourceErrors"] : [];
 PassphraseSignerEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["keyFileUrl","onSigned","onUnlocked","registration","unlockSeconds"] : [];
 RequestsOverviewEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["allow","emptyMessage","expired","held","machines","notices","noticesError","onRefresh","pending","remote","self"] : [];
 VerticalTimelineEntry.knownKeys = process.env.NODE_ENV !== 'production' ? ["steps"] : [];

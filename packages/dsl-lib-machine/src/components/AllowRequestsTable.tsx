@@ -1,12 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { ButtonAction, DataTable, HorizontalStack, Notice, type TableColumn } from '@wadeck-app/dsl-ui';
+import { ButtonAction, DataTable, HorizontalStack, Notice, type TableColumn, Text } from '@wadeck-app/dsl-ui';
 import { deliveryNotice, noticeRecipientsText, shellAllowApi, type AllowApi, type AllowResult } from '../lib/allowFlow.js';
 import { dismissFailureMessage, dismissNotice } from '../lib/dismissNotice.js';
 import { MachineName } from './MachineName.js';
 import { AllowDialog } from './AllowDialog.js';
 import type { WaitingRenewal } from '@wadeck-app/machine-core';
 import type { CallerAsk } from '../lib/callerAsk.js';
-import { MONO_STYLE } from '../lib/styleTokens.js';
 
 export type PendingRequestRow = {
   peerText: string;
@@ -138,7 +137,7 @@ export function AllowRequestsTable({ rows = [], allow, emptyMessage = 'No reques
           {rowCanAllow(r) ? (
             <ButtonAction label="Allow" ariaLabel={`Allow ${r.command}`} size="xs" onClick={() => setSelected(r)} />
           ) : (
-            <span style={MONO_STYLE}>{r.nextCommand}</span>
+            <Text mono text={r.nextCommand} />
           )}
           {r.notice !== undefined && <ButtonAction label="Dismiss" variant="secondary" size="sm" disabled={dismissing} onClick={() => dismiss(r, r.notice as NonNullable<PendingRequestRow['notice']>)} />}
         </HorizontalStack>

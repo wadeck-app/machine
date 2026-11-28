@@ -187,3 +187,53 @@ describe('Approve', () => {
     expect([statusOf('Details checked'), statusOf('Passphrase and signature')]).toEqual(['current', 'todo']);
   }, 60_000);
 });
+
+describe('the status column and the empty and failed states (UX review)', () => {
+  const LONG = 'Cannot be approved: the candidacy carries no uuid (posted by an older `machine join`, or the relay dropped it): reject it, and ask the candidate to run `machine join --resume`';
+
+  it('the status cell is a short headline that never wraps; the whole sentence is in the row expansion', async () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A, { statusText: LONG, canApprove: false })]} onAction={vi.fn()} />);
+    const cell = within(tableRow('laptop')).getByText('Cannot be approved').closest('td') as HTMLElement;
+    expect(cell.className).toMatch(/whitespace-nowrap/);
+    expect(cell).not.toHaveTextContent('carries no uuid');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    expect(screen.getByText(/the candidacy carries no uuid/)).toBeInTheDocument();
+  });
+
+  it('a short status is shown as it is', () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} onAction={vi.fn()} />);
+    expect(within(tableRow('laptop')).getByText('Pending')).toBeInTheDocument();
+  });
+
+  it('nothing pending: the empty message names the next step, and no timeline of five "To do" steps without a headline is drawn', () => {
+    render(<CandidaciesTable rows={[]} timeline={TIMELINE} onAction={vi.fn()} />);
+    expect(screen.getByText(/run `machine join` on the new machine/)).toBeInTheDocument();
+    expect(screen.queryByText('Candidacy received')).toBeNull();
+    expect(screen.queryByText('To do')).toBeNull();
+  });
+
+  it('a failed load is ONE alert above the table (cause and exact command), the whole message folded, and the empty text is NOT shown', async () => {
+    const message = 'this machine holds no admin relay token (no relay-admin.json): approving needs it. Run `machine admin login` and confirm the request';
+    render(<CandidaciesTable rows={[]} timeline={TIMELINE} sourceErrors={{ candidacies: { message, status: 503 } }} onAction={vi.fn()} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Could not load the candidacies: this machine holds no admin relay token. Run `machine admin login`.');
+    expect(screen.queryByText(/run `machine join` on the new machine/)).toBeNull();
+    expect(screen.queryByText('No pending candidacy')).toBeNull();
+    expect(screen.queryByText('Candidacy received')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
+    await userEvent.click(screen.getByText('Details'));
+    expect(screen.getByText(/HTTP 503/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp('approving needs it'))).toBeInTheDocument();
+  });
+
+  it('a failed poll that keeps the rows shown before: the alert is above them, the rows stay', () => {
+    render(<CandidaciesTable rows={[rowOf('c1', A)]} sourceErrors={{ candidacies: { message: 'the relay is unreachable at https://r.example (fetch failed): check the network' } }} onAction={vi.fn()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load the candidacies');
+    expect(within(tableRow('laptop')).getByText('Pending')).toBeInTheDocument();
+  });
+
+  it('the failure of ANOTHER source is not this table\'s alert', () => {
+    render(<CandidaciesTable rows={[]} sourceErrors={{ machines: { message: 'boom' } }} onAction={vi.fn()} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

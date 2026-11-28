@@ -29,8 +29,8 @@ describe('the compact card of a running request', () => {
   it('is ONE line: the command in mono, the machine in mono, the outcome and the elapsed time; the stepper is under it', () => {
     render(<RequestProgressCard {...props(stored())} />);
     const c = card();
-    expect(within(c).getByText('ls').style.fontFamily).toContain('JetBrains Mono');
-    expect(within(c).getByText('thinkcentre').style.fontFamily).toContain('JetBrains Mono');
+    expect(within(c).getByText('ls')).toHaveClass('font-mono');
+    expect(within(c).getByText('thinkcentre')).toHaveClass('font-mono');
     expect(within(c).getByText('Waiting for the install')).toBeInTheDocument();
     expect(within(c).getByText('6 s')).toBeInTheDocument();
     expect(within(c).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');

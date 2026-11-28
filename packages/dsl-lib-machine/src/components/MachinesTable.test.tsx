@@ -167,7 +167,7 @@ describe('Revoke', () => {
     const dialog = await screen.findByRole('dialog', { name: 'laptop revoked' }, { timeout: 20_000 });
     expect(within(dialog).getByText('Documents NOT delivered to 1 machine. Run `' + RETRY + '`.')).toBeInTheDocument();
     expect(within(dialog).getByText('Failed')).toBeInTheDocument();
-    expect(within(dialog).getByText(RETRY, { selector: 'code' })).toBeInTheDocument();
+    expect(within(dialog).getByText(RETRY, { selector: '.font-mono' })).toBeInTheDocument();
     expect(within(dialog).getByText(/relay down/)).toBeInTheDocument();
   }, 60_000);
 
@@ -225,4 +225,24 @@ describe('Revoke', () => {
     expect(within(dialog).getByText('No other machine to tell.')).toBeInTheDocument();
     expect(within(dialog).queryByRole('list', { name: 'Machines told' })).toBeNull();
   }, 60_000);
+});
+
+describe('the Reachable column and the failed load (UX review)', () => {
+  const ROW: MachineTableRow = { ...ROWS[2]!, reachable: 'not reachable now: documents go through the relay inbox' };
+
+  it('the Reachable cell is a short headline that never wraps; the whole sentence is in the row details', async () => {
+    render(<MachinesTable rows={[ROWS[0]!, ROW]} />);
+    const cell = within(tableRow('server')).getByText('not reachable now').closest('td') as HTMLElement;
+    expect(cell.className).toMatch(/whitespace-nowrap/);
+    expect(cell).not.toHaveTextContent('relay inbox');
+    await userEvent.click(within(tableRow('server')).getByRole('button', { name: /expand row/i }));
+    expect(screen.getByText(/documents go through the relay inbox/)).toBeInTheDocument();
+  });
+
+  it('a failed load is ONE alert above the table, and the empty text is NOT shown', () => {
+    render(<MachinesTable rows={[]} emptyMessage="No machine" sourceErrors={{ machines: { message: 'the relay is unreachable at https://r.example (fetch failed): check the network', status: 502 } }} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load the machines: the relay is unreachable at https://r.example. Check the network.');
+    expect(screen.queryByText('No machine')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
 });

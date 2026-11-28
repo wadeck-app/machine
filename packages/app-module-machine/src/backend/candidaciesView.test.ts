@@ -20,11 +20,17 @@ describe('candidacies view', () => {
     expect(yaml).toContain('$sources.candidacies.timelineNote');
   });
 
-  it('the subtitle says what the page does: Approve signs in the browser with the passphrase asked each time, Reject refuses, the terminal command stays', () => {
-    expect(yaml).toMatch(/subtitle:.*Approve.*browser.*passphrase/);
-    expect(yaml).toMatch(/subtitle:.*Reject/);
-    expect(yaml).toMatch(/subtitle:.*machine admin approve/);
+  it('the subtitle is ONE sentence (UX review): what the page is for. The approval and the terminal command are said where they are used (dialog, row expansion)', () => {
+    const subtitle = /^\s+subtitle:\s*(.*)$/m.exec(yaml)?.[1] ?? '';
+    expect(subtitle).not.toBe('');
+    // One sentence: no full stop followed by another sentence.
+    expect(subtitle).not.toMatch(/\.\s+\S/);
+    expect(subtitle.length).toBeLessThanOrEqual(120);
     expect(yaml).not.toMatch(/not observable|not built|Read-only/);
+  });
+
+  it('the empty state is the one of the component (it names the next step), not a bare "No pending candidacy" set here', () => {
+    expect(yaml).not.toMatch(/emptyMessage:/);
   });
 });
 

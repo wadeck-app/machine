@@ -296,7 +296,7 @@ describe('request notices (reported by other machines, no passphrase)', () => {
   it('shows the machine name of a section heading in the machine font', () => {
     render(<RequestsOverview {...props({ notices: [notice({ state: 'refused', secondsLeft: null, command: 'whoami' })] })} />);
     const heading = screen.getByRole('heading', { name: 'Waiting for approval on laptop' });
-    expect(within(heading).getByText('laptop').style.fontFamily).toContain('JetBrains Mono');
+    expect(within(heading).getByText('laptop')).toHaveClass('font-mono');
   });
 
   it('a damaged store is a visible warning with the message', () => {

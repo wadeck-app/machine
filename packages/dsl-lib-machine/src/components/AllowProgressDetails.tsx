@@ -1,11 +1,10 @@
 import React from 'react';
-import { Badge, type BadgeVariant } from '@wadeck-app/dsl-ui';
+import { Badge, type BadgeVariant, Text } from '@wadeck-app/dsl-ui';
 import { stepsOf, type ProgressRecord, type StepState } from '../lib/allowProgress.js';
 import { deliverySummary } from '../lib/deliverySummary.js';
 import { MachineText } from './MachineText.js';
 import { STATE_WORDS } from './AllowProgress.js';
 import { StepMarker } from './StepMarker.js';
-import { TEXT_MUTED } from '../lib/styleTokens.js';
 
 // The content of the Details disclosure of a request: the vertical steps (state in words) and the long explanation of the delivery. What the row above the
 // stepper already says (the outcome, the cause of a failure) is NOT said again here. The list is a polite live region: a change of step is announced.
@@ -28,12 +27,12 @@ export function AllowProgressDetails({ record }: { record: ProgressRecord }) {
                 <span><MachineText text={s.label} names={names} /></span>
               </span>
               {/* The detail of a FAILED step is the cause the row shows: not repeated here. */}
-              {s.detail !== undefined && s.state !== 'failed' && <span className={`pl-6 text-xs ${TEXT_MUTED}`}>{s.detail}</span>}
+              {s.detail !== undefined && s.state !== 'failed' && <span className="pl-6"><Text tone="muted" size="xs" text={s.detail} /></span>}
             </li>
           ))}
         </ol>
         {record.pollError !== undefined && !record.timedOut && record.finishedAt === undefined && (
-          <p className={`text-xs ${TEXT_MUTED}`}>
+          <p className="text-xs text-muted">
             The page could not ask <MachineText text={record.machineName} names={names} /> just now ({record.pollError}); it asks again.
           </p>
         )}
@@ -44,12 +43,12 @@ export function AllowProgressDetails({ record }: { record: ProgressRecord }) {
         </p>
       )}
       {explanation !== undefined && (
-        <p className={`text-xs ${TEXT_MUTED}`}>
+        <p className="text-xs text-muted">
           <MachineText text={explanation} names={names} />
         </p>
       )}
       {record.result !== undefined && (
-        <p className={`text-xs ${TEXT_MUTED}`}>
+        <p className="text-xs text-muted">
           Policy version {record.result.version}. <MachineText text={`\`machine allowed ${record.result.target.name}\``} names={[record.result.target.name]} /> lists it.
         </p>
       )}

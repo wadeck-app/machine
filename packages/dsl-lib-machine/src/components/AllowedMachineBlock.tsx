@@ -1,4 +1,4 @@
-import { DataTable, IconButton, type SortDir, type TableColumn, Notice } from '@wadeck-app/dsl-ui';
+import { DataTable, IconButton, type SortDir, type TableColumn, Notice, Text } from '@wadeck-app/dsl-ui';
 import { Pencil, Trash2 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import type { AllowApi } from '../lib/allowFlow.js';
@@ -6,7 +6,6 @@ import type { EditAction, EditOutcome } from '../lib/allowedEdit.js';
 import { AllowedEditDialog } from './AllowedEditDialog.js';
 import { AllowedEntryDetails } from './AllowedEntryDetails.js';
 import type { AllowedEntryData, AllowedMachineData } from './AllowedList.js';
-import { MONO_STYLE, TEXT_MUTED_SM, COMMAND_TEXT } from '../lib/styleTokens.js';
 
 const TYPED_TAG = 'ml-2 rounded border border-border px-1 text-xs text-muted';
 
@@ -22,7 +21,7 @@ const COLUMNS: Array<TableColumn<AllowedEntryData>> = [
     sortable: true,
     render: (r) => (
       <>
-        <span className={COMMAND_TEXT} style={MONO_STYLE}>{r.text}</span>
+        <span className="break-all"><Text mono size="sm" text={r.text} /></span>
         {r.typed ? <span className={TYPED_TAG}>typed</span> : null}
       </>
     ),
@@ -97,25 +96,22 @@ export function AllowedMachineBlock({ machine, rows, needle, sortCol, sortDir, o
   const columns = useMemo(() => (canEdit ? [...COLUMNS, actionsColumn((a, r) => beginRef.current(a, r))] : COLUMNS), [canEdit]);
   return (
     <section className="flex flex-col gap-2" aria-label={`Allowed on ${machine.name}`}>
-      <p className={`${TEXT_MUTED_SM} flex flex-wrap items-baseline gap-x-3`}>
+      <p className="flex flex-wrap items-baseline gap-x-3 text-sm text-muted">
         <span>{machine.sourceText}</span>
         {machine.version !== null ? <span>{`version ${machine.version}`}</span> : null}
         {machine.signedText !== '' ? <span title={machine.signedIso}>{machine.signedText}</span> : null}
       </p>
       {machine.problem !== '' ? <Notice variant="danger" label={machine.problem} /> : null}
       {machine.emptyText !== '' ? (
-        <p className={TEXT_MUTED_SM}>
-          {machine.emptyText}
-          {' '}
-          Allow a first command with
-          {' '}
-          <code className={COMMAND_TEXT} style={MONO_STYLE}>{machine.fillCommand}</code>
+        <p>
+          <Text tone="muted" size="sm" text={`${machine.emptyText} Allow a first command with `} />
+          <span className="break-all"><Text mono size="sm" text={machine.fillCommand} /></span>
         </p>
       ) : null}
       {machine.version !== null && total === 0 ? <Notice variant="default" label={`Nothing is allowed for ${machine.name}: this policy has no entry, so every command is refused.`} /> : null}
       {total > 0 ? (
         <>
-          <p className={TEXT_MUTED_SM}>
+          <p className="text-sm text-muted">
             {canEdit ? (
               'Delete or change the lifetime of a row with its buttons, or select several rows. Add from a terminal: '
             ) : (
@@ -125,7 +121,7 @@ export function AllowedMachineBlock({ machine, rows, needle, sortCol, sortDir, o
                 {' Add from a terminal: '}
               </>
             )}
-            <code className={COMMAND_TEXT} style={MONO_STYLE}>{machine.fillCommand}</code>
+            <span className="break-all"><Text mono size="sm" text={machine.fillCommand} /></span>
             {canEdit ? '.' : '. Open a row for the command that withdraws it.'}
           </p>
           <DataTable<AllowedEntryData>

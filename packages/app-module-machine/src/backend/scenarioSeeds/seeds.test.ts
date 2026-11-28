@@ -106,7 +106,7 @@ describe('what each seed shows (the intent of the scenario, on the real answer)'
   it('several-pending: two rows, the timeline follows the oldest', () => {
     const out = rowsOf(readSeed('several-pending'));
     expect(out.count).toBe(2);
-    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (12 min), the oldest pending of 2 candidacies: pending.');
+    expect(out.timelineNote).toBe('The timeline follows "mac-m2" (posted 12 min ago), the oldest pending of 2 candidacies: pending.');
     expect(out.candidacies.find((r) => r.name === 'thinkcentre')?.rebind).toBe(true);
   });
   it('pending-revoked-earlier: the context says REVOKED earlier, the page then prints no code', () => {
@@ -130,6 +130,8 @@ describe('what each seed shows (the intent of the scenario, on the real answer)'
     const out = rowsOf(readSeed('approval-codes-recallable'));
     expect(out.approvals.map((a) => a.name)).toEqual(['mac-m2', 'thinkcentre']);
     expect(out.timeline[4]?.description).toContain(out.approvals[0]?.code);
+    // Approved: the distribution and the code are not recorded by this page, which is not "to do".
+    expect(out.timeline.map((s) => s.status)).toEqual(['done', 'done', 'done', 'unrecorded', 'unrecorded']);
     expect(out.candidacies[0]?.statusText).toBe('Approved by the admin (relay status: approved)');
   });
   it('candidate-expired: cannot be decided, the problem says it expired', () => {

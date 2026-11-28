@@ -16,12 +16,12 @@ sections:
     items:
       - $type: Markdown
         text: $sources.machines.note
-  - $type: Card
+  # A discreet help line, not a notice: it says what the page does not show, it is not a fact about a machine.
+  - $type: Text
     $if: $sources.machines.presenceNote
-    padding: sm
-    items:
-      - $type: Markdown
-        text: $sources.machines.presenceNote
+    text: $sources.machines.presenceNote
+    tone: muted
+    size: sm
   # Who receives request notices (decisions 83, 84): the sentence when a list is known, and the fix when the daemon cannot tell.
   - $type: Card
     $if: $sources.machines.noticesText

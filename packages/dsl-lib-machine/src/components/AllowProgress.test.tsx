@@ -32,10 +32,12 @@ describe('AllowProgress (the thin stepper)', () => {
     expect(screen.queryByText(/Cause/)).toBeNull();
   });
 
-  it('says the state of every step in words (the title of its badge): the Progress of the design system has no value text', () => {
+  it('says the state of every step in words in the value text of the progress bar (aria-valuetext), not in titles of the badges', () => {
     render(<AllowProgress record={waiting()} now={T0} />);
-    const titles = ['Signed', 'Stored', 'Installed', 'Released'].map((word) => screen.getByText(word).closest('[title]')?.getAttribute('title'));
-    expect(titles).toEqual(['Signed: done', 'Stored: done', 'Installed: in progress', 'Released: pending']);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', 'Signed: done, Stored: done, Installed: in progress, Released: pending');
+    for (const word of ['Signed', 'Stored', 'Installed', 'Released']) {
+      expect(screen.getByText(word).closest('[title]')).toBeNull();
+    }
   });
 
   it('a request nobody waits for has three segments', () => {
