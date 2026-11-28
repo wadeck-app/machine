@@ -31,10 +31,11 @@ beforeAll(() => {
   console.info(`PowerShell warm-up: ${seconds} s`);
   // Log-only bisection of what differs between this warm-up (passes) and the daemon run (hangs): never throws, a hang is a data point.
   return bisectPowerShell();
-}, 240_000);
+  // warm-up (110 s at most) + control (8 s) + at most 14 probes of 8 s.
+}, 300_000);
 
-/** One variant of `echo hi`: started, ended or killed after 25 s; resolves with one log line, never rejects. */
-function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'ignore' | 'pipe'): Promise<string> {
+/** One variant of `echo hi`: started, ended or killed after `timeoutMs`; resolves with one log line and whether it worked, never rejects. */
+function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'ignore' | 'pipe', timeoutMs: number): Promise<{ line: string; ok: boolean; seconds: string; result: string }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const took = (): string => `${((Date.now() - started) / 1000).toFixed(1)} s`;
@@ -43,10 +44,10 @@ function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'i
     let err = '';
     let timedOut = false;
     let settled = false;
-    const finish = (text: string): void => {
+    const finish = (text: string, ok = false, result = text): void => {
       if (settled) return;
       settled = true;
-      resolve(`PowerShell variant ${name}: ${text}`);
+      resolve({ line: `PowerShell variant ${name}: ${text}`, ok, seconds: took(), result });
     };
     try {
       // Same file and spawn options as machine-exec (launch.ts, run.ts): cwd is the home folder, windowsHide, stdout and stderr piped.
@@ -60,8 +61,8 @@ function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'i
           killNote = `taskkill /T /F /PID ${child.pid} -> ${k.error?.message ?? `exit ${String(k.status)}`}`;
         }
         // The pipes may stay open if a grandchild survives: do not wait for 'close'.
-        finish(`TIMEOUT after ${took()} (killed: ${killNote}) stdout=${head(out)} stderr=${head(err)}`);
-      }, 25_000);
+        finish(`TIMEOUT after ${took()} (killed: ${killNote}) stdout=${head(out)} stderr=${head(err)}`, false, 'TIMEOUT');
+      }, timeoutMs);
       child.stdout?.on('data', (c: Buffer) => (out += c.toString('utf8')));
       child.stderr?.on('data', (c: Buffer) => (err += c.toString('utf8')));
       child.on('error', (e) => {
@@ -70,7 +71,7 @@ function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'i
       });
       child.on('close', (code, signal) => {
         clearTimeout(timer);
-        if (!timedOut) finish(`${took()} exit=${String(code)} signal=${String(signal)} stdout=${head(out)} stderr=${head(err)}`);
+        if (!timedOut) finish(`${took()} exit=${String(code)} signal=${String(signal)} stdout=${head(out)} stderr=${head(err)}`, code === 0 && out.includes('hi'), `exit=${String(code)}`);
       });
     } catch (e) {
       finish(`threw ${(e as Error).message}`);
@@ -80,14 +81,65 @@ function variant(name: string, env: NodeJS.ProcessEnv, args: string[], stdin: 'i
 
 async function bisectPowerShell(): Promise<void> {
   try {
-    const scrubbed = scrubEnv(process.env, 'win32');
     const encoded = Buffer.from('echo hi', 'utf16le').toString('base64');
     const encodedArgs = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded];
-    // A: scrubbed env, -Command. B: default env, -EncodedCommand. C: scrubbed env, -EncodedCommand, stdin ignored (as launch.ts). D: as C, stdin piped.
-    console.info(await variant('A scrubbed-env -Command', scrubbed, ['-NoProfile', '-NonInteractive', '-Command', 'echo hi'], 'ignore'));
-    console.info(await variant('B default-env -EncodedCommand', process.env, encodedArgs, 'ignore'));
-    console.info(await variant('C scrubbed-env -EncodedCommand stdin=ignore', scrubbed, encodedArgs, 'ignore'));
-    console.info(await variant('D scrubbed-env -EncodedCommand stdin=pipe', scrubbed, encodedArgs, 'pipe'));
+    const PROBE_MS = 8_000;
+    const MAX_PROBES = 14;
+    // Control: default env, -EncodedCommand (works in about 1 s on the CI runner).
+    console.info((await variant('B default-env -EncodedCommand (control)', process.env, encodedArgs, 'ignore', PROBE_MS)).line);
+
+    const scrubbed = scrubEnv(process.env, 'win32');
+    // The scrubbed env without the variable that scrubEnv adds itself: the base of every probe below.
+    const { NoDefaultCurrentDirectoryInExePath: _added, ...base } = scrubbed;
+    const kept = new Set(Object.keys(scrubbed).map((n) => n.toUpperCase()));
+    // Names only, never values (secrets).
+    const extras = Object.keys(process.env)
+      .filter((n) => process.env[n] !== undefined && !kept.has(n.toUpperCase()))
+      .sort();
+    let probes = 0;
+    const probe = async (label: string, names: string[], withAdded = false): Promise<boolean | undefined> => {
+      if (probes >= MAX_PROBES) {
+        console.info(`PowerShell env bisect: probe cap (${MAX_PROBES}) reached, ${label} not run`);
+        return undefined;
+      }
+      probes++;
+      const env: Record<string, string> = withAdded ? { ...scrubbed } : { ...base };
+      for (const n of names) env[n] = process.env[n] as string;
+      const r = await variant(label, env, encodedArgs, 'ignore', PROBE_MS);
+      console.info(`PowerShell env bisect probe ${label}: ${names.length} extra names, ${r.seconds}, ${r.ok ? 'WORKS' : 'FAILS'} (${r.result})`);
+      return r.ok;
+    };
+
+    const p0 = await probe('P0 scrubEnv without NoDefaultCurrentDirectoryInExePath', []);
+    let needed: string;
+    if (p0 === true) {
+      // Then the variable added by scrubEnv is the suspect: one more probe tells.
+      const p2 = await probe('P2 scrubEnv as is (with NoDefaultCurrentDirectoryInExePath)', [], true);
+      needed = p2 === false ? 'NoDefaultCurrentDirectoryInExePath (added by scrubEnv)' : 'none (P0 works' + (p2 === true ? ', scrubEnv as is works too)' : ')');
+    } else if (p0 === undefined) {
+      needed = 'unknown';
+    } else {
+      const p1 = await probe('P1 scrubEnv plus all other variables', extras);
+      if (p1 !== true) {
+        needed = p1 === false ? 'not found (P1 with all variables fails too)' : 'unknown';
+      } else {
+        let candidates = extras;
+        needed = '';
+        while (candidates.length > 1) {
+          const half = Math.ceil(candidates.length / 2);
+          const first = candidates.slice(0, half);
+          const second = candidates.slice(half);
+          const w1 = await probe(`S first half (${first.length})`, first);
+          if (w1 === true) { candidates = first; continue; }
+          const w2 = w1 === undefined ? undefined : await probe(`S second half (${second.length})`, second);
+          if (w2 === true) { candidates = second; continue; }
+          needed = w2 === false ? `joint (neither half works alone) first=[${first.join(',')}] second=[${second.join(',')}]` : `unknown (cap reached) among [${candidates.join(',')}]`;
+          break;
+        }
+        if (needed === '') needed = candidates.join(',');
+      }
+    }
+    console.info(`PowerShell env bisect: needed=${needed} probes=${probes}`);
   } catch (e) {
     console.info(`PowerShell bisection failed to run: ${(e as Error).message}`);
   }
